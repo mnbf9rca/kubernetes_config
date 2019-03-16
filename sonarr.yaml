@@ -1,0 +1,185 @@
+kind: Service
+apiVersion: v1
+metadata:
+  name: sonarr-service
+  namespace: downloads
+spec:
+  selector:
+    app: sonarr
+  type: NodePort
+  ports:
+  - protocol: TCP
+    port: 8989
+    targetPort: 8989
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: sonarr-config-nfs-pv
+  namespace: downloads
+spec:
+  capacity:
+    storage: 10Gi
+  accessModes:
+    - ReadWriteMany
+  nfs:
+    server: fs.cynexia.net
+    path: "/tank/appdata/sonarr/"
+---
+kind: PersistentVolumeClaim
+apiVersion: v1
+metadata:
+  name: sonarr-config-nfs-pvc
+  namespace: downloads
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: ""
+  resources:
+    requests:
+      storage: 10Gi
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: sonarr-downloads-nfs-pv
+  namespace: downloads
+spec:
+  capacity:
+    storage: 6Ti
+  accessModes:
+    - ReadWriteMany
+  nfs:
+    server: fs.cynexia.net
+    path: "/tank/largeappdata/sabnzbd/"
+---
+kind: PersistentVolumeClaim
+apiVersion: v1
+metadata:
+  name: sonarr-downloads-nfs-pvc
+  namespace: downloads
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: ""
+  resources:
+    requests:
+      storage: 6Ti
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: sonarr-tv-nfs-pv
+  namespace: downloads
+spec:
+  capacity:
+    storage: 6Ti
+  accessModes:
+    - ReadWriteMany
+  nfs:
+    server: fs.cynexia.net
+    path: "/tank/video/series/"
+---
+kind: PersistentVolumeClaim
+apiVersion: v1
+metadata:
+  name: sonarr-tv-nfs-pvc
+  namespace: downloads
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: ""
+  resources:
+    requests:
+      storage: 6Ti
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: sonarr-gip-nfs-pv
+  namespace: downloads
+spec:
+  capacity:
+    storage: 6Ti
+  accessModes:
+    - ReadWriteMany
+  nfs:
+    server: fs.cynexia.net
+    path: "/tank/appdata/gip/output/tv/"
+---
+kind: PersistentVolumeClaim
+apiVersion: v1
+metadata:
+  name: sonarr-gip-nfs-pvc
+  namespace: downloads
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: ""
+  resources:
+    requests:
+      storage: 6Ti
+---
+apiVersion: extensions/v1beta1
+kind: Deployment
+metadata:
+  name: sonarr
+  namespace: downloads
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: sonarr
+  template:
+    metadata:
+      labels:
+        app: sonarr
+    spec:
+      containers:
+      - name: sonarr
+        image: linuxserver/sonarr:latest
+        env:
+        - name: PUID
+          value: "99"
+        - name: PGID
+          value: "100"  
+        ports:
+        - containerPort: 8989
+          protocol: TCP
+        volumeMounts:
+        - name: gip
+          mountPath: /gip
+        - name: config
+          mountPath: /config
+        - name: downloads
+          mountPath: /downloads
+        - name: tv
+          mountPath: /tv
+      volumes:
+      - name: gip
+        persistentVolumeClaim:
+          claimName: sonarr-gip-nfs-pvc
+      - name: config
+        persistentVolumeClaim:
+          claimName: sonarr-config-nfs-pvc
+      - name: downloads
+        persistentVolumeClaim:
+          claimName: sonarr-downloads-nfs-pvc
+      - name: tv
+        persistentVolumeClaim:
+          claimName: sonarr-tv-nfs-pvc
+---
+apiVersion: extensions/v1beta1
+kind: Ingress
+metadata:
+  name: ingress-sonarr
+  namespace: downloads
+spec:
+  rules:
+  - host: sonarr.cynexia.net
+    http:
+      paths:
+      - path: /
+        backend:
+          serviceName: sonarr-service
+          servicePort: 8989

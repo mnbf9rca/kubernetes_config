@@ -1,0 +1,209 @@
+kind: Service
+apiVersion: v1
+metadata:
+  name: getiplayer-service
+  namespace: downloads
+  labels:
+    applicationname: getiplayer
+spec:
+  selector:
+    app: getiplayer
+  type: NodePort
+  ports:
+  - protocol: TCP
+    port: 80
+    targetPort: 80
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: gip-config-nfs-pv
+  namespace: downloads
+  labels:
+    applicationname: getiplayer
+spec:
+  capacity:
+    storage: 10Gi
+  accessModes:
+    - ReadWriteMany
+  nfs:
+    server: fs.cynexia.net
+    path: "/tank/appdata/gip/options"
+---
+kind: PersistentVolumeClaim
+apiVersion: v1
+metadata:
+  name: gip-config-nfs-pvc
+  namespace: downloads
+  labels:
+    applicationname: getiplayer
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: ""
+  resources:
+    requests:
+      storage: 10Gi
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: gip-tmp-nfs-pv
+  namespace: downloads
+  labels:
+    applicationname: getiplayer
+spec:
+  capacity:
+    storage: 6Ti
+  accessModes:
+    - ReadWriteMany
+  nfs:
+    server: fs.cynexia.net
+    path: "/tank/appdata/gip/tmp/"
+---
+kind: PersistentVolumeClaim
+apiVersion: v1
+metadata:
+  name: gip-tmp-nfs-pvc
+  namespace: downloads
+  labels:
+    applicationname: getiplayer
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: ""
+  resources:
+    requests:
+      storage: 6Ti
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: gip-cache-nfs-pv
+  namespace: downloads
+  labels:
+    applicationname: getiplayer
+spec:
+  capacity:
+    storage: 6Ti
+  accessModes:
+    - ReadWriteMany
+  nfs:
+    server: fs.cynexia.net
+    path: "/tank/appdata/gip/cache/"
+---
+kind: PersistentVolumeClaim
+apiVersion: v1
+metadata:
+  name: gip-cache-nfs-pvc
+  namespace: downloads
+  labels:
+    applicationname: getiplayer
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: ""
+  resources:
+    requests:
+      storage: 6Ti
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: gip-output-nfs-pv
+  namespace: downloads
+  labels:
+    applicationname: getiplayer
+spec:
+  capacity:
+    storage: 6Ti
+  accessModes:
+    - ReadWriteMany
+  nfs:
+    server: fs.cynexia.net
+    path: "/tank/appdata/gip/output/"
+---
+kind: PersistentVolumeClaim
+apiVersion: v1
+metadata:
+  name: gip-output-nfs-pvc
+  namespace: downloads
+  labels:
+    applicationname: getiplayer
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: ""
+  resources:
+    requests:
+      storage: 6Ti
+---
+apiVersion: extensions/v1beta1
+kind: Deployment
+metadata:
+  name: getiplayer
+  namespace: downloads
+  labels:
+    applicationname: getiplayer
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: getiplayer
+  template:
+    metadata:
+      labels:
+        app: getiplayer
+    spec:
+      containers:
+      - name: getiplayer
+        image: mnbf9rca/getiplayer:daily
+        env:
+          - name: TZ
+            value: "UTC"
+          - name: GIP_OPTIONS
+            value: "--email=<email> --email-smtp=aspmx.l.google.com --email-sender=<sender>"
+        ports:
+        - containerPort: 80
+          protocol: TCP
+        volumeMounts:
+        - name: options
+          mountPath: /etc/get_iplayer
+        - name: tmp
+          mountPath: /tmp
+        - name: cache
+          mountPath: /var/www/get_iplayer/.get_iplayer
+        - name: output
+          mountPath: /output
+      volumes:
+      - name: options
+        persistentVolumeClaim:
+          claimName: gip-config-nfs-pvc
+      - name: tmp
+        persistentVolumeClaim:
+          claimName: gip-tmp-nfs-pvc
+      - name: cache
+        persistentVolumeClaim:
+          claimName: gip-cache-nfs-pvc
+      - name: output
+        persistentVolumeClaim:
+          claimName: gip-output-nfs-pvc
+---
+apiVersion: extensions/v1beta1
+kind: Ingress
+metadata:
+  name: ingress-getiplayer
+  namespace: downloads
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /iplayer
+  labels:
+    applicationname: getiplayer
+spec:
+  rules:
+  - host: gip.cynexia.net
+    http:
+      paths:
+      - path: /
+        backend:
+          serviceName: getiplayer-service
+          servicePort: 80

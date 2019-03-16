@@ -1,0 +1,151 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ingress-tcp-passthrough
+  namespace: default
+data:
+  8096: "downloads/emby-service:8096"
+---  
+kind: Service
+apiVersion: v1
+metadata:
+  name: emby-service
+  namespace: downloads
+spec:
+  selector:
+    app: emby
+  type: NodePort
+  ports:
+  - protocol: TCP
+    port: 8096
+    targetPort: 8096
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: emby-config-nfs-pv
+  namespace: downloads
+labels:
+  app: emby
+  appmappath: config
+spec:
+  selector:
+  capacity:
+    storage: 1Ti
+  accessModes:
+    - ReadWriteOnce
+  nfs:
+    server: fs.cynexia.net
+    path: "/tank/appdata/emby/"
+---
+kind: PersistentVolumeClaim
+apiVersion: v1
+metadata:
+  name: emby-config-nfs-pvc
+  namespace: downloads
+spec:
+  selector:
+    matchlabels:
+      app: emby
+      appmappath: config
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: ""
+  resources:
+    requests:
+      storage: 1Ti
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: video-nfs-pv
+  namespace: downloads
+spec:
+  capacity:
+    storage: 6Ti
+  accessModes:
+    - ReadWriteMany
+  nfs:
+    server: fs.cynexia.net
+    path: "/tank/video/"
+---
+kind: PersistentVolumeClaim
+apiVersion: v1
+metadata:
+  name: video-nfs-pvc
+  namespace: downloads
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: ""
+  resources:
+    requests:
+      storage: 6Ti
+---
+apiVersion: extensions/v1beta1
+kind: Deployment
+metadata:
+  name: emby
+  namespace: downloads
+  annotations:
+    deployment.kubernetes.io/max-replicas: "1"
+strategy:
+  type: Recreate
+spec:
+  replicas: 1
+  parallelism: 1
+  max-replicas: 1
+  maxSurge: 0
+  selector:
+    matchLabels:
+      app: emby
+  template:
+    metadata:
+      labels:
+        app: emby
+    spec:
+      containers:
+      - name: emby
+        readinessProbe:
+          tcpSocket:
+            port: http
+          initialDelaySeconds: 10
+          periodSeconds: 5
+        image: emby/embyserver:latest
+        imagePullPolicy: Always
+        readinessProbe:
+          tcpSocket:
+            port: http
+          initialDelaySeconds: 10
+          periodSeconds: 5
+        livenessProbe:
+          tcpSocket:
+            port: http
+          initialDelaySeconds: 600
+          periodSeconds: 10
+        env:
+          - name: UID
+            value: "911"
+          - name: GID
+            value: "10"
+        ports:
+        - name: http
+          containerPort: 8096
+          protocol: TCP
+        volumeMounts:
+        - name: config
+          mountPath: /config
+        - name: video
+          mountPath: /mnt
+        resources:
+          requests:
+            memory: "512Mi"
+          limits:
+            memory: "1.5Gi"
+      volumes:
+      - name: config
+        persistentVolumeClaim:
+          claimName: emby-config-nfs-pvc
+      - name: video
+        persistentVolumeClaim:
+          claimName: video-nfs-pvc
