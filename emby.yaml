@@ -121,7 +121,7 @@ spec:
         livenessProbe:
           tcpSocket:
             port: http
-          initialDelaySeconds: 600
+          initialDelaySeconds: 3600
           periodSeconds: 10
         env:
           - name: UID
