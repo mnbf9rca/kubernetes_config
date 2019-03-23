@@ -41,6 +41,11 @@ basic steps:
 	export KUBE_EDITOR="nano"
 	echo KUBE_EDITOR="nano" >> ~/.bashrc`
 	```
+2. enable DNS, dashboard, ingress and make kubectl work without microk8s in front
+	```
+	sudo microk8s.enable dns ingress dashboard
+	sudo snap alias microk8s.kubectl kubectl
+	```
 3. apply `nginx-load-balancer-microk8s-conf.yaml` (or at least the HSTS part) to disable HSTS
 6. create DNS entry for dashboard (e.g. `k-dashboard` as cname for `k`)
 7. Publish dashboard as an ingress
