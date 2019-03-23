@@ -50,7 +50,6 @@ spec:
       appmappath: config
   accessModes:
     - ReadWriteOnce
-  storageClassName: ""
   resources:
     requests:
       storage: 1Ti
@@ -58,8 +57,11 @@ spec:
 apiVersion: v1
 kind: PersistentVolume
 metadata:
-  name: video-nfs-pv
+  name: emby-videos-nfs-pv
   namespace: downloads
+labels:
+  app: emby
+  appmappath: videos
 spec:
   capacity:
     storage: 6Ti
@@ -72,12 +74,15 @@ spec:
 kind: PersistentVolumeClaim
 apiVersion: v1
 metadata:
-  name: video-nfs-pvc
+  name: emby-videos-nfs-pvc
   namespace: downloads
 spec:
+  selector:
+    matchlabels:
+      app: emby
+      appmappath: videos
   accessModes:
     - ReadWriteMany
-  storageClassName: ""
   resources:
     requests:
       storage: 6Ti
@@ -148,4 +153,4 @@ spec:
           claimName: emby-config-nfs-pvc
       - name: video
         persistentVolumeClaim:
-          claimName: video-nfs-pvc
+          claimName: emby-videos-nfs-pvc
