@@ -46,7 +46,7 @@ basic steps:
 	sudo microk8s.enable dns ingress dashboard
 	sudo snap alias microk8s.kubectl kubectl
 	```
-3. apply `nginx-load-balancer-microk8s-conf.yaml` (or at least the HSTS part) to disable HSTS
+3. apply `nginx-load-balancer-conf.yaml` (or at least the HSTS part) to disable HSTS, and set max file upload size to accomodate large files (e.g. nzbs)
 6. create DNS entry for dashboard (e.g. `k-dashboard` as cname for `k`)
 7. Publish dashboard as an ingress
 	1. edit existing service to switch from `ClusterIP` to `NodePort`: `kubectl -n kube-system edit service kubernetes-dashboard`
