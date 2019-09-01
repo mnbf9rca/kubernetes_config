@@ -4,7 +4,8 @@ data:
   hsts-include-subdomains: "true"
   hsts-max-age: "0"
   hsts-preload: "false"
+  proxy-body-size: "20m"
 kind: ConfigMap
 metadata:
-  name: nginx-load-balancer-microk8s-conf
+  name: nginx-load-balancer-conf
   namespace: default
