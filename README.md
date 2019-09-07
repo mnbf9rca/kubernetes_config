@@ -53,7 +53,8 @@ basic steps:
 	2. create [ingress-dashboard.yaml](ingress-dashboard.yaml) via ingress using `kubectl create -f ingress-dashboard.yaml`
 	3. edit `spec`:`containers`:`args` section of `nginx-ingress-microk8s-controller` to add `--enable-ssl-passthrough` option (see [documentation](https://github.com/kubernetes/ingress-nginx/blob/master/docs/user-guide/cli-arguments.md))
 8. Create an admin user (from [here](https://github.com/kubernetes/dashboard/wiki/Creating-sample-user)) using [create-admin-user.yaml](create-admin-user.yaml) - not sure if this is strictly necessary as any user with `admin-user` role will work (or just "skip" login), but i did it.
-9. Log in to the dashboard - press skip. Or find the token using the command `kubectl -n kube-system describe secret $(kubectl -n kube-system get secret | grep admin-user | awk '{print $1}')`
+9. Log in to the dashboard. Find the token using the command `kubectl -n kube-system describe secret $(kubectl -n kube-system get secret | grep admin-user | awk '{print $1}')`
+1. Edit `kubernetes-dashboard` to add `--enable-skip-login` to the `template`:`spec`:`containers`:`args` node
 1. Create persistent volume claims and `downloads` namespace with `persistent-nfs-storage.yaml`
 1. emby
 	1. deploy emby.yaml
