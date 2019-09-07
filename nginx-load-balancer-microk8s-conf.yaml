@@ -7,5 +7,5 @@ data:
   proxy-body-size: "20m"
 kind: ConfigMap
 metadata:
-  name: nginx-load-balancer-conf
+  name: nginx-load-balancer-microk8s-conf
   namespace: default
