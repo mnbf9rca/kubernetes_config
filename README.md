@@ -42,9 +42,10 @@ basic steps:
 	export KUBE_EDITOR="nano"
 	echo KUBE_EDITOR="nano" >> ~/.bashrc
 	```
-2. enable DNS, dashboard, ingress and make kubectl work without microk8s in front
+2. enable DNS, dashboard, ingress and make kubectl work without microk8s in front. Enable DNS first because of https://github.com/ubuntu/microk8s/issues/706
 	```
-	sudo microk8s.enable dns ingress dashboard
+	sudo microk8s.enable dns 
+	sudo microk8s.enable ingress dashboard
 	sudo snap alias microk8s.kubectl kubectl
 	```
 3. apply `nginx-load-balancer-microk8s-conf.yaml` (or at least the HSTS part) to disable HSTS, and set max file upload size to accomodate large files (e.g. nzbs)
