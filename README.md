@@ -31,9 +31,9 @@ basic steps:
 		`sudo ufw allow in on cbr0 && sudo ufw allow out on cbr0`
 	6. enable ssh, http and https on ufw:
 		```
-		sudo ufw enable ssh
-		sudo ufw enable http
-		sudo ufw enable https
+		sudo ufw allow ssh
+		sudo ufw allow http
+		sudo ufw allow https
 		sudo ufw reload
 		```
 2. switch kubectl to use nano:
