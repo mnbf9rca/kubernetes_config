@@ -51,9 +51,10 @@ basic steps:
 7. Publish dashboard as an ingress
 	1. edit existing service to switch from `ClusterIP` to `NodePort`: `kubectl -n kube-system edit service kubernetes-dashboard`
 	2. create [ingress-dashboard.yaml](ingress-dashboard.yaml) via ingress using `kubectl create -f ingress-dashboard.yaml`
-	3. edit `spec`:`containers`:`args` section of `nginx-ingress-microk8s-controller` to add `--enable-ssl-passthrough` option (see [documentation](https://github.com/kubernetes/ingress-nginx/blob/master/docs/user-guide/cli-arguments.md)) using `kubectl --namespace=ingress edit ds/nginx-ingress-microk8s-controller` - remember to indent with spaces not tabs.
-1. Edit `kubernetes-dashboard` to add `--enable-skip-login` to the `template`:`spec`:`containers`:`args` node - see [documentation](https://github.com/kubernetes/dashboard/blob/master/docs/common/dashboard-arguments.md)
-    -  `kubectl -n kube-system edit deployments.apps kubernetes-dashboard` 
+	3. edit `spec`:`containers`:`args` section of `nginx-ingress-microk8s-controller` to add `--enable-ssl-passthrough` option (see [documentation](https://github.com/kubernetes/ingress-nginx/blob/master/docs/user-guide/cli-arguments.md))
+		 - `kubectl --namespace=ingress edit nginx-ingress-microk8s-controller` - remember to indent with spaces not tabs.
+1. Edit `kubernetes-dashboard` to add `--enable-skip-login` to the `spec`:`template`:`spec`:`containers`:`args` node - see [documentation](https://github.com/kubernetes/dashboard/blob/master/docs/common/dashboard-arguments.md)
+    -  `kubectl --namespace=kube-system edit deployments.apps kubernetes-dashboard` 
     
 8. (optional if not skip login) Create an admin user (from [here](https://github.com/kubernetes/dashboard/wiki/Creating-sample-user)) using [create-admin-user.yaml](create-admin-user.yaml) - not sure if this is strictly necessary as any user with `admin-user` role will work (or just "skip" login), but i did it.
 9. Log in to the dashboard. Find the token using the command `kubectl -n kube-system describe secret $(kubectl -n kube-system get secret | grep admin-user | awk '{print $1}')`
