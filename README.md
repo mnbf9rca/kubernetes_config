@@ -34,6 +34,7 @@ basic steps:
 		sudo ufw allow ssh
 		sudo ufw allow http
 		sudo ufw allow https
+		sudo ufw enable
 		sudo ufw reload
 		```
 2. switch kubectl to use nano:
