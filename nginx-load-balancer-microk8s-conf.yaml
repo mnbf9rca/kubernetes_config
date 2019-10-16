@@ -8,4 +8,4 @@ data:
 kind: ConfigMap
 metadata:
   name: nginx-load-balancer-microk8s-conf
-  namespace: default
+  namespace: ingress
