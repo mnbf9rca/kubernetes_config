@@ -39,7 +39,7 @@ basic steps:
 2. switch kubectl to use nano:
 	```
 	export KUBE_EDITOR="nano"
-	echo KUBE_EDITOR="nano" >> ~/.bashrc`
+	echo KUBE_EDITOR="nano" >> ~/.bashrc
 	```
 2. enable DNS, dashboard, ingress and make kubectl work without microk8s in front
 	```
@@ -51,7 +51,7 @@ basic steps:
 7. Publish dashboard as an ingress
 	1. edit existing service to switch from `ClusterIP` to `NodePort`: `kubectl -n kube-system edit service kubernetes-dashboard`
 	2. create [ingress-dashboard.yaml](ingress-dashboard.yaml) via ingress using `kubectl create -f ingress-dashboard.yaml`
-	3. edit `spec`:`containers`:`args` section of `nginx-ingress-microk8s-controller` to add `--enable-ssl-passthrough` option (see [documentation](https://github.com/kubernetes/ingress-nginx/blob/master/docs/user-guide/cli-arguments.md))
+	3. edit `spec`:`containers`:`args` section of `nginx-ingress-microk8s-controller` to add `--enable-ssl-passthrough` option (see [documentation](https://github.com/kubernetes/ingress-nginx/blob/master/docs/user-guide/cli-arguments.md)) using `kubectl --namespace=ingress edit ds/nginx-ingress-microk8s-controller` - remember to indent with spaces not tabs.
 8. Create an admin user (from [here](https://github.com/kubernetes/dashboard/wiki/Creating-sample-user)) using [create-admin-user.yaml](create-admin-user.yaml) - not sure if this is strictly necessary as any user with `admin-user` role will work (or just "skip" login), but i did it.
 	- might need to configure `enable-skip-login` - see [documentation](https://github.com/kubernetes/dashboard/blob/master/docs/common/dashboard-arguments.md).
 9. Log in to the dashboard. Find the token using the command `kubectl -n kube-system describe secret $(kubectl -n kube-system get secret | grep admin-user | awk '{print $1}')`
