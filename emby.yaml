@@ -79,18 +79,18 @@ metadata:
   namespace: downloads
   annotations:
     deployment.kubernetes.io/max-replicas: "1"
-strategy:
-  type: Recreate
 spec:
+  strategy:
+    type: Recreate
   replicas: 1
-  parallelism: 1
-  max-replicas: 1
-  maxSurge: 0
   template:
     metadata:
       labels:
         app: emby
     spec:
+      selector:
+        matchLabels:
+          app: emby
       containers:
       - name: emby
         readinessProbe:
