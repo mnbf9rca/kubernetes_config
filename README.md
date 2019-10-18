@@ -1,6 +1,6 @@
 
 # How to implement
-basic steps:
+## basic steps
 1. install ubuntu server 
 	1. remove splash screen so you can see boot and shutdown messages:
 		- modify  `/etc/default/grub` to remove `quiet` and `splash` from `GRUB_CMDLINE_LINUX_DEFAULT`:
@@ -45,23 +45,29 @@ basic steps:
 2. enable DNS, dashboard, ingress and make kubectl work without microk8s in front. Enable DNS first because of https://github.com/ubuntu/microk8s/issues/706
 	```
 	sudo microk8s.enable dns 
-	sudo microk8s.enable ingress dashboard
 	sudo snap alias microk8s.kubectl kubectl
 	```
+## Enable Kube ingress
+1. enable ingress:
+	`sudo microk8s.enable ingress`
 3. apply `nginx-load-balancer-microk8s-conf.yaml` (or at least the HSTS part) to disable HSTS, and set max file upload size to accomodate large files (e.g. nzbs)
 3. edit `spec`:`containers`:`args` section of `nginx-ingress-microk8s-controller` to add `--enable-ssl-passthrough` option (see [documentation](https://github.com/kubernetes/ingress-nginx/blob/master/docs/user-guide/cli-arguments.md))
     - `kubectl --namespace=ingress edit DaemonSet/nginx-ingress-microk8s-controller` - remember to indent with spaces not tabs.
+    
+## dashboard
+1. enable dashboard:
+	`sudo microk8s.enable dashboard`
 6. create DNS entry for dashboard (e.g. `k-dashboard` as cname for `k`)
 7. Publish dashboard as an ingress
 	1. edit existing service to switch from `ClusterIP` to `NodePort`: `kubectl -n kube-system edit service kubernetes-dashboard`
 	2. create [ingress-dashboard.yaml](ingress-dashboard.yaml) via ingress using `kubectl create -f ingress-dashboard.yaml`
-
 1. Edit `kubernetes-dashboard` to add `--enable-skip-login` to the `spec`:`template`:`spec`:`containers`:`args` node - see [documentation](https://github.com/kubernetes/dashboard/blob/master/docs/common/dashboard-arguments.md)
     -  `kubectl --namespace=kube-system edit deployments.apps kubernetes-dashboard` 
 
-
 8. (optional if not skip login) Create an admin user (from [here](https://github.com/kubernetes/dashboard/wiki/Creating-sample-user)) using [create-admin-user.yaml](create-admin-user.yaml) - not sure if this is strictly necessary as any user with `admin-user` role will work (or just "skip" login), but i did it.
 9. Log in to the dashboard. Find the token using the command `kubectl -n kube-system describe secret $(kubectl -n kube-system get secret | grep admin-user | awk '{print $1}')`
+
+## apps
 1. Create persistent volume claims and `downloads` namespace with `persistent-nfs-storage.yaml`
 1. emby
 	1. deploy emby.yaml
