@@ -2,6 +2,7 @@
 # How to implement
 ## basic steps
 1. install ubuntu server 
+	1. install config from other repo
 	1. remove splash screen so you can see boot and shutdown messages:
 		- modify  `/etc/default/grub` to remove `quiet` and `splash` from `GRUB_CMDLINE_LINUX_DEFAULT`:
 			```
@@ -9,6 +10,7 @@
 			```
 
 		- Run  `sudo update-grub`
+	1. update `sudo apt-get dist-upgrade autoremove --no-install-recommends --assume-yes`
 	2. increase max file limit:
 		1. GUI login:
 			 - modify `/etc/systemd/user.conf` by setting `DefaultLimitNOFILE=1048576`
