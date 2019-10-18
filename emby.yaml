@@ -82,15 +82,16 @@ metadata:
 spec:
   strategy:
     type: Recreate
+  selector:
+    matchLabels:
+      app: emby
   replicas: 1
   template:
     metadata:
       labels:
         app: emby
     spec:
-      selector:
-        matchLabels:
-          app: emby
+
       containers:
       - name: emby
         readinessProbe:
