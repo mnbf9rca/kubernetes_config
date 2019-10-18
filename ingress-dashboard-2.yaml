@@ -4,7 +4,7 @@ metadata:
   name: ingress-dashboard
   namespace: kube-system
   annotations:
-    nginx.ingress.kubernetes.io/ssl-passthrough: "true"
+    nginx.ingress.kubernetes.io/backend-protocol: "HTTPS"
     nginx.ingress.kubernetes.io/rewrite-target: /
 spec:
   tls:
