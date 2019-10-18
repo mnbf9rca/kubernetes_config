@@ -49,12 +49,13 @@ basic steps:
 	sudo snap alias microk8s.kubectl kubectl
 	```
 3. apply `nginx-load-balancer-microk8s-conf.yaml` (or at least the HSTS part) to disable HSTS, and set max file upload size to accomodate large files (e.g. nzbs)
+3. edit `spec`:`containers`:`args` section of `nginx-ingress-microk8s-controller` to add `--enable-ssl-passthrough` option (see [documentation](https://github.com/kubernetes/ingress-nginx/blob/master/docs/user-guide/cli-arguments.md))
+    - `kubectl --namespace=ingress edit DaemonSet/nginx-ingress-microk8s-controller` - remember to indent with spaces not tabs.
 6. create DNS entry for dashboard (e.g. `k-dashboard` as cname for `k`)
 7. Publish dashboard as an ingress
 	1. edit existing service to switch from `ClusterIP` to `NodePort`: `kubectl -n kube-system edit service kubernetes-dashboard`
 	2. create [ingress-dashboard.yaml](ingress-dashboard.yaml) via ingress using `kubectl create -f ingress-dashboard.yaml`
-	3. edit `spec`:`containers`:`args` section of `nginx-ingress-microk8s-controller` to add `--enable-ssl-passthrough` option (see [documentation](https://github.com/kubernetes/ingress-nginx/blob/master/docs/user-guide/cli-arguments.md))
-		 - `kubectl --namespace=ingress edit DaemonSet/nginx-ingress-microk8s-controller` - remember to indent with spaces not tabs.
+
 1. Edit `kubernetes-dashboard` to add `--enable-skip-login` to the `spec`:`template`:`spec`:`containers`:`args` node - see [documentation](https://github.com/kubernetes/dashboard/blob/master/docs/common/dashboard-arguments.md)
     -  `kubectl --namespace=kube-system edit deployments.apps kubernetes-dashboard` 
 
