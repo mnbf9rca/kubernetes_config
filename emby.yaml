@@ -3,9 +3,6 @@ kind: ConfigMap
 metadata:
   name: ingress-tcp-passthrough
   namespace: default
-labels:
-  app: emby
-  appmappath: config
 data:
   8096: "downloads/emby-service:8096"
 ---  
