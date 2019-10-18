@@ -10,7 +10,7 @@
 			```
 
 		- Run  `sudo update-grub`
-	1. update `sudo apt-get dist-upgrade autoremove --no-install-recommends --assume-yes`
+	1. update `sudo apt-get dist-upgrade --autoremove --no-install-recommends --assume-yes`
 	2. increase max file limit:
 		1. GUI login:
 			 - modify `/etc/systemd/user.conf` by setting `DefaultLimitNOFILE=1048576`
