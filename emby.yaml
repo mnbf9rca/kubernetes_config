@@ -25,9 +25,6 @@ kind: PersistentVolume
 metadata:
   name: emby-config-nfs-pv
   namespace: downloads
-labels:
-  app: emby
-  appmappath: config
 spec:
   selector:
   capacity:
@@ -59,9 +56,6 @@ kind: PersistentVolume
 metadata:
   name: emby-videos-nfs-pv
   namespace: downloads
-labels:
-  app: emby
-  appmappath: videos
 spec:
   capacity:
     storage: 6Ti
