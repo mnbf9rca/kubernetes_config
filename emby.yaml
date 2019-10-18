@@ -26,7 +26,6 @@ metadata:
   name: emby-config-nfs-pv
   namespace: downloads
 spec:
-  selector:
   capacity:
     storage: 1Ti
   accessModes:
@@ -41,10 +40,6 @@ metadata:
   name: emby-config-nfs-pvc
   namespace: downloads
 spec:
-  selector:
-    matchlabels:
-      app: emby
-      appmappath: config
   accessModes:
     - ReadWriteOnce
   resources:
@@ -71,10 +66,6 @@ metadata:
   name: emby-videos-nfs-pvc
   namespace: downloads
 spec:
-  selector:
-    matchlabels:
-      app: emby
-      appmappath: videos
   accessModes:
     - ReadWriteMany
   resources:
@@ -95,9 +86,6 @@ spec:
   parallelism: 1
   max-replicas: 1
   maxSurge: 0
-  selector:
-    matchLabels:
-      app: emby
   template:
     metadata:
       labels:
