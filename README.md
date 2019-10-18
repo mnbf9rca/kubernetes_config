@@ -37,6 +37,12 @@
 		sudo ufw enable
 		sudo ufw reload
 		```
+	6. install iptables-persistent and configure
+	    ```
+	    sudo iptables -P FORWARD ACCEPT
+	    sudo apt-get install iptables-persistent
+	    ```
+	    
 2. switch kubectl to use nano:
 	```
 	export KUBE_EDITOR="nano"
@@ -77,8 +83,12 @@
 	4. open firewall: `sudo ufw allow 8086`
 1. sabnzbd, couchpotato, sonarr - just create a cname sab, cp, sonarr.* and deploy the relevant yaml file.
 
+## Helm
+1. `microk8s.enable helm`
+1. because of https://github.com/ubuntu/microk8s/issues/70 use `microk8s.helm init --override spec.selector.matchLabels.'name'='tiller',spec.selector.matchLabels.'app'='helm' --output yaml | sed 's@apiVersion: extensions/v1beta1@apiVersion: apps/v1@' | microk8s.kubectl apply -f -`
 
-## to disable or enable snap at boot
+
+# to disable or enable snap at boot
 from https://docs.snapcraft.io/service-management/3965
 To prevent a service from starting on the next boot, use the  `--disable`  option:
 ```
