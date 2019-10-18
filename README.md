@@ -68,6 +68,7 @@
 9. Log in to the dashboard. Find the token using the command `kubectl -n kube-system describe secret $(kubectl -n kube-system get secret | grep admin-user | awk '{print $1}')`
 
 ## apps
+1. Install NFS helper `sudo apt install nfs-common`
 1. Create persistent volume claims and `downloads` namespace with `persistent-nfs-storage.yaml`
 1. emby
 	1. deploy emby.yaml
