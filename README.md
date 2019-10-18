@@ -40,7 +40,7 @@ basic steps:
 2. switch kubectl to use nano:
 	```
 	export KUBE_EDITOR="nano"
-	echo KUBE_EDITOR="nano" >> ~/.bashrc
+	echo export KUBE_EDITOR="nano" >> ~/.bashrc
 	```
 2. enable DNS, dashboard, ingress and make kubectl work without microk8s in front. Enable DNS first because of https://github.com/ubuntu/microk8s/issues/706
 	```
