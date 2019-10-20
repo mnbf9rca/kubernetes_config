@@ -25,13 +25,13 @@
 
 # create cluster, basic config
 1. in Rancher, create new custom cluster
-1. edit config map nginx-cofiguration by pasting this in to the "edit" box (it'll parse it to individual values):
+1. edit config map `nginx-cofiguration` by pasting this in to the "edit" box (it'll parse it to individual values):
   ```
-  hsts: "true"
-  hsts-include-subdomains: "true"
-  hsts-max-age: "0"
-  hsts-preload: "false"
-  proxy-body-size: "20m"
+  hsts: true
+  hsts-include-subdomains: true
+  hsts-max-age: 0
+  hsts-preload: false
+  proxy-body-size: 20m
   ```
 1. Create new "project" called "Downloads"
 
