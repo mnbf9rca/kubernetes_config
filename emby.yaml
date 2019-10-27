@@ -1,5 +1,5 @@
-kind: Service
 apiVersion: v1
+kind: Service
 metadata:
   name: emby-service
   namespace: downloads
@@ -7,6 +7,8 @@ spec:
   selector:
     app: emby
   type: NodePort
+  externalTrafficPolicy: Cluster
+  sessionAffinity: None
   ports:
   - name: http-8096
     port: 8096
@@ -86,41 +88,53 @@ metadata:
   name: emby
   namespace: downloads
 spec:
+  selector:
+    matchLabels:
+      app: emby
   progressDeadlineSeconds: 600
   replicas: 1
   revisionHistoryLimit: 10
   strategy:
     type: Recreate
   template:
+    metadata:
+      labels:
+        app: emby
     spec:
       containers:
       - env:
-        - name: GID
+        - name: PGID
           value: "10"
-        - name: UID
+        - name: PUID
           value: "911"
-        image: emby/embyserver:latest
+        - name: TZ
+          value: Europe/London
+        image: linuxserver/emby:latest
         imagePullPolicy: Always
         livenessProbe:
           failureThreshold: 3
-          initialDelaySeconds: 3600
-          periodSeconds: 10
-          successThreshold: 1
-          tcpSocket:
+          httpGet:
+            path: /
             port: 8096
+            scheme: HTTP
+          initialDelaySeconds: 10
+          periodSeconds: 2
+          successThreshold: 1
           timeoutSeconds: 2
         name: emby
         ports:
         - containerPort: 8096
-          name: http-8096
+          name: 8096tcp01
           protocol: TCP
         readinessProbe:
           failureThreshold: 3
-          initialDelaySeconds: 10
-          periodSeconds: 10
-          successThreshold: 2
-          tcpSocket:
+          httpGet:
+            path: /
             port: 8096
+            scheme: HTTP
+          initialDelaySeconds: 10
+          periodSeconds: 2
+          successThreshold: 2
           timeoutSeconds: 2
         volumeMounts:
         - mountPath: /config
