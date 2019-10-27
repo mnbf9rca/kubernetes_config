@@ -32,6 +32,7 @@ metadata:
   name: couchpotato-nfs-pvc
   namespace: downloads
 spec:
+  volumeName: couchpotato-nfs-pv
   accessModes:
     - ReadWriteMany
   storageClassName: ""

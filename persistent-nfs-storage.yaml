@@ -23,6 +23,7 @@ metadata:
   name: downloads-nfs-pvc
   namespace: downloads
 spec:
+  volumeName: downloads-nfs-pv
   accessModes:
     - ReadWriteMany
   storageClassName: ""
@@ -50,6 +51,7 @@ metadata:
   name: movies-nfs-pvc
   namespace: downloads
 spec:
+  volumeName: movies-nfs-pv
   accessModes:
     - ReadWriteMany
   storageClassName: ""
