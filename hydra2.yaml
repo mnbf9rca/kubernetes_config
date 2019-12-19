@@ -1,21 +1,21 @@
 kind: Service
 apiVersion: v1
 metadata:
-  name: sabnzbd-service
+  name: hydra-service
   namespace: downloads
 spec:
   selector:
-    app: sabnzbd
+    app: hydra
   type: NodePort
   ports:
   - protocol: TCP
-    port: 8080
-    targetPort: 8080
+    port: 5096
+    targetPort: 5096
 ---
 apiVersion: v1
 kind: PersistentVolume
 metadata:
-  name: sabnzbd-config-nfs-pv
+  name: hydra-config-nfs-pv
   namespace: downloads
 spec:
   capacity:
@@ -24,15 +24,15 @@ spec:
     - ReadWriteMany
   nfs:
     server: fs.cynexia.net
-    path: "/tank/appdata/sabnzbd/config"
+    path: "/tank/appdata/hydra/config"
 ---
 kind: PersistentVolumeClaim
 apiVersion: v1
 metadata:
-  name: sabnzbd-config-nfs-pvc
+  name: hydra-config-nfs-pvc
   namespace: downloads
 spec:
-  volumeName: sabnzbd-config-nfs-pv
+  volumeName: hydra-config-nfs-pv
   accessModes:
     - ReadWriteMany
   storageClassName: ""
@@ -40,122 +40,51 @@ spec:
     requests:
       storage: 10Gi
 ---
-apiVersion: v1
-kind: PersistentVolume
-metadata:
-  name: watch-nfs-pv
-  namespace: downloads
-spec:
-  capacity:
-    storage: 6Ti
-  accessModes:
-    - ReadWriteMany
-  nfs:
-    server: fs.cynexia.net
-    path: "/tank/appdata/sabnzbd/watch"
----
-kind: PersistentVolumeClaim
-apiVersion: v1
-metadata:
-  name: watch-nfs-pvc
-  namespace: downloads
-spec:
-  volumeName: watch-nfs-pv
-  accessModes:
-    - ReadWriteMany
-  storageClassName: ""
-  resources:
-    requests:
-      storage: 6Ti
----
-apiVersion: v1
-kind: PersistentVolume
-metadata:
-  name: incomplete-nfs-pv
-  namespace: downloads
-spec:
-  capacity:
-    storage: 6Ti
-  accessModes:
-    - ReadWriteMany
-  nfs:
-    server: fs.cynexia.net
-    path: "/tank/largeappdata/sabnzbd/incomplete"
----
-kind: PersistentVolumeClaim
-apiVersion: v1
-metadata:
-  name: incomplete-nfs-pvc
-  namespace: downloads
-spec:
-  volumeName: incomplete-nfs-pv
-  accessModes:
-    - ReadWriteMany
-  storageClassName: ""
-  resources:
-    requests:
-      storage: 6Ti
----
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: sabnzbd
+  name: hydra
   namespace: downloads
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: sabnzbd
+      app: hydra
   template:
     metadata:
       labels:
-        app: sabnzbd
+        app: hydra
     spec:
       containers:
-      - name: sabnzbd
-        image: linuxserver/sabnzbd:latest
+      - name: hydra
+        image: linuxserver/hydra2:latest
         env:
         - name: PUID
           value: "99"
         - name: PGID
-          value: "100"  
+          value: "911"  
         ports:
-        - containerPort: 8080
+        - containerPort: 5096
           protocol: TCP
         volumeMounts:
-        - name: watch
-          mountPath: /watch
         - name: config
           mountPath: /config
-        - name: downloads
-          mountPath: /downloads
-        - name: incomplete
-          mountPath: /incomplete-downloads
       volumes:
-      - name: watch
-        persistentVolumeClaim:
-          claimName: watch-nfs-pvc
       - name: config
         persistentVolumeClaim:
-          claimName: sabnzbd-config-nfs-pvc
-      - name: downloads
-        persistentVolumeClaim:
-          claimName: downloads-nfs-pvc
-      - name: incomplete
-        persistentVolumeClaim:
-          claimName: incomplete-nfs-pvc
+          claimName: hydra-config-nfs-pvc
 ---
 apiVersion: extensions/v1beta1
 kind: Ingress
 metadata:
-  name: ingress-sabnzbd
+  name: ingress-hydra
   namespace: downloads
 spec:
   rules:
-  - host: sab.cynexia.net
+  - host: hydra.cynexia.net
     http:
       paths:
       - path: /
         backend:
-          serviceName: sabnzbd-service
-          servicePort: 8080
+          serviceName: hydra-service
+          servicePort: 5096
