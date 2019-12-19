@@ -9,8 +9,8 @@ spec:
   type: NodePort
   ports:
   - protocol: TCP
-    port: 5096
-    targetPort: 5096
+    port: 5076
+    targetPort: 5076
 ---
 apiVersion: v1
 kind: PersistentVolume
@@ -64,7 +64,7 @@ spec:
         - name: PGID
           value: "911"  
         ports:
-        - containerPort: 5096
+        - containerPort: 5076
           protocol: TCP
         volumeMounts:
         - name: config
@@ -87,4 +87,4 @@ spec:
       - path: /
         backend:
           serviceName: hydra-service
-          servicePort: 5096
+          servicePort: 5076
