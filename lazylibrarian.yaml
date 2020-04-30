@@ -127,7 +127,7 @@ spec:
         - name: "DOCKER_MODS"
           value: "linuxserver/calibre-web:calibre"
         readinessProbe:
-          failureThreshold: 150
+          failureThreshold: 2
           httpGet:
             path: /
             port: 5299
