@@ -80,7 +80,7 @@ spec:
     - ReadWriteMany
   nfs:
     server: fs.cynexia.net
-    path: "/tank/largeappdata/sabnzbd/books"
+    path: "/tank/largeappdata/sabnzbd/complete/books"
 ---
 kind: PersistentVolumeClaim
 apiVersion: v1
@@ -103,6 +103,8 @@ metadata:
   namespace: downloads
 spec:
   replicas: 1
+  strategy:
+    type: Recreate  
   selector:
     matchLabels:
       app: lazylibrarian
@@ -114,6 +116,7 @@ spec:
       containers:
       - name: lazylibrarian
         image: linuxserver/lazylibrarian:latest
+        imagePullPolicy: Always
         env:
         - name: PUID
           value: "99"
@@ -123,6 +126,16 @@ spec:
           value: "Europe/London"  
         - name: "DOCKER_MODS"
           value: "linuxserver/calibre-web:calibre"
+        readinessProbe:
+          failureThreshold: 150
+          httpGet:
+            path: /
+            port: 5299
+            scheme: HTTP
+          initialDelaySeconds: 60
+          periodSeconds: 2
+          successThreshold: 1
+          timeoutSeconds: 2
         ports:
         - containerPort: 5299
           protocol: TCP
