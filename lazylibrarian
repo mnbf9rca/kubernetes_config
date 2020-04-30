@@ -1,0 +1,160 @@
+kind: Service
+apiVersion: v1
+metadata:
+  name: lazylibrarian-service
+  namespace: downloads
+spec:
+  selector:
+    app: lazylibrarian
+  type: NodePort
+  ports:
+  - protocol: TCP
+    port: 5299
+    targetPort: 5299
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: lazylibrarian-config-nfs-pv
+  namespace: downloads
+spec:
+  capacity:
+    storage: 10Gi
+  accessModes:
+    - ReadWriteMany
+  nfs:
+    server: fs.cynexia.net
+    path: "/tank/appdata/lazylibrarian/config"
+---
+kind: PersistentVolumeClaim
+apiVersion: v1
+metadata:
+  name: lazylibrarian-config-nfs-pvc
+  namespace: downloads
+spec:
+  volumeName: lazylibrarian-config-nfs-pv
+  accessModes:
+    - ReadWriteMany
+  storageClassName: ""
+  resources:
+    requests:
+      storage: 10Gi
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: books-nfs-pv
+  namespace: downloads
+spec:
+  capacity:
+    storage: 6Ti
+  accessModes:
+    - ReadWriteMany
+  nfs:
+    server: fs.cynexia.net
+    path: "/tank/appdata/books"
+---
+kind: PersistentVolumeClaim
+apiVersion: v1
+metadata:
+  name: books-nfs-pvc
+  namespace: downloads
+spec:
+  volumeName: books-nfs-pv
+  accessModes:
+    - ReadWriteMany
+  storageClassName: ""
+  resources:
+    requests:
+      storage: 6Ti
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: lazylibrarian-downloads-nfs-pv
+  namespace: downloads
+spec:
+  capacity:
+    storage: 6Ti
+  accessModes:
+    - ReadWriteMany
+  nfs:
+    server: fs.cynexia.net
+    path: "/tank/largeappdata/sabnzbd/books"
+---
+kind: PersistentVolumeClaim
+apiVersion: v1
+metadata:
+  name: lazylibrarian-downloads-nfs-pvc
+  namespace: downloads
+spec:
+  volumeName: lazylibrarian-downloads-nfs-pv
+  accessModes:
+    - ReadWriteMany
+  storageClassName: ""
+  resources:
+    requests:
+      storage: 6Ti
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: lazylibrarian
+  namespace: downloads
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: lazylibrarian
+  template:
+    metadata:
+      labels:
+        app: lazylibrarian
+    spec:
+      containers:
+      - name: lazylibrarian
+        image: linuxserver/lazylibrarian:latest
+        env:
+        - name: PUID
+          value: "99"
+        - name: PGID
+          value: "100"  
+        - name: "TZ"
+          value: "Europe/London"  
+        - name: "DOCKER_MODS"
+          value: "linuxserver/calibre-web:calibre"
+        ports:
+        - containerPort: 5299
+          protocol: TCP
+        volumeMounts:
+        - name: config
+          mountPath: /config
+        - name: downloads
+          mountPath: /downloads
+        - name: books
+          mountPath: /books
+      volumes:
+      - name: config
+        persistentVolumeClaim:
+          claimName: lazylibrarian-config-nfs-pvc
+      - name: downloads
+        persistentVolumeClaim:
+          claimName: lazylibrarian-downloads-nfs-pvc
+      - name: books
+        persistentVolumeClaim:
+          claimName: books-nfs-pvc
+---
+apiVersion: extensions/v1beta1
+kind: Ingress
+metadata:
+  name: ingress-lazylibrarian
+  namespace: downloads
+spec:
+  rules:
+  - host: lib.cynexia.net
+    http:
+      paths:
+      - path: /
+        backend:
+          serviceName: lazylibrarian-service
+          servicePort: 5299
