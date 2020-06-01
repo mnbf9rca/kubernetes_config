@@ -57,7 +57,7 @@ spec:
     spec:
       containers:
       - name: hydra
-        image: linuxserver/hydra2:latest
+        image: linuxserver/nzbhydra2:latest
         env:
         - name: PUID
           value: "99"
