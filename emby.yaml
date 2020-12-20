@@ -129,13 +129,13 @@ spec:
           name: 8096tcp01
           protocol: TCP
         readinessProbe:
-          failureThreshold: 3
+          failureThreshold: 6
           httpGet:
             path: /
             port: 8096
             scheme: HTTP
-          initialDelaySeconds: 10
-          periodSeconds: 2
+          initialDelaySeconds: 90
+          periodSeconds: 15
           successThreshold: 2
           timeoutSeconds: 2
         volumeMounts:
