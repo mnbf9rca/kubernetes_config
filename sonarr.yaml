@@ -116,7 +116,7 @@ metadata:
   name: sonarr-gip-nfs-pvc
   namespace: downloads
 spec:
-  volumeName: sonarr-tv-nfs-pv: sonarr-gip-nfs-pv
+  volumeName: sonarr-gip-nfs-pv
   accessModes:
     - ReadWriteMany
   storageClassName: ""
