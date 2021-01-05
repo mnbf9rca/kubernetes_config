@@ -96,34 +96,6 @@ spec:
     requests:
       storage: 6Ti
 ---
-apiVersion: v1
-kind: PersistentVolume
-metadata:
-  name: sonarr-gip-nfs-pv
-  namespace: downloads
-spec:
-  capacity:
-    storage: 6Ti
-  accessModes:
-    - ReadWriteMany
-  nfs:
-    server: fs.cynexia.net
-    path: "/tank/appdata/gip/output/tv/"
----
-kind: PersistentVolumeClaim
-apiVersion: v1
-metadata:
-  name: sonarr-gip-nfs-pvc
-  namespace: downloads
-spec:
-  volumeName: sonarr-gip-nfs-pv
-  accessModes:
-    - ReadWriteMany
-  storageClassName: ""
-  resources:
-    requests:
-      storage: 6Ti
----
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -151,8 +123,6 @@ spec:
         - containerPort: 8989
           protocol: TCP
         volumeMounts:
-        - name: gip
-          mountPath: /gip
         - name: config
           mountPath: /config
         - name: downloads
@@ -160,9 +130,6 @@ spec:
         - name: tv
           mountPath: /tv
       volumes:
-      - name: gip
-        persistentVolumeClaim:
-          claimName: sonarr-gip-nfs-pvc
       - name: config
         persistentVolumeClaim:
           claimName: sonarr-config-nfs-pvc
