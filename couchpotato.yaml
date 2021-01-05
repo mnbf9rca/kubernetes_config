@@ -59,9 +59,9 @@ spec:
       - name: couchpotato
         image: linuxserver/couchpotato:latest
         env:
-          - name: UID
-            value: "911"
-          - name: GID
+          - name: PUID
+            value: "110"
+          - name: PGID
             value: "10"
         ports:
         - containerPort: 5050
