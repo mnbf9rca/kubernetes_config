@@ -60,7 +60,7 @@ spec:
         image: linuxserver/nzbhydra2:latest
         env:
         - name: PUID
-          value: "99"
+          value: "110"
         - name: PGID
           value: "911"  
         ports:
