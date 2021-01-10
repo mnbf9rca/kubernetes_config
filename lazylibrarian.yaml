@@ -119,9 +119,9 @@ spec:
         imagePullPolicy: Always
         env:
         - name: PUID
-          value: "99"
+          value: "110"
         - name: PGID
-          value: "100"  
+          value: "998"  
         - name: "TZ"
           value: "Europe/London"  
         - name: "DOCKER_MODS"
