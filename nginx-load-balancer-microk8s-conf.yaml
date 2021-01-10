@@ -1,11 +1,7 @@
 apiVersion: v1
 data:
-  hsts: "true"
-  hsts-include-subdomains: "true"
-  hsts-max-age: "0"
-  hsts-preload: "false"
   proxy-body-size: "20m"
 kind: ConfigMap
 metadata:
-  name: nginx-load-balancer-microk8s-conf
-  namespace: ingress
+  name: nginx-configuration
+  namespace: ingress-nginx

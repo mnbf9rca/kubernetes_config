@@ -83,7 +83,7 @@ spec:
               path: /
               port: containerport
               scheme: HTTP
-            failureThreshold: 2
+            failureThreshold: 5
             periodSeconds: 10
         volumeMounts:
         - name: config
