@@ -126,19 +126,26 @@ spec:
           value: "Europe/London"  
         - name: "DOCKER_MODS"
           value: "linuxserver/calibre-web:calibre"
-        readinessProbe:
-          failureThreshold: 2
-          httpGet:
-            path: /
-            port: 5299
-            scheme: HTTP
-          initialDelaySeconds: 60
-          periodSeconds: 2
-          successThreshold: 1
-          timeoutSeconds: 2
+        startupProbe:
+            failureThreshold: 15
+            httpGet:
+              path: /
+              port: containerport
+              scheme: HTTP
+            periodSeconds: 10
+            successThreshold: 1
+            timeoutSeconds: 1
+        livenessProbe:
+            httpGet:
+              path: /
+              port: containerport
+              scheme: HTTP
+            failureThreshold: 2
+            periodSeconds: 10
         ports:
         - containerPort: 5299
           protocol: TCP
+          name: containerport
         volumeMounts:
         - name: config
           mountPath: /config
