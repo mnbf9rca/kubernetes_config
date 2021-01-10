@@ -102,6 +102,8 @@ metadata:
   name: sonarr
   namespace: downloads
 spec:
+  strategy:
+    type: Recreate
   replicas: 1
   selector:
     matchLabels:
