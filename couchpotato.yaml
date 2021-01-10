@@ -62,7 +62,7 @@ spec:
           - name: PUID
             value: "110"
           - name: PGID
-            value: "10"
+            value: "998"
         ports:
         - containerPort: 5050
           protocol: TCP
