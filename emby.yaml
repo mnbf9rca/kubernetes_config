@@ -106,9 +106,9 @@ spec:
       containers:
       - env:
         - name: PGID
-          value: "110"
-        - name: PUID
           value: "998"
+        - name: PUID
+          value: "110"
         - name: TZ
           value: Europe/London
         image: linuxserver/emby:latest
