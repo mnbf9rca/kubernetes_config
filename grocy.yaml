@@ -20,6 +20,9 @@ kind: Ingress
 metadata:
   name: ingress-grocy
   namespace: downloads
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod | letsencrypt-stg
+    ingress.kubernetes.io/ssl-redirect: "true"
 spec:
   rules:
   - host: grocy.cynexia.net
@@ -32,6 +35,10 @@ spec:
               name: http-web
         path: /
         pathType: ImplementationSpecific
+  tls:
+  - hosts:
+    - grocy.cynexia.net
+    secretName: grocy.cynexia.net
 ---
 apiVersion: v1
 kind: PersistentVolume
