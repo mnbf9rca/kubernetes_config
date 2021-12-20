@@ -1,0 +1,133 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: grocy-service
+  namespace: downloads
+spec:
+  selector:
+    app: grocy
+  type: NodePort
+  externalTrafficPolicy: Cluster
+  sessionAffinity: None
+  ports:
+  - name: http-web
+    port: 80
+    protocol: TCP
+    targetPort: 80
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: ingress-grocy
+  namespace: downloads
+spec:
+  rules:
+  - host: grocy.cynexia.net
+    http:
+      paths:
+      - backend:
+          service:
+            name: grocy-service
+            port: 
+              name: http-web
+        path: /
+        pathType: ImplementationSpecific
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: grocy-config-nfs-pv
+  namespace: downloads
+spec:
+  capacity:
+    storage: 1Ti
+  accessModes:
+    - ReadWriteOnce
+  nfs:
+    server: fs.cynexia.net
+    path: "/tank/appdata/grocy/config/"
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: retain-local-path
+---
+kind: PersistentVolumeClaim
+apiVersion: v1
+metadata:
+  name: grocy-config-nfs-pvc
+  namespace: downloads
+spec:
+  volumeName: grocy-config-nfs-pv
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Ti
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: grocy
+  namespace: downloads
+spec:
+  selector:
+    matchLabels:
+      app: grocy
+  progressDeadlineSeconds: 600
+  replicas: 1
+  revisionHistoryLimit: 10
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app: grocy
+    spec:
+      containers:
+      - env:
+        - name: PGID
+          value: "998"
+        - name: PUID
+          value: "110"
+        - name: TZ
+          value: Europe/London
+        image: lscr.io/linuxserver/grocy:latest
+        imagePullPolicy: Always
+        startupProbe:
+          failureThreshold: 15
+          httpGet:
+            path: /
+            port: webserver
+            scheme: HTTP
+          periodSeconds: 30
+          successThreshold: 1
+          timeoutSeconds: 1
+        livenessProbe:
+          httpGet:
+            path: /
+            port: webserver
+            scheme: HTTP
+          failureThreshold: 2
+          periodSeconds: 10
+        name: grocy
+        ports:
+        - containerPort: 80
+          name: webserver
+          protocol: TCP
+        readinessProbe:
+          failureThreshold: 6
+          httpGet:
+            path: /
+            port: webserver
+            scheme: HTTP
+          initialDelaySeconds: 90
+          periodSeconds: 15
+          successThreshold: 2
+          timeoutSeconds: 2
+        volumeMounts:
+        - mountPath: /config
+          name: config
+      restartPolicy: Always
+      terminationGracePeriodSeconds: 30
+      volumes:
+      - name: config
+        persistentVolumeClaim:
+          claimName: grocy-config-nfs-pvc
