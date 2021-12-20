@@ -8,7 +8,8 @@ spec:
     app: sabnzbd
   type: NodePort
   ports:
-  - protocol: TCP
+  - name: sab-web-port
+    protocol: TCP
     port: 8080
     targetPort: 8080
 ---
@@ -25,6 +26,8 @@ spec:
   nfs:
     server: fs.cynexia.net
     path: "/tank/appdata/sabnzbd/config"
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: retain-local-path
 ---
 kind: PersistentVolumeClaim
 apiVersion: v1
@@ -53,6 +56,8 @@ spec:
   nfs:
     server: fs.cynexia.net
     path: "/tank/appdata/sabnzbd/watch"
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: retain-local-path
 ---
 kind: PersistentVolumeClaim
 apiVersion: v1
@@ -164,7 +169,7 @@ spec:
         persistentVolumeClaim:
           claimName: incomplete-nfs-pvc
 ---
-apiVersion: extensions/v1beta1
+apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
   name: ingress-sabnzbd
@@ -174,7 +179,10 @@ spec:
   - host: sab.cynexia.net
     http:
       paths:
-      - path: /
-        backend:
-          serviceName: sabnzbd-service
-          servicePort: 8080
+      - backend:
+          service:
+            name: sabnzbd-service
+            port:
+              name: sab-web-port
+        path: /
+        pathType: ImplementationSpecific
