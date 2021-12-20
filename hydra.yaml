@@ -1,0 +1,98 @@
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: hydra-config-nfs-pv
+  namespace: downloads
+spec:
+  capacity:
+    storage: 1Ti
+  accessModes:
+    - ReadWriteOnce
+  nfs:
+    server: fs.cynexia.net
+    path: "/tank/appdata/hydra/config/"
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: retain-local-path
+---
+kind: PersistentVolumeClaim
+apiVersion: v1
+metadata:
+  name: hydra-config-nfs-pvc
+  namespace: downloads
+spec:
+  volumeName: hydra-config-nfs-pv
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Ti
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hydra
+  namespace: downloads
+spec:
+  selector:
+    matchLabels:
+      app: hydra
+  progressDeadlineSeconds: 600
+  replicas: 1
+  revisionHistoryLimit: 10
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app: hydra
+    spec:
+      containers:
+      - env:
+        - name: PGID
+          value: "998"
+        - name: PUID
+          value: "110"
+        - name: TZ
+          value: Europe/London
+        image: linuxserver/nzbhydra2:latest
+        imagePullPolicy: Always
+        startupProbe:
+          failureThreshold: 15
+          httpGet:
+            path: /
+            port: 5076tcp01
+            scheme: HTTP
+          periodSeconds: 30
+          successThreshold: 1
+          timeoutSeconds: 1
+        livenessProbe:
+          httpGet:
+            path: /
+            port: 5076tcp01
+            scheme: HTTP
+          failureThreshold: 2
+          periodSeconds: 10
+        name: hydra
+        ports:
+        - containerPort: 5076
+          name: 5076tcp01
+          protocol: TCP
+        readinessProbe:
+          failureThreshold: 6
+          httpGet:
+            path: /
+            port: 5076
+            scheme: HTTP
+          initialDelaySeconds: 90
+          periodSeconds: 15
+          successThreshold: 2
+          timeoutSeconds: 2
+        volumeMounts:
+        - mountPath: /config
+          name: config
+      restartPolicy: Always
+      terminationGracePeriodSeconds: 30
+      volumes:
+      - name: config
+        persistentVolumeClaim:
+          claimName: hydra-config-nfs-pvc
