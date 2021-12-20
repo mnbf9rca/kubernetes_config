@@ -1,0 +1,56 @@
+# requires certmgr to be installed, creates an issuer for prod and staging servers
+# follows https://cert-manager.io/docs/configuration/acme/dns01/route53/
+apiVersion: v1
+data:
+  secret-access-key: <key>
+kind: Secret
+metadata:
+  name: prod-route53-credentials-secret
+  namespace: cert-manager
+type: Opaque
+---
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: letsencrypt-prod
+spec:
+  acme:
+    email: <email>
+    preferredChain: ""
+    privateKeySecretRef:
+      name: pk-letsencrypt-prod
+    server: https://acme-v02.api.letsencrypt.org/directory
+    solvers:
+    - dns01:
+        route53:
+          accessKeyID: AKIAYWQ3QCCFJ3WWB4WW
+          region: eu-west-2
+          secretAccessKeySecretRef:
+            key: secret-access-key
+            name: prod-route53-credentials-secret
+      selector:
+        dnsZones:
+        - cynexia.net
+---
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: letsencrypt-stg
+spec:
+  acme:
+    email: <email>
+    preferredChain: ""
+    privateKeySecretRef:
+      name: pk-letsencrypt-stg
+    server: https://acme-staging-v02.api.letsencrypt.org/directory
+    solvers:
+    - dns01:
+        route53:
+          accessKeyID: AKIAYWQ3QCCFJ3WWB4WW
+          region: eu-west-2
+          secretAccessKeySecretRef:
+            key: secret-access-key
+            name: prod-route53-credentials-secret
+      selector:
+        dnsZones:
+        - cynexia.net
