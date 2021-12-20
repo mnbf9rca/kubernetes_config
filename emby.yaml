@@ -43,6 +43,8 @@ spec:
   nfs:
     server: fs.cynexia.net
     path: "/tank/appdata/emby/"
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: retain-local-path
 ---
 kind: PersistentVolumeClaim
 apiVersion: v1
@@ -70,6 +72,8 @@ spec:
   nfs:
     server: fs.cynexia.net
     path: "/tank/video/"
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: retain-local-path
 ---
 kind: PersistentVolumeClaim
 apiVersion: v1
@@ -113,43 +117,35 @@ spec:
           value: Europe/London
         image: linuxserver/emby:latest
         imagePullPolicy: Always
-        startupProbe:
-          failureThreshold: 15
-          httpGet:
-            path: /
-            port: 8096tcp02
-            scheme: HTTP
-          periodSeconds: 30
-          successThreshold: 1
-          timeoutSeconds: 1
-        livenessProbe:
-          httpGet:
-            path: /
-            port: 8096tcp02
-            scheme: HTTP
-          failureThreshold: 2
-          periodSeconds: 10
         name: emby
         ports:
         - containerPort: 8096
           name: 8096tcp01
           protocol: TCP
-        readinessProbe:
-          failureThreshold: 6
-          httpGet:
-            path: /
-            port: 8096
-            scheme: HTTP
-          initialDelaySeconds: 90
-          periodSeconds: 15
-          successThreshold: 2
-          timeoutSeconds: 2
         volumeMounts:
         - mountPath: /config
           name: config
         - mountPath: /mnt
           name: video
       restartPolicy: Always
+      startupProbe:
+        failureThreshold: 10
+        httpGet:
+          path: /
+          port: 8096tcp01
+          scheme: HTTP
+        periodSeconds: 60
+        successThreshold: 1
+        timeoutSeconds: 5
+      livenessProbe:
+        failureThreshold: 3
+        httpGet:
+          path: /
+          port: 8096tcp01
+          scheme: HTTP
+        periodSeconds: 60
+        successThreshold: 1
+        timeoutSeconds: 1
       terminationGracePeriodSeconds: 30
       volumes:
       - name: config
