@@ -26,9 +26,11 @@ spec:
     http:
       paths:
       - backend:
-          serviceName: emby-service
-          servicePort: 8096
+          service:
+            name: emby-service
+            port: http-8096
         path: /
+        pathType: ImplementationSpecific
 ---
 apiVersion: v1
 kind: PersistentVolume
