@@ -15,11 +15,14 @@ spec:
     protocol: TCP
     targetPort: 8096
 ---
-apiVersion: extensions/v1beta1
+apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
   name: ingress-emby
   namespace: downloads
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    ingress.kubernetes.io/ssl-redirect: "true"
 spec:
   rules:
   - host: emby.cynexia.net
@@ -28,9 +31,14 @@ spec:
       - backend:
           service:
             name: emby-service
-            port: http-8096
+            port: 
+              name: http-8096
         path: /
         pathType: ImplementationSpecific
+  tls:
+  - hosts:
+    - emby.cynexia.net
+    secretName: emby.cynexia.net
 ---
 apiVersion: v1
 kind: PersistentVolume
