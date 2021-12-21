@@ -8,7 +8,8 @@ spec:
     app: couchpotato
   type: NodePort
   ports:
-  - protocol: TCP
+  - name: cp-web-port
+    protocol: TCP
     port: 5050
     targetPort: 5050
 ---
@@ -68,12 +69,12 @@ spec:
         ports:
         - containerPort: 5050
           protocol: TCP
-          name: containerport
+          name: cpwebport
         startupProbe:
             failureThreshold: 15
             httpGet:
               path: /
-              port: containerport
+              port: cpwebport
               scheme: HTTP
             periodSeconds: 10
             successThreshold: 1
@@ -81,7 +82,7 @@ spec:
         livenessProbe:
             httpGet:
               path: /
-              port: containerport
+              port: cpwebport
               scheme: HTTP
             failureThreshold: 5
             periodSeconds: 10
@@ -103,17 +104,27 @@ spec:
         persistentVolumeClaim:
           claimName: movies-nfs-pvc
 ---
-apiVersion: extensions/v1beta1
+apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
   name: ingress-couchpotato
   namespace: downloads
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    ingress.kubernetes.io/ssl-redirect: "true"
 spec:
   rules:
   - host: cp.cynexia.net
     http:
       paths:
-      - path: /
-        backend:
-          serviceName: couchpotato-service
-          servicePort: 5050
+      - backend:
+          service:
+            name: couchpotato-service
+            port:
+              name: cp-web-port
+        path: /
+        pathType: ImplementationSpecific
+  tls:
+  - hosts:
+    - cp.cynexia.net
+    secretName: cp.cynexia.net
