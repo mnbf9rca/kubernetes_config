@@ -16,6 +16,34 @@ spec:
 apiVersion: v1
 kind: PersistentVolume
 metadata:
+  name: sabnzbd-downloads-nfs-pv
+  namespace: downloads
+spec:
+  capacity:
+    storage: 6Ti
+  accessModes:
+    - ReadWriteMany
+  nfs:
+    server: fs.cynexia.net
+    path: "/tank/largeappdata/sabnzbd/complete"
+---
+kind: PersistentVolumeClaim
+apiVersion: v1
+metadata:
+  name: sabnzbd-downloads-nfs-pvc
+  namespace: downloads
+spec:
+  volumeName: sabnzbd-downloads-nfs-pv
+  accessModes:
+    - ReadWriteMany
+  storageClassName: ""
+  resources:
+    requests:
+      storage: 6Ti
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
   name: sabnzbd-config-nfs-pv
   namespace: downloads
 spec:
