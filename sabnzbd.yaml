@@ -46,7 +46,7 @@ spec:
 apiVersion: v1
 kind: PersistentVolume
 metadata:
-  name: watch-nfs-pv
+  name: sabnzbd-watch-nfs-pv
   namespace: downloads
 spec:
   capacity:
@@ -62,10 +62,10 @@ spec:
 kind: PersistentVolumeClaim
 apiVersion: v1
 metadata:
-  name: watch-nfs-pvc
+  name: sabnzbd-watch-nfs-pvc
   namespace: downloads
 spec:
-  volumeName: watch-nfs-pv
+  volumeName: sabnzbd-watch-nfs-pv
   accessModes:
     - ReadWriteMany
   storageClassName: ""
@@ -76,7 +76,7 @@ spec:
 apiVersion: v1
 kind: PersistentVolume
 metadata:
-  name: incomplete-nfs-pv
+  name: sabnzbd-incomplete-nfs-pv
   namespace: downloads
 spec:
   capacity:
@@ -90,10 +90,10 @@ spec:
 kind: PersistentVolumeClaim
 apiVersion: v1
 metadata:
-  name: incomplete-nfs-pvc
+  name: sabnzbd-incomplete-nfs-pvc
   namespace: downloads
 spec:
-  volumeName: incomplete-nfs-pv
+  volumeName: sabnzbd-incomplete-nfs-pv
   accessModes:
     - ReadWriteMany
   storageClassName: ""
@@ -158,16 +158,16 @@ spec:
       volumes:
       - name: watch
         persistentVolumeClaim:
-          claimName: watch-nfs-pvc
+          claimName: sabnzbd-watch-nfs-pvc
       - name: config
         persistentVolumeClaim:
           claimName: sabnzbd-config-nfs-pvc
       - name: downloads
         persistentVolumeClaim:
-          claimName: downloads-nfs-pvc
+          claimName: sabnzbd-downloads-nfs-pvc
       - name: incomplete
         persistentVolumeClaim:
-          claimName: incomplete-nfs-pvc
+          claimName: sabnzbd-incomplete-nfs-pvc
 ---
 apiVersion: networking.k8s.io/v1
 kind: Ingress
