@@ -26,6 +26,8 @@ spec:
   nfs:
     server: fs.cynexia.net
     path: "/tank/largeappdata/sabnzbd/complete"
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: retain-local-path
 ---
 kind: PersistentVolumeClaim
 apiVersion: v1
@@ -36,7 +38,7 @@ spec:
   volumeName: sabnzbd-downloads-nfs-pv
   accessModes:
     - ReadWriteMany
-  storageClassName: ""
+  storageClassName: retain-local-path
   resources:
     requests:
       storage: 6Ti
@@ -66,7 +68,7 @@ spec:
   volumeName: sabnzbd-config-nfs-pv
   accessModes:
     - ReadWriteMany
-  storageClassName: ""
+  storageClassName: retain-local-path
   resources:
     requests:
       storage: 10Gi
@@ -96,7 +98,7 @@ spec:
   volumeName: sabnzbd-watch-nfs-pv
   accessModes:
     - ReadWriteMany
-  storageClassName: ""
+  storageClassName: retain-local-path
   resources:
     requests:
       storage: 6Ti
@@ -114,6 +116,8 @@ spec:
   nfs:
     server: fs.cynexia.net
     path: "/tank/largeappdata/sabnzbd/incomplete"
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: retain-local-path
 ---
 kind: PersistentVolumeClaim
 apiVersion: v1
@@ -124,7 +128,7 @@ spec:
   volumeName: sabnzbd-incomplete-nfs-pv
   accessModes:
     - ReadWriteMany
-  storageClassName: ""
+  storageClassName: retain-local-path
   resources:
     requests:
       storage: 6Ti
