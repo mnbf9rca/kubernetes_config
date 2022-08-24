@@ -1,0 +1,203 @@
+kind: Service
+apiVersion: v1
+metadata:
+  name: radarr-service
+  namespace: downloads
+spec:
+  selector:
+    app: radarr
+  type: NodePort
+  ports:
+  - name: radarr-web-port
+    protocol: TCP
+    port: 7878
+    targetPort: 7878
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: radarr-config-nfs-pv
+  namespace: downloads
+spec:
+  capacity:
+    storage: 10Gi
+  accessModes:
+    - ReadWriteMany
+  nfs:
+    server: fs.cynexia.net
+    path: "/tank/appdata/radarr"
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: retain-local-path
+---
+kind: PersistentVolumeClaim
+apiVersion: v1
+metadata:
+  name: radarr-config-nfs-pvc
+  namespace: downloads
+spec:
+  volumeName: radarr-config-nfs-pv
+  accessModes:
+    - ReadWriteMany
+  storageClassName: retain-local-path
+  resources:
+    requests:
+      storage: 10Gi
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: radarr-downloads-nfs-pv
+  namespace: downloads
+spec:
+  capacity:
+    storage: 6Ti
+  accessModes:
+    - ReadWriteMany
+  nfs:
+    server: fs.cynexia.net
+    path: "/tank/largeappdata/sabnzbd/complete"
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: retain-local-path
+---
+kind: PersistentVolumeClaim
+apiVersion: v1
+metadata:
+  name: radarr-downloads-nfs-pvc
+  namespace: downloads
+spec:
+  volumeName: radarr-downloads-nfs-pv
+  accessModes:
+    - ReadWriteMany
+  storageClassName: retain-local-path
+  resources:
+    requests:
+      storage: 6Ti
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: radarr-movies-nfs-pv
+  namespace: downloads
+spec:
+  capacity:
+    storage: 6Ti
+  accessModes:
+    - ReadWriteMany
+  nfs:
+    server: fs.cynexia.net
+    path: "/tank/video/movies"
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: retain-local-path
+---
+kind: PersistentVolumeClaim
+apiVersion: v1
+metadata:
+  name: radarr-movies-nfs-pvc
+  namespace: downloads
+spec:
+  volumeName: radarr-movies-nfs-pv
+  accessModes:
+    - ReadWriteMany
+  storageClassName: retain-local-path
+  resources:
+    requests:
+      storage: 6Ti
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: radarr
+  namespace: downloads
+spec:
+  strategy:
+    type: Recreate
+  replicas: 1
+  selector:
+    matchLabels:
+      app: radarr
+  template:
+    metadata:
+      labels:
+        app: radarr
+    spec:
+
+      dnsConfig:
+        nameservers:
+        - 8.8.8.8
+        - 8.8.4.4
+      dnsPolicy: None
+      containers:
+      - name: radarr
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities: {}
+          privileged: false
+          readOnlyRootFilesystem: false
+        image: linuxserver/radarr:latest
+        env:
+        - name: PUID
+          value: "110"
+        - name: PGID
+          value: "998"  
+        ports:
+        - containerPort: 7878
+          protocol: TCP
+          name: containerport
+        startupProbe:
+            failureThreshold: 15
+            httpGet:
+              path: /
+              port: containerport
+              scheme: HTTP
+            periodSeconds: 10
+            successThreshold: 1
+            timeoutSeconds: 1
+        livenessProbe:
+            httpGet:
+              path: /
+              port: containerport
+              scheme: HTTP
+            failureThreshold: 5
+            periodSeconds: 10
+        volumeMounts:
+        - name: movies
+          mountPath: /movies
+        - name: config
+          mountPath: /config
+        - name: downloads
+          mountPath: /downloads
+      volumes:
+      - name: config
+        persistentVolumeClaim:
+          claimName: radarr-config-nfs-pvc
+      - name: downloads
+        persistentVolumeClaim:
+          claimName: radarr-downloads-nfs-pvc
+      - name: movies
+        persistentVolumeClaim:
+          claimName: radarr-movies-nfs-pvc
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: ingress-radarr
+  namespace: downloads
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    ingress.kubernetes.io/ssl-redirect: "true"
+spec:
+  rules:
+  - host: radarr.cynexia.net
+    http:
+      paths:
+      - backend:
+          service:
+            name: radarr-service
+            port:
+              name: radarr-web-port
+        path: /
+        pathType: ImplementationSpecific
+  tls:
+  - hosts:
+    - radarr.cynexia.net
+    secretName: radarr.cynexia.net
