@@ -16,32 +16,41 @@ spec:
 apiVersion: v1
 kind: PersistentVolume
 metadata:
-  name: radarr-config-nfs-pv
+  name: radarr-config-smb-pv
   namespace: downloads
 spec:
-  capacity:
-    storage: 10Gi
+  selector:
+      app: radarr
   accessModes:
     - ReadWriteMany
-  nfs:
-    server: fs.cynexia.net
-    path: "/tank/appdata/radarr"
-  persistentVolumeReclaimPolicy: Retain
+  capacity:
+    storage: 100Gi
+  local:
+    path: /mnt/appdata/radarr
+  mountOptions:
   storageClassName: retain-local-path
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: kubernetes.io/hostname
+              operator: In
+              values:
+                - k2.cynexia.net
 ---
 kind: PersistentVolumeClaim
 apiVersion: v1
 metadata:
-  name: radarr-config-nfs-pvc
+  name: radarr-config-smb-pvc
   namespace: downloads
 spec:
-  volumeName: radarr-config-nfs-pv
+  volumeName: radarr-config-smb-pv
   accessModes:
     - ReadWriteMany
   storageClassName: retain-local-path
   resources:
     requests:
-      storage: 10Gi
+      storage: 100Gi
 ---
 apiVersion: v1
 kind: PersistentVolume
@@ -172,7 +181,7 @@ spec:
           claimName: radarr-config-nfs-pvc
       - name: downloads
         persistentVolumeClaim:
-          claimName: radarr-downloads-nfs-pvc
+          claimName: radarr-downloads-smb-pvc
       - name: movies
         persistentVolumeClaim:
           claimName: radarr-movies-nfs-pvc
