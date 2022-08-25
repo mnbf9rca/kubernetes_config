@@ -1,28 +1,37 @@
 apiVersion: v1
 kind: PersistentVolume
 metadata:
-  name: hydra-config-nfs-pv
+  name: hydra-config-smb-pv
   namespace: downloads
 spec:
   capacity:
     storage: 1Ti
   accessModes:
-    - ReadWriteOnce
-  nfs:
-    server: fs.cynexia.net
-    path: "/tank/appdata/hydra/config/"
+    - ReadWriteMany
+  local:
+    path: /mnt/appdata/hydra/config
   persistentVolumeReclaimPolicy: Retain
+  mountOptions:
   storageClassName: retain-local-path
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: kubernetes.io/hostname
+              operator: In
+              values:
+                - k2.cynexia.net
 ---
 kind: PersistentVolumeClaim
 apiVersion: v1
 metadata:
-  name: hydra-config-nfs-pvc
+  name: hydra-config-smb-pvc
   namespace: downloads
 spec:
-  volumeName: hydra-config-nfs-pv
+  volumeName: hydra-config-smb-pv
+  storageClassName: retain-local-path
   accessModes:
-    - ReadWriteOnce
+    - ReadWriteMany
   resources:
     requests:
       storage: 1Ti
@@ -107,4 +116,4 @@ spec:
       volumes:
       - name: config
         persistentVolumeClaim:
-          claimName: hydra-config-nfs-pvc
+          claimName: hydra-config-smb-pvc
