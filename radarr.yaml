@@ -145,8 +145,15 @@ spec:
       containers:
       - name: radarr
         securityContext:
+          runAsRoot: false
           allowPrivilegeEscalation: false
-          capabilities: {}
+          capabilities:
+            add:
+            - CHOWN
+            - SETGID
+            - SETUID
+            drop:
+            - ALL
           privileged: false
           readOnlyRootFilesystem: false
         image: linuxserver/radarr:latest
