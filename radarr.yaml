@@ -93,7 +93,7 @@ spec:
   accessModes:
     - ReadWriteMany
   local:
-    path: /mnt/appdata/radarr
+    path: /mnt/video/movies
   persistentVolumeReclaimPolicy: Retain
   storageClassName: retain-local-path
   nodeAffinity:
