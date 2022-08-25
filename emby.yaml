@@ -43,26 +43,35 @@ spec:
 apiVersion: v1
 kind: PersistentVolume
 metadata:
-  name: emby-config-nfs-pv
+  name: emby-config-smb-pv
   namespace: downloads
 spec:
   capacity:
     storage: 1Ti
   accessModes:
     - ReadWriteOnce
-  nfs:
-    server: fs.cynexia.net
-    path: "/tank/appdata/emby/"
-  persistentVolumeReclaimPolicy: Retain
+  local:
+    path: /mnt/appdata/emby
+  mountOptions:
   storageClassName: retain-local-path
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: kubernetes.io/hostname
+              operator: In
+              values:
+                - k2.cynexia.net
+  persistentVolumeReclaimPolicy: Retain
 ---
 kind: PersistentVolumeClaim
 apiVersion: v1
 metadata:
-  name: emby-config-nfs-pvc
+  name: emby-config-smb-pvc
   namespace: downloads
 spec:
-  volumeName: emby-config-nfs-pv
+  storageClassName: retain-local-path
+  volumeName: emby-config-smb-pv
   accessModes:
     - ReadWriteOnce
   resources:
@@ -127,6 +136,18 @@ spec:
           value: Europe/London
         image: linuxserver/emby:latest
         imagePullPolicy: Always
+        securityContext:
+          runAsRoot: false
+          allowPrivilegeEscalation: false
+          capabilities:
+            add:
+            - CHOWN
+            - SETGID
+            - SETUID
+            drop:
+            - ALL
+          privileged: false
+          readOnlyRootFilesystem: false        
         name: emby
         ports:
         - containerPort: 8096
@@ -160,7 +181,7 @@ spec:
       volumes:
       - name: config
         persistentVolumeClaim:
-          claimName: emby-config-nfs-pvc
+          claimName: emby-config-smb-pvc
       - name: video
         persistentVolumeClaim:
           claimName: emby-videos-nfs-pvc
