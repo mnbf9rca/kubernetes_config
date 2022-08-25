@@ -85,26 +85,33 @@ spec:
 apiVersion: v1
 kind: PersistentVolume
 metadata:
-  name: radarr-movies-nfs-pv
+  name: radarr-movies-smb-pv
   namespace: downloads
 spec:
   capacity:
     storage: 6Ti
   accessModes:
     - ReadWriteMany
-  nfs:
-    server: fs.cynexia.net
-    path: "/tank/video/movies"
+  local:
+    path: /mnt/appdata/radarr
   persistentVolumeReclaimPolicy: Retain
   storageClassName: retain-local-path
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: kubernetes.io/hostname
+              operator: In
+              values:
+                - k2.cynexia.net
 ---
 kind: PersistentVolumeClaim
 apiVersion: v1
 metadata:
-  name: radarr-movies-nfs-pvc
+  name: radarr-movies-smb-pvc
   namespace: downloads
 spec:
-  volumeName: radarr-movies-nfs-pv
+  volumeName: radarr-movies-smb-pv
   accessModes:
     - ReadWriteMany
   storageClassName: retain-local-path
@@ -184,7 +191,7 @@ spec:
           claimName: radarr-downloads-smb-pvc
       - name: movies
         persistentVolumeClaim:
-          claimName: radarr-movies-nfs-pvc
+          claimName: radarr-movies-smb-pvc
 ---
 apiVersion: networking.k8s.io/v1
 kind: Ingress
