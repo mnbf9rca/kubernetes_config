@@ -158,6 +158,7 @@ spec:
       containers:
       - name: sabnzbd
         image: linuxserver/sabnzbd:latest
+        imagePullPolicy: Always
         env:
         - name: PUID
           value: "110"
