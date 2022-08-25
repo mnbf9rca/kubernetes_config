@@ -163,6 +163,18 @@ spec:
           value: "110"
         - name: PGID
           value: "998"  
+        securityContext:
+          runAsRoot: false
+          allowPrivilegeEscalation: false
+          capabilities:
+            add:
+            - CHOWN
+            - SETGID
+            - SETUID
+            drop:
+            - ALL
+          privileged: false
+          readOnlyRootFilesystem: false
         ports:
         - containerPort: 8080
           protocol: TCP
