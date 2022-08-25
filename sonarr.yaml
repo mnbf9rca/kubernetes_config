@@ -15,27 +15,36 @@ spec:
 apiVersion: v1
 kind: PersistentVolume
 metadata:
-  name: sonarr-config-nfs-pv
+  name: sonarr-config-smb-pv
   namespace: downloads
 spec:
   capacity:
     storage: 10Gi
   accessModes:
     - ReadWriteMany
-  nfs:
-    server: fs.cynexia.net
-    path: "/tank/appdata/sonarr/"
+  local:
+    path: /mnt/appdata/sonarr
+  mountOptions:
+  storageClassName: retain-local-path
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: kubernetes.io/hostname
+              operator: In
+              values:
+                - k2.cynexia.net
 ---
 kind: PersistentVolumeClaim
 apiVersion: v1
 metadata:
-  name: sonarr-config-nfs-pvc
+  name: sonarr-config-smb-pvc
   namespace: downloads
 spec:
-  volumeName: sonarr-config-nfs-pv
+  volumeName: sonarr-config-smb-pv
   accessModes:
     - ReadWriteMany
-  storageClassName: ""
+  storageClassName: retain-local-path
   resources:
     requests:
       storage: 10Gi
@@ -115,6 +124,18 @@ spec:
     spec:
       containers:
       - name: sonarr
+        securityContext:
+          runAsRoot: false
+          allowPrivilegeEscalation: false
+          capabilities:
+            add:
+            - CHOWN
+            - SETGID
+            - SETUID
+            drop:
+            - ALL
+          privileged: false
+          readOnlyRootFilesystem: false
         image: linuxserver/sonarr:latest
         env:
         - name: PUID
@@ -151,7 +172,7 @@ spec:
       volumes:
       - name: config
         persistentVolumeClaim:
-          claimName: sonarr-config-nfs-pvc
+          claimName: sonarr-config-smb-pvc
       - name: downloads
         persistentVolumeClaim:
           claimName: sonarr-downloads-nfs-pvc
