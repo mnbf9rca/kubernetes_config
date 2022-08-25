@@ -64,7 +64,7 @@ spec:
     - ReadWriteMany
   nfs:
     server: fs.cynexia.net
-    path: "/tank/largeappdata/sabnzbd/complete"
+    path: "/tank/largeappdata/sabnzbd"
   persistentVolumeReclaimPolicy: Retain
   storageClassName: retain-local-path
 ---
