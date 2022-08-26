@@ -185,6 +185,9 @@ kind: Ingress
 metadata:
   name: ingress-sonarr
   namespace: downloads
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    ingress.kubernetes.io/ssl-redirect: "true"
 spec:
   rules:
   - host: sonarr.cynexia.net
@@ -194,3 +197,7 @@ spec:
         backend:
           serviceName: sonarr-service
           servicePort: 8989
+  tls:
+  - hosts:
+    - sonarr.cynexia.net
+    secretName: sonarr.cynexia.net
