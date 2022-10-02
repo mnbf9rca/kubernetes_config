@@ -55,7 +55,7 @@ spec:
 apiVersion: v1
 kind: PersistentVolume
 metadata:
-  name: radarr-downloads-nfs-pv
+  name: radarr-media-nfs-pv
   namespace: downloads
 spec:
   capacity:
@@ -64,54 +64,17 @@ spec:
     - ReadWriteMany
   nfs:
     server: fs.cynexia.net
-    path: "/tank/largeappdata/sabnzbd"
+    path: "/tank/video"
   persistentVolumeReclaimPolicy: Retain
   storageClassName: retain-local-path
 ---
 kind: PersistentVolumeClaim
 apiVersion: v1
 metadata:
-  name: radarr-downloads-nfs-pvc
+  name: radarr-media-nfs-pvc
   namespace: downloads
 spec:
-  volumeName: radarr-downloads-nfs-pv
-  accessModes:
-    - ReadWriteMany
-  storageClassName: retain-local-path
-  resources:
-    requests:
-      storage: 6Ti
----
-apiVersion: v1
-kind: PersistentVolume
-metadata:
-  name: radarr-movies-smb-pv
-  namespace: downloads
-spec:
-  capacity:
-    storage: 6Ti
-  accessModes:
-    - ReadWriteMany
-  local:
-    path: /mnt/video/movies
-  persistentVolumeReclaimPolicy: Retain
-  storageClassName: retain-local-path
-  nodeAffinity:
-    required:
-      nodeSelectorTerms:
-        - matchExpressions:
-            - key: kubernetes.io/hostname
-              operator: In
-              values:
-                - k2.cynexia.net
----
-kind: PersistentVolumeClaim
-apiVersion: v1
-metadata:
-  name: radarr-movies-smb-pvc
-  namespace: downloads
-spec:
-  volumeName: radarr-movies-smb-pv
+  volumeName: radarr-media-nfs-pv
   accessModes:
     - ReadWriteMany
   storageClassName: retain-local-path
@@ -183,22 +146,17 @@ spec:
             failureThreshold: 5
             periodSeconds: 10
         volumeMounts:
-        - name: movies
-          mountPath: /movies
+        - name: media
+          mountPath: /media
         - name: config
           mountPath: /config
-        - name: downloads
-          mountPath: /downloads
       volumes:
       - name: config
         persistentVolumeClaim:
-          claimName: radarr-config-nfs-pvc
-      - name: downloads
+          claimName: radarr-config-smb-pvc
+      - name: media
         persistentVolumeClaim:
-          claimName: radarr-downloads-smb-pvc
-      - name: movies
-        persistentVolumeClaim:
-          claimName: radarr-movies-smb-pvc
+          claimName: radarr-media-nfs-pvc
 ---
 apiVersion: networking.k8s.io/v1
 kind: Ingress

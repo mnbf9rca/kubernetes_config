@@ -16,32 +16,32 @@ spec:
 apiVersion: v1
 kind: PersistentVolume
 metadata:
-  name: sabnzbd-downloads-nfs-pv
+  name: sabnzbd-media-nfs-pv
   namespace: downloads
 spec:
   capacity:
-    storage: 6Ti
+    storage: 10Ti
   accessModes:
     - ReadWriteMany
   nfs:
     server: fs.cynexia.net
-    path: "/tank/largeappdata/sabnzbd/complete"
+    path: "/tank/video"
   persistentVolumeReclaimPolicy: Retain
   storageClassName: retain-local-path
 ---
 kind: PersistentVolumeClaim
 apiVersion: v1
 metadata:
-  name: sabnzbd-downloads-nfs-pvc
+  name: sabnzbd-media-nfs-pvc
   namespace: downloads
 spec:
-  volumeName: sabnzbd-downloads-nfs-pv
+  volumeName: sabnzbd-media-nfs-pv
   accessModes:
     - ReadWriteMany
   storageClassName: retain-local-path
   resources:
     requests:
-      storage: 6Ti
+      storage: 10Gi
 ---
 apiVersion: v1
 kind: PersistentVolume
@@ -72,66 +72,6 @@ spec:
   resources:
     requests:
       storage: 10Gi
----
-apiVersion: v1
-kind: PersistentVolume
-metadata:
-  name: sabnzbd-watch-nfs-pv
-  namespace: downloads
-spec:
-  capacity:
-    storage: 6Ti
-  accessModes:
-    - ReadWriteMany
-  nfs:
-    server: fs.cynexia.net
-    path: "/tank/appdata/sabnzbd/watch"
-  persistentVolumeReclaimPolicy: Retain
-  storageClassName: retain-local-path
----
-kind: PersistentVolumeClaim
-apiVersion: v1
-metadata:
-  name: sabnzbd-watch-nfs-pvc
-  namespace: downloads
-spec:
-  volumeName: sabnzbd-watch-nfs-pv
-  accessModes:
-    - ReadWriteMany
-  storageClassName: retain-local-path
-  resources:
-    requests:
-      storage: 6Ti
----
-apiVersion: v1
-kind: PersistentVolume
-metadata:
-  name: sabnzbd-incomplete-nfs-pv
-  namespace: downloads
-spec:
-  capacity:
-    storage: 6Ti
-  accessModes:
-    - ReadWriteMany
-  nfs:
-    server: fs.cynexia.net
-    path: "/tank/largeappdata/sabnzbd/incomplete"
-  persistentVolumeReclaimPolicy: Retain
-  storageClassName: retain-local-path
----
-kind: PersistentVolumeClaim
-apiVersion: v1
-metadata:
-  name: sabnzbd-incomplete-nfs-pvc
-  namespace: downloads
-spec:
-  volumeName: sabnzbd-incomplete-nfs-pv
-  accessModes:
-    - ReadWriteMany
-  storageClassName: retain-local-path
-  resources:
-    requests:
-      storage: 6Ti
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -197,27 +137,17 @@ spec:
             failureThreshold: 5
             periodSeconds: 10
         volumeMounts:
-        - name: watch
-          mountPath: /watch
+        - name: media
+          mountPath: /media
         - name: config
           mountPath: /config
-        - name: downloads
-          mountPath: /downloads
-        - name: incomplete
-          mountPath: /incomplete-downloads
       volumes:
-      - name: watch
+      - name: media
         persistentVolumeClaim:
-          claimName: sabnzbd-watch-nfs-pvc
+          claimName: sabnzbd-media-nfs-pvc
       - name: config
         persistentVolumeClaim:
           claimName: sabnzbd-config-nfs-pvc
-      - name: downloads
-        persistentVolumeClaim:
-          claimName: sabnzbd-downloads-nfs-pvc
-      - name: incomplete
-        persistentVolumeClaim:
-          claimName: sabnzbd-incomplete-nfs-pvc
 ---
 apiVersion: networking.k8s.io/v1
 kind: Ingress

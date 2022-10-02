@@ -52,55 +52,28 @@ spec:
 apiVersion: v1
 kind: PersistentVolume
 metadata:
-  name: sonarr-downloads-nfs-pv
+  name: sonarr-media-nfs-pv
   namespace: downloads
 spec:
   capacity:
     storage: 6Ti
   accessModes:
     - ReadWriteMany
+  storageClassName: retain-local-path
   nfs:
     server: fs.cynexia.net
-    path: "/tank/largeappdata/sabnzbd/"
+    path: "/tank/video"
 ---
 kind: PersistentVolumeClaim
 apiVersion: v1
 metadata:
-  name: sonarr-downloads-nfs-pvc
+  name: sonarr-media-nfs-pvc
   namespace: downloads
 spec:
-  volumeName: sonarr-downloads-nfs-pv
+  volumeName: sonarr-media-nfs-pv
   accessModes:
     - ReadWriteMany
-  storageClassName: ""
-  resources:
-    requests:
-      storage: 6Ti
----
-apiVersion: v1
-kind: PersistentVolume
-metadata:
-  name: sonarr-tv-nfs-pv
-  namespace: downloads
-spec:
-  capacity:
-    storage: 6Ti
-  accessModes:
-    - ReadWriteMany
-  nfs:
-    server: fs.cynexia.net
-    path: "/tank/video/series/"
----
-kind: PersistentVolumeClaim
-apiVersion: v1
-metadata:
-  name: sonarr-tv-nfs-pvc
-  namespace: downloads
-spec:
-  volumeName: sonarr-tv-nfs-pv
-  accessModes:
-    - ReadWriteMany
-  storageClassName: ""
+  storageClassName: retain-local-path
   resources:
     requests:
       storage: 6Ti
@@ -169,6 +142,8 @@ spec:
           mountPath: /downloads
         - name: tv
           mountPath: /tv
+        - name: media
+          mountPath: /media
       volumes:
       - name: config
         persistentVolumeClaim:
@@ -179,6 +154,9 @@ spec:
       - name: tv
         persistentVolumeClaim:
           claimName: sonarr-tv-nfs-pvc
+      - name: media
+        persistentVolumeClaim:
+          claimName: sonarr-media-nfs-pvc
 ---
 apiVersion: extensions/v1beta1
 kind: Ingress
