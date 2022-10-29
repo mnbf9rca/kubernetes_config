@@ -101,6 +101,7 @@ metadata:
   namespace: downloads
 spec:
   volumeName: emby-videos-nfs-pv
+  storageClassName: retain-local-path
   accessModes:
     - ReadWriteMany
   resources:
