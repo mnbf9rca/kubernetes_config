@@ -1,0 +1,188 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: jellyfin-service
+  namespace: downloads
+spec:
+  selector:
+    app: jellyfin
+  type: NodePort
+  externalTrafficPolicy: Cluster
+  sessionAffinity: None
+  ports:
+  - name: http-8096
+    port: 8096
+    protocol: TCP
+    targetPort: 8096
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: ingress-jellyfin
+  namespace: downloads
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    ingress.kubernetes.io/ssl-redirect: "true"
+spec:
+  rules:
+  - host: jellyfin.cynexia.net
+    http:
+      paths:
+      - backend:
+          service:
+            name: jellyfin-service
+            port: 
+              name: http-8096
+        path: /
+        pathType: ImplementationSpecific
+  tls:
+  - hosts:
+    - jellyfin.cynexia.net
+    secretName: jellyfin.cynexia.net
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: jellyfin-config-smb-pv
+  namespace: downloads
+spec:
+  capacity:
+    storage: 1Ti
+  accessModes:
+    - ReadWriteOnce
+  local:
+    path: /mnt/appdata/jellyfin
+  mountOptions:
+  storageClassName: retain-local-path
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: kubernetes.io/hostname
+              operator: In
+              values:
+                - k2.cynexia.net
+  persistentVolumeReclaimPolicy: Retain
+---
+kind: PersistentVolumeClaim
+apiVersion: v1
+metadata:
+  name: jellyfin-config-smb-pvc
+  namespace: downloads
+spec:
+  storageClassName: retain-local-path
+  volumeName: jellyfin-config-smb-pv
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Ti
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: jellyfin-videos-nfs-pv
+  namespace: downloads
+spec:
+  capacity:
+    storage: 6Ti
+  accessModes:
+    - ReadWriteMany
+  nfs:
+    server: fs.cynexia.net
+    path: "/tank/video/"
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: retain-local-path
+---
+kind: PersistentVolumeClaim
+apiVersion: v1
+metadata:
+  name: jellyfin-videos-nfs-pvc
+  namespace: downloads
+spec:
+  volumeName: jellyfin-videos-nfs-pv
+  storageClassName: retain-local-path
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 6Ti
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: jellyfin
+  namespace: downloads
+spec:
+  selector:
+    matchLabels:
+      app: jellyfin
+  progressDeadlineSeconds: 600
+  replicas: 1
+  revisionHistoryLimit: 10
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app: jellyfin
+    spec:
+      containers:
+      - env:
+        - name: PGID
+          value: "998"
+        - name: PUID
+          value: "110"
+        - name: TZ
+          value: Europe/London
+        image: linuxserver/jellyfin:latest
+        imagePullPolicy: Always
+        securityContext:
+          runAsRoot: false
+          allowPrivilegeEscalation: false
+          capabilities:
+            add:
+            - CHOWN
+            - SETGID
+            - SETUID
+            drop:
+            - ALL
+          privileged: false
+          readOnlyRootFilesystem: false        
+        name: jellyfin
+        ports:
+        - containerPort: 8096
+          name: 8096tcp01
+          protocol: TCP
+        volumeMounts:
+        - mountPath: /config
+          name: config
+        - mountPath: /mnt
+          name: video
+      restartPolicy: Always
+      startupProbe:
+        failureThreshold: 10
+        httpGet:
+          path: /
+          port: 8096tcp01
+          scheme: HTTP
+        periodSeconds: 60
+        successThreshold: 1
+        timeoutSeconds: 5
+      livenessProbe:
+        failureThreshold: 3
+        httpGet:
+          path: /
+          port: 8096tcp01
+          scheme: HTTP
+        periodSeconds: 60
+        successThreshold: 1
+        timeoutSeconds: 1
+      terminationGracePeriodSeconds: 30
+      volumes:
+      - name: config
+        persistentVolumeClaim:
+          claimName: jellyfin-config-smb-pvc
+      - name: video
+        persistentVolumeClaim:
+          claimName: jellyfin-videos-nfs-pvc
