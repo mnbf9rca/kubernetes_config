@@ -6,48 +6,45 @@ metadata:
 spec:
   selector:
     app: sonarr
-  type: NodePort
+  type: LoadBalancer
+  loadBalancerIP: 192.168.17.250
   ports:
   - protocol: TCP
-    port: 8989
+    port: 80
     targetPort: 8989
+    name: sonarr-port
 ---
 apiVersion: v1
 kind: PersistentVolume
 metadata:
-  name: sonarr-config-smb-pv
+  name: sonarr-config-longhorn-pv
   namespace: downloads
 spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: longhorn
   capacity:
-    storage: 10Gi
-  accessModes:
-    - ReadWriteMany
-  local:
-    path: /mnt/appdata/sonarr
-  mountOptions:
-  storageClassName: retain-local-path
-  nodeAffinity:
-    required:
-      nodeSelectorTerms:
-        - matchExpressions:
-            - key: kubernetes.io/hostname
-              operator: In
-              values:
-                - k2.cynexia.net
+      storage: 20Gi
+  csi:
+    driver: driver.longhorn.io
+    fsType: ext4
+    volumeHandle: sonarr-config
+  persistentVolumeReclaimPolicy: Retain
+  volumeMode: Filesystem
 ---
-kind: PersistentVolumeClaim
 apiVersion: v1
+kind: PersistentVolumeClaim
 metadata:
-  name: sonarr-config-smb-pvc
+  name: sonarr-config-longhorn-pvc
   namespace: downloads
 spec:
-  volumeName: sonarr-config-smb-pv
   accessModes:
-    - ReadWriteMany
-  storageClassName: retain-local-path
+    - ReadWriteOnce
   resources:
     requests:
-      storage: 10Gi
+      storage: 20Gi
+  storageClassName: longhorn
+  volumeName: sonarr-config-longhorn-pv
 ---
 apiVersion: v1
 kind: PersistentVolume
@@ -138,27 +135,17 @@ spec:
         volumeMounts:
         - name: config
           mountPath: /config
-        - name: downloads
-          mountPath: /downloads
-        - name: tv
-          mountPath: /tv
         - name: media
           mountPath: /media
       volumes:
       - name: config
         persistentVolumeClaim:
-          claimName: sonarr-config-smb-pvc
-      - name: downloads
-        persistentVolumeClaim:
-          claimName: sonarr-downloads-nfs-pvc
-      - name: tv
-        persistentVolumeClaim:
-          claimName: sonarr-tv-nfs-pvc
+          claimName: sonarr-config-longhorn-pvc
       - name: media
         persistentVolumeClaim:
           claimName: sonarr-media-nfs-pvc
 ---
-apiVersion: extensions/v1beta1
+apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
   name: ingress-sonarr
@@ -173,8 +160,11 @@ spec:
       paths:
       - path: /
         backend:
-          serviceName: sonarr-service
-          servicePort: 8989
+          service:
+            name: sonarr-service
+            port: 
+              name: sonarr-port
+        pathType: Prefix
   tls:
   - hosts:
     - sonarr.cynexia.net

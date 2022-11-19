@@ -6,50 +6,45 @@ metadata:
 spec:
   ports:
   - name: hydra-web-port
-    port: 5076
+    port: 80
     protocol: TCP
     targetPort: 5076
   selector:
     app: hydra
-  type: NodePort
+  type: LoadBalancer
+  loadBalancerIP: 192.168.17.249
 ---
 apiVersion: v1
 kind: PersistentVolume
 metadata:
-  name: hydra-config-smb-pv
+  name: hydra-config-longhorn-pv
   namespace: downloads
 spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: longhorn
   capacity:
-    storage: 1Ti
-  accessModes:
-    - ReadWriteMany
-  local:
-    path: /mnt/appdata/hydra/config
+      storage: 30Gi
+  csi:
+    driver: driver.longhorn.io
+    fsType: ext4
+    volumeHandle: hydra-config
   persistentVolumeReclaimPolicy: Retain
-  mountOptions:
-  storageClassName: retain-local-path
-  nodeAffinity:
-    required:
-      nodeSelectorTerms:
-        - matchExpressions:
-            - key: kubernetes.io/hostname
-              operator: In
-              values:
-                - k2.cynexia.net
+  volumeMode: Filesystem
 ---
-kind: PersistentVolumeClaim
 apiVersion: v1
+kind: PersistentVolumeClaim
 metadata:
-  name: hydra-config-smb-pvc
+  name: hydra-config-longhorn-pvc
   namespace: downloads
 spec:
-  volumeName: hydra-config-smb-pv
-  storageClassName: retain-local-path
   accessModes:
-    - ReadWriteMany
+    - ReadWriteOnce
   resources:
     requests:
-      storage: 1Ti
+      storage: 30Gi
+  storageClassName: longhorn
+  volumeName: hydra-config-longhorn-pv
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -83,13 +78,14 @@ spec:
         securityContext:
           runAsRoot: false
           allowPrivilegeEscalation: false
-          capabilities:
-            add:
-            - CHOWN
-            - SETGID
-            - SETUID
-            drop:
-            - ALL
+          # dropping capabilities seems to be incompatible with longhorn
+          #capabilities:
+          #  add:
+          #  - CHOWN
+          #  - SETGID
+          #  - SETUID
+          #  drop:
+          #  - ALL
           privileged: false
           readOnlyRootFilesystem: false
         startupProbe:
@@ -131,11 +127,12 @@ spec:
       volumes:
       - name: config
         persistentVolumeClaim:
-          claimName: hydra-config-smb-pvc
+          claimName: hydra-config-longhorn-pvc
 ---
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
+  name: hydra-emby
   annotations:
     cert-manager.io/cluster-issuer: letsencrypt-prod
     ingress.kubernetes.io/ssl-redirect: "true"
@@ -150,7 +147,7 @@ spec:
             port:
               name: hydra-web-port
         path: /
-        pathType: ImplementationSpecific
+        pathType: Prefix
   tls:
   - hosts:
     - hydra.cynexia.net

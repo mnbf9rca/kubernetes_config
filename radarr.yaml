@@ -6,51 +6,45 @@ metadata:
 spec:
   selector:
     app: radarr
-  type: NodePort
+  type: LoadBalancer
+  loadBalancerIP: 192.168.17.253
   ports:
   - name: radarr-web-port
     protocol: TCP
-    port: 7878
+    port: 80
     targetPort: 7878
 ---
 apiVersion: v1
 kind: PersistentVolume
 metadata:
-  name: radarr-config-smb-pv
+  name: radarr-config-longhorn-pv
   namespace: downloads
 spec:
-  selector:
-      app: radarr
   accessModes:
-    - ReadWriteMany
+    - ReadWriteOnce
+  storageClassName: longhorn
   capacity:
-    storage: 100Gi
-  local:
-    path: /mnt/appdata/radarr
-  mountOptions:
-  storageClassName: retain-local-path
-  nodeAffinity:
-    required:
-      nodeSelectorTerms:
-        - matchExpressions:
-            - key: kubernetes.io/hostname
-              operator: In
-              values:
-                - k2.cynexia.net
+      storage: 20Gi
+  csi:
+    driver: driver.longhorn.io
+    fsType: ext4
+    volumeHandle: radarr-config
+  persistentVolumeReclaimPolicy: Retain
+  volumeMode: Filesystem
 ---
-kind: PersistentVolumeClaim
 apiVersion: v1
+kind: PersistentVolumeClaim
 metadata:
-  name: radarr-config-smb-pvc
+  name: radarr-config-longhorn-pvc
   namespace: downloads
 spec:
-  volumeName: radarr-config-smb-pv
   accessModes:
-    - ReadWriteMany
-  storageClassName: retain-local-path
+    - ReadWriteOnce
   resources:
     requests:
-      storage: 100Gi
+      storage: 20Gi
+  storageClassName: longhorn
+  volumeName: radarr-config-longhorn-pv
 ---
 apiVersion: v1
 kind: PersistentVolume
@@ -99,7 +93,6 @@ spec:
       labels:
         app: radarr
     spec:
-
       dnsConfig:
         nameservers:
         - 8.8.8.8
@@ -110,13 +103,14 @@ spec:
         securityContext:
           runAsRoot: false
           allowPrivilegeEscalation: false
-          capabilities:
-            add:
-            - CHOWN
-            - SETGID
-            - SETUID
-            drop:
-            - ALL
+          # dropping capabilities seems to be incompatible with longhorn
+          #capabilities:
+          #  add:
+          #  - CHOWN
+          #  - SETGID
+          #  - SETUID
+          #  drop:
+          #  - ALL
           privileged: false
           readOnlyRootFilesystem: false
         image: linuxserver/radarr:latest
@@ -153,7 +147,7 @@ spec:
       volumes:
       - name: config
         persistentVolumeClaim:
-          claimName: radarr-config-smb-pvc
+          claimName: radarr-config-longhorn-pvc
       - name: media
         persistentVolumeClaim:
           claimName: radarr-media-nfs-pvc
@@ -177,7 +171,7 @@ spec:
             port:
               name: radarr-web-port
         path: /
-        pathType: ImplementationSpecific
+        pathType: Prefix
   tls:
   - hosts:
     - radarr.cynexia.net

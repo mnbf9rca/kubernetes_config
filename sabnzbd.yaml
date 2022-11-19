@@ -7,6 +7,7 @@ spec:
   selector:
     app: sabnzbd
   type: LoadBalancer
+  loadBalancerIP: 192.168.17.251
   ports:
   - name: sab-web-port
     protocol: TCP

@@ -7,6 +7,7 @@ spec:
   selector:
     app: emby
   type: LoadBalancer
+  loadBalancerIP: 192.168.17.252
   externalTrafficPolicy: Cluster
   sessionAffinity: None
   ports:
