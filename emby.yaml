@@ -6,12 +6,12 @@ metadata:
 spec:
   selector:
     app: emby
-  type: NodePort
+  type: LoadBalancer
   externalTrafficPolicy: Cluster
   sessionAffinity: None
   ports:
   - name: http-8096
-    port: 8096
+    port: 80
     protocol: TCP
     targetPort: 8096
 ---
@@ -43,40 +43,34 @@ spec:
 apiVersion: v1
 kind: PersistentVolume
 metadata:
-  name: emby-config-smb-pv
+  name: emby-config-longhorn-pv
   namespace: downloads
 spec:
-  capacity:
-    storage: 1Ti
   accessModes:
     - ReadWriteOnce
-  local:
-    path: /mnt/appdata/emby
-  mountOptions:
-  storageClassName: retain-local-path
-  nodeAffinity:
-    required:
-      nodeSelectorTerms:
-        - matchExpressions:
-            - key: kubernetes.io/hostname
-              operator: In
-              values:
-                - k2.cynexia.net
+  storageClassName: longhorn
+  capacity:
+      storage: 100Gi
+  csi:
+    driver: driver.longhorn.io
+    fsType: ext4
+    volumeHandle: emby-config
   persistentVolumeReclaimPolicy: Retain
+  volumeMode: Filesystem
 ---
-kind: PersistentVolumeClaim
 apiVersion: v1
+kind: PersistentVolumeClaim
 metadata:
-  name: emby-config-smb-pvc
+  name: emby-config-longhorn-pvc
   namespace: downloads
 spec:
-  storageClassName: retain-local-path
-  volumeName: emby-config-smb-pv
   accessModes:
     - ReadWriteOnce
   resources:
     requests:
-      storage: 1Ti
+      storage: 100Gi
+  storageClassName: longhorn
+  volumeName: emby-config-longhorn-pv
 ---
 apiVersion: v1
 kind: PersistentVolume
@@ -140,13 +134,14 @@ spec:
         securityContext:
           runAsRoot: false
           allowPrivilegeEscalation: false
-          capabilities:
-            add:
-            - CHOWN
-            - SETGID
-            - SETUID
-            drop:
-            - ALL
+          # dropping capabilities seems to be incompatible with longhorn
+          #capabilities:
+          #  add:
+          #  - CHOWN
+          #  - SETGID
+          #  - SETUID
+          #  drop:
+          #  - ALL
           privileged: false
           readOnlyRootFilesystem: false        
         name: emby
@@ -182,7 +177,7 @@ spec:
       volumes:
       - name: config
         persistentVolumeClaim:
-          claimName: emby-config-smb-pvc
+          claimName: emby-config-longhorn-pvc
       - name: video
         persistentVolumeClaim:
           claimName: emby-videos-nfs-pvc
