@@ -1,0 +1,94 @@
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: emby-target-pv
+  namespace: default
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: longhorn
+  capacity:
+      storage: 100Gi
+  csi:
+    driver: driver.longhorn.io
+    fsType: ext4
+    volumeHandle: emby-config
+  persistentVolumeReclaimPolicy: Retain
+  volumeMode: Filesystem
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: emby-target-pvc
+  namespace: downloads
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 100Gi
+  storageClassName: longhorn
+  volumeName: emby-target-pv
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: data-source-pv
+  namespace: downloads
+spec:
+  capacity:
+    storage: 6Ti
+  accessModes:
+    - ReadWriteMany
+  nfs:
+    server: fs.cynexia.net
+    path: "/tank/appdata/emby"
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: retain-local-path
+---
+kind: PersistentVolumeClaim
+apiVersion: v1
+metadata:
+  name: data-source-pvc
+  namespace: downloads
+spec:
+  volumeName: data-source-pv
+  accessModes:
+    - ReadWriteMany
+  storageClassName: retain-local-path
+  resources:
+    requests:
+      storage: 6Ti
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  namespace: downloads
+  name: volume-migration
+spec:
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: volume-migration
+  template:
+    metadata:
+      labels:
+        app: volume-migration      
+    spec:
+      containers:
+        - name: volume-migration
+          image: mnbf9rca/data-migrator:v4
+          volumeMounts:
+            - name: old-vol
+              mountPath: /source
+            - name: new-vol
+              mountPath: /target
+      volumes:
+        - name: old-vol
+          persistentVolumeClaim:
+            claimName: data-source-pvc # change to data source pvc
+        - name: new-vol
+          persistentVolumeClaim:
+            claimName: emby-target-pvc # change to data target pvc
+
