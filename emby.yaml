@@ -84,7 +84,7 @@ spec:
   accessModes:
     - ReadWriteMany
   nfs:
-    server: fs.cynexia.net
+    server: pve2.cynexia.net
     path: "/tank/video/"
   persistentVolumeReclaimPolicy: Retain
   storageClassName: retain-local-path
