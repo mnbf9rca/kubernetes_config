@@ -1,18 +1,33 @@
 apiVersion: v1
 kind: Service
 metadata:
+  name: ingress-loadbalancer-sabnzbd
+  namespace: ingress
+spec:
+  selector:
+    name: nginx-ingress-microk8s
+  type: LoadBalancer
+  loadBalancerIP: 192.168.17.252
+  ports:
+    - name: https
+      protocol: TCP
+      port: 443
+      targetPort: 443
+---
+apiVersion: v1
+kind: Service
+metadata:
   name: emby-service
   namespace: downloads
 spec:
   selector:
     app: emby
-  type: LoadBalancer
-  loadBalancerIP: 192.168.17.252
+  type: NodePort
   externalTrafficPolicy: Cluster
   sessionAffinity: None
   ports:
-  - name: http-8096
-    port: 80
+  - name: emby-https
+    port: 443
     protocol: TCP
     targetPort: 8096
 ---
@@ -33,7 +48,7 @@ spec:
           service:
             name: emby-service
             port: 
-              name: http-8096
+              name: emby-https
         path: /
         pathType: ImplementationSpecific
   tls:
