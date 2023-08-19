@@ -47,7 +47,7 @@ spec:
           service:
             name: sonarr-service
             port: 
-              number: sonarr-port
+              number: 443
         pathType: Prefix
   tls:
   - hosts:
