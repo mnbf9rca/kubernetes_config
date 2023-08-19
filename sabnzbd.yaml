@@ -46,7 +46,7 @@ spec:
           service:
             name: sabnzbd-service
             port:
-              number: sab-web-port
+              number: 443
         path: /
         pathType: ImplementationSpecific
   tls:
