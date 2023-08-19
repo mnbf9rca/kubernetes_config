@@ -1,0 +1,229 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: ingress-loadbalancer-mylar
+  namespace: ingress
+spec:
+  selector:
+    name: nginx-ingress-microk8s
+  type: LoadBalancer
+  loadBalancerIP: 192.168.17.248
+  ports:
+    - name: https
+      protocol: TCP
+      port: 443
+      targetPort: 443
+---
+kind: Service
+apiVersion: v1
+metadata:
+  name: mylar-service
+  namespace: downloads
+spec:
+  selector:
+    app: mylar
+  type: NodePort
+  ports:
+  - name: mylar-web-port
+    protocol: TCP
+    port: 443
+    targetPort: 8090
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: ingress-mylar
+  namespace: downloads
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    ingress.kubernetes.io/ssl-redirect: "true"
+spec:
+  rules:
+  - host: mylar.cynexia.net
+    http:
+      paths:
+      - backend:
+          service:
+            name: mylar-service
+            port:
+              number: 443
+        path: /
+        pathType: ImplementationSpecific
+  tls:
+  - hosts:
+    - mylar.cynexia.net
+    secretName: mylar.cynexia.net
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: mylar-comics-nfs-pv
+  namespace: downloads
+spec:
+  capacity:
+    storage: 10Ti
+  accessModes:
+    - ReadWriteMany
+  nfs:
+    server: pve2.cynexia.net
+    path: "/tank/video/comics"
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: retain-local-path
+---
+kind: PersistentVolumeClaim
+apiVersion: v1
+metadata:
+  name: mylar-comics-nfs-pvc
+  namespace: downloads
+spec:
+  volumeName: mylar-comics-nfs-pv
+  accessModes:
+    - ReadWriteMany
+  storageClassName: retain-local-path
+  resources:
+    requests:
+      storage: 10Gi
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: mylar-downloads-nfs-pv
+  namespace: downloads
+spec:
+  capacity:
+    storage: 10Ti
+  accessModes:
+    - ReadWriteMany
+  nfs:
+    server: pve2.cynexia.net
+    path: "/tank/video/sab/complete/mylar"
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: retain-local-path
+---
+kind: PersistentVolumeClaim
+apiVersion: v1
+metadata:
+  name: mylar-downloads-nfs-pvc
+  namespace: downloads
+spec:
+  volumeName: mylar-downloads-nfs-pv
+  accessModes:
+    - ReadWriteMany
+  storageClassName: retain-local-path
+  resources:
+    requests:
+      storage: 10Gi
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: mylar-config-longhorn-pv
+  namespace: downloads
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: longhorn
+  capacity:
+      storage: 20Gi
+  csi:
+    driver: driver.longhorn.io
+    fsType: ext4
+    volumeHandle: mylar-config
+  persistentVolumeReclaimPolicy: Retain
+  volumeMode: Filesystem
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: mylar-config-longhorn-pvc
+  namespace: downloads
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 20Gi
+  storageClassName: longhorn
+  volumeName: mylar-config-longhorn-pv
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mylar
+  namespace: downloads
+spec:
+  strategy:
+    type: Recreate
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mylar
+  template:
+    metadata:
+      labels:
+        app: mylar
+    spec:
+      dnsConfig:
+        nameservers:
+        - 8.8.8.8
+        - 8.8.4.4
+      dnsPolicy: None
+      containers:
+      - name: mylar
+        image: lscr.io/linuxserver/mylar3:latest
+        imagePullPolicy: Always
+        env:
+        - name: PUID
+          value: "110"
+        - name: PGID
+          value: "998"  
+        securityContext:
+          runAsRoot: false
+          allowPrivilegeEscalation: false
+          # dropping capabilities seems to be incompatible with longhorn
+          #capabilities:
+          #  add:
+          #  - CHOWN
+          #  - SETGID
+          #  - SETUID
+          #  drop:
+          #  - ALL
+          privileged: false
+          readOnlyRootFilesystem: false
+        ports:
+        - containerPort: 8090
+          protocol: TCP
+          name: containerport
+        startupProbe:
+            failureThreshold: 15
+            httpGet:
+              path: /
+              port: containerport
+              scheme: HTTP
+            periodSeconds: 10
+            successThreshold: 1
+            timeoutSeconds: 1
+        livenessProbe:
+            httpGet:
+              path: /
+              port: containerport
+              scheme: HTTP
+            failureThreshold: 5
+            periodSeconds: 10
+        volumeMounts:
+        - name: comics
+          mountPath: /comics
+        - name: config
+          mountPath: /config
+        - name: downloads
+          mountPath: /downloads
+      volumes:
+      - name: comics
+        persistentVolumeClaim:
+          claimName: mylar-comics-nfs-pvc
+      - name: downloads
+        persistentVolumeClaim:
+          claimName: mylar-downloads-nfs-pvc
+      - name: config
+        persistentVolumeClaim:
+          claimName: mylar-config-longhorn-pvc
