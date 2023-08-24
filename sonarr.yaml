@@ -135,13 +135,16 @@ spec:
       containers:
       - name: sonarr
         securityContext:
-          runAsRoot: false
           allowPrivilegeEscalation: false
+          # dropping capabilities seems to be incompatible with longhorn
           capabilities:
             add:
             - CHOWN
             - SETGID
             - SETUID
+            - FOWNER
+            - DAC_OVERRIDE
+            - DAC_READ_SEARCH
             drop:
             - ALL
           privileged: false
