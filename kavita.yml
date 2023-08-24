@@ -1,13 +1,13 @@
 apiVersion: v1
 kind: Service
 metadata:
-  name: ingress-loadbalancer-radarr
+  name: ingress-loadbalancer-kavita
   namespace: ingress
 spec:
   selector:
     name: nginx-ingress-microk8s
   type: LoadBalancer
-  loadBalancerIP: 192.168.17.253
+  loadBalancerIP: 192.168.17.247
   ports:
     - name: https
       protocol: TCP
@@ -17,109 +17,77 @@ spec:
 kind: Service
 apiVersion: v1
 metadata:
-  name: radarr-service
+  name: kavita-service
   namespace: downloads
 spec:
   selector:
-    app: radarr
+    app: kavita
   type: NodePort
   ports:
-  - name: radarr-web-port
+  - name: kavita-web-port
     protocol: TCP
     port: 443
-    targetPort: conainerport
+    targetPort: containerport
 ---
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: ingress-radarr
+  name: ingress-kavita
   namespace: downloads
   annotations:
     cert-manager.io/cluster-issuer: letsencrypt-prod
     ingress.kubernetes.io/ssl-redirect: "true"
 spec:
   rules:
-  - host: radarr.cynexia.net
+  - host: kavita.cynexia.net
     http:
       paths:
       - backend:
           service:
-            name: radarr-service
+            name: kavita-service
             port:
-              name: radarr-web-port
+              name: kavita-web-port
         path: /
-        pathType: Prefix
+        pathType: ImplementationSpecific
   tls:
   - hosts:
-    - radarr.cynexia.net
-    secretName: radarr.cynexia.net
+    - kavita.cynexia.net
+    secretName: kavita.cynexia.net
 ---
 apiVersion: v1
 kind: PersistentVolume
 metadata:
-  name: radarr-config-longhorn-pv
-  namespace: downloads
-spec:
-  accessModes:
-    - ReadWriteOnce
-  storageClassName: longhorn
-  capacity:
-      storage: 20Gi
-  csi:
-    driver: driver.longhorn.io
-    fsType: ext4
-    volumeHandle: radarr-config
-  persistentVolumeReclaimPolicy: Retain
-  volumeMode: Filesystem
----
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: radarr-config-longhorn-pvc
-  namespace: downloads
-spec:
-  accessModes:
-    - ReadWriteOnce
-  resources:
-    requests:
-      storage: 20Gi
-  storageClassName: longhorn
-  volumeName: radarr-config-longhorn-pv
----
-apiVersion: v1
-kind: PersistentVolume
-metadata:
-  name: radarr-media-nfs-pv
+  name: kavita-data-nfs-pv
   namespace: downloads
 spec:
   capacity:
-    storage: 6Ti
+    storage: 10Ti
   accessModes:
     - ReadWriteMany
   nfs:
     server: pve2.cynexia.net
-    path: "/tank/video"
+    path: "/tank/comics"
   persistentVolumeReclaimPolicy: Retain
   storageClassName: retain-local-path
 ---
 kind: PersistentVolumeClaim
 apiVersion: v1
 metadata:
-  name: radarr-media-nfs-pvc
+  name: kavita-data-nfs-pvc
   namespace: downloads
 spec:
-  volumeName: radarr-media-nfs-pv
+  volumeName: kavita-data-nfs-pv
   accessModes:
     - ReadWriteMany
   storageClassName: retain-local-path
   resources:
     requests:
-      storage: 6Ti
+      storage: 10Gi
 ---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: radarr
+  name: kavita
   namespace: downloads
 spec:
   strategy:
@@ -127,11 +95,11 @@ spec:
   replicas: 1
   selector:
     matchLabels:
-      app: radarr
+      app: kavita
   template:
     metadata:
       labels:
-        app: radarr
+        app: kavita
     spec:
       dnsConfig:
         nameservers:
@@ -139,7 +107,16 @@ spec:
         - 8.8.4.4
       dnsPolicy: None
       containers:
-      - name: radarr
+      - name: kavita
+        image: lscr.io/linuxserver/kavita:latest
+        imagePullPolicy: Always
+        env:
+        - name: PUID
+          value: "1999"
+        - name: PGID
+          value: "1999"
+        - name: TZ
+          value: Europe/London
         securityContext:
           runAsRoot: false
           allowPrivilegeEscalation: false
@@ -153,16 +130,8 @@ spec:
           #  - ALL
           privileged: false
           readOnlyRootFilesystem: false
-        image: linuxserver/radarr:latest
-        env:
-        - name: PGID
-          value: "1999"
-        - name: PUID
-          value: "1999"
-        - name: TZ
-          value: Europe/London
         ports:
-        - containerPort: 7878
+        - containerPort: 5000
           protocol: TCP
           name: containerport
         startupProbe:
@@ -182,14 +151,15 @@ spec:
             failureThreshold: 5
             periodSeconds: 10
         volumeMounts:
-        - name: media
-          mountPath: /media
+        - name: data
+          mountPath: /data
         - name: config
           mountPath: /config
       volumes:
+      - name: data
+        persistentVolumeClaim:
+          claimName: kavita-data-nfs-pvc
       - name: config
         persistentVolumeClaim:
-          claimName: radarr-config-longhorn-pvc
-      - name: media
-        persistentVolumeClaim:
-          claimName: radarr-media-nfs-pvc
+          claimName: kavita-config-longhorn-pvc
+

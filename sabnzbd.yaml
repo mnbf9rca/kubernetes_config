@@ -27,7 +27,7 @@ spec:
   - name: sab-web-port
     protocol: TCP
     port: 443
-    targetPort: 8080
+    targetPort: containerport
 ---
 apiVersion: networking.k8s.io/v1
 kind: Ingress
@@ -46,7 +46,7 @@ spec:
           service:
             name: sabnzbd-service
             port:
-              number: 443
+              name: sab-web-port
         path: /
         pathType: ImplementationSpecific
   tls:
@@ -144,9 +144,11 @@ spec:
         imagePullPolicy: Always
         env:
         - name: PUID
-          value: "110"
+          value: "1999"
         - name: PGID
-          value: "998"  
+          value: "1999"
+        - name: TZ
+          value: Europe/London
         securityContext:
           runAsRoot: false
           allowPrivilegeEscalation: false

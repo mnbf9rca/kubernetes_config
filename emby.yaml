@@ -29,7 +29,7 @@ spec:
   - name: emby-https
     port: 443
     protocol: TCP
-    targetPort: 8096
+    targetPort: containerport
 ---
 apiVersion: networking.k8s.io/v1
 kind: Ingress
@@ -140,9 +140,9 @@ spec:
       containers:
       - env:
         - name: PGID
-          value: "998"
+          value: "1999"
         - name: PUID
-          value: "110"
+          value: "1999"
         - name: TZ
           value: Europe/London
         image: linuxserver/emby:latest
@@ -163,7 +163,7 @@ spec:
         name: emby
         ports:
         - containerPort: 8096
-          name: 8096tcp01
+          name: containerport
           protocol: TCP
         volumeMounts:
         - mountPath: /config
@@ -175,7 +175,7 @@ spec:
         failureThreshold: 10
         httpGet:
           path: /
-          port: 8096tcp01
+          port: containerport
           scheme: HTTP
         periodSeconds: 60
         successThreshold: 1
@@ -184,7 +184,7 @@ spec:
         failureThreshold: 3
         httpGet:
           path: /
-          port: 8096tcp01
+          port: containerport
           scheme: HTTP
         periodSeconds: 60
         successThreshold: 1

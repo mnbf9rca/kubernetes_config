@@ -24,7 +24,7 @@ spec:
   - name: hydra-web-port
     port: 443
     protocol: TCP
-    targetPort: 5076
+    targetPort: containerport
   selector:
     app: hydra
   type: NodePort
@@ -108,9 +108,9 @@ spec:
       containers:
       - env:
         - name: PGID
-          value: "998"
+          value: "1999"
         - name: PUID
-          value: "110"
+          value: "1999"
         - name: TZ
           value: Europe/London
         image: linuxserver/nzbhydra2:latest
@@ -132,7 +132,7 @@ spec:
           failureThreshold: 15
           httpGet:
             path: /
-            port: 5076tcp01
+            port: containerport
             scheme: HTTP
           periodSeconds: 30
           successThreshold: 1
@@ -140,14 +140,14 @@ spec:
         livenessProbe:
           httpGet:
             path: /
-            port: 5076tcp01
+            port: containerport
             scheme: HTTP
           failureThreshold: 2
           periodSeconds: 10
         name: hydra
         ports:
         - containerPort: 5076
-          name: 5076tcp01
+          name: containerport
           protocol: TCP
         readinessProbe:
           failureThreshold: 6

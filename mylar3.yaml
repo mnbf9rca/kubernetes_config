@@ -12,7 +12,7 @@ spec:
     - name: https
       protocol: TCP
       port: 443
-      targetPort: 443
+      targetPort: mylar-web-port
 ---
 kind: Service
 apiVersion: v1
@@ -66,7 +66,7 @@ spec:
     - ReadWriteMany
   nfs:
     server: pve2.cynexia.net
-    path: "/tank/video/comics"
+    path: "/tank/comics"
   persistentVolumeReclaimPolicy: Retain
   storageClassName: retain-local-path
 ---
@@ -173,21 +173,23 @@ spec:
         image: lscr.io/linuxserver/mylar3:latest
         imagePullPolicy: Always
         env:
-        - name: PUID
-          value: "110"
         - name: PGID
-          value: "998"  
+          value: "1999"
+        - name: PUID
+          value: "1999"
+        - name: TZ
+          value: Europe/London
         securityContext:
           runAsRoot: false
           allowPrivilegeEscalation: false
           # dropping capabilities seems to be incompatible with longhorn
-          #capabilities:
-          #  add:
-          #  - CHOWN
-          #  - SETGID
-          #  - SETUID
-          #  drop:
-          #  - ALL
+          capabilities:
+            add:
+            - CHOWN
+            - SETGID
+            - SETUID
+            drop:
+            - ALL
           privileged: false
           readOnlyRootFilesystem: false
         ports:
