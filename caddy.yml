@@ -1,0 +1,143 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: caddy-service-lb
+  namespace: downloads
+spec:
+  selector:
+    app: caddy
+  type: LoadBalancer
+  loadBalancerIP: 192.168.17.246
+  ports:
+    - name: http
+      protocol: TCP
+      port: 80
+      targetPort: cont-port-http
+    - name: https
+      protocol: TCP
+      port: 443
+      targetPort: cont-port-https
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: caddy-config-longhorn-pv
+  namespace: downloads
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: longhorn
+  capacity:
+      storage: 30Gi
+  csi:
+    driver: driver.longhorn.io
+    fsType: ext4
+    volumeHandle: caddy-config
+  persistentVolumeReclaimPolicy: Retain
+  volumeMode: Filesystem
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: caddy-config-longhorn-pvc
+  namespace: downloads
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 30Gi
+  storageClassName: longhorn
+  volumeName: caddy-config-longhorn-pv
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: caddy-config
+  namespace: downloads
+data:
+  Caddyfile: |
+    komga.{$MY_DOMAIN} {
+      reverse_proxy https://komga.cynexia.net {
+        header_up Host {upstream_hostport}
+        transport http {tls}
+      }
+      basicauth { # create with caddy hash-password -p  - must use email address
+          email@name.com $2a$14$GywIinA2nrs1Fc0AFxDM7uALnwP/7qZWHl6RI25R2MHSkZBSsEISa
+          someoneelse@example.com $2a$14$brSiH7g78hheLGQdcxVVGuLM.frab7XibJkWpu.r3Gd3zecokxZ1W
+      }
+    }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: caddy
+  namespace: downloads
+spec:
+  selector:
+    matchLabels:
+      app: caddy
+  progressDeadlineSeconds: 600
+  replicas: 1
+  revisionHistoryLimit: 10
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app: caddy
+    spec:
+      dnsConfig:
+        nameservers:
+        - 8.8.8.8
+        - 8.8.4.4
+      dnsPolicy: None
+      containers:
+      - env:
+        - name: MY_DOMAIN
+          value: "proxy.cynexia.net"
+        - name: TZ
+          value: "Europe/London"
+        image: caddy:latest
+        resources:
+          limits:
+            memory: 1Gi
+            cpu: "1"
+          requests:
+            memory: 256Mi
+            cpu: "0.2"
+        imagePullPolicy: Always
+        securityContext:
+          allowPrivilegeEscalation: false
+          # dropping capabilities seems to be incompatible with longhorn
+          privileged: false
+          readOnlyRootFilesystem: false
+          runAsUser: 1999  # UID
+          runAsGroup: 1999 # GID
+        name: caddy
+        ports:
+        - containerPort: 443
+          name: cont-port-https
+          protocol: TCP
+        - containerPort: 80
+          name: cont-port-http
+          protocol: TCP
+        volumeMounts:
+        - name: caddy-config-volume
+          mountPath: /config
+          subPath: caddy_config
+        - name: caddy-config-volume
+          mountPath: /data
+          subPath: caddy_data
+        - name: caddyfile-configmap
+          mountPath: /etc/caddy/Caddyfile
+          subPath: Caddyfile  # This is the key from the ConfigMap
+      restartPolicy: Always
+      terminationGracePeriodSeconds: 30
+      volumes:
+      - name: caddy-config-volume
+        persistentVolumeClaim:
+          claimName: caddy-config-longhorn-pvc
+      - name: caddyfile-configmap
+        configMap:
+          name: caddy-config  # This is the name of the ConfigMap
