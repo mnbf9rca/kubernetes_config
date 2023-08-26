@@ -1,0 +1,196 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: ingress-loadbalancer-komga
+  namespace: ingress
+spec:
+  selector:
+    name: nginx-ingress-microk8s
+  type: LoadBalancer
+  loadBalancerIP: 192.168.17.247
+  ports:
+    - name: https
+      protocol: TCP
+      port: 443
+      targetPort: 443
+---
+kind: Service
+apiVersion: v1
+metadata:
+  name: komga-service
+  namespace: downloads
+spec:
+  selector:
+    app: komga
+  type: NodePort
+  ports:
+  - name: komga-web-port
+    protocol: TCP
+    port: 443
+    targetPort: containerport
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: ingress-komga
+  namespace: downloads
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    ingress.kubernetes.io/ssl-redirect: "true"
+spec:
+  rules:
+  - host: komga.cynexia.net
+    http:
+      paths:
+      - backend:
+          service:
+            name: komga-service
+            port:
+              name: komga-web-port
+        path: /
+        pathType: ImplementationSpecific
+  tls:
+  - hosts:
+    - komga.cynexia.net
+    secretName: komga.cynexia.net
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: komga-config-longhorn-pv
+  namespace: downloads
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: longhorn
+  capacity:
+      storage: 20Gi
+  csi:
+    driver: driver.longhorn.io
+    fsType: ext4
+    volumeHandle: komga-config # remember to mount and chown + chmod 2777
+  persistentVolumeReclaimPolicy: Retain
+  volumeMode: Filesystem
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: komga-config-longhorn-pvc
+  namespace: downloads
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 20Gi
+  storageClassName: longhorn
+  volumeName: komga-config-longhorn-pv
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: komga-data-nfs-pv
+  namespace: downloads
+spec:
+  capacity:
+    storage: 10Ti
+  accessModes:
+    - ReadWriteMany
+  nfs:
+    server: pve2.cynexia.net
+    path: "/tank/comics"
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: retain-local-path
+---
+kind: PersistentVolumeClaim
+apiVersion: v1
+metadata:
+  name: komga-data-nfs-pvc
+  namespace: downloads
+spec:
+  volumeName: komga-data-nfs-pv
+  accessModes:
+    - ReadWriteMany
+  storageClassName: retain-local-path
+  resources:
+    requests:
+      storage: 10Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: komga
+  namespace: downloads
+spec:
+  strategy:
+    type: Recreate
+  replicas: 1
+  selector:
+    matchLabels:
+      app: komga
+  template:
+    metadata:
+      labels:
+        app: komga
+    spec:
+      dnsConfig:
+        nameservers:
+        - 8.8.8.8
+        - 8.8.4.4
+      dnsPolicy: None
+      containers:
+      - name: komga
+        image: gotson/komga:latest
+        imagePullPolicy: Always
+        env:
+        - name: TZ
+          value: Europe/London
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+          #  add:
+          #  - CHOWN
+          #  - SETGID
+          #  - SETUID
+          #  - FOWNER
+          #  - DAC_OVERRIDE
+          #  - DAC_READ_SEARCH
+            drop:
+            - ALL
+          privileged: false
+          readOnlyRootFilesystem: false
+          runAsUser: 1999  # UID
+          runAsGroup: 1999 # GID
+        ports:
+        - containerPort: 25600
+          protocol: TCP
+          name: containerport
+        startupProbe:
+            failureThreshold: 15
+            httpGet:
+              path: /
+              port: containerport
+              scheme: HTTP
+            periodSeconds: 10
+            successThreshold: 1
+            timeoutSeconds: 1
+        livenessProbe:
+            httpGet:
+              path: /
+              port: containerport
+              scheme: HTTP
+            failureThreshold: 5
+            periodSeconds: 10
+        volumeMounts:
+        - name: data
+          mountPath: /data
+        - name: config
+          mountPath: /config
+      volumes:
+      - name: data
+        persistentVolumeClaim:
+          claimName: komga-data-nfs-pvc
+      - name: config
+        persistentVolumeClaim:
+          claimName: komga-config-longhorn-pvc
+
