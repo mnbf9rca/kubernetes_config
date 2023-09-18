@@ -99,7 +99,7 @@ spec:
   accessModes:
     - ReadWriteMany
   nfs:
-    server: pve2.cynexia.net
+    server: fs.cynexia.net
     path: "/tank/video/"
   persistentVolumeReclaimPolicy: Retain
   storageClassName: retain-local-path
@@ -172,6 +172,8 @@ spec:
           name: config
         - mountPath: /mnt
           name: video
+        - mountPath: /transcode
+          name: cache-vol          
       restartPolicy: Always
       startupProbe:
         failureThreshold: 10
@@ -199,3 +201,7 @@ spec:
       - name: video
         persistentVolumeClaim:
           claimName: emby-videos-nfs-pvc
+      - name: cache-vol
+        emptyDir:
+          medium: Memory
+          sizeLimit: 35Gi
