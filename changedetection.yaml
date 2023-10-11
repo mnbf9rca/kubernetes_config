@@ -16,19 +16,6 @@ spec:
     fsType: ext4
     volumeHandle: changedetection-config
 ---
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: changedetection-config-pvc
-  namespace: downloads
-spec:
-  storageClassName: longhorn
-  accessModes:
-    - ReadWriteOnce
-  resources:
-    requests:
-      storage: 20Gi
----
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -52,11 +39,20 @@ spec:
         - name: config-storage
           mountPath: /datastore    
       containers:
+        - name: mailer
+          image: boky/postfix
+          env:
+            - name: "ALLOWED_SENDER_DOMAINS"
+              value: "cynexia.net"
+            - name: "HOSTNAME"
+              value: "changedetection.cynexia.net"
+          ports:
+            - containerPort: 25
         - name: changedetection
           image: ghcr.io/dgtlmoon/changedetection.io:latest
           env:
             - name: PLAYWRIGHT_DRIVER_URL
-              value: "ws://playwright-chrome:3000/?blockAds=true&stealth=1&--disable-web-security=true"
+              value: "ws://playwright-service:3000/?blockAds=true&stealth=1&--disable-web-security=true" # Update this line
             - name: PUID
               value: "1999"
             - name: PGID
@@ -72,18 +68,18 @@ spec:
             allowPrivilegeEscalation: false
         - name: playwright
           image: browserless/chrome
-          hostname: playwright-chrome
+          hostname: playwright
           env:
             - name: WORKSPACE_DELETE_EXPIRED
               value: "true"
             - name: WORKSPACE_EXPIRE_DAYS
               value: "7"
+            - name: "HOST"
+              value: "0.0.0.0"
           ports:
             - containerPort: 3000
+              protocol: TCP
           securityContext:
-            readOnlyRootFilesystem: true
-            runAsNonRoot: true
-            runAsUser: 1999
             allowPrivilegeEscalation: false
       volumes:
         - name: config-storage
@@ -91,24 +87,18 @@ spec:
             claimName: changedetection-config-pvc
 ---
 apiVersion: v1
-kind: ConfigMap
+kind: Service
 metadata:
-  name: seccomp-profile
-  namespace: downloads
-data:
-  seccomp_profile.json: |
-    {
-      "comment": "Allow create user namespaces",
-      "names": [
-        "clone",
-        "setns",
-        "unshare"
-      ],
-      "action": "SCMP_ACT_ALLOW",
-      "args": [],
-      "includes": {},
-      "excludes": {}
-    }
+  name: playwright-service
+  namespace: downloads  # Replace with your desired namespace
+spec:
+  selector:
+    app: changedetection  # Make sure this selector matches your WebSocket container's labels
+  ports:
+    - name: playwright
+      protocol: TCP
+      port: 3000
+      targetPort: 3000
 ---
 apiVersion: v1
 kind: Service
