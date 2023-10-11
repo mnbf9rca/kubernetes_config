@@ -1,0 +1,152 @@
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: changedetection-config-pv
+  namespace: downloads
+spec:
+  capacity:
+    storage: 20Gi
+  volumeMode: Filesystem
+  accessModes:
+    - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: longhorn
+  csi:
+    driver: driver.longhorn.io
+    fsType: ext4
+    volumeHandle: changedetection-config
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: changedetection-config-pvc
+  namespace: downloads
+spec:
+  storageClassName: longhorn
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 20Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: changedetection-deployment
+  namespace: downloads
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: changedetection
+  template:
+    metadata:
+      labels:
+        app: changedetection
+    spec:
+      initContainers:
+      - name: set-permissions
+        image: busybox
+        command: ["sh", "-c", "chown -R 1999:1999 /datastore"]
+        volumeMounts:
+        - name: config-storage
+          mountPath: /datastore    
+      containers:
+        - name: changedetection
+          image: ghcr.io/dgtlmoon/changedetection.io:latest
+          env:
+            - name: PLAYWRIGHT_DRIVER_URL
+              value: "ws://playwright-chrome:3000/?blockAds=true&stealth=1&--disable-web-security=true"
+            - name: PUID
+              value: "1999"
+            - name: PGID
+              value: "1999"
+          ports:
+            - containerPort: 5000
+          volumeMounts:
+            - name: config-storage
+              mountPath: /datastore  # Adjusted path
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1999
+            allowPrivilegeEscalation: false
+        - name: playwright
+          image: browserless/chrome
+          hostname: playwright-chrome
+          env:
+            - name: WORKSPACE_DELETE_EXPIRED
+              value: "true"
+            - name: WORKSPACE_EXPIRE_DAYS
+              value: "7"
+          ports:
+            - containerPort: 3000
+          securityContext:
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 1999
+            allowPrivilegeEscalation: false
+      volumes:
+        - name: config-storage
+          persistentVolumeClaim:
+            claimName: changedetection-config-pvc
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: seccomp-profile
+  namespace: downloads
+data:
+  seccomp_profile.json: |
+    {
+      "comment": "Allow create user namespaces",
+      "names": [
+        "clone",
+        "setns",
+        "unshare"
+      ],
+      "action": "SCMP_ACT_ALLOW",
+      "args": [],
+      "includes": {},
+      "excludes": {}
+    }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: changedetection-service
+  namespace: downloads
+spec:
+  selector:
+    app: changedetection
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 5000
+  loadBalancerIP: 192.168.17.245
+  type: LoadBalancer
+
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: changedetection-ingress
+  namespace: downloads
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    ingress.kubernetes.io/ssl-redirect: "true"
+spec:
+  rules:
+  - host: changedetection.cynexia.net
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: changedetection-service
+            port:
+              number: 80
+  tls:
+  - hosts:
+    - changedetection.cynexia.net
+    secretName: changedetection.cynexia.net
