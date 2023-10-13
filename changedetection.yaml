@@ -47,7 +47,8 @@ spec:
             - name: "HOSTNAME"
               value: "changedetection.cynexia.net"
           ports:
-            - containerPort: 25
+            - name: smtp
+              containerPort: 25
         - name: changedetection
           image: ghcr.io/dgtlmoon/changedetection.io:latest
           env:
@@ -58,7 +59,8 @@ spec:
             - name: PGID
               value: "1999"
           ports:
-            - containerPort: 5000
+            - name: web
+              containerPort: 5000
           volumeMounts:
             - name: config-storage
               mountPath: /datastore  # Adjusted path
@@ -97,7 +99,8 @@ spec:
             - name: DEFAULT_STEALTH
               value: "true"
           ports:
-            - containerPort: 3000
+            - name: pw-container 
+              containerPort: 3000
               protocol: TCP
           securityContext:
             allowPrivilegeEscalation: false
@@ -118,7 +121,7 @@ spec:
     - name: playwright
       protocol: TCP
       port: 3000
-      targetPort: 3000
+      targetPort: pw-container 
 ---
 apiVersion: v1
 kind: Service
@@ -128,13 +131,12 @@ metadata:
 spec:
   selector:
     app: changedetection
+  type: NodePort
   ports:
-    - protocol: TCP
-      port: 80
-      targetPort: 5000
-  loadBalancerIP: 192.168.17.245
-  type: LoadBalancer
-
+  - name: cd-web-port
+    protocol: TCP
+    port: 443
+    targetPort: web
 ---
 apiVersion: networking.k8s.io/v1
 kind: Ingress
@@ -155,8 +157,24 @@ spec:
           service:
             name: changedetection-service
             port:
-              number: 80
+              name: cd-web-port
   tls:
   - hosts:
     - changedetection.cynexia.net
     secretName: changedetection.cynexia.net
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ingress-loadbalancer-changedetection
+  namespace: ingress
+spec:
+  selector:
+    name: nginx-ingress-microk8s
+  type: LoadBalancer
+  loadBalancerIP: 192.168.17.245
+  ports:
+    - name: https-in
+      protocol: TCP
+      port: 443
+      targetPort: 443
