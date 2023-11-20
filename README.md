@@ -22,3 +22,17 @@ in microk8s, enable:
 
 
 retrieve dashbaord token with `microk8s kubectl create token default`
+
+install cluster issuer for cert-manager
+
+install CSI driver for NFS: https://microk8s.io/docs/nfs
+
+```
+microk8s enable helm3
+microk8s helm3 repo add csi-driver-nfs https://raw.githubusercontent.com/kubernetes-csi/csi-driver-nfs/master/charts
+microk8s helm3 repo update
+microk8s helm3 install csi-driver-nfs csi-driver-nfs/csi-driver-nfs \
+    --namespace kube-system \
+    --set kubeletDir=/var/snap/microk8s/common/var/lib/kubelet
+microk8s kubectl wait pod --selector app.kubernetes.io/name=csi-driver-nfs --for condition=ready --namespace kube-system
+```

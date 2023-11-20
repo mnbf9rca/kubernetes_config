@@ -1,5 +1,8 @@
 # requires certmgr to be installed, creates an issuer for prod and staging servers
 # follows https://cert-manager.io/docs/configuration/acme/dns01/route53/
+# you can also create this manually
+# kubectl create secret generic -n cert-manager prod-route53-credentials-secret \
+# --from-literal=secret-access-key=gC...cL
 apiVersion: v1
 data:
   secret-access-key: <key>
@@ -23,7 +26,7 @@ spec:
     solvers:
     - dns01:
         route53:
-          accessKeyID: AKIAYWQ3QCCFJ3WWB4WW
+          accessKeyID: AKIAYWQ3QCCFJMO5EFP6
           region: eu-west-2
           secretAccessKeySecretRef:
             key: secret-access-key
@@ -46,7 +49,7 @@ spec:
     solvers:
     - dns01:
         route53:
-          accessKeyID: AKIAYWQ3QCCFJ3WWB4WW
+          accessKeyID: AKIAYWQ3QCCFJMO5EFP6
           region: eu-west-2
           secretAccessKeySecretRef:
             key: secret-access-key
