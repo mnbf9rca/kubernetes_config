@@ -16,6 +16,20 @@ spec:
     fsType: ext4
     volumeHandle: changedetection-config
 ---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: changedetection-config-pvc
+  namespace: downloads
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 20Gi
+  storageClassName: longhorn
+  volumeName: changedetection-config-pv
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
