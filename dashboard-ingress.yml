@@ -1,14 +1,35 @@
-# USER=username; PASSWORD=password; echo "${USER}:$(openssl passwd -stdin -apr1 <<< ${PASSWORD})" >> auth
+## this ingress will use basic auth to protect the dashboard
+## but hardcodes a long-lived bearer token
+## we can't use a secret or configmap for this because
+## it's not supported by configuration-snippet
+
+
+## first, create a secret with the user/password combination for basic auth
+# USER=rob; PASSWORD=Lass1rv; echo "${USER}:$(openssl passwd -stdin -apr1 <<< ${PASSWORD})" >> auth
+# kubectl -n kube-system create secret generic basic-auth-dashboard --from-file=auth
+
+## create a long-lived secret for use in the auth header
+## place this after "Bearer " in the nginx.ingress.kubernetes.io/configuration-snippet annotation
+# microk8s kubectl create token default --duration 87600h # 10 years
+
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
   name: dashboard-ingress
   namespace: kube-system
   annotations:
-    # prevent the controller from redirecting (308) to HTTPS
-    nginx.ingress.kubernetes.io/ssl-redirect: 'false'
+    nginx.ingress.kubernetes.io/ssl-redirect: 'true'
     nginx.ingress.kubernetes.io/proxy-body-size: 10000m
     nginx.ingress.kubernetes.io/backend-protocol: "https"
+    nginx.ingress.kubernetes.io/auth-type: basic
+    # name of the secret that contains the user/password definitions
+    nginx.ingress.kubernetes.io/auth-secret: basic-auth-dashboard
+    nginx.ingress.kubernetes.io/auth-realm: 'Authentication Required '
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    # this is the bearer token for the dashboard
+    # see https://github.com/kubernetes/dashboard/blob/master/docs/user/access-control/README.md#authorization-header
+    nginx.ingress.kubernetes.io/configuration-snippet: |
+      proxy_set_header Authorization "Bearer ey..K0w";
 spec:
   rules:
   - host: k7.cynexia.net
@@ -21,3 +42,7 @@ spec:
             name: kubernetes-dashboard
             port:
               number: 443
+  tls:
+  - hosts:
+    - k7.cynexia.net
+    secretName: k7.cynexia.net-tls
