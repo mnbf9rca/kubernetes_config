@@ -1,16 +1,19 @@
 # requires certmgr to be installed, creates an issuer for prod and staging servers
 # follows https://cert-manager.io/docs/configuration/acme/dns01/route53/
+# but with renamed secret keys
 # you can also create this manually
 # kubectl create secret generic -n cert-manager prod-route53-credentials-secret \
-# --from-literal=secret-access-key=gC...cL
+# --from-literal=AWS_ACCESS_KEY_ID=AK..P6 \
+# --from-literal=AWS_SECRET_ACCESS_KEY=gC..cL
 apiVersion: v1
-data:
-  secret-access-key: <key>
 kind: Secret
 metadata:
   name: prod-route53-credentials-secret
   namespace: cert-manager
 type: Opaque
+data:
+  AWS_SECRET_ACCESS_KEY: <key>== # base64 encoded
+  AWS_ACCESS_KEY_ID: <secret>= # base64 encoded
 ---
 apiVersion: cert-manager.io/v1
 kind: ClusterIssuer
@@ -19,17 +22,21 @@ metadata:
 spec:
   acme:
     email: <email>
-    preferredChain: ""
     privateKeySecretRef:
       name: pk-letsencrypt-prod
     server: https://acme-v02.api.letsencrypt.org/directory
     solvers:
     - dns01:
         route53:
-          accessKeyID: AKIAYWQ3QCCFJMO5EFP6
           region: eu-west-2
+          # accessKeyID: AKIAYWQ3QCCFJMO5EFP6
+          # from v1.13.0 we can use accessKeyIDSecretRef
+          # see https://cert-manager.io/v1.13-docs/configuration/acme/dns01/route53/#credentials
+          accessKeyIDSecretRef:
+            name: prod-route53-credentials-secret
+            key: AWS_ACCESS_KEY_ID
           secretAccessKeySecretRef:
-            key: secret-access-key
+            key: AWS_SECRET_ACCESS_KEY
             name: prod-route53-credentials-secret
       selector:
         dnsZones:
@@ -42,17 +49,20 @@ metadata:
 spec:
   acme:
     email: <email>
-    preferredChain: ""
     privateKeySecretRef:
       name: pk-letsencrypt-stg
     server: https://acme-staging-v02.api.letsencrypt.org/directory
     solvers:
     - dns01:
         route53:
-          accessKeyID: AKIAYWQ3QCCFJMO5EFP6
           region: eu-west-2
+          # accessKeyID: AKIAYWQ3QCCFJMO5EFP6
+          # from v1.13.0 we can use accessKeyIDSecretRef
+          accessKeyIDSecretRef:
+            name: prod-route53-credentials-secret
+            key: AWS_ACCESS_KEY_ID
           secretAccessKeySecretRef:
-            key: secret-access-key
+            key: AWS_SECRET_ACCESS_KEY
             name: prod-route53-credentials-secret
       selector:
         dnsZones:
