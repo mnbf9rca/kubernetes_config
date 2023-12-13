@@ -5,15 +5,15 @@
 # kubectl create secret generic -n cert-manager prod-route53-credentials-secret \
 # --from-literal=AWS_ACCESS_KEY_ID=AK..P6 \
 # --from-literal=AWS_SECRET_ACCESS_KEY=gC..cL
-apiVersion: v1
-kind: Secret
-metadata:
-  name: prod-route53-credentials-secret
-  namespace: cert-manager
-type: Opaque
-data:
-  AWS_SECRET_ACCESS_KEY: <key>== # base64 encoded
-  AWS_ACCESS_KEY_ID: <secret>= # base64 encoded
+# apiVersion: v1
+# kind: Secret
+# metadata:
+#   name: prod-route53-credentials-secret
+#   namespace: cert-manager
+# type: Opaque
+# data:
+#   AWS_SECRET_ACCESS_KEY: <key>== # base64 encoded
+#   AWS_ACCESS_KEY_ID: <secret>= # base64 encoded
 ---
 apiVersion: cert-manager.io/v1
 kind: ClusterIssuer
