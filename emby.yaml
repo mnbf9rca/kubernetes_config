@@ -147,6 +147,24 @@ spec:
         - name: TZ
           value: Europe/London
         image: linuxserver/emby:latest
+        startupProbe:
+          failureThreshold: 10
+          httpGet:
+            path: /
+            port: containerport
+            scheme: HTTP
+          periodSeconds: 60
+          successThreshold: 1
+          timeoutSeconds: 5
+        livenessProbe:
+          failureThreshold: 3
+          httpGet:
+            path: /
+            port: containerport
+            scheme: HTTP
+          periodSeconds: 60
+          successThreshold: 1
+          timeoutSeconds: 1        
         imagePullPolicy: Always
         securityContext:
           allowPrivilegeEscalation: false
@@ -176,24 +194,6 @@ spec:
         - mountPath: /transcode
           name: cache-vol          
       restartPolicy: Always
-      startupProbe:
-        failureThreshold: 10
-        httpGet:
-          path: /
-          port: containerport
-          scheme: HTTP
-        periodSeconds: 60
-        successThreshold: 1
-        timeoutSeconds: 5
-      livenessProbe:
-        failureThreshold: 3
-        httpGet:
-          path: /
-          port: containerport
-          scheme: HTTP
-        periodSeconds: 60
-        successThreshold: 1
-        timeoutSeconds: 1
       terminationGracePeriodSeconds: 30
       volumes:
       - name: config
