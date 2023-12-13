@@ -3,11 +3,12 @@ kind: Service
 metadata:
   name: ingress-loadbalancer-radarr
   namespace: ingress
+  annotations:
+    metallb.universe.tf/loadBalancerIPs: 10.100.0.253
 spec:
   selector:
     name: nginx-ingress-microk8s
   type: LoadBalancer
-  loadBalancerIP: 192.168.17.253
   ports:
     - name: https
       protocol: TCP
