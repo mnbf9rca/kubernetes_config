@@ -151,6 +151,7 @@ spec:
           privileged: false
           readOnlyRootFilesystem: false
         image: linuxserver/sonarr:latest
+        imagePullPolicy: Always
         env:
         - name: PUID
           value: "1999"

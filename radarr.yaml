@@ -157,6 +157,7 @@ spec:
           privileged: false
           readOnlyRootFilesystem: false
         image: linuxserver/radarr:latest
+        imagePullPolicy: Always
         env:
         - name: PGID
           value: "1999"
