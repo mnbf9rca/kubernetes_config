@@ -7,7 +7,7 @@ spec:
   selector:
     name: nginx-ingress-microk8s
   type: LoadBalancer
-  loadBalancerIP: 192.168.17.247
+  loadBalancerIP: 10.100.0.247
   ports:
     - name: https
       protocol: TCP
@@ -97,7 +97,7 @@ spec:
   accessModes:
     - ReadWriteMany
   nfs:
-    server: pve2.cynexia.net
+    server: fs.cynexia.net
     path: "/tank/comics"
   persistentVolumeReclaimPolicy: Retain
   storageClassName: retain-local-path
