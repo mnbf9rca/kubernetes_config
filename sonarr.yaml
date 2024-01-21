@@ -133,6 +133,11 @@ spec:
       labels:
         app: sonarr
     spec:
+      dnsConfig:
+        nameservers:
+        - 8.8.8.8
+        - 8.8.4.4
+      dnsPolicy: None        
       containers:
       - name: sonarr
         securityContext:
