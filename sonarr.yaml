@@ -99,7 +99,7 @@ spec:
     - ReadWriteMany
   storageClassName: retain-local-path
   nfs:
-    server: fs.cynexia.net
+    server: 10.10.10.1
     path: "/tank/video"
 ---
 kind: PersistentVolumeClaim

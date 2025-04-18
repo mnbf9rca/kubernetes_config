@@ -97,7 +97,7 @@ spec:
   accessModes:
     - ReadWriteMany
   nfs:
-    server: fs.cynexia.net
+    server: 10.10.10.1
     path: "/tank/comics"
   persistentVolumeReclaimPolicy: Retain
   storageClassName: retain-local-path
