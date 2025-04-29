@@ -1,4 +1,7 @@
 # requires certmgr to be installed, creates an issuer for prod and staging servers
+#
+# Note that ClusterIssuer is a cluster-scoped resource (like Node or ClusterRole) and does not live inside a namespace
+#
 # follows https://cert-manager.io/docs/configuration/acme/dns01/route53/
 # but with renamed secret keys
 # you can also create this manually
