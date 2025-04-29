@@ -5,7 +5,9 @@ well, you either implement with [rancher](https://github.com/mnbf9rca/kubernetes
 
 # microk8s
 
-## basics
+## basics
+
+inblock ufw: `sudo ufw allow from 127.0.0.1 port 19001`
 
 in microk8s, enable:
 - dashboard
@@ -21,13 +23,13 @@ cd .kube
 microk8s config > config
 ```
 
-alias kubectl - add to `~/.bash_aliases`
+alias kubectl - add to `~/.bash_aliases` or `~/.bashrc`
 ```
 alias kubectl='microk8s kubectl'
 ```
 
 ## cert manager
-install cert-manger from helm
+install cert-manger from helm or enable in microk8s
 ```
 helm repo add jetstack https://charts.jetstack.io
 helm repo update
