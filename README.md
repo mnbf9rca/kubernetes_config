@@ -72,9 +72,12 @@ microk8s kubectl wait pod --selector app.kubernetes.io/name=csi-driver-nfs --for
 
 ## dashboard
 
+Create admin user `htpasswd -c auth rob`
+Create secret `kubectl create secret generic basic-auth-dashboard --from-file=auth -n kube-system`
+(you might need `sudo apt-get install apache2-utils`)
 ignore default `microk8s kubectl describe secret -n kube-system microk8s-dashboard-token`
 retrieve dashbaord token with `microk8s kubectl create token default  --duration 87600h`
-install dashboard-ingress.yml
+install `dashboard-ingress.yml`
 
 ## downloads
 
