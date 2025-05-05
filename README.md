@@ -79,9 +79,6 @@ microk8s kubectl wait pod --selector app.kubernetes.io/name=csi-driver-nfs --for
 
 ## dashboard
 
-> [!IMPORTANT]  
-> this isnt working yet.
-
 Because of [CVE-2021-25742](https://github.com/kubernetes/kubernetes/issues/126811) you need to [enable annotation snippets](https://kubernetes.github.io/ingress-nginx/user-guide/nginx-configuration/configmap/#allow-snippet-annotations):
 ```
 kubectl patch configmap nginx-load-balancer-microk8s-conf \
