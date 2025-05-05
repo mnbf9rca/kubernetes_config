@@ -25,9 +25,10 @@ cd .kube
 microk8s config > config
 ```
 
-alias kubectl - add to `~/.bash_aliases` or `~/.bashrc`
+alias kubectl and helm - add to `~/.bash_aliases` or `~/.bashrc`
 ```
 alias kubectl='microk8s kubectl'
+alias helm='microk8s helm'
 ```
 
 ## cert manager
