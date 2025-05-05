@@ -35,6 +35,7 @@ blacklist {
 Then rebuild the initramfs so it doesn't load multipath on boot:
 
 ```
+echo "blacklist dm_multipath" | sudo tee /etc/modprobe.d/blacklist-multipath.conf
 sudo update-initramfs -u
 ```
 
