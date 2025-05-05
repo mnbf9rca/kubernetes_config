@@ -15,6 +15,8 @@ in microk8s, enable:
 - metallb:10.100.0.200-10.100.0.254
 - ingress
 
+Apply metallb address pool: `kubectl apply -f addresspool.yaml`
+
 store kubectl config:
 ```
 cd $HOME
