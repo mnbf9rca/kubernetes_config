@@ -28,7 +28,7 @@ defaults {
 }
 
 blacklist {
-    devnode "*"
+    devnode ".*"
 }
 
 ```
