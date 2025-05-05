@@ -14,8 +14,11 @@ in microk8s, enable:
 - dns
 - metallb:10.100.0.200-10.100.0.254
 - ingress
+- cert-manager
 
 Apply metallb address pool: `kubectl apply -f addresspool.yaml`
+
+install cluster issuer for cert-manager
 
 store kubectl config:
 ```
@@ -31,15 +34,6 @@ alias kubectl='microk8s kubectl'
 alias helm='microk8s helm'
 ```
 
-## cert manager
-install cert-manger from helm or enable in microk8s
-```
-helm repo add jetstack https://charts.jetstack.io
-helm repo update
-helm install   cert-manager jetstack/cert-manager   --namespace cert-manager   --create-namespace  --set installCRDs=true
-```
-
-install cluster issuer for cert-manager
 
 ## longhorn
 
