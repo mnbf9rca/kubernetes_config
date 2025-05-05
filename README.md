@@ -5,6 +5,40 @@ well, you either implement with [rancher](https://github.com/mnbf9rca/kubernetes
 
 # microk8s
 
+## Disable multipath
+
+Stop and disable the multipath service
+```
+sudo systemctl stop multipathd.socket
+sudo systemctl stop multipathd.service
+sudo systemctl disable multipathd.socket
+sudo systemctl disable multipathd.service
+```
+
+Prevent multipath from loading at boot
+```
+sudo nano /etc/multipath.conf
+```
+Add the following minimal config to explicitly blacklist all devices:
+
+```
+defaults {
+    user_friendly_names yes
+    find_multipaths no
+}
+
+blacklist {
+    devnode "*"
+}
+
+```
+Then rebuild the initramfs so it doesn't load multipath on boot:
+
+```
+sudo update-initramfs -u
+```
+
+
 ## basics
 
 inblock ufw: `sudo ufw allow from 127.0.0.1 port 19001`
