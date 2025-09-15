@@ -1,0 +1,76 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: ingress-loadbalancer-immich
+  namespace: ingress
+  annotations:
+    metallb.universe.tf/loadBalancerIPs: 10.100.0.247
+spec:
+  selector:
+    name: nginx-ingress-microk8s
+  type: LoadBalancer
+  ports:
+    - name: https
+      protocol: TCP
+      port: 443
+      targetPort: 443
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: immich-library-nfs-pv
+  namespace: immich
+spec:
+  capacity:
+    storage: 10Ti
+  accessModes:
+    - ReadOnlyMany
+  nfs:
+    server: 10.10.10.1
+    path: "/tank/largeappdata/ente"
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: retain-local-path
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: immich-library-pvc
+  namespace: immich
+spec:
+  volumeName: immich-library-nfs-pv
+  accessModes:
+    - ReadOnlyMany
+  storageClassName: retain-local-path
+  resources:
+    requests:
+      storage: 10Ti
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: immich-upload-nfs-pv
+  namespace: immich
+spec:
+  capacity:
+    storage: 1Ti
+  accessModes:
+    - ReadWriteMany
+  nfs:
+    server: 10.10.10.1
+    path: "/tank/largeappdata/immich-data"
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: retain-local-path
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: immich-upload-pvc
+  namespace: immich
+spec:
+  volumeName: immich-upload-nfs-pv
+  accessModes:
+    - ReadWriteMany
+  storageClassName: retain-local-path
+  resources:
+    requests:
+      storage: 1Ti
