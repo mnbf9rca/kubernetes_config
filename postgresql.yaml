@@ -59,6 +59,17 @@ spec:
   storageClassName: longhorn
   volumeName: postgresql-longhorn-pv
 ---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: postgresql-initdb
+  namespace: immich
+data:
+  01-extensions.sql: |
+    CREATE EXTENSION IF NOT EXISTS cube;
+    CREATE EXTENSION IF NOT EXISTS earthdistance;
+    CREATE EXTENSION IF NOT EXISTS vchord CASCADE;
+---
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
@@ -79,7 +90,7 @@ spec:
         fsGroup: 999
       containers:
       - name: postgresql
-        image: postgres:17-alpine
+        image: tensorchord/vchord-postgres:pg16-v0.4.3
         imagePullPolicy: Always
         env:
         - name: POSTGRES_PASSWORD
@@ -89,6 +100,8 @@ spec:
               key: postgres-password
         - name: PGDATA
           value: /var/lib/postgresql/data/pgdata
+        - name: POSTGRES_INITDB_ARGS
+          value: "--encoding=UTF8 --locale=C"
         securityContext:
           allowPrivilegeEscalation: false
           capabilities:
@@ -135,7 +148,12 @@ spec:
         volumeMounts:
         - name: postgresql-data
           mountPath: /var/lib/postgresql/data
+        - name: initdb-scripts
+          mountPath: /docker-entrypoint-initdb.d
       volumes:
       - name: postgresql-data
         persistentVolumeClaim:
           claimName: postgresql-longhorn-pvc
+      - name: initdb-scripts
+        configMap:
+          name: postgresql-initdb
