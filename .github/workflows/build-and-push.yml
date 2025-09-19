@@ -26,11 +26,11 @@ jobs:
       uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8  # v5.0.0
 
     - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@c47758b77c9736f7135ef20d2e06c5f127c5b991  # v3.7.1
+      uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435  # v3.11.1
 
     - name: Log in to Container Registry
       if: github.event_name != 'pull_request'
-      uses: docker/login-action@9780b0c442fbb1117ed29e0efdff1e18412f7567  # v3.3.0
+      uses: docker/login-action@184bdaa0721073962dff0199f1fb9940f07167d1  # v3.5.0
       with:
         registry: ${{ env.REGISTRY }}
         username: ${{ github.actor }}
