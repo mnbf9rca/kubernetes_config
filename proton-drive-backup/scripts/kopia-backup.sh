@@ -139,7 +139,9 @@ if ! kopia snapshot list "$SNAPSHOT_SOURCE" 2>/dev/null | grep -q "$SNAPSHOT_SOU
     log "Configuring snapshot policy for $SNAPSHOT_SOURCE"
 
     # Set snapshot policy
-    kopia --config-file="$KOPIA_CONFIG_FILE" policy set "$SNAPSHOT_SOURCE"
+    kopia --config-file="$KOPIA_CONFIG_FILE" \
+    policy set "$SNAPSHOT_SOURCE" \
+    --ignore-identical-snapshots true
 
     log "Snapshot policy configured"
 fi
