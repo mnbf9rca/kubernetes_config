@@ -1,9 +1,11 @@
-apiVersion: v1
-kind: Namespace
-metadata:
-  name: proton-backup
-  labels:
-    name: proton-backup
-    pod-security.kubernetes.io/enforce: restricted
-    pod-security.kubernetes.io/audit: restricted
-    pod-security.kubernetes.io/warn: restricted
+# This file is replaced by the comprehensive pod-security-policy.yaml
+# which includes the namespace with Pod Security Standards
+# You can delete this file or use it for simple deployments
+
+# Simple namespace without security policies
+# apiVersion: v1
+# kind: Namespace
+# metadata:
+#   name: proton-backup
+#   labels:
+#     name: proton-backup

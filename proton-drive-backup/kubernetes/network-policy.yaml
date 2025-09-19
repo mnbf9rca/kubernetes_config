@@ -1,0 +1,46 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: proton-backup-network-policy
+  namespace: proton-backup
+spec:
+  podSelector:
+    matchLabels:
+      app: proton-backup
+  policyTypes:
+  - Egress
+  - Ingress
+
+  # Deny all ingress traffic (no services exposed)
+  ingress: []
+
+  # Allow specific egress traffic only
+  egress:
+  # Allow DNS resolution
+  - to: []
+    ports:
+    - protocol: UDP
+      port: 53
+    - protocol: TCP
+      port: 53
+
+  # Allow HTTPS for:
+  # - Proton Drive API
+  # - Backblaze B2 S3 API
+  # - healthchecks.io API
+  - to: []
+    ports:
+    - protocol: TCP
+      port: 443
+
+  # Allow HTTP for healthchecks.io (if needed)
+  - to: []
+    ports:
+    - protocol: TCP
+      port: 80
+
+  # Allow NTP for time synchronization
+  - to: []
+    ports:
+    - protocol: UDP
+      port: 123

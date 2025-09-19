@@ -16,28 +16,43 @@ spec:
     metadata:
       labels:
         app: proton-backup
+      annotations:
+        # AppArmor profile for enhanced security
+        container.apparmor.security.beta.kubernetes.io/backup: runtime/default
+        # Seccomp profile annotation (alternative to securityContext)
+        seccomp.security.alpha.kubernetes.io/pod: runtime/default
     spec:
       serviceAccountName: default
       securityContext:
+        # Pod-level security context
         runAsNonRoot: true
         runAsUser: 1000
         runAsGroup: 1000
         fsGroup: 1000
+        fsGroupChangePolicy: "OnRootMismatch"
         seccompProfile:
           type: RuntimeDefault
+        sysctls: []
+        supplementalGroups: []
       containers:
       - name: backup
         image: ghcr.io/your-username/proton-drive-backup:latest  # Replace with your image
         imagePullPolicy: Always
         securityContext:
+          # Container-level security context (overrides pod-level when specified)
           allowPrivilegeEscalation: false
           readOnlyRootFilesystem: true
           runAsNonRoot: true
           runAsUser: 1000
           runAsGroup: 1000
+          privileged: false
           capabilities:
             drop:
             - ALL
+            # No capabilities needed for this workload
+          seccompProfile:
+            type: RuntimeDefault
+          procMount: Default
         env:
         - name: POD_NAME
           valueFrom:
