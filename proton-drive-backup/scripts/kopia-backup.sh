@@ -134,13 +134,15 @@ log "Repository information:"
 kopia repository status
 
 # Check if source is already configured for backup
-SNAPSHOT_SOURCE="$KOPIA_USERNAME@$KOPIA_HOSTNAME:$SOURCE_PATH"
-if ! kopia snapshot list "$SNAPSHOT_SOURCE" 2>/dev/null | grep -q "$SNAPSHOT_SOURCE"; then
-    log "Configuring snapshot policy for $SNAPSHOT_SOURCE"
+SNAPSHOT_POLICY="$KOPIA_USERNAME@$KOPIA_HOSTNAME:$SOURCE_PATH"
+SNAPSHOT_SOURCE="$SOURCE_PATH"
+
+if ! kopia snapshot list "$SNAPSHOT_POLICY" 2>/dev/null | grep -q "$SNAPSHOT_POLICY"; then
+    log "Configuring snapshot policy for $SNAPSHOT_POLICY"
 
     # Set snapshot policy
     kopia --config-file="$KOPIA_CONFIG_FILE" \
-    policy set "$SNAPSHOT_SOURCE" \
+    policy set "$SNAPSHOT_POLICY" \
     --ignore-identical-snapshots true
 
     log "Snapshot policy configured"
@@ -166,7 +168,7 @@ if [ $KOPIA_EXIT -eq 0 ]; then
 
     # Show snapshot info
     log "Latest snapshots:"
-    kopia snapshot list "$SNAPSHOT_SOURCE" --max-results=5
+    kopia snapshot list "$SNAPSHOT_POLICY" --max-results=5
 
     # Show repository statistics
     log "Repository statistics:"
