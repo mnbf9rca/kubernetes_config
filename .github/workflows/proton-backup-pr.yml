@@ -119,3 +119,23 @@ jobs:
                 body: output
               });
             }
+
+      - name: Clean up scan artifact
+        if: always() && steps.build.outputs.digest
+        run: |
+          # Get the package version ID for the scan artifact
+          PACKAGE_VERSION_ID=$(gh api \
+            "repos/${{ github.repository }}/packages/container/proton-drive-backup/versions" \
+            --jq '.[] | select(.metadata.container.tags[] | contains("pr-${{ github.event.number }}")) | .id' \
+            2>/dev/null || echo "")
+
+          if [ -n "$PACKAGE_VERSION_ID" ]; then
+            echo "Cleaning up scan artifact with ID: $PACKAGE_VERSION_ID"
+            gh api --method DELETE \
+              "repos/${{ github.repository }}/packages/container/proton-drive-backup/versions/$PACKAGE_VERSION_ID" || \
+              echo "Failed to delete scan artifact (may not exist or already deleted)"
+          else
+            echo "No scan artifact found to clean up"
+          fi
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
