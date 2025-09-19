@@ -112,9 +112,41 @@ jobs:
 
       - name: Create release tag
         if: steps.version_bump.outputs.should_create_release == 'true'
+        id: tag
         uses: anothrNick/github-tag-action@4ed44965e0db8dab2b466a16da04aec3cc312fd8 # v1.75.0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           WITH_V: true
           DEFAULT_BUMP: ${{ steps.version_bump.outputs.bump_type }}
           RELEASE_BRANCHES: main,master
+
+      - name: Create GitHub release
+        if: steps.version_bump.outputs.should_create_release == 'true'
+        uses: ncipollo/release-action@b7eabc95ff50cbeeedec83973935c8f306dfcd0b # v1.20.0
+        with:
+          tag: ${{ steps.tag.outputs.new_tag }}
+          name: ${{ steps.tag.outputs.new_tag }}
+          body: |
+            ## 🐳 Container Release ${{ steps.tag.outputs.new_tag }}
+
+            **Image**: `${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.tag.outputs.new_tag }}`
+            **Digest**: `${{ steps.push.outputs.digest }}`
+            **Platforms**: linux/amd64, linux/arm64
+
+            ### 📦 Dependency Updates
+            ${{ steps.version_bump.outputs.changes }}
+
+            ### 🔒 Security Features
+            - ✅ Signed with Cosign (keyless)
+            - ✅ SBOM and provenance included
+            - ✅ Vulnerability scanned with Trivy
+            - 🔍 Verify signature: `cosign verify --certificate-identity-regexp="^https://github.com/${{ github.repository }}/" --certificate-oidc-issuer=https://token.actions.githubusercontent.com ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.push.outputs.digest }}`
+
+            ### 🚀 Usage
+            ```bash
+            docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.tag.outputs.new_tag }}
+            ```
+          draft: false
+          prerelease: false
+          allowUpdates: true
+          generateReleaseNotes: true
