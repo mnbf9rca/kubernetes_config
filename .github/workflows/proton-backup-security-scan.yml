@@ -1,0 +1,149 @@
+name: Proton Drive Backup - Scheduled Security Scan
+
+on:
+  schedule:
+    # Run daily at 6 AM UTC
+    - cron: '0 6 * * *'
+  workflow_dispatch:  # Allow manual triggering
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository_owner }}/proton-drive-backup
+
+jobs:
+  security-scan:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+      issues: write
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8  # v5.0.0
+
+    - name: Get latest image digest
+      id: latest-image
+      run: |
+        # Get the latest digest from the main branch
+        DIGEST=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+          "https://api.github.com/repos/${{ github.repository }}/packages/container/proton-drive-backup/versions" \
+          | jq -r '.[0].name' 2>/dev/null || echo "")
+
+        if [ -z "$DIGEST" ] || [ "$DIGEST" = "null" ]; then
+          echo "No published image found, exiting gracefully"
+          echo "skip=true" >> $GITHUB_OUTPUT
+        else
+          echo "digest=$DIGEST" >> $GITHUB_OUTPUT
+          echo "image=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@$DIGEST" >> $GITHUB_OUTPUT
+          echo "skip=false" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Run Trivy vulnerability scanner
+      if: steps.latest-image.outputs.skip == 'false'
+      uses: aquasecurity/trivy-action@b6643a29fecd7f34b3597bc6acb0a98b03d33ff8  # v0.33.1
+      with:
+        image-ref: ${{ steps.latest-image.outputs.image }}
+        format: sarif
+        output: trivy-results.sarif
+
+    - name: Upload Trivy scan results to GitHub Security
+      if: steps.latest-image.outputs.skip == 'false'
+      uses: github/codeql-action/upload-sarif@573acd9552f33577783abde4acb66a1058e762e5  # v2.23.1
+      with:
+        sarif_file: trivy-results.sarif
+
+    - name: Check for high/critical vulnerabilities
+      if: steps.latest-image.outputs.skip == 'false'
+      id: vuln-check
+      run: |
+        # Run Trivy again to get human-readable output for issue creation
+        docker run --rm -v "$(pwd):/workspace" \
+          aquasec/trivy:0.57.0 image \
+          --severity HIGH,CRITICAL \
+          --format table \
+          --output /workspace/vuln-summary.txt \
+          ${{ steps.latest-image.outputs.image }} || true
+
+        # Check if we have any HIGH or CRITICAL vulnerabilities
+        if [ -s vuln-summary.txt ] && grep -q "HIGH\|CRITICAL" vuln-summary.txt; then
+          echo "critical-found=true" >> $GITHUB_OUTPUT
+          echo "Critical vulnerabilities found"
+        else
+          echo "critical-found=false" >> $GITHUB_OUTPUT
+          echo "No critical vulnerabilities found"
+        fi
+
+    - name: Create security issue on critical vulnerabilities
+      if: steps.latest-image.outputs.skip == 'false' && steps.vuln-check.outputs.critical-found == 'true'
+      uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd  # v8.0.0
+      with:
+        script: |
+          const fs = require('fs');
+          const vulnerabilities = fs.readFileSync('vuln-summary.txt', 'utf8');
+
+          const issueTitle = `🚨 Critical Security Vulnerabilities Found in proton-drive-backup`;
+          const issueBody = `
+          ## Security Alert
+
+          **Image**: \`${{ steps.latest-image.outputs.image }}\`
+          **Scan Date**: ${new Date().toISOString()}
+          **Severity**: HIGH/CRITICAL vulnerabilities detected
+
+          ### Vulnerability Report
+
+          \`\`\`
+          ${vulnerabilities}
+          \`\`\`
+
+          ### Recommended Actions
+
+          1. Review the vulnerabilities above
+          2. Update base image and dependencies if possible
+          3. Rebuild and redeploy the container
+          4. Close this issue once resolved
+
+          ### Additional Resources
+
+          - [Trivy Documentation](https://aquasecurity.github.io/trivy/)
+          - [Security Advisory Database](https://github.com/advisories)
+
+          ---
+
+          This issue was automatically created by the scheduled security scan workflow.
+          `;
+
+          // Check if there's already an open security issue
+          const { data: issues } = await github.rest.issues.listForRepo({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            labels: 'security,vulnerability',
+            state: 'open'
+          });
+
+          if (issues.length === 0) {
+            // Create new issue
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: issueTitle,
+              body: issueBody,
+              labels: ['security', 'vulnerability', 'high-priority']
+            });
+            console.log('Created new security issue');
+          } else {
+            // Update existing issue
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issues[0].number,
+              body: `## Updated Scan Results (${new Date().toISOString()})\n\n\`\`\`\n${vulnerabilities}\n\`\`\``
+            });
+            console.log('Updated existing security issue');
+          }
+
+    - name: Notify on success
+      if: steps.latest-image.outputs.skip == 'false' && steps.vuln-check.outputs.critical-found == 'false'
+      run: |
+        echo "✅ Security scan completed successfully - no critical vulnerabilities found"
+        echo "Image: ${{ steps.latest-image.outputs.image }}"
