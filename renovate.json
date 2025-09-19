@@ -54,21 +54,6 @@
       "enabled": false
     },
     {
-      "description": "Enable SHA updates only for actions we want to keep current",
-      "matchManagers": ["github-actions"],
-      "matchCurrentVersion": "/^[a-f0-9]{40}$/",
-      "matchPackageNames": [
-        "actions/checkout",
-        "docker/setup-buildx-action",
-        "docker/metadata-action",
-        "docker/build-push-action",
-        "docker/login-action"
-      ],
-      "enabled": true,
-      "schedule": ["monthly"],
-      "stabilityDays": 30
-    },
-    {
       "description": "Group Docker multi-stage FROM updates",
       "matchDatasources": ["docker"],
       "matchFileNames": ["proton-drive-backup/Dockerfile"],
