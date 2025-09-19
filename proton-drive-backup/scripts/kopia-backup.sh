@@ -65,10 +65,6 @@ fi
 # Create necessary directories
 mkdir -p "$KOPIA_CACHE_DIR" "$KOPIA_LOG_DIR"
 
-# Cleanup old Kopia logs (keep last 14 days)
-find "$KOPIA_LOG_DIR" -name "*.log" -mtime +14 -delete 2>/dev/null || true
-find "$KOPIA_LOG_DIR" -name "*.log.*" -mtime +14 -delete 2>/dev/null || true
-
 log "Starting Kopia backup process..."
 log "Source path: $SOURCE_PATH"
 log "S3 bucket: $S3_BUCKET"
@@ -114,6 +110,7 @@ if [ "$NEEDS_CONNECT" = "true" ]; then
         --region="$S3_REGION" \
         --cache-directory="$KOPIA_CACHE_DIR" \
         --log-dir="$KOPIA_LOG_DIR" \
+        --log-dir-max-age=14d \
         --override-hostname="proton-backup-client" \
         --override-username="backup"
 
