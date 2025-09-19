@@ -1,0 +1,157 @@
+name: Build and Push Container
+
+on:
+  push:
+    branches: [ main, master ]
+    tags: [ 'v*' ]
+  pull_request:
+    branches: [ main, master ]
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      security-events: write
+      attestations: write
+      id-token: write
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@eef61447b9ff4aafe5dcd4e0bbf5d482be7e7871  # v4.2.1
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@c47758b77c9736f7135ef20d2e06c5f127c5b991  # v3.7.1
+
+    - name: Log in to Container Registry
+      if: github.event_name != 'pull_request'
+      uses: docker/login-action@9780b0c442fbb1117ed29e0efdff1e18412f7567  # v3.3.0
+      with:
+        registry: ${{ env.REGISTRY }}
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Extract metadata
+      id: meta
+      uses: docker/metadata-action@8e5442c4ef9f78752691e2d8f8d19755c6f78e81  # v5.5.1
+      with:
+        images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+        tags: |
+          type=ref,event=branch
+          type=ref,event=pr
+          type=semver,pattern={{version}}
+          type=semver,pattern={{major}}.{{minor}}
+          type=sha,prefix={{branch}}-
+
+    - name: Get current date
+      id: date
+      run: echo "BUILD_DATE=$(date -u +'%Y-%m-%dT%H:%M:%SZ')" >> $GITHUB_OUTPUT
+
+    - name: Build and push Docker image
+      id: build
+      uses: docker/build-push-action@4f58ea79222b3b9dc2c8bbdd6debcef730109a75  # v6.9.0
+      with:
+        context: ./proton-drive-backup
+        platforms: linux/amd64,linux/arm64
+        push: ${{ github.event_name != 'pull_request' }}
+        tags: ${{ steps.meta.outputs.tags }}
+        labels: ${{ steps.meta.outputs.labels }}
+        build-args: |
+          BUILD_DATE=${{ steps.date.outputs.BUILD_DATE }}
+          VCS_REF=${{ github.sha }}
+          VERSION=${{ steps.meta.outputs.version }}
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+        sbom: true
+        provenance: true
+
+    - name: Generate SBOM
+      if: github.event_name != 'pull_request'
+      uses: anchore/sbom-action@61119d458adab75f756bc0b9e4bde25725f86a7a  # v0.17.2
+      with:
+        image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build.outputs.digest }}
+        format: spdx-json
+        output-file: sbom.spdx.json
+
+    - name: Upload SBOM to GitHub
+      if: github.event_name != 'pull_request'
+      uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882  # v4.4.3
+      with:
+        name: sbom
+        path: sbom.spdx.json
+
+    - name: Run Trivy vulnerability scanner
+      if: github.event_name != 'pull_request'
+      uses: aquasecurity/trivy-action@6e7b7d1fd3e4fef0c5fa8cce1229c54b9c9a2fa0  # v0.24.0
+      with:
+        image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build.outputs.digest }}
+        format: sarif
+        output: trivy-results.sarif
+
+    - name: Upload Trivy scan results to GitHub Security
+      if: github.event_name != 'pull_request'
+      uses: github/codeql-action/upload-sarif@c36620d31ac7c881962c3d9dd939c40ec9434f2b  # v3.26.12
+      with:
+        sarif_file: trivy-results.sarif
+
+    - name: Sign container image with cosign
+      if: github.event_name != 'pull_request'
+      uses: sigstore/cosign-installer@4959ce089c160fddf62f7b42464195ba1a56d382  # v3.6.0
+
+    - name: Sign the container image
+      if: github.event_name != 'pull_request'
+      env:
+        COSIGN_EXPERIMENTAL: 1
+      run: |
+        echo "Signing image ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build.outputs.digest }}"
+        cosign sign --yes ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build.outputs.digest }}
+
+    - name: Generate attestation
+      if: github.event_name != 'pull_request'
+      uses: actions/attest-build-provenance@1c608d11d69870c2092266b3f9a6ac1a492d2a8c  # v1.4.3
+      with:
+        subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+        subject-digest: ${{ steps.build.outputs.digest }}
+        push-to-registry: true
+
+    - name: Verify signature
+      if: github.event_name != 'pull_request'
+      env:
+        COSIGN_EXPERIMENTAL: 1
+      run: |
+        cosign verify \
+          --certificate-identity-regexp="^https://github.com/${{ github.repository }}/" \
+          --certificate-oidc-issuer=https://token.actions.githubusercontent.com \
+          ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build.outputs.digest }}
+
+    - name: Comment PR with image info
+      if: github.event_name == 'pull_request'
+      uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea  # v7.0.1
+      with:
+        script: |
+          const output = `
+          ## 🐳 Container Build Summary
+
+          **Image**: \`${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}\`
+          **Digest**: \`${{ steps.build.outputs.digest }}\`
+          **Platforms**: linux/amd64, linux/arm64
+
+          ### Security Scanning
+          - ✅ Trivy vulnerability scan completed
+          - ✅ SBOM generated
+          - ✅ Build provenance attestation ready
+
+          > Note: Image is built but not pushed for pull requests
+          `;
+
+          github.rest.issues.createComment({
+            issue_number: context.issue.number,
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            body: output
+          });

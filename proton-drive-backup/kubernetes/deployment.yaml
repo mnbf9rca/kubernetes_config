@@ -1,0 +1,111 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: proton-backup
+  namespace: proton-backup
+  labels:
+    app: proton-backup
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate  # Prevent concurrent backups
+  selector:
+    matchLabels:
+      app: proton-backup
+  template:
+    metadata:
+      labels:
+        app: proton-backup
+    spec:
+      serviceAccountName: default
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+      - name: backup
+        image: ghcr.io/your-username/proton-drive-backup:latest  # Replace with your image
+        imagePullPolicy: Always
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          runAsNonRoot: true
+          runAsUser: 1000
+          runAsGroup: 1000
+          capabilities:
+            drop:
+            - ALL
+        env:
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        envFrom:
+        - configMapRef:
+            name: proton-backup-config
+        - secretRef:
+            name: proton-backup-secrets
+        volumeMounts:
+        - name: data
+          mountPath: /data
+        - name: config
+          mountPath: /config
+        - name: tmp
+          mountPath: /tmp
+        - name: rclone-config
+          mountPath: /config/rclone.conf
+          subPath: rclone.conf
+          readOnly: true
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "250m"
+          limits:
+            memory: "2Gi"
+            cpu: "1000m"
+        livenessProbe:
+          exec:
+            command:
+            - /bin/sh
+            - -c
+            - "ps aux | grep -v grep | grep -E '(rclone|kopia|backup.sh)' || test -f /tmp/backup-completed"
+          initialDelaySeconds: 300
+          periodSeconds: 300
+          timeoutSeconds: 30
+          failureThreshold: 3
+        readinessProbe:
+          exec:
+            command:
+            - /bin/sh
+            - -c
+            - "test -x /usr/local/bin/rclone && test -x /usr/local/bin/kopia"
+          initialDelaySeconds: 5
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+      volumes:
+      - name: data
+        persistentVolumeClaim:
+          claimName: proton-backup-data-pvc
+      - name: config
+        persistentVolumeClaim:
+          claimName: proton-backup-config-pvc
+      - name: tmp
+        emptyDir:
+          sizeLimit: 1Gi
+      - name: rclone-config
+        secret:
+          secretName: proton-backup-secrets
+          items:
+          - key: RCLONE_CONFIG
+            path: rclone.conf
+      restartPolicy: Always
+      nodeSelector:
+        kubernetes.io/arch: amd64  # Remove if supporting both architectures
