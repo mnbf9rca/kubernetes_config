@@ -6,13 +6,21 @@ set -e
 
 # Configuration
 LOG_FILE="/tmp/backup.log"
+PERSISTENT_LOG_DIR="/data/logs"
+PERSISTENT_LOG_FILE="$PERSISTENT_LOG_DIR/backup.log"
+
+# Create logs directory and cleanup old logs
+mkdir -p "$PERSISTENT_LOG_DIR"
+
+# Keep only last 30 days of backup logs
+find "$PERSISTENT_LOG_DIR" -name "backup-*.log" -mtime +30 -delete 2>/dev/null || true
 START_TIME=$(date +%s)
 HEALTHCHECK_BASE_URL="${HEALTHCHECK_URL}"
 ERRORS=""
 SCRIPT_EXIT_CODE=0
 
-# Initialize logging
-echo "=== Proton Drive Backup Started at $(date) ===" | tee $LOG_FILE
+# Initialize logging (both temporary and persistent)
+echo "=== Proton Drive Backup Started at $(date) ===" | tee $LOG_FILE | tee -a $PERSISTENT_LOG_FILE
 
 # Log container build metadata as JSON for diagnostics
 BUILD_INFO=$(cat <<EOF

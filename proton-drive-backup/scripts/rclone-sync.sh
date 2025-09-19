@@ -70,10 +70,21 @@ mkdir -p "$LOCAL_PATH" || {
 
 # Perform the sync with comprehensive logging
 # Using sync instead of copy to handle deletions
+log "Starting rclone sync from $PROTON_REMOTE: to $LOCAL_PATH"
+
+# Create rclone logs directory and cleanup old logs
+RCLONE_LOG_DIR="/data/logs/rclone"
+mkdir -p "$RCLONE_LOG_DIR"
+RCLONE_LOG_FILE="$RCLONE_LOG_DIR/sync-$(date +%Y%m%d-%H%M%S).log"
+
+# Keep only last 7 days of rclone logs
+find "$RCLONE_LOG_DIR" -name "sync-*.log" -mtime +7 -delete 2>/dev/null || true
+
 rclone sync \
     --config="$RCLONE_CONFIG_FILE" \
     --log-level="$RCLONE_LOG_LEVEL" \
-    --stats=5m \
+    --log-file="$RCLONE_LOG_FILE" \
+    --stats=1m \
     --stats-one-line \
     --progress \
     --check-first \
@@ -84,7 +95,7 @@ rclone sync \
     --timeout=10m \
     --contimeout=60s \
     --low-level-retries=10 \
-    "$PROTON_REMOTE:" "$LOCAL_PATH"
+    "$PROTON_REMOTE:" "$LOCAL_PATH" 2>&1 | tee -a "$RCLONE_LOG_FILE"
 
 RCLONE_EXIT=$?
 
