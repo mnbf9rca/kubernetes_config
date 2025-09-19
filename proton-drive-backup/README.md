@@ -20,22 +20,30 @@ Automated, secure backup of Proton Drive to Backblaze B2 using rclone and Kopia 
 ### 1. Configure Storage & Settings
 
 Edit `kubernetes/persistent-volumes.yaml` for your NFS server:
+
 ```yaml
 nfs:
-  server: 10.10.10.1  # Your NFS server
+  server: 10.10.10.1 # Your NFS server
   path: "/tank/backup/proton-drive"
 ```
 
 Edit `kubernetes/configmap.yaml` for your environment:
+
 ```yaml
 # Update these values:
-S3_ENDPOINT: "s3.us-west-000.backblazeb2.com"     # Your B2 region
-S3_BUCKET: "your-existing-kopia-bucket"           # Your bucket name
-HEALTHCHECK_UUID: "your-healthchecks-io-uuid"     # Optional monitoring
-BACKUP_SCHEDULE: "0 2 * * *"                      # Daily at 2 AM
+S3_ENDPOINT: "s3.us-west-000.backblazeb2.com" # Your B2 region
+S3_BUCKET: "your-existing-kopia-bucket" # Your bucket name
+HEALTHCHECK_UUID: "your-healthchecks-io-uuid" # Optional monitoring
+BACKUP_SCHEDULE: "0 2 * * *" # Daily at 2 AM
 ```
 
-### 2. Create Secrets
+### 2. Create Namespace
+
+```bash
+kubectl apply -f kubernetes/pod-security-policy.yaml
+```
+
+### 3. Create Secrets
 
 ```bash
 # Create rclone config locally first
@@ -51,15 +59,14 @@ kubectl create secret generic proton-backup-secrets \
   --dry-run=client -o yaml | kubectl apply -f -
 ```
 
-### 3. Deploy
+### 4. Deploy
 
 ```bash
-kubectl apply -f kubernetes/pod-security-policy.yaml
+# Deploy storage, configuration, and CronJob
 kubectl apply -f kubernetes/persistent-volumes.yaml
 kubectl apply -f kubernetes/configmap.yaml
 kubectl apply -f kubernetes/serviceaccount.yaml
 kubectl apply -f kubernetes/network-policy.yaml
-# Secret created above with kubectl create
 kubectl apply -f kubernetes/cronjob.yaml
 ```
 
@@ -67,12 +74,12 @@ kubectl apply -f kubernetes/cronjob.yaml
 
 ### Required Secrets
 
-| Variable | Description |
-|----------|-------------|
-| `RCLONE_CONFIG` | Base64-encoded rclone config file |
-| `S3_ACCESS_KEY` | Backblaze B2 key ID |
-| `S3_SECRET_KEY` | Backblaze B2 application key |
-| `KOPIA_PASSWORD` | Repository encryption password |
+| Variable         | Description                       |
+| ---------------- | --------------------------------- |
+| `RCLONE_CONFIG`  | Base64-encoded rclone config file |
+| `S3_ACCESS_KEY`  | Backblaze B2 key ID               |
+| `S3_SECRET_KEY`  | Backblaze B2 application key      |
+| `KOPIA_PASSWORD` | Repository encryption password    |
 
 ### Update Secrets
 
@@ -90,8 +97,45 @@ kubectl create secret generic proton-backup-secrets \
 ## Monitoring
 
 Optional [healthchecks.io](https://healthchecks.io) integration:
+
 1. Create a check, copy the UUID
 2. Set `HEALTHCHECK_UUID` in ConfigMap
+
+## Kopia Repository Management
+
+The container uses a **stable client identity** (`backup@proton-backup-client`) to avoid creating multiple client entries in your Kopia repository with each container run.
+
+### Client Identity
+
+- **Hostname**: `proton-backup-client` (consistent across runs)
+- **Username**: `backup` (dedicated backup user)
+- **Benefits**: Clean policy management, single client identity in repository
+
+### Smart Connection Management
+
+- Only reconnects when S3 parameters change
+- Persists repository configuration across CronJob runs
+- Automatically detects configuration changes and reconnects
+
+### Logging
+- **Main logs**: `/data/logs/backup.log` (kept 30 days)
+- **rclone logs**: `/data/logs/rclone/` (kept 7 days)
+- **Kopia logs**: `/data/logs/kopia/` (kept 14 days)
+- All logs stored on NFS for persistent access
+
+### Policy Management
+
+You can manage backup policies from your local Kopia client:
+
+```bash
+# List all clients connected to repository
+kopia snapshot list --all
+
+# Set retention policy for the backup client
+kopia policy set backup@proton-backup-client \
+  --retention-period=1y \
+  --compression=zstd
+```
 
 ## Manual Operations
 
@@ -127,7 +171,6 @@ This project follows a **pragmatic security approach** for service containers:
 - **Weekly monitoring** - Scheduled scans ensure new vulnerabilities are promptly identified
 
 For upstream vulnerabilities (e.g., Go stdlib issues in Kopia), risks are assessed based on actual usage patterns rather than theoretical exposure.
-
 
 ## Documentation
 

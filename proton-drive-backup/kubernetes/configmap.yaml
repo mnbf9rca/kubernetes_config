@@ -17,17 +17,19 @@ data:
   # Kopia configuration
   KOPIA_CONFIG_FILE: "/config/kopia.config"
   KOPIA_CACHE_DIR: "/config/cache"
-  KOPIA_LOG_DIR: "/config/logs"
+  KOPIA_LOG_DIR: "/data/logs/kopia"
+  KOPIA_USERNAME: "backup"
+  KOPIA_HOSTNAME: "proton-backup-client"
   SOURCE_PATH: "/data/proton"
 
   # S3 configuration for Backblaze B2
-  S3_ENDPOINT: "s3.us-west-000.backblazeb2.com"
-  S3_BUCKET: "your-existing-kopia-bucket"
-  S3_REGION: "us-west-000"
+  S3_ENDPOINT: "s3.eu-central-003.backblazeb2.com"
+  S3_BUCKET: "cloud-files-backup"
+  S3_REGION: "eu-central-003"
 
   # Healthcheck configuration
   HEALTHCHECK_URL: "https://hc-ping.com"
-  HEALTHCHECK_UUID: "your-healthchecks-io-uuid"
+  HEALTHCHECK_UUID: "00528ad5-0f6a-4193-aeb0-7b980fccbe5f"
 
   # Resource limits for backup jobs
   BACKUP_TIMEOUT: "6h"

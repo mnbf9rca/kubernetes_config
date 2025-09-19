@@ -10,7 +10,7 @@ spec:
     - ReadWriteMany
   nfs:
     server: 10.10.10.1  # Replace with your NFS server
-    path: "/tank/backup/proton-drive"  # Replace with your NFS path
+    path: "/tank/largeappdata/proton-drive"  # Replace with your NFS path
   persistentVolumeReclaimPolicy: Retain
   storageClassName: retain-local-path
 ---
@@ -29,11 +29,28 @@ spec:
       storage: 2Ti
 ---
 apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: proton-backup-config-pv
+spec:
+  capacity:
+    storage: 10Gi
+  accessModes:
+    - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: longhorn
+  csi:
+    driver: driver.longhorn.io
+    volumeHandle: proton-backup-config  # Explicit Longhorn volume name
+    fsType: ext4
+---
+apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: proton-backup-config-pvc
   namespace: proton-backup
 spec:
+  volumeName: proton-backup-config-pv
   accessModes:
     - ReadWriteOnce
   resources:

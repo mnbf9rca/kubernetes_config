@@ -6,7 +6,7 @@ metadata:
   labels:
     app: proton-backup
 spec:
-  schedule: "0 2 * * *"  # Daily at 2 AM UTC
+  schedule: "45 */6 * * *"  # Daily at 2 AM UTC
   timeZone: "UTC"
   concurrencyPolicy: Forbid  # Prevent overlapping backup jobs
   successfulJobsHistoryLimit: 3
@@ -21,20 +21,16 @@ spec:
           labels:
             app: proton-backup
             job-type: scheduled
-          annotations:
-            # AppArmor profile for enhanced security
-            container.apparmor.security.beta.kubernetes.io/backup: runtime/default
-            # Seccomp profile annotation (alternative to securityContext)
-            seccomp.security.alpha.kubernetes.io/pod: runtime/default
+          annotations: {}
         spec:
           restartPolicy: OnFailure
           serviceAccountName: proton-backup-sa
           securityContext:
             # Pod-level security context
             runAsNonRoot: true
-            runAsUser: 1000
-            runAsGroup: 1000
-            fsGroup: 1000
+            runAsUser: 1999
+            runAsGroup: 1999
+            fsGroup: 1999
             fsGroupChangePolicy: "OnRootMismatch"
             seccompProfile:
               type: RuntimeDefault
@@ -49,14 +45,16 @@ spec:
               allowPrivilegeEscalation: false
               readOnlyRootFilesystem: true
               runAsNonRoot: true
-              runAsUser: 1000
-              runAsGroup: 1000
+              runAsUser: 1999
+              runAsGroup: 1999
               privileged: false
               capabilities:
                 drop:
                 - ALL
                 # No capabilities needed for this workload
               seccompProfile:
+                type: RuntimeDefault
+              appArmorProfile:
                 type: RuntimeDefault
               procMount: Default
             env:
