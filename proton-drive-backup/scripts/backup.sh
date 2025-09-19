@@ -47,9 +47,14 @@ trap 'cleanup_and_exit $?' EXIT
 
 log "Starting Proton Drive sync process..."
 
-# Run rclone sync
-if ! /scripts/rclone-sync.sh 2>&1 | tee -a $LOG_FILE; then
-    RCLONE_EXIT=$?
+# Run rclone sync - capture output and exit code separately
+set +e
+/scripts/rclone-sync.sh > /tmp/rclone.log 2>&1
+RCLONE_EXIT=$?
+cat /tmp/rclone.log | tee -a $LOG_FILE
+set -e
+
+if [ $RCLONE_EXIT -ne 0 ]; then
     log "ERROR: Rclone sync failed with exit code $RCLONE_EXIT"
     ERRORS="${ERRORS}rclone-sync:$RCLONE_EXIT "
 else
@@ -58,9 +63,14 @@ fi
 
 log "Starting Kopia backup process..."
 
-# Run Kopia backup
-if ! /scripts/kopia-backup.sh 2>&1 | tee -a $LOG_FILE; then
-    KOPIA_EXIT=$?
+# Run Kopia backup - capture output and exit code separately
+set +e
+/scripts/kopia-backup.sh > /tmp/kopia.log 2>&1
+KOPIA_EXIT=$?
+cat /tmp/kopia.log | tee -a $LOG_FILE
+set -e
+
+if [ $KOPIA_EXIT -ne 0 ]; then
     log "ERROR: Kopia backup failed with exit code $KOPIA_EXIT"
     ERRORS="${ERRORS}kopia-backup:$KOPIA_EXIT "
 else

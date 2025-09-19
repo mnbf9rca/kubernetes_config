@@ -107,8 +107,8 @@ LABEL org.opencontainers.image.title="Proton Drive Backup" \
       org.opencontainers.image.licenses="MIT" \
       org.opencontainers.image.source="https://github.com/your-username/proton-drive-backup" \
       org.opencontainers.image.base.name="alpine:3.22.1" \
-      com.example.rclone.version="${RCLONE_VERSION}" \
-      com.example.kopia.version="${KOPIA_VERSION}"
+      com.example.rclone.version="1.71.0" \
+      com.example.kopia.version="0.21.1"
 
 # Default command runs the backup script
 CMD ["/scripts/backup.sh"]
