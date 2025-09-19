@@ -21,6 +21,10 @@ EOF
 )
 echo "BUILD_INFO: $BUILD_INFO" | tee -a $LOG_FILE
 
+# Debug: Check user and mount permissions
+log "Current user: $(id)"
+log "Data mount permissions: $(ls -la /data 2>/dev/null || echo 'Failed to list /data')"
+
 # Start healthcheck timer if URL is provided
 if [ -n "$HEALTHCHECK_BASE_URL" ] && [ -n "$HEALTHCHECK_UUID" ]; then
     echo "[$(date)] Starting healthcheck timer..." | tee -a $LOG_FILE

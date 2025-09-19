@@ -68,9 +68,9 @@ RUN apk add --no-cache \
     tzdata && \
     rm -rf /var/cache/apk/*
 
-# Create non-root user
-RUN addgroup -g 1000 backup && \
-    adduser -D -G backup -u 1000 -s /bin/sh backup
+# Create non-root user (using standard UID/GID 1999 for media/backup containers)
+RUN addgroup -g 1999 backup && \
+    adduser -D -G backup -u 1999 -s /bin/sh backup
 
 # Copy binaries from builder stage
 COPY --from=builder /usr/local/bin/rclone /usr/local/bin/rclone
