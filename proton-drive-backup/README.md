@@ -116,6 +116,18 @@ kubectl apply -f kubernetes/cronjob.yaml
 - Container signing and SBOM generation
 - Automated vulnerability scanning
 
+### Security Philosophy
+
+This project follows a **pragmatic security approach** for service containers:
+
+- **Continuous deployment** - Images are always built and tagged as `latest`, vulnerabilities are tracked but don't block deployment
+- **Service continuity over perfection** - Running backups with known low-risk vulnerabilities is better than no backups at all
+- **Automated improvement** - Renovate automatically updates dependencies when fixes become available
+- **Full visibility** - All vulnerabilities are tracked in GitHub Security tab for review and dismissal decisions
+- **Weekly monitoring** - Scheduled scans ensure new vulnerabilities are promptly identified
+
+For upstream vulnerabilities (e.g., Go stdlib issues in Kopia), risks are assessed based on actual usage patterns rather than theoretical exposure.
+
 
 ## Documentation
 

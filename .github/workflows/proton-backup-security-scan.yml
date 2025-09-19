@@ -2,8 +2,8 @@ name: Proton Drive Backup - Scheduled Security Scan
 
 on:
   schedule:
-    # Run daily at 6 AM UTC
-    - cron: '0 6 * * *'
+    # Run weekly on Mondays at 6 AM UTC
+    - cron: '0 6 * * 1'
   workflow_dispatch:  # Allow manual triggering
 
 env:
@@ -16,7 +16,6 @@ jobs:
     permissions:
       contents: read
       security-events: write
-      issues: write
 
     steps:
     - name: Checkout repository
@@ -53,97 +52,9 @@ jobs:
       with:
         sarif_file: trivy-results.sarif
 
-    - name: Check for high/critical vulnerabilities
+    - name: Log scan completion
       if: steps.latest-image.outputs.skip == 'false'
-      id: vuln-check
       run: |
-        # Run Trivy again to get human-readable output for issue creation
-        docker run --rm -v "$(pwd):/workspace" \
-          aquasec/trivy:0.57.0 image \
-          --severity HIGH,CRITICAL \
-          --format table \
-          --output /workspace/vuln-summary.txt \
-          ${{ steps.latest-image.outputs.image }} || true
-
-        # Check if we have any HIGH or CRITICAL vulnerabilities
-        if [ -s vuln-summary.txt ] && grep -q "HIGH\|CRITICAL" vuln-summary.txt; then
-          echo "critical-found=true" >> $GITHUB_OUTPUT
-          echo "Critical vulnerabilities found"
-        else
-          echo "critical-found=false" >> $GITHUB_OUTPUT
-          echo "No critical vulnerabilities found"
-        fi
-
-    - name: Create security issue on critical vulnerabilities
-      if: steps.latest-image.outputs.skip == 'false' && steps.vuln-check.outputs.critical-found == 'true'
-      uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd  # v8.0.0
-      with:
-        script: |
-          const fs = require('fs');
-          const vulnerabilities = fs.readFileSync('vuln-summary.txt', 'utf8');
-
-          const issueTitle = `🚨 Critical Security Vulnerabilities Found in proton-drive-backup`;
-          const issueBody = `
-          ## Security Alert
-
-          **Image**: \`${{ steps.latest-image.outputs.image }}\`
-          **Scan Date**: ${new Date().toISOString()}
-          **Severity**: HIGH/CRITICAL vulnerabilities detected
-
-          ### Vulnerability Report
-
-          \`\`\`
-          ${vulnerabilities}
-          \`\`\`
-
-          ### Recommended Actions
-
-          1. Review the vulnerabilities above
-          2. Update base image and dependencies if possible
-          3. Rebuild and redeploy the container
-          4. Close this issue once resolved
-
-          ### Additional Resources
-
-          - [Trivy Documentation](https://aquasecurity.github.io/trivy/)
-          - [Security Advisory Database](https://github.com/advisories)
-
-          ---
-
-          This issue was automatically created by the scheduled security scan workflow.
-          `;
-
-          // Check if there's already an open security issue
-          const { data: issues } = await github.rest.issues.listForRepo({
-            owner: context.repo.owner,
-            repo: context.repo.repo,
-            labels: 'security,vulnerability',
-            state: 'open'
-          });
-
-          if (issues.length === 0) {
-            // Create new issue
-            await github.rest.issues.create({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              title: issueTitle,
-              body: issueBody,
-              labels: ['security', 'vulnerability', 'high-priority']
-            });
-            console.log('Created new security issue');
-          } else {
-            // Update existing issue
-            await github.rest.issues.createComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: issues[0].number,
-              body: `## Updated Scan Results (${new Date().toISOString()})\n\n\`\`\`\n${vulnerabilities}\n\`\`\``
-            });
-            console.log('Updated existing security issue');
-          }
-
-    - name: Notify on success
-      if: steps.latest-image.outputs.skip == 'false' && steps.vuln-check.outputs.critical-found == 'false'
-      run: |
-        echo "✅ Security scan completed successfully - no critical vulnerabilities found"
+        echo "✅ Weekly security scan completed"
         echo "Image: ${{ steps.latest-image.outputs.image }}"
+        echo "Results uploaded to GitHub Security tab for review"
