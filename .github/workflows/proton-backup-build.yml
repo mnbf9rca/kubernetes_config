@@ -2,16 +2,16 @@ name: Proton Drive Backup - Build Container
 
 on:
   push:
-    branches: [ main, master ]
-    tags: [ 'v*' ]
+    branches: [main, master]
+    tags: ["v*"]
     paths:
-      - 'proton-drive-backup/**'
-      - '.github/workflows/proton-backup-build.yml'
+      - "proton-drive-backup/**"
+      - ".github/workflows/proton-backup-build.yml"
   pull_request:
-    branches: [ main, master ]
+    branches: [main, master]
     paths:
-      - 'proton-drive-backup/**'
-      - '.github/workflows/proton-backup-build.yml'
+      - "proton-drive-backup/**"
+      - ".github/workflows/proton-backup-build.yml"
 
 env:
   REGISTRY: ghcr.io
@@ -26,139 +26,140 @@ jobs:
       security-events: write
       attestations: write
       id-token: write
+      issues: write
 
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8  # v5.0.0
+      - name: Checkout repository
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
 
-    - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435  # v3.11.1
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435 # v3.11.1
 
-    - name: Log in to Container Registry
-      if: github.event_name != 'pull_request'
-      uses: docker/login-action@184bdaa0721073962dff0199f1fb9940f07167d1  # v3.5.0
-      with:
-        registry: ${{ env.REGISTRY }}
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Log in to Container Registry
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@184bdaa0721073962dff0199f1fb9940f07167d1 # v3.5.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
-    - name: Extract metadata
-      id: meta
-      uses: docker/metadata-action@c1e51972afc2121e065aed6d45c65596fe445f3f  # v5.8.0
-      with:
-        images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-        tags: |
-          type=ref,event=branch
-          type=ref,event=pr
-          type=semver,pattern={{version}}
-          type=semver,pattern={{major}}.{{minor}}
-          type=sha
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@c1e51972afc2121e065aed6d45c65596fe445f3f # v5.8.0
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha
 
-    - name: Get current date
-      id: date
-      run: echo "BUILD_DATE=$(date -u +'%Y-%m-%dT%H:%M:%SZ')" >> $GITHUB_OUTPUT
+      - name: Get current date
+        id: date
+        run: echo "BUILD_DATE=$(date -u +'%Y-%m-%dT%H:%M:%SZ')" >> $GITHUB_OUTPUT
 
-    - name: Build Docker image (without pushing)
-      id: build
-      uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83  # v6.18.0
-      with:
-        context: ./proton-drive-backup
-        platforms: linux/amd64  # Single platform for local scanning
-        push: false
-        load: true  # Load single-platform image for scanning
-        tags: ${{ steps.meta.outputs.tags }}
-        labels: ${{ steps.meta.outputs.labels }}
-        build-args: |
-          BUILD_DATE=${{ steps.date.outputs.BUILD_DATE }}
-          VCS_REF=${{ github.event.pull_request.head.sha || github.sha }}
-          VERSION=${{ steps.meta.outputs.version }}
-        cache-from: type=gha
-        cache-to: type=gha,mode=max
+      - name: Build Docker image (without pushing)
+        id: build
+        uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83 # v6.18.0
+        with:
+          context: ./proton-drive-backup
+          platforms: linux/amd64 # Single platform for local scanning
+          push: false
+          load: true # Load single-platform image for scanning
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            BUILD_DATE=${{ steps.date.outputs.BUILD_DATE }}
+            VCS_REF=${{ github.event.pull_request.head.sha || github.sha }}
+            VERSION=${{ steps.meta.outputs.version }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
-    - name: Run Trivy vulnerability scanner
-      uses: aquasecurity/trivy-action@b6643a29fecd7f34b3597bc6acb0a98b03d33ff8  # v0.33.1
-      with:
-        image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.version }}
-        format: sarif
-        output: trivy-results.sarif
-        exit-code: 0  # Informational only - track vulnerabilities but don't block deployment
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@b6643a29fecd7f34b3597bc6acb0a98b03d33ff8 # v0.33.1
+        with:
+          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.version }}
+          format: sarif
+          output: trivy-results.sarif
+          exit-code: 0 # Informational only - track vulnerabilities but don't block deployment
 
-    - name: Upload Trivy scan results to GitHub Security
-      if: always() && hashFiles('trivy-results.sarif') != ''  # Upload only if SARIF file exists
-      uses: github/codeql-action/upload-sarif@573acd9552f33577783abde4acb66a1058e762e5  # v2.23.1
-      with:
-        sarif_file: trivy-results.sarif
+      - name: Upload Trivy scan results to GitHub Security
+        if: always() && hashFiles('trivy-results.sarif') != '' # Upload only if SARIF file exists
+        uses: github/codeql-action/upload-sarif@573acd9552f33577783abde4acb66a1058e762e5 # v2.23.1
+        with:
+          sarif_file: trivy-results.sarif
 
-    - name: Build and push multi-platform image
-      if: github.event_name != 'pull_request'  # Always push on main/master branches
-      id: push
-      uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83  # v6.18.0
-      with:
-        context: ./proton-drive-backup
-        platforms: linux/amd64,linux/arm64
-        push: true
-        tags: ${{ steps.meta.outputs.tags }}
-        labels: ${{ steps.meta.outputs.labels }}
-        build-args: |
-          BUILD_DATE=${{ steps.date.outputs.BUILD_DATE }}
-          VCS_REF=${{ github.event.pull_request.head.sha || github.sha }}
-          VERSION=${{ steps.meta.outputs.version }}
-        cache-from: type=gha
-        cache-to: type=gha,mode=max
-        sbom: true
-        provenance: true
+      - name: Build and push multi-platform image
+        if: github.event_name != 'pull_request' # Always push on main/master branches
+        id: push
+        uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83 # v6.18.0
+        with:
+          context: ./proton-drive-backup
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            BUILD_DATE=${{ steps.date.outputs.BUILD_DATE }}
+            VCS_REF=${{ github.event.pull_request.head.sha || github.sha }}
+            VERSION=${{ steps.meta.outputs.version }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          sbom: true
+          provenance: true
 
-    - name: Install Cosign
-      if: github.event_name != 'pull_request'  # Always sign when pushing
-      uses: sigstore/cosign-installer@4959ce089c160fddf62f7b42464195ba1a56d382  # v3.6.0
-      with:
-        cosign-release: 'v2.6.0'  # Pin to specific cosign version
+      - name: Install Cosign
+        if: github.event_name != 'pull_request' # Always sign when pushing
+        uses: sigstore/cosign-installer@4959ce089c160fddf62f7b42464195ba1a56d382 # v3.6.0
+        with:
+          cosign-release: "v2.6.0" # Pin to specific cosign version
 
-    - name: Sign the container image
-      if: github.event_name != 'pull_request'  # Always sign when pushing
-      env:
-        COSIGN_EXPERIMENTAL: 1
-      run: |
-        # Sign using content digest from push step (see docs/SIGNING_FLOW.md for why this order is correct)
-        echo "Signing image ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.push.outputs.digest }}"
-        cosign sign --yes ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.push.outputs.digest }}
+      - name: Sign the container image
+        if: github.event_name != 'pull_request' # Always sign when pushing
+        env:
+          COSIGN_EXPERIMENTAL: 1
+        run: |
+          # Sign using content digest from push step (see docs/SIGNING_FLOW.md for why this order is correct)
+          echo "Signing image ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.push.outputs.digest }}"
+          cosign sign --yes ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.push.outputs.digest }}
 
-    - name: Verify signature
-      if: github.event_name != 'pull_request'  # Always verify when pushing
-      env:
-        COSIGN_EXPERIMENTAL: 1
-      run: |
-        cosign verify \
-          --certificate-identity-regexp="^https://github.com/${{ github.repository }}/" \
-          --certificate-oidc-issuer=https://token.actions.githubusercontent.com \
-          ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.push.outputs.digest }}
+      - name: Verify signature
+        if: github.event_name != 'pull_request' # Always verify when pushing
+        env:
+          COSIGN_EXPERIMENTAL: 1
+        run: |
+          cosign verify \
+            --certificate-identity-regexp="^https://github.com/${{ github.repository }}/" \
+            --certificate-oidc-issuer=https://token.actions.githubusercontent.com \
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.push.outputs.digest }}
 
-    - name: Comment PR with image info
-      if: github.event_name == 'pull_request'
-      uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd  # v8.0.0
-      with:
-        script: |
-          const output = `
-          ## 🐳 Container Build Summary
+      - name: Comment PR with image info
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8.0.0
+        with:
+          script: |
+            const output = `
+            ## 🐳 Container Build Summary
 
-          **Image**: \`${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}\`
-          **Digest**: \`${{ steps.build.outputs.digest }}\`
-          **Scanned**: linux/amd64 (vulnerability scan)
-          **Deploy**: linux/amd64, linux/arm64 (production)
+            **Image**: \`${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}\`
+            **Digest**: \`${{ steps.build.outputs.digest }}\`
+            **Scanned**: linux/amd64 (vulnerability scan)
+            **Deploy**: linux/amd64, linux/arm64 (production)
 
-          ### Security Features
-          - ✅ Trivy vulnerability scan completed (informational)
-          - ✅ SBOM and provenance built-in to image
-          - ✅ Container signing with Cosign
-          - 🔄 Scheduled vulnerability scanning (weekly checks)
+            ### Security Features
+            - ✅ Trivy vulnerability scan completed (informational)
+            - ✅ SBOM and provenance built-in to image
+            - ✅ Container signing with Cosign
+            - 🔄 Scheduled vulnerability scanning (weekly checks)
 
-          > Note: Image is built but not pushed for pull requests
-          > Vulnerabilities are tracked in GitHub Security tab for review
-          `;
+            > Note: Image is built but not pushed for pull requests
+            > Vulnerabilities are tracked in GitHub Security tab for review
+            `;
 
-          github.rest.issues.createComment({
-            issue_number: context.issue.number,
-            owner: context.repo.owner,
-            repo: context.repo.repo,
-            body: output
-          });
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: output
+            });
