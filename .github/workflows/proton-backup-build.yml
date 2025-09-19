@@ -1,11 +1,17 @@
-name: Build and Push Container
+name: Proton Drive Backup - Build Container
 
 on:
   push:
     branches: [ main, master ]
     tags: [ 'v*' ]
+    paths:
+      - 'proton-drive-backup/**'
+      - '.github/workflows/proton-backup-build.yml'
   pull_request:
     branches: [ main, master ]
+    paths:
+      - 'proton-drive-backup/**'
+      - '.github/workflows/proton-backup-build.yml'
 
 env:
   REGISTRY: ghcr.io
