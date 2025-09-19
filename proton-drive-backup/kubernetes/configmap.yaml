@@ -1,0 +1,36 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: proton-backup-config
+  namespace: proton-backup
+data:
+  # Backup configuration
+  BACKUP_SCHEDULE: "0 2 * * *"  # Daily at 2 AM
+  TZ: "UTC"
+
+  # Rclone configuration
+  RCLONE_LOG_LEVEL: "INFO"
+  RCLONE_CONFIG_FILE: "/config/rclone.conf"
+  PROTON_REMOTE: "proton"
+  LOCAL_PATH: "/data/proton"
+
+  # Kopia configuration
+  KOPIA_CONFIG_FILE: "/config/kopia.config"
+  KOPIA_CACHE_DIR: "/config/cache"
+  KOPIA_LOG_DIR: "/config/logs"
+  SOURCE_PATH: "/data/proton"
+
+  # S3 configuration for Backblaze B2
+  S3_ENDPOINT: "s3.us-west-000.backblazeb2.com"
+  S3_BUCKET: "your-existing-kopia-bucket"
+  S3_REGION: "us-west-000"
+
+  # Healthcheck configuration
+  HEALTHCHECK_URL: "https://hc-ping.com"
+  HEALTHCHECK_UUID: "your-healthchecks-io-uuid"
+
+  # Resource limits for backup jobs
+  BACKUP_TIMEOUT: "6h"
+  MAX_PARALLEL_UPLOADS: "4"
+
+  # Future: Email notifications could be added here

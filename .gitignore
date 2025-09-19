@@ -1,0 +1,11 @@
+# Secrets and configuration files
+*.conf
+*.config
+*rclone.conf
+*kopia.config
+test-*.conf
+*secret*.yaml
+
+# Local testing files
+/tmp/
+*.log

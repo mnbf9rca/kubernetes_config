@@ -1,0 +1,42 @@
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: proton-backup-data-pv
+  namespace: proton-backup
+spec:
+  capacity:
+    storage: 2Ti  # Adjust based on your Proton Drive size
+  accessModes:
+    - ReadWriteMany
+  nfs:
+    server: 10.10.10.1  # Replace with your NFS server
+    path: "/tank/backup/proton-drive"  # Replace with your NFS path
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: retain-local-path
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: proton-backup-data-pvc
+  namespace: proton-backup
+spec:
+  volumeName: proton-backup-data-pv
+  accessModes:
+    - ReadWriteMany
+  storageClassName: retain-local-path
+  resources:
+    requests:
+      storage: 2Ti
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: proton-backup-config-pvc
+  namespace: proton-backup
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
+  storageClassName: longhorn
