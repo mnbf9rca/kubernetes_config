@@ -2,60 +2,84 @@
 # Stage 1: Download and verify binaries
 FROM alpine:3.22.1 AS builder
 
-# Define versions with checksums for reproducible builds
+# Define versions for reproducible builds (checksums fetched dynamically)
 ARG RCLONE_VERSION=1.71.0
 ARG KOPIA_VERSION=0.21.1
-ARG RCLONE_AMD64_SHA256=3ddbcfd535ef2e6eb00cd006831766537f1fef1c8baeed1ee4632e7bcc699e93
-ARG RCLONE_ARM64_SHA256=b710ac2ded37261d2cc6ab046dcd644828944524cf1ee7c2b17dd746f0fd8684
-ARG KOPIA_AMD64_SHA256=de47d6b8ae2dfd6199a81d428c9eaed58cfd96a167bdc20407d3264dd18d33ca
-ARG KOPIA_ARM64_SHA256=11fad6d30b1e9c264d4a30a886212fcef59a2d174a349a041ee6b24312004b23
 
 WORKDIR /tmp
 
 # Install tools needed for download and verification
 RUN apk add --no-cache curl ca-certificates
 
-# Detect architecture and download rclone
+# Detect architecture and download rclone with dynamic checksum verification
 RUN ARCH=$(uname -m) && \
     case ${ARCH} in \
         x86_64) \
-            RCLONE_ARCH=amd64 && \
-            EXPECTED_SHA256=${RCLONE_AMD64_SHA256} \
+            RCLONE_ARCH=amd64 \
             ;; \
         aarch64) \
-            RCLONE_ARCH=arm64 && \
-            EXPECTED_SHA256=${RCLONE_ARM64_SHA256} \
+            RCLONE_ARCH=arm64 \
             ;; \
         *) \
             echo "Unsupported architecture: ${ARCH}" && exit 1 \
             ;; \
     esac && \
-    curl -sSL "https://github.com/rclone/rclone/releases/download/v${RCLONE_VERSION}/rclone-v${RCLONE_VERSION}-linux-${RCLONE_ARCH}.zip" -o rclone.zip && \
+    RCLONE_FILE="rclone-v${RCLONE_VERSION}-linux-${RCLONE_ARCH}.zip" && \
+    echo "Downloading rclone ${RCLONE_VERSION} for ${RCLONE_ARCH}..." && \
+    # Download checksums file
+    curl -sSL "https://github.com/rclone/rclone/releases/download/v${RCLONE_VERSION}/SHA256SUMS" -o rclone-checksums.txt && \
+    # Extract expected checksum for our file
+    EXPECTED_SHA256=$(grep "${RCLONE_FILE}" rclone-checksums.txt | cut -d' ' -f1) && \
+    if [ -z "$EXPECTED_SHA256" ]; then \
+        echo "ERROR: Could not find checksum for ${RCLONE_FILE}" && \
+        cat rclone-checksums.txt && \
+        exit 1; \
+    fi && \
+    echo "Expected SHA256: ${EXPECTED_SHA256}" && \
+    # Download and verify rclone
+    curl -sSL "https://github.com/rclone/rclone/releases/download/v${RCLONE_VERSION}/${RCLONE_FILE}" -o rclone.zip && \
     echo "${EXPECTED_SHA256}  rclone.zip" | sha256sum -c - && \
     unzip rclone.zip && \
     cp rclone-*/rclone /usr/local/bin/rclone && \
-    chmod +x /usr/local/bin/rclone
+    chmod +x /usr/local/bin/rclone && \
+    # Cleanup
+    rm -f rclone.zip rclone-checksums.txt && \
+    rm -rf rclone-*
 
-# Detect architecture and download kopia
+# Detect architecture and download kopia with dynamic checksum verification
 RUN ARCH=$(uname -m) && \
     case ${ARCH} in \
         x86_64) \
-            KOPIA_SUFFIX=x64 && \
-            EXPECTED_SHA256=${KOPIA_AMD64_SHA256} \
+            KOPIA_SUFFIX=x64 \
             ;; \
         aarch64) \
-            KOPIA_SUFFIX=arm64 && \
-            EXPECTED_SHA256=${KOPIA_ARM64_SHA256} \
+            KOPIA_SUFFIX=arm64 \
             ;; \
         *) \
             echo "Unsupported architecture: ${ARCH}" && exit 1 \
             ;; \
     esac && \
-    curl -sSL "https://github.com/kopia/kopia/releases/download/v${KOPIA_VERSION}/kopia-${KOPIA_VERSION}-linux-${KOPIA_SUFFIX}.tar.gz" -o kopia.tar.gz && \
+    KOPIA_FILE="kopia-${KOPIA_VERSION}-linux-${KOPIA_SUFFIX}.tar.gz" && \
+    echo "Downloading kopia ${KOPIA_VERSION} for ${KOPIA_SUFFIX}..." && \
+    # Download checksums file
+    curl -sSL "https://github.com/kopia/kopia/releases/download/v${KOPIA_VERSION}/checksums.txt" -o kopia-checksums.txt && \
+    # Extract expected checksum for our file
+    EXPECTED_SHA256=$(grep "${KOPIA_FILE}" kopia-checksums.txt | cut -d' ' -f1) && \
+    if [ -z "$EXPECTED_SHA256" ]; then \
+        echo "ERROR: Could not find checksum for ${KOPIA_FILE}" && \
+        cat kopia-checksums.txt && \
+        exit 1; \
+    fi && \
+    echo "Expected SHA256: ${EXPECTED_SHA256}" && \
+    # Download and verify kopia
+    curl -sSL "https://github.com/kopia/kopia/releases/download/v${KOPIA_VERSION}/${KOPIA_FILE}" -o kopia.tar.gz && \
     echo "${EXPECTED_SHA256}  kopia.tar.gz" | sha256sum -c - && \
     tar -xzf kopia.tar.gz && \
     cp kopia-*/kopia /usr/local/bin/kopia && \
-    chmod +x /usr/local/bin/kopia
+    chmod +x /usr/local/bin/kopia && \
+    # Cleanup
+    rm -f kopia.tar.gz kopia-checksums.txt && \
+    rm -rf kopia-*
 
 # Stage 2: Runtime image
 FROM alpine:3.22.1
