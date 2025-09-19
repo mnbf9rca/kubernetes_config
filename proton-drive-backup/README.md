@@ -52,10 +52,10 @@ rclone config  # Choose protondrive, enter email/password
 # Create secret with all credentials
 kubectl create secret generic proton-backup-secrets \
   --namespace=proton-backup \
-  --from-file=RCLONE_CONFIG=$HOME/.config/rclone/rclone.conf \
-  --from-literal=S3_ACCESS_KEY="your-b2-key-id" \
-  --from-literal=S3_SECRET_KEY="your-b2-app-key" \
-  --from-literal=KOPIA_PASSWORD="your-repo-password" \
+  --from-file=RCLONE_CONFIG='$HOME/.config/rclone/rclone.conf' \
+  --from-literal=S3_ACCESS_KEY='your-b2-key-id' \
+  --from-literal=S3_SECRET_KEY='your-b2-app-key' \
+  --from-literal=KOPIA_PASSWORD='your-repo-password' \
   --dry-run=client -o yaml | kubectl apply -f -
 ```
 
@@ -118,6 +118,7 @@ The container uses a **stable client identity** (`backup@proton-backup-client`) 
 - Automatically detects configuration changes and reconnects
 
 ### Logging
+
 - **Main logs**: `/data/logs/backup.log` (kept 30 days)
 - **rclone logs**: `/data/logs/rclone/` (kept 7 days)
 - **Kopia logs**: `/data/logs/kopia/` (kept 14 days)
