@@ -138,9 +138,9 @@ if ! kopia snapshot list "$SNAPSHOT_SOURCE" 2>/dev/null | grep -q "$SNAPSHOT_SOU
 
     # Set snapshot policy
     kopia policy set "$SNAPSHOT_SOURCE" \
-        --retention-mode=locked \
+        --retention-mode=COMPLIANCE \
         --retention-period=1y \
-        --compression=zstd \
+        --compression= \
         --before-folder-action= \
         --after-folder-action= \
         --ignore-cache-dirs=true \
