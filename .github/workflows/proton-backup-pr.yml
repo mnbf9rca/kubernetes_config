@@ -21,14 +21,14 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
+        uses: actions/checkout@ff7abcd0c3c05ccf6adc123a8cd1fd4fb30fb493
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435
+        uses: docker/setup-buildx-action@1583c0f09d26c58c59d25b0eef29792b7ce99d9a
 
       - name: Extract metadata
         id: meta
-        uses: docker/metadata-action@c1e51972afc2121e065aed6d45c65596fe445f3f
+        uses: docker/metadata-action@032a4b3bda1b716928481836ac5bfe36e1feaad6
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
@@ -41,7 +41,7 @@ jobs:
 
       - name: Build Docker image for scanning
         id: build
-        uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83
+        uses: docker/build-push-action@cb8fc7586f9ad9441b20c33e0f6e8b1b58d8b4c6
         with:
           context: ./proton-drive-backup
           platforms: linux/amd64
@@ -66,7 +66,7 @@ jobs:
 
       - name: Upload Trivy scan results to GitHub Security
         if: always() && hashFiles('trivy-results.sarif') != ''
-        uses: github/codeql-action/upload-sarif@573acd9552f33577783abde4acb66a1058e762e5
+        uses: github/codeql-action/upload-sarif@0337c4c06e7e00d0d6e64396c13b9dc18dd6d8c5
         with:
           sarif_file: trivy-results.sarif
 
