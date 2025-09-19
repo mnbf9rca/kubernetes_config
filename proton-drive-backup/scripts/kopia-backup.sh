@@ -75,11 +75,33 @@ log "Config file: $KOPIA_CONFIG_FILE"
 export KOPIA_PASSWORD="$REPOSITORY_PASSWORD"
 export KOPIA_CONFIG_PATH="$KOPIA_CONFIG_FILE"
 
-# Check if repository is already connected
-if ! kopia repository status 2>/dev/null; then
-    log "Repository not connected, connecting to S3 repository..."
+# Smart repository connection management
+# Only reconnect when parameters change or on first run
+PARAMS_HASH_FILE="/config/.s3-params.hash"
 
+# Calculate current S3 parameters hash
+CURRENT_HASH=$(echo "${S3_BUCKET}${S3_ENDPOINT}${S3_ACCESS_KEY}${S3_SECRET_KEY}${S3_REGION}" | sha256sum | cut -d' ' -f1)
+
+# Check if repository connection needs to be established/updated
+NEEDS_CONNECT=false
+
+if [ ! -f "$KOPIA_CONFIG_FILE" ]; then
+    log "Repository config not found, connecting to S3 repository..."
+    NEEDS_CONNECT=true
+elif [ ! -f "$PARAMS_HASH_FILE" ]; then
+    log "Parameter hash missing, reconnecting to S3 repository..."
+    NEEDS_CONNECT=true
+else
+    STORED_HASH=$(cat "$PARAMS_HASH_FILE" 2>/dev/null || echo "")
+    if [ "$CURRENT_HASH" != "$STORED_HASH" ]; then
+        log "S3 parameters changed, reconnecting to repository..."
+        NEEDS_CONNECT=true
+    fi
+fi
+
+if [ "$NEEDS_CONNECT" = "true" ]; then
     # Connect to existing S3 repository (Backblaze B2 in S3 mode)
+    # Use stable client identity to avoid multiple client entries in repository
     kopia repository connect s3 \
         --bucket="$S3_BUCKET" \
         --access-key="$S3_ACCESS_KEY" \
@@ -87,11 +109,21 @@ if ! kopia repository status 2>/dev/null; then
         --endpoint="$S3_ENDPOINT" \
         --region="$S3_REGION" \
         --cache-directory="$KOPIA_CACHE_DIR" \
-        --log-dir="$KOPIA_LOG_DIR"
+        --log-dir="$KOPIA_LOG_DIR" \
+        --override-hostname="proton-backup-client" \
+        --override-username="backup"
 
-    log "Connected to S3 repository successfully"
+    # Store parameter hash to detect future changes
+    echo "$CURRENT_HASH" > "$PARAMS_HASH_FILE"
+    log "Connected to S3 repository successfully with stable client identity: backup@proton-backup-client"
 else
-    log "Repository already connected"
+    log "Repository already connected and parameters unchanged"
+fi
+
+# Verify repository connection
+if ! kopia repository status 2>/dev/null; then
+    log "ERROR: Repository connection verification failed"
+    exit 1
 fi
 
 # Show repository info

@@ -52,6 +52,22 @@ fi
 
 log "Connection test successful, starting sync..."
 
+# Ensure destination directory exists and is writable
+log "Checking current user and permissions..."
+id
+log "Checking data mount permissions..."
+ls -la "/data" || true
+
+log "Creating destination directory: $LOCAL_PATH"
+mkdir -p "$LOCAL_PATH" || {
+    log "ERROR: Failed to create directory $LOCAL_PATH"
+    log "Data directory permissions:"
+    ls -la "/data" || true
+    log "Parent directory permissions:"
+    ls -la "$(dirname "$LOCAL_PATH")" || true
+    exit 1
+}
+
 # Perform the sync with comprehensive logging
 # Using sync instead of copy to handle deletions
 rclone sync \
