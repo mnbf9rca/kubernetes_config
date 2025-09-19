@@ -144,7 +144,7 @@ jobs:
 
       - name: Create release tag
         if: github.event_name != 'pull_request' && steps.version_bump.outputs.should_create_release == 'true'
-        uses: anothrNick/github-tag-action@1.64.0
+        uses: anothrNick/github-tag-action@4ed44965e0db8dab2b466a16da04aec3cc312fd8 # v1.75.0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           WITH_V: true
