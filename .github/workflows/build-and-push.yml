@@ -9,7 +9,7 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
+  IMAGE_NAME: ${{ github.repository_owner }}/proton-drive-backup
 
 jobs:
   build:
@@ -108,9 +108,11 @@ jobs:
       with:
         sarif_file: trivy-results.sarif
 
-    - name: Sign container image with cosign
+    - name: Install Cosign
       if: github.event_name != 'pull_request'
       uses: sigstore/cosign-installer@4959ce089c160fddf62f7b42464195ba1a56d382  # v3.6.0
+      with:
+        cosign-release: 'v2.6.0'  # Pin to specific cosign version
 
     - name: Sign the container image
       if: github.event_name != 'pull_request'
