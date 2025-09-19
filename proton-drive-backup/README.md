@@ -117,6 +117,7 @@ kubectl apply -f kubernetes/cronjob.yaml
 - Automated vulnerability scanning
 
 
-## Local Testing
+## Documentation
 
-See [docs/LOCAL_TESTING.md](docs/LOCAL_TESTING.md) for detailed testing instructions.
+- [docs/LOCAL_TESTING.md](docs/LOCAL_TESTING.md) - Local testing instructions
+- [docs/SIGNING_FLOW.md](docs/SIGNING_FLOW.md) - Container signing and verification explained
