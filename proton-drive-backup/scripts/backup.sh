@@ -14,6 +14,13 @@ SCRIPT_EXIT_CODE=0
 # Initialize logging
 echo "=== Proton Drive Backup Started at $(date) ===" | tee $LOG_FILE
 
+# Log container build metadata as JSON for diagnostics
+BUILD_INFO=$(cat <<EOF
+{"version":"${CONTAINER_VERSION:-unknown}","git_sha":"${CONTAINER_VCS_REF:-unknown}","build_date":"${CONTAINER_BUILD_DATE:-unknown}","rclone":"${RCLONE_VERSION:-unknown}","kopia":"${KOPIA_VERSION:-unknown}"}
+EOF
+)
+echo "BUILD_INFO: $BUILD_INFO" | tee -a $LOG_FILE
+
 # Start healthcheck timer if URL is provided
 if [ -n "$HEALTHCHECK_BASE_URL" ] && [ -n "$HEALTHCHECK_UUID" ]; then
     echo "[$(date)] Starting healthcheck timer..." | tee -a $LOG_FILE

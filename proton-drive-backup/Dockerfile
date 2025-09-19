@@ -109,5 +109,12 @@ LABEL org.opencontainers.image.title="Proton Drive Backup" \
       com.example.rclone.version="1.71.0" \
       com.example.kopia.version="0.21.1"
 
+# Set build metadata as environment variables for script access
+ENV CONTAINER_BUILD_DATE="${BUILD_DATE}" \
+    CONTAINER_VCS_REF="${VCS_REF}" \
+    CONTAINER_VERSION="${VERSION}" \
+    RCLONE_VERSION="1.71.0" \
+    KOPIA_VERSION="0.21.1"
+
 # Default command runs the backup script
 CMD ["/scripts/backup.sh"]
