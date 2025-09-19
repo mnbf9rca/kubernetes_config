@@ -113,8 +113,8 @@ LABEL org.opencontainers.image.title="Proton Drive Backup" \
 ENV CONTAINER_BUILD_DATE="${BUILD_DATE}" \
     CONTAINER_VCS_REF="${VCS_REF}" \
     CONTAINER_VERSION="${VERSION}" \
-    RCLONE_VERSION="1.71.0" \
-    KOPIA_VERSION="0.21.1"
+    CONTAINER_RCLONE_VERSION="1.71.0" \
+    CONTAINER_KOPIA_VERSION="0.21.1"
 
 # Default command runs the backup script
 CMD ["/scripts/backup.sh"]

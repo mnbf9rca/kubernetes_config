@@ -16,7 +16,7 @@ echo "=== Proton Drive Backup Started at $(date) ===" | tee $LOG_FILE
 
 # Log container build metadata as JSON for diagnostics
 BUILD_INFO=$(cat <<EOF
-{"version":"${CONTAINER_VERSION:-unknown}","git_sha":"${CONTAINER_VCS_REF:-unknown}","build_date":"${CONTAINER_BUILD_DATE:-unknown}","rclone":"${RCLONE_VERSION:-unknown}","kopia":"${KOPIA_VERSION:-unknown}"}
+{"version":"${CONTAINER_VERSION:-unknown}","git_sha":"${CONTAINER_VCS_REF:-unknown}","build_date":"${CONTAINER_BUILD_DATE:-unknown}","rclone":"${CONTAINER_RCLONE_VERSION:-unknown}","kopia":"${CONTAINER_KOPIA_VERSION:-unknown}"}
 EOF
 )
 echo "BUILD_INFO: $BUILD_INFO" | tee -a $LOG_FILE
@@ -38,7 +38,7 @@ log() {
 
 # Debug: Check user and mount permissions
 log "Current user: $(id)"
-log "Data mount permissions: $(ls -la /data 2>/dev/null || echo 'Failed to list /data')"
+log "Data mount permissions: $(ls -lan /data 2>/dev/null || echo 'Failed to list /data')"
 
 # Function to handle script exit
 cleanup_and_exit() {
