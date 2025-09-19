@@ -102,7 +102,7 @@ if [ $RCLONE_EXIT -eq 0 ]; then
 
     # Show final statistics
     log "Final sync statistics:"
-    du -sh "$LOCAL_PATH" 2>/dev/null || log "Could not calculate directory size"
+    du -sh "$LOCAL_PATH"
 
     # Count files
     FILE_COUNT=$(find "$LOCAL_PATH" -type f | wc -l)

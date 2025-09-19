@@ -176,11 +176,11 @@ if [ $KOPIA_EXIT -eq 0 ]; then
 
     # Clean up old snapshots according to policy
     log "Running snapshot maintenance..."
-    kopia snapshot expire --delete 2>/dev/null || log "No snapshots to expire"
+    kopia snapshot expire --delete
 
     # Repository maintenance (optional, but good practice)
     log "Running repository maintenance..."
-    kopia maintenance run --full 2>/dev/null || log "Maintenance completed with warnings"
+    kopia maintenance run --full
 
 else
     log "ERROR: Snapshot creation failed with exit code $KOPIA_EXIT"
