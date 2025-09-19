@@ -63,7 +63,7 @@ jobs:
       uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83  # v6.18.0
       with:
         context: ./proton-drive-backup
-        platforms: linux/amd64,linux/arm64
+        platforms: linux/amd64  # Single platform for local scanning
         push: false
         load: true  # Load single-platform image for scanning
         tags: ${{ steps.meta.outputs.tags }}
@@ -84,7 +84,7 @@ jobs:
         exit-code: 1  # Fail build on HIGH/CRITICAL vulnerabilities
 
     - name: Upload Trivy scan results to GitHub Security
-      if: always()  # Upload even if scan fails
+      if: always() && hashFiles('trivy-results.sarif') != ''  # Upload only if SARIF file exists
       uses: github/codeql-action/upload-sarif@573acd9552f33577783abde4acb66a1058e762e5  # v2.23.1
       with:
         sarif_file: trivy-results.sarif
@@ -143,7 +143,8 @@ jobs:
 
           **Image**: \`${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}\`
           **Digest**: \`${{ steps.build.outputs.digest }}\`
-          **Platforms**: linux/amd64, linux/arm64
+          **Scanned**: linux/amd64 (vulnerability scan)
+          **Deploy**: linux/amd64, linux/arm64 (production)
 
           ### Security Features
           - ✅ Trivy vulnerability scan completed
