@@ -9,6 +9,7 @@ LOG_FILE="/tmp/backup.log"
 START_TIME=$(date +%s)
 HEALTHCHECK_BASE_URL="${HEALTHCHECK_URL}"
 ERRORS=""
+SCRIPT_EXIT_CODE=0
 
 # Initialize logging
 echo "=== Proton Drive Backup Started at $(date) ===" | tee $LOG_FILE
@@ -43,7 +44,45 @@ cleanup_and_exit() {
 }
 
 # Set trap to handle exit
-trap 'cleanup_and_exit $?' EXIT
+trap 'cleanup_and_exit $SCRIPT_EXIT_CODE' EXIT
+
+# Smart rclone config management - copy from secret only when needed
+SECRET_CONFIG="/tmp/rclone-secret/rclone.conf"
+CONFIG_FILE="/config/rclone.conf"
+CHECKSUM_FILE="/config/.rclone.conf.checksum"
+
+if [ -f "$SECRET_CONFIG" ]; then
+    # Calculate secret config checksum
+    SECRET_CHECKSUM=$(sha256sum "$SECRET_CONFIG" | cut -d' ' -f1)
+
+    # Check if we need to update the config
+    NEEDS_UPDATE=false
+
+    if [ ! -f "$CONFIG_FILE" ]; then
+        log "rclone config not found, copying from secret..."
+        NEEDS_UPDATE=true
+    elif [ ! -f "$CHECKSUM_FILE" ]; then
+        log "Checksum file missing, updating rclone config..."
+        NEEDS_UPDATE=true
+    else
+        STORED_CHECKSUM=$(cat "$CHECKSUM_FILE" 2>/dev/null || echo "")
+        if [ "$SECRET_CHECKSUM" != "$STORED_CHECKSUM" ]; then
+            log "rclone config in secret changed, updating..."
+            NEEDS_UPDATE=true
+        fi
+    fi
+
+    if [ "$NEEDS_UPDATE" = "true" ]; then
+        cp "$SECRET_CONFIG" "$CONFIG_FILE"
+        chmod 600 "$CONFIG_FILE"
+        echo "$SECRET_CHECKSUM" > "$CHECKSUM_FILE"
+        log "rclone config updated successfully"
+    else
+        log "rclone config is up to date"
+    fi
+else
+    log "WARNING: rclone config not found in secret at $SECRET_CONFIG"
+fi
 
 log "Starting Proton Drive sync process..."
 
@@ -57,6 +96,7 @@ set -e
 if [ $RCLONE_EXIT -ne 0 ]; then
     log "ERROR: Rclone sync failed with exit code $RCLONE_EXIT"
     ERRORS="${ERRORS}rclone-sync:$RCLONE_EXIT "
+    SCRIPT_EXIT_CODE=$RCLONE_EXIT
 else
     log "Rclone sync completed successfully"
 fi
@@ -73,15 +113,19 @@ set -e
 if [ $KOPIA_EXIT -ne 0 ]; then
     log "ERROR: Kopia backup failed with exit code $KOPIA_EXIT"
     ERRORS="${ERRORS}kopia-backup:$KOPIA_EXIT "
+    # Use first failure as the main exit code if not already set
+    if [ $SCRIPT_EXIT_CODE -eq 0 ]; then
+        SCRIPT_EXIT_CODE=$KOPIA_EXIT
+    fi
 else
     log "Kopia backup completed successfully"
 fi
 
-# If we have errors, exit with error code
+# Set final exit code based on errors
 if [ -n "$ERRORS" ]; then
     log "Backup completed with errors: $ERRORS"
-    exit 1
+    # SCRIPT_EXIT_CODE already set to first failure above
 else
     log "All backup operations completed successfully"
-    exit 0
+    SCRIPT_EXIT_CODE=0
 fi

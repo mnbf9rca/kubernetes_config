@@ -21,11 +21,16 @@ data:
   SOURCE_PATH: "/data/proton"
 
   # S3 configuration for Backblaze B2
-  S3_REGION: "us-west-000"  # Default Backblaze region
+  S3_ENDPOINT: "s3.us-west-000.backblazeb2.com"
+  S3_BUCKET: "your-existing-kopia-bucket"
+  S3_REGION: "us-west-000"
 
-  # Healthcheck configuration (base URL only, UUID in secret)
+  # Healthcheck configuration
   HEALTHCHECK_URL: "https://hc-ping.com"
+  HEALTHCHECK_UUID: "your-healthchecks-io-uuid"
 
   # Resource limits for backup jobs
   BACKUP_TIMEOUT: "6h"
   MAX_PARALLEL_UPLOADS: "4"
+
+  # Future: Email notifications could be added here

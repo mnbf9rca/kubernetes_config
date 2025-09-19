@@ -5,8 +5,8 @@ FROM alpine:3.22.1 AS builder
 # Define versions with checksums for reproducible builds
 ARG RCLONE_VERSION=1.71.0
 ARG KOPIA_VERSION=0.21.1
-ARG RCLONE_AMD64_SHA256=9bf52ea536bf3e63d51e0924f851c6c5
-ARG RCLONE_ARM64_SHA256=f7156e73cbd4df4af93aef2f62ce49c0
+ARG RCLONE_AMD64_SHA256=3ddbcfd535ef2e6eb00cd006831766537f1fef1c8baeed1ee4632e7bcc699e93
+ARG RCLONE_ARM64_SHA256=b710ac2ded37261d2cc6ab046dcd644828944524cf1ee7c2b17dd746f0fd8684
 ARG KOPIA_AMD64_SHA256=de47d6b8ae2dfd6199a81d428c9eaed58cfd96a167bdc20407d3264dd18d33ca
 ARG KOPIA_ARM64_SHA256=11fad6d30b1e9c264d4a30a886212fcef59a2d174a349a041ee6b24312004b23
 
@@ -31,7 +31,7 @@ RUN ARCH=$(uname -m) && \
             ;; \
     esac && \
     curl -sSL "https://github.com/rclone/rclone/releases/download/v${RCLONE_VERSION}/rclone-v${RCLONE_VERSION}-linux-${RCLONE_ARCH}.zip" -o rclone.zip && \
-    echo "${EXPECTED_SHA256}  rclone.zip" | md5sum -c - && \
+    echo "${EXPECTED_SHA256}  rclone.zip" | sha256sum -c - && \
     unzip rclone.zip && \
     cp rclone-*/rclone /usr/local/bin/rclone && \
     chmod +x /usr/local/bin/rclone
@@ -91,8 +91,7 @@ VOLUME ["/data", "/config"]
 # Switch to non-root user
 USER backup
 
-# Health check endpoint (simple HTTP server on port 8080)
-EXPOSE 8080
+# No exposed ports needed for CronJob operation
 
 # Add OCI labels with metadata
 ARG BUILD_DATE

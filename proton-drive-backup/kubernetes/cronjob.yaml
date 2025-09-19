@@ -28,7 +28,7 @@ spec:
             seccomp.security.alpha.kubernetes.io/pod: runtime/default
         spec:
           restartPolicy: OnFailure
-          serviceAccountName: default
+          serviceAccountName: proton-backup-sa
           securityContext:
             # Pod-level security context
             runAsNonRoot: true
@@ -42,7 +42,7 @@ spec:
             supplementalGroups: []
           containers:
           - name: backup
-            image: ghcr.io/your-username/proton-drive-backup:latest  # Replace with your image
+            image: ghcr.io/mnbf9rca/proton-drive-backup:latest
             imagePullPolicy: Always
             securityContext:
               # Container-level security context (overrides pod-level when specified)
@@ -86,9 +86,8 @@ spec:
               mountPath: /config
             - name: tmp
               mountPath: /tmp
-            - name: rclone-config
-              mountPath: /config/rclone.conf
-              subPath: rclone.conf
+            - name: rclone-config-secret
+              mountPath: /tmp/rclone-secret
               readOnly: true
             resources:
               requests:
@@ -119,7 +118,7 @@ spec:
           - name: tmp
             emptyDir:
               sizeLimit: 5Gi
-          - name: rclone-config
+          - name: rclone-config-secret
             secret:
               secretName: proton-backup-secrets
               items:
