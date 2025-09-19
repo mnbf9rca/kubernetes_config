@@ -7,6 +7,8 @@ set -e
 KOPIA_CONFIG_FILE="${KOPIA_CONFIG_FILE}"
 KOPIA_CACHE_DIR="${KOPIA_CACHE_DIR}"
 KOPIA_LOG_DIR="${KOPIA_LOG_DIR}"
+KOPIA_USERNAME="${KOPIA_USERNAME}"
+KOPIA_HOSTNAME="${KOPIA_HOSTNAME}"
 SOURCE_PATH="${SOURCE_PATH}"
 REPOSITORY_PASSWORD="${KOPIA_PASSWORD}"
 S3_BUCKET="${S3_BUCKET:-${B2_BUCKET}}"
@@ -111,12 +113,12 @@ if [ "$NEEDS_CONNECT" = "true" ]; then
         --cache-directory="$KOPIA_CACHE_DIR" \
         --log-dir="$KOPIA_LOG_DIR" \
         --log-dir-max-age=14d \
-        --override-hostname="proton-backup-client" \
-        --override-username="backup"
+        --override-hostname="$KOPIA_HOSTNAME" \
+        --override-username="$KOPIA_USERNAME"
 
     # Store parameter hash to detect future changes
     echo "$CURRENT_HASH" > "$PARAMS_HASH_FILE"
-    log "Connected to S3 repository successfully with stable client identity: backup@proton-backup-client"
+    log "Connected to S3 repository successfully with stable client identity: $KOPIA_USERNAME@$KOPIA_HOSTNAME"
 else
     log "Repository already connected and parameters unchanged"
 fi
@@ -132,19 +134,12 @@ log "Repository information:"
 kopia repository status
 
 # Check if source is already configured for backup
-SNAPSHOT_SOURCE="$SOURCE_PATH"
+SNAPSHOT_SOURCE="$KOPIA_USERNAME@$KOPIA_HOSTNAME:$SOURCE_PATH"
 if ! kopia snapshot list "$SNAPSHOT_SOURCE" 2>/dev/null | grep -q "$SNAPSHOT_SOURCE"; then
     log "Configuring snapshot policy for $SNAPSHOT_SOURCE"
 
     # Set snapshot policy
-    kopia policy set "$SNAPSHOT_SOURCE" \
-        --retention-mode=COMPLIANCE \
-        --retention-period=1y \
-        --compression= \
-        --before-folder-action= \
-        --after-folder-action= \
-        --ignore-cache-dirs=true \
-        --one-file-system=true
+    kopia --config-file="$KOPIA_CONFIG_FILE" policy set "$SNAPSHOT_SOURCE"
 
     log "Snapshot policy configured"
 fi
