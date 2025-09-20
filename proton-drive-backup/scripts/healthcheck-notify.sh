@@ -145,8 +145,8 @@ else
 fi
 
 # Also send a separate log-only ping if we have detailed logs
-if [ -f "$LOG_FILE" ] && [ "$EXIT_CODE" -ne 0 ]; then
-    log "Sending detailed logs to log endpoint"
+if [ -f "$LOG_FILE" ]; then
+    log "Sending detailed logs to log endpoint for all backups"
 
     # Send logs to the /log endpoint without changing check status
     LOG_ENDPOINT="${HEALTHCHECK_BASE_URL}/${HEALTHCHECK_UUID}/log"
