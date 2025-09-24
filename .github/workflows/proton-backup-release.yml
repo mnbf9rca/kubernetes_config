@@ -105,6 +105,7 @@ jobs:
           format: sarif
           output: trivy-results.sarif
           exit-code: 0
+          version: v0.66.0
 
       - name: Upload Trivy scan results to GitHub Security
         if: always() && hashFiles('trivy-results.sarif') != ''

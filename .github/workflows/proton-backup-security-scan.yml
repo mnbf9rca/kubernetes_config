@@ -45,6 +45,7 @@ jobs:
         image-ref: ${{ steps.latest-image.outputs.image }}
         format: sarif
         output: trivy-results.sarif
+        version: v0.66.0
 
     - name: Upload Trivy scan results to GitHub Security
       if: steps.latest-image.outputs.skip == 'false'
