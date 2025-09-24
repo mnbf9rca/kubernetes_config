@@ -18,6 +18,7 @@ jobs:
       contents: read
       security-events: write
       pull-requests: write
+      packages: write
 
     steps:
       - name: Checkout repository
