@@ -89,6 +89,7 @@ jobs:
         uses: github/codeql-action/upload-sarif@0337c4c06e7e00d0d6e64396c13b9dc18dd6d8c5
         with:
           sarif_file: trivy-results.sarif
+          category: trivy-container-scan
 
       - name: Comment PR with build summary
         uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd
