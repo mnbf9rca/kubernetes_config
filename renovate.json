@@ -153,8 +153,8 @@
     {
       "customType": "regex",
       "description": "Update Cosign version in GitHub Actions workflows",
-      "fileMatch": [
-        "^\\.github/workflows/.+\\.ya?ml$"
+      "managerFilePatterns": [
+        "/^\\.github/workflows/.+\\.ya?ml$/"
       ],
       "matchStrings": [
         "cosign-release: [\"']?(?<currentValue>v?[^\"'\\s]+)[\"']?"
@@ -166,8 +166,8 @@
     {
       "customType": "regex",
       "description": "Update Trivy version in GitHub Actions workflows",
-      "fileMatch": [
-        "^\\.github/workflows/.+\\.ya?ml$"
+      "managerFilePatterns": [
+        "/^\\.github/workflows/.+\\.ya?ml$/"
       ],
       "matchStrings": [
         "uses: aquasecurity/trivy-action@[a-f0-9]+\\s*\\n.*?version: [\"']?(?<currentValue>v?[^\"'\\s]+)[\"']?"
