@@ -1,9 +1,0 @@
-# Trivy ignore file for security scanning
-# Add CVE IDs that are false positives or acceptable risks
-
-# Example:
-# CVE-2023-12345  # False positive in Alpine package
-# CVE-2023-67890  # Low severity, not exploitable in our use case
-
-# Add specific vulnerabilities to ignore here when needed
-# Make sure to document why each CVE is being ignored
