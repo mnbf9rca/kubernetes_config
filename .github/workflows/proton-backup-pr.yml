@@ -18,6 +18,8 @@ jobs:
       contents: read
       security-events: write
       pull-requests: write
+      packages: write
+      id-token: write
 
     steps:
       - name: Checkout repository
@@ -26,27 +28,32 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@1583c0f09d26c58c59d25b0eef29792b7ce99d9a
 
+      - name: Log in to Container Registry
+        uses: docker/login-action@5b7b28b1cc417bbd34cd8c225a957c9ce9adf7f2
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Extract metadata
         id: meta
         uses: docker/metadata-action@032a4b3bda1b716928481836ac5bfe36e1feaad6
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
-            type=ref,event=pr
-            type=sha
+            type=raw,value=pr-${{ github.event.number }}-${{ github.event.pull_request.head.sha }}
 
       - name: Get current date
         id: date
         run: echo "BUILD_DATE=$(date -u +'%Y-%m-%dT%H:%M:%SZ')" >> $GITHUB_OUTPUT
 
-      - name: Build Docker image for scanning
+      - name: Build Docker image
         id: build
         uses: docker/build-push-action@cb8fc7586f9ad9441b20c33e0f6e8b1b58d8b4c6
         with:
           context: ./proton-drive-backup
           platforms: linux/amd64
-          push: false
-          load: true
+          push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
@@ -55,11 +62,24 @@ jobs:
             VERSION=${{ steps.meta.outputs.version }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+          outputs: type=image,name=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }},push=true
+
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@d7543c93d881b35a8faa02e8e3605f69b7a1ce62
+        with:
+          cosign-release: "v2.6.0"
+
+      - name: Sign the container image
+        env:
+          COSIGN_EXPERIMENTAL: 1
+        run: |
+          echo "Signing image ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build.outputs.digest }}"
+          cosign sign --yes ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build.outputs.digest }}
 
       - name: Run Trivy vulnerability scanner
         uses: aquasecurity/trivy-action@b6643a29fecd7f34b3597bc6acb0a98b03d33ff8
         with:
-          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.version }}
+          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build.outputs.digest }}
           format: sarif
           output: trivy-results.sarif
           exit-code: 0
@@ -79,16 +99,18 @@ jobs:
 
             **Image**: \`${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}\`
             **Digest**: \`${{ steps.build.outputs.digest }}\`
-            **Platform**: linux/amd64 (vulnerability scan only)
-            **Version**: \`${{ steps.meta.outputs.version }}\`
+            **Platform**: linux/amd64
+            **Tags**: \`pr-${{ github.event.number }}\`, \`${{ github.event.pull_request.head.ref }}-${{ github.event.pull_request.head.sha }}\`
 
-            ### Security Scan Results
+            ### Security Features
+            - ✅ Container image built and pushed
+            - ✅ Signed with Cosign (keyless)
             - ✅ Trivy vulnerability scan completed
             - 📊 Results uploaded to GitHub Security tab
             - 🔍 Review any findings before merging
 
-            > **Note**: Image is built but not pushed for pull requests.
-            > Production multi-platform build happens after merge to main branch.
+            > **Note**: Image is built, signed, and scanned for pull requests.
+            > Release workflow will retag this image upon merge.
             `;
 
             // Check if a comment with this content already exists
@@ -120,22 +142,3 @@ jobs:
               });
             }
 
-      - name: Clean up scan artifact
-        if: always() && steps.build.outputs.digest
-        run: |
-          # Get the package version ID for the scan artifact
-          PACKAGE_VERSION_ID=$(gh api \
-            "repos/${{ github.repository }}/packages/container/proton-drive-backup/versions" \
-            --jq '.[] | select(.metadata.container.tags[] | contains("pr-${{ github.event.number }}")) | .id' \
-            2>/dev/null || echo "")
-
-          if [ -n "$PACKAGE_VERSION_ID" ]; then
-            echo "Cleaning up scan artifact with ID: $PACKAGE_VERSION_ID"
-            gh api --method DELETE \
-              "repos/${{ github.repository }}/packages/container/proton-drive-backup/versions/$PACKAGE_VERSION_ID" || \
-              echo "Failed to delete scan artifact (may not exist or already deleted)"
-          else
-            echo "No scan artifact found to clean up"
-          fi
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
