@@ -19,6 +19,7 @@ jobs:
       security-events: write
       pull-requests: write
       packages: write
+      id-token: write
 
     steps:
       - name: Checkout repository
