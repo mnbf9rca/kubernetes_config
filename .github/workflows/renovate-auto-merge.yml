@@ -1,0 +1,37 @@
+name: Renovate Auto-merge
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+
+jobs:
+  auto-merge:
+    if: github.actor == 'renovate[bot]'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+
+    steps:
+      - name: Check if PR should auto-merge
+        id: should_merge
+        run: |
+          # Check if this PR matches the auto-merge rules from renovate.json
+          PR_LABELS='${{ join(github.event.pull_request.labels.*.name, ',') }}'
+
+          # Check if PR has the auto-merge label (set by renovate config)
+          if [[ "$PR_LABELS" == *"auto-merge"* ]]; then
+            echo "AUTO_MERGE=true" >> $GITHUB_OUTPUT
+            echo "PR matches auto-merge criteria"
+          else
+            echo "AUTO_MERGE=false" >> $GITHUB_OUTPUT
+            echo "PR does not match auto-merge criteria"
+          fi
+
+      - name: Enable auto-merge
+        if: steps.should_merge.outputs.AUTO_MERGE == 'true'
+        run: |
+          echo "Enabling auto-merge for PR #${{ github.event.number }}"
+          gh pr merge ${{ github.event.number }} --auto --squash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
