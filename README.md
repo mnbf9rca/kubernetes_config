@@ -92,7 +92,7 @@ install longhorn-ingress.yml - remember to create the secret
 `USER=<USERNAME_HERE>; PASSWORD=<PASSWORD_HERE>; echo "${USER}:$(openssl passwd -stdin -apr1 <<< ${PASSWORD})" >> auth`
 `kubectl -n longhorn-system create secret generic basic-auth-longhorn --from-file=auth`
 longhorn backup config:
-- backup target: s3://<bucket>@<region>/ e.g. `s3://longhorn-bucket@eu-west-2/`
+- backup target: s3://<bucket>@<region>/ e.g. `s3://longhorn-backup@nl-ams-1.linodeobjects.com/`
 - backup target credential secret: `aws-secret` or `linode-secret`
 
 ## NFS
