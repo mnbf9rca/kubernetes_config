@@ -1,6 +1,23 @@
 apiVersion: v1
 kind: Service
 metadata:
+  name: ingress-loadbalancer-jellyfin
+  namespace: ingress
+  annotations:
+    metallb.universe.tf/loadBalancerIPs: 10.100.0.246
+spec:
+  selector:
+    name: nginx-ingress-microk8s
+  type: LoadBalancer
+  ports:
+    - name: https
+      protocol: TCP
+      port: 443
+      targetPort: 443
+---
+apiVersion: v1
+kind: Service
+metadata:
   name: jellyfin-service
   namespace: downloads
 spec:
@@ -11,9 +28,9 @@ spec:
   sessionAffinity: None
   ports:
   - name: http-8096
-    port: 8096
+    port: 443
     protocol: TCP
-    targetPort: 8096
+    targetPort: containerport
 ---
 apiVersion: networking.k8s.io/v1
 kind: Ingress
@@ -43,40 +60,34 @@ spec:
 apiVersion: v1
 kind: PersistentVolume
 metadata:
-  name: jellyfin-config-smb-pv
+  name: jellyfin-config-longhorn-pv
   namespace: downloads
 spec:
-  capacity:
-    storage: 1Ti
   accessModes:
     - ReadWriteOnce
-  local:
-    path: /mnt/appdata/jellyfin
-  mountOptions:
-  storageClassName: retain-local-path
-  nodeAffinity:
-    required:
-      nodeSelectorTerms:
-        - matchExpressions:
-            - key: kubernetes.io/hostname
-              operator: In
-              values:
-                - k2.cynexia.net
+  storageClassName: longhorn
+  capacity:
+    storage: 100Gi
+  csi:
+    driver: driver.longhorn.io
+    fsType: ext4
+    volumeHandle: jellyfin-config
   persistentVolumeReclaimPolicy: Retain
+  volumeMode: Filesystem
 ---
-kind: PersistentVolumeClaim
 apiVersion: v1
+kind: PersistentVolumeClaim
 metadata:
-  name: jellyfin-config-smb-pvc
+  name: jellyfin-config-longhorn-pvc
   namespace: downloads
 spec:
-  storageClassName: retain-local-path
-  volumeName: jellyfin-config-smb-pv
   accessModes:
     - ReadWriteOnce
   resources:
     requests:
-      storage: 1Ti
+      storage: 100Gi
+  storageClassName: longhorn
+  volumeName: jellyfin-config-longhorn-pv
 ---
 apiVersion: v1
 kind: PersistentVolume
@@ -88,11 +99,11 @@ spec:
     storage: 6Ti
   accessModes:
     - ReadWriteMany
+  storageClassName: retain-local-path
   nfs:
-    server: fs.cynexia.net
+    server: 10.10.10.1
     path: "/tank/video/"
   persistentVolumeReclaimPolicy: Retain
-  storageClassName: retain-local-path
 ---
 kind: PersistentVolumeClaim
 apiVersion: v1
@@ -130,59 +141,68 @@ spec:
       containers:
       - env:
         - name: PGID
-          value: "998"
+          value: "1999"
         - name: PUID
-          value: "110"
+          value: "1999"
         - name: TZ
           value: Europe/London
         image: linuxserver/jellyfin:latest
+        startupProbe:
+          failureThreshold: 10
+          httpGet:
+            path: /
+            port: containerport
+            scheme: HTTP
+          periodSeconds: 60
+          successThreshold: 1
+          timeoutSeconds: 5
+        livenessProbe:
+          failureThreshold: 3
+          httpGet:
+            path: /
+            port: containerport
+            scheme: HTTP
+          periodSeconds: 60
+          successThreshold: 1
+          timeoutSeconds: 1
         imagePullPolicy: Always
         securityContext:
-          runAsRoot: false
           allowPrivilegeEscalation: false
+          # dropping capabilities seems to be incompatible with longhorn
           capabilities:
             add:
             - CHOWN
             - SETGID
             - SETUID
+            - FOWNER
+            - DAC_OVERRIDE
+            - DAC_READ_SEARCH
             drop:
             - ALL
           privileged: false
-          readOnlyRootFilesystem: false        
+          readOnlyRootFilesystem: false
         name: jellyfin
         ports:
         - containerPort: 8096
-          name: 8096tcp01
+          name: containerport
           protocol: TCP
         volumeMounts:
         - mountPath: /config
           name: config
         - mountPath: /mnt
           name: video
+        - mountPath: /transcode
+          name: cache-vol
       restartPolicy: Always
-      startupProbe:
-        failureThreshold: 10
-        httpGet:
-          path: /
-          port: 8096tcp01
-          scheme: HTTP
-        periodSeconds: 60
-        successThreshold: 1
-        timeoutSeconds: 5
-      livenessProbe:
-        failureThreshold: 3
-        httpGet:
-          path: /
-          port: 8096tcp01
-          scheme: HTTP
-        periodSeconds: 60
-        successThreshold: 1
-        timeoutSeconds: 1
       terminationGracePeriodSeconds: 30
       volumes:
       - name: config
         persistentVolumeClaim:
-          claimName: jellyfin-config-smb-pvc
+          claimName: jellyfin-config-longhorn-pvc
       - name: video
         persistentVolumeClaim:
           claimName: jellyfin-videos-nfs-pvc
+      - name: cache-vol
+        emptyDir:
+          medium: Memory
+          sizeLimit: 35Gi
