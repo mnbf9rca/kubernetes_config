@@ -11,7 +11,7 @@ postgresql:
   enabled: false  # Disable built-in PostgreSQL
 
 image:
-  tag: v1.142.0
+  tag: v2.0.1
 
 env:
   DB_HOSTNAME: postgresql-service.immich.svc.cluster.local
