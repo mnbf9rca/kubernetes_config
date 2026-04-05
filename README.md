@@ -157,10 +157,13 @@ helmProvider.enabled=false is correct since i'm using plain Kubernetes manifests
 metadata:
   annotations:
     keel.sh/policy: force
+    keel.sh/match-tag: "true"
     keel.sh/trigger: poll
     keel.sh/pollSchedule: "@every 6h"
 ```
-`force` is the policy i want. It detects SHA digest changes on the same tag, which is exactly what happens when linuxserver or wherever pushes a new build behind `:latest`. keel
+`force` is the policy i want. It detects SHA digest changes on the same tag, which is exactly what happens when linuxserver or wherever pushes a new build behind `:latest`.
+
+`match-tag: "true"` is **required** when tracking `:latest`. Without it, keel's force policy watches the image name (across all tags), finds the newest digest, then rewrites the deployment's tag to whatever is in the image's `org.opencontainers.image.version` label. For linuxserver images that label is the upstream app version (e.g. `3.17.0` for nzbhydra2's core jar), which happens to also exist as an ancient Docker Hub tag — so keel will silently downgrade you to a years-old image. With `match-tag: "true"`, keel watches the specific `:latest` tag and keeps the tag name intact on update.
 
 3. Confirm `imagePullPolicy: Always` on every container spec using `:latest`.
 

@@ -125,6 +125,7 @@ metadata:
   namespace: downloads
   annotations:
     keel.sh/policy: force
+    keel.sh/match-tag: "true"
     keel.sh/trigger: poll
     keel.sh/pollSchedule: "@every 6h"
 spec:
