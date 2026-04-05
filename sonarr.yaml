@@ -121,6 +121,10 @@ kind: Deployment
 metadata:
   name: sonarr
   namespace: downloads
+  annotations:
+    keel.sh/policy: force
+    keel.sh/trigger: poll
+    keel.sh/pollSchedule: "@every 6h"
 spec:
   strategy:
     type: Recreate

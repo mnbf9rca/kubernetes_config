@@ -137,3 +137,32 @@ create downloads namespace:
 ```
 kubectl create namespace downloads
 ```
+
+
+## Install `keel` to manage automatic updates
+
+1. Add the Helm repo and install Keel
+```shell
+helm repo add keel https://charts.keel.sh
+helm repo update
+helm upgrade --install keel keel/keel \
+  --namespace=keel \
+  --create-namespace \
+  --set helmProvider.enabled="false"
+```
+helmProvider.enabled=false is correct since i'm using plain Kubernetes manifests, not Helm-managed releases.
+
+2. Annotate each deployment (if not already done)
+```yaml
+metadata:
+  annotations:
+    keel.sh/policy: force
+    keel.sh/trigger: poll
+    keel.sh/pollSchedule: "@every 6h"
+```
+`force` is the policy i want. It detects SHA digest changes on the same tag, which is exactly what happens when linuxserver or wherever pushes a new build behind `:latest`. keel
+
+3. Confirm `imagePullPolicy: Always` on every container spec using `:latest`.
+
+Without it, the kubelet may use its local cache even after Keel triggers the rollout.
+
