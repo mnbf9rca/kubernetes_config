@@ -3,21 +3,9 @@ kind: Namespace
 metadata:
   name: downloads
 ---
-apiVersion: v1
-kind: Namespace
-metadata:
-  name: cert-manager
----
-apiVersion: v1
-kind: Namespace
-metadata:
-  name: traefik
----
-apiVersion: v1
-kind: Namespace
-metadata:
-  name: keel
----
+# NOTE: cert-manager, traefik, keel, and local-path-storage namespaces
+# are created by their respective upstream manifests (see homelab/bootstrap/*/).
+# Don't list them here — kustomize rejects duplicate resources.
 apiVersion: v1
 kind: Namespace
 metadata:
