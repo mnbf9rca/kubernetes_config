@@ -38,7 +38,9 @@ make diff-homelab             # kubectl diff against current cluster state
 make apply-homelab            # apply to the current kubeconfig context
 ```
 
-`make apply-homelab` runs `kustomize build homelab/ | envsubst | kubectl apply -f -`. Secrets are substituted from direnv-loaded env vars at apply time; no plaintext secret values live in git.
+`make apply-homelab` runs `kustomize build homelab/ | envsubst "$(ENVSUBST_VARS)" | kubectl apply -f -`. Secrets are substituted from direnv-loaded env vars at apply time; no plaintext secret values live in git.
+
+**`ENVSUBST_VARS` is an explicit allowlist** — never call envsubst without one. With no allowlist, envsubst substitutes every `${VAR}` token in the stream, including shell variables embedded in upstream manifests (e.g. `$VOL_DIR` inside local-path-provisioner's helper-pod setup script), breaking them silently. When you add a new secret placeholder to a manifest, add it to `ENVSUBST_VARS` in the Makefile.
 
 ## Cluster Stack (Target)
 
