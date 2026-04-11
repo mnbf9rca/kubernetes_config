@@ -9,3 +9,4 @@ resources:
   - local-path
   - nfs-csi
   - cert-manager
+  - traefik

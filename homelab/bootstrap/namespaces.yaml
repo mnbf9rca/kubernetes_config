@@ -7,6 +7,13 @@ apiVersion: v1
 kind: Namespace
 metadata:
   name: traefik
+  labels:
+    # Traefik uses hostNetwork + hostPort, which violate PSA baseline
+    # (the cluster-wide enforce level). Elevate this namespace to privileged
+    # so the DaemonSet pod is allowed to schedule.
+    pod-security.kubernetes.io/enforce: privileged
+    pod-security.kubernetes.io/audit: privileged
+    pod-security.kubernetes.io/warn: privileged
 ---
 apiVersion: v1
 kind: Namespace
