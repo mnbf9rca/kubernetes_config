@@ -8,7 +8,8 @@ SHELL := /bin/bash
 # Phase 0 Makefile targets (check-tools, build-homelab with empty kustomizations)
 # do not strictly require these — require-vars is called from apply/diff only.
 REQUIRED_VARS := B2_ACCOUNT_ID B2_ACCOUNT_KEY RESTIC_PASSWORD RESTIC_REPOSITORY \
-                 ROUTE53_ACCESS_KEY_ID ROUTE53_SECRET_ACCESS_KEY
+                 ROUTE53_ACCESS_KEY_ID ROUTE53_SECRET_ACCESS_KEY \
+                 ACME_EMAIL
 
 .PHONY: help
 help:
