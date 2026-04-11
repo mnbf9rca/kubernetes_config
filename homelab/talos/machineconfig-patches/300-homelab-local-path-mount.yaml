@@ -1,0 +1,18 @@
+metadata:
+  namespace: default
+  type: ConfigPatches.omni.sidero.dev
+  id: 300-homelab-local-path-mount
+  labels:
+    omni.sidero.dev/cluster: homelab
+spec:
+  data: |-
+    machine:
+      kubelet:
+        extraMounts:
+          - destination: /var/mnt/local-path-provisioner
+            type: bind
+            source: /var/mnt/local-path-provisioner
+            options:
+              - bind
+              - rshared
+              - rw
