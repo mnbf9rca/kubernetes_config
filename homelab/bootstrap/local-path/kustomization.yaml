@@ -1,0 +1,45 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Rancher local-path-provisioner. The upstream manifest creates:
+#   - local-path-storage namespace
+#   - ServiceAccount, ClusterRole, ClusterRoleBinding
+#   - Deployment (local-path-provisioner)
+#   - ConfigMap local-path-config (root path, helper pod spec)
+#   - StorageClass local-path (NOT default by default)
+#
+# We patch the ConfigMap to use /var/mnt/local-path-provisioner (the Talos kubelet
+# bind mount declared in homelab/talos/machineconfig-patches/user-volume-local-path.yaml),
+# and we patch the StorageClass to be the cluster default.
+
+resources:
+  - https://raw.githubusercontent.com/rancher/local-path-provisioner/v0.0.30/deploy/local-path-storage.yaml
+
+patches:
+  - target:
+      kind: ConfigMap
+      name: local-path-config
+      namespace: local-path-storage
+    patch: |-
+      - op: replace
+        path: /data/config.json
+        value: |-
+          {
+            "nodePathMap":[
+              {
+                "node":"DEFAULT_PATH_FOR_NON_LISTED_NODES",
+                "paths":["/var/mnt/local-path-provisioner"]
+              }
+            ]
+          }
+
+  - target:
+      kind: StorageClass
+      name: local-path
+    patch: |-
+      apiVersion: storage.k8s.io/v1
+      kind: StorageClass
+      metadata:
+        name: local-path
+        annotations:
+          storageclass.kubernetes.io/is-default-class: "true"
