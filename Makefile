@@ -33,21 +33,28 @@ check-tools:
 
 .PHONY: require-vars
 require-vars:
-	@missing=0; \
+	@missing=0; set=0; \
 	for v in $(REQUIRED_VARS); do \
 	  if [ -z "$${!v:-}" ]; then \
-	    echo "ERROR: required env var $$v is not set (is direnv loaded?)"; \
-	    missing=1; \
+	    echo "MISSING: $$v"; missing=1; \
+	  else \
+	    set=$$((set+1)); \
 	  fi; \
 	done; \
 	if [ $$missing -ne 0 ]; then \
 	  echo "Tip: uncomment the relevant exports in .envrc and run 'direnv reload'"; \
 	  exit 1; \
-	fi
+	fi; \
+	echo "OK: $$set / $$set required vars set"
 
 .PHONY: build-homelab
 build-homelab:
-	@kustomize build homelab/ | envsubst
+	@out=$$(kustomize build homelab/ | envsubst); \
+	if [ -z "$$out" ]; then \
+	  echo "OK: kustomize build succeeded (no resources yet)"; \
+	else \
+	  echo "$$out"; \
+	fi
 
 .PHONY: diff-homelab
 diff-homelab: require-vars
