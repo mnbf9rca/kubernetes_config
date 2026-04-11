@@ -1,0 +1,35 @@
+# Configures the siderolabs/tailscale Talos system extension on the homelab node.
+# The extension runs tailscaled on the host itself, so the node is reachable via
+# its tailnet address for talosctl/kubectl when you're away from home.
+#
+# Advertises the home LAN as a subnet route, so any tailnet device can reach
+# *.cynexia.net (which resolves to the node's LAN IP) over the mesh.
+#
+# The TS_AUTHKEY is substituted from the TAILSCALE_AUTH_KEY env var at apply time
+# (see .env.tpl and the Makefile's apply-talos target). Never commit the literal
+# key value — even expired keys are still credentials from a hygiene standpoint.
+#
+# Apply with:
+#   envsubst '${TAILSCALE_AUTH_KEY}' < this-file | omnictl apply -f -
+#
+# On the first run, NOTE that an existing UI-created patch (id 500-7ff144ef-...)
+# may already carry the Tailscale extension config from the initial bring-up.
+# Delete that patch via `omnictl delete configpatch 500-<uuid>` after applying
+# this one, so the repo is the single source of truth.
+metadata:
+  namespace: default
+  type: ConfigPatches.omni.sidero.dev
+  id: 320-homelab-tailscale-extension
+  labels:
+    omni.sidero.dev/cluster: homelab
+  annotations:
+    name: tailscale
+spec:
+  data: |-
+    apiVersion: v1alpha1
+    kind: ExtensionServiceConfig
+    name: tailscale
+    environment:
+      - TS_AUTHKEY=${TAILSCALE_AUTH_KEY}
+      - TS_HOSTNAME=talos-homelab
+      - TS_ROUTES=10.100.0.0/24

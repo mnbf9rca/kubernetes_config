@@ -98,3 +98,17 @@ diff-homelab: require-vars check-context
 .PHONY: apply-homelab
 apply-homelab: require-vars check-context
 	@kustomize build homelab/ | envsubst '$(ENVSUBST_VARS)' | kubectl apply -f -
+
+# Apply Talos machine config patches to Omni. Each file under
+# homelab/talos/machineconfig-patches/ is a full ConfigPatch resource YAML.
+# Patches with ${VAR} placeholders are substituted from env vars first.
+#
+# omnictl itself has no kustomize/loop support, so we iterate in shell.
+# Idempotent: omnictl apply replaces existing resources by ID.
+.PHONY: apply-talos
+apply-talos:
+	@for f in homelab/talos/machineconfig-patches/*.yaml; do \
+	  echo "applying $$f"; \
+	  envsubst '$(ENVSUBST_VARS)' < $$f | omnictl apply -f - || exit 1; \
+	done; \
+	echo "OK: all Talos patches applied"
