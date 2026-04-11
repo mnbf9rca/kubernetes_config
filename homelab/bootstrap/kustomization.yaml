@@ -10,3 +10,4 @@ resources:
   - nfs-csi
   - cert-manager
   - traefik
+  - keel
