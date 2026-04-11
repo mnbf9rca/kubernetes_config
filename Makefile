@@ -70,7 +70,7 @@ require-vars:
 
 .PHONY: build-homelab
 build-homelab:
-	@out=$$(kustomize build homelab/ | envsubst "$(ENVSUBST_VARS)"); \
+	@out=$$(kustomize build homelab/ | envsubst '$(ENVSUBST_VARS)'); \
 	if [ -z "$$out" ]; then \
 	  echo "OK: kustomize build succeeded (no resources yet)"; \
 	else \
@@ -93,8 +93,8 @@ check-context:
 
 .PHONY: diff-homelab
 diff-homelab: require-vars check-context
-	@kustomize build homelab/ | envsubst "$(ENVSUBST_VARS)" | kubectl diff -f - || true
+	@kustomize build homelab/ | envsubst '$(ENVSUBST_VARS)' | kubectl diff -f - || true
 
 .PHONY: apply-homelab
 apply-homelab: require-vars check-context
-	@kustomize build homelab/ | envsubst "$(ENVSUBST_VARS)" | kubectl apply -f -
+	@kustomize build homelab/ | envsubst '$(ENVSUBST_VARS)' | kubectl apply -f -
