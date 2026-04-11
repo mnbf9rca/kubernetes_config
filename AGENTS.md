@@ -1,80 +1,101 @@
 # Kubernetes Config Repository
 
-Personal Kubernetes cluster config for a home media/downloads stack running on **microk8s**.
+Personal Kubernetes cluster config for a home media/downloads stack being rebuilt on **Talos Linux**, managed by Omni, with a VPS cluster to follow.
 
-## What This Repo Is
+## Target State
 
-Flat directory of Kubernetes YAML manifests and a few helper scripts. No CI/CD, no kustomize, no templating. Files are applied manually with `kubectl apply -f <file>`. The one exception is **immich**, which uses a Helm chart with `immich-values.yaml`.
+The repository is being rebuilt from a drifted microk8s cluster to a clean greenfield Talos setup. See the design document at `docs/superpowers/specs/2026-04-11-talos-homelab-rebuild-design.md` and the implementation plan at `docs/superpowers/plans/2026-04-11-talos-homelab-rebuild.md` (both are local-only under the gitignored `docs/superpowers/` tree).
 
-## Cluster Stack
+## Repo Layout
 
-- **microk8s** on Linux
-- **MetalLB** for LoadBalancer IPs (pool: `10.100.0.200-10.100.0.254`, see `addresspool.yaml`)
-- **nginx ingress** (microk8s built-in)
-- **cert-manager** with `ClusterIssuer` for Let's Encrypt TLS
-- **Longhorn** for distributed block storage (data at `/mnt/longhorn`)
-- **NFS CSI driver** for shared storage from NAS
+```
+kubernetes_config/
+├── .envrc                    # direnv + 1Password CLI; loads secrets into env vars at shell entry
+├── Makefile                  # apply/diff/build/check-tools targets
+├── homelab/                  # new Talos homelab cluster
+│   ├── kustomization.yaml    # top-level
+│   ├── talos/                # Talos machine config patches (applied via Omni)
+│   ├── bootstrap/            # platform: namespaces, storage, ingress, TLS, keel
+│   ├── workloads/            # application workloads (one file per service, --- separated)
+│   ├── secrets/              # Secret manifests with ${VAR} envsubst placeholders
+│   └── backup/               # restic CronJob
+├── vps/                      # planned Phase 2 (Hetzner Talos), not yet populated
+├── legacy-microk8s/          # frozen reference copies of the old microk8s manifests
+└── docs/
+    └── superpowers/          # gitignored: specs and implementation plans
+```
+
+## Apply Workflow
+
+```bash
+# One-time per shell session
+direnv allow                  # loads 1P-backed env vars
+
+# Regular flow
+make check-tools              # verify kubectl, kustomize, envsubst, op, direnv, talosctl, omnictl
+make build-homelab            # render kustomize + envsubst to stdout (preview)
+make diff-homelab             # kubectl diff against current cluster state
+make apply-homelab            # apply to the current kubeconfig context
+```
+
+`make apply-homelab` runs `kustomize build homelab/ | envsubst | kubectl apply -f -`. Secrets are substituted from direnv-loaded env vars at apply time; no plaintext secret values live in git.
+
+## Cluster Stack (Target)
+
+- **Talos Linux** single-node VM on Proxmox, managed by **Omni**
+- **Tailscale** as a Talos system extension on the host (subnet router + remote `talosctl`/`kubectl` access)
+- **Traefik** as a hostNetwork DaemonSet for ingress on :80/:443 (no MetalLB)
+- **cert-manager** + Let's Encrypt with **Route53 DNS-01** solver; single wildcard `*.cynexia.net` cert
+- **local-path-provisioner** on the node's SSD (user volume mount)
+- **NFS CSI driver** for NFS-backed media from the Proxmox ZFS pool
+- **keel** for image auto-updates (with `keel.sh/match-tag: "true"` required on every Deployment — without it keel silently downgrades `:latest` via OCI version label)
+- **restic** nightly CronJob to Backblaze B2 for cluster-wide backup. Services are atomic — each one embeds its own backup-prep logic where needed (sqlite quiesce sidecar for sonarr/radarr; Emby's own Premier Backup plugin for emby).
 
 ## Domain
 
-All services exposed via `*.cynexia.net` ingress rules.
+Homelab services resolve on `*.cynexia.net` (Route53). The homelab cluster is **not exposed to the public internet**. Remote access to homelab services goes via Tailscale. The VPS cluster (Phase 2) uses `cynexia.com` (Cloudflare DNS) with Cloudflare Access / Zero Trust for public auth.
 
-## Namespaces
+## Workload List
 
-| Namespace | Purpose |
-|---|---|
-| `downloads` | Media management apps (sabnzbd, radarr, sonarr, mylar3, lazylibrarian, hydra, komga, caddy, changedetection) |
-| `immich` | Photo library (immich + postgresql) |
-| `open-webui` | LLM stack (ollama + open-webui) |
-| `proxy` | tinyproxy |
-| `cloudflare-tunnel` | cloudflared daemon |
-| `ingress` | Ingress resources |
-| `longhorn-system` | Longhorn storage |
-| `metallb-system` | MetalLB |
-| `kube-system` | Dashboard |
-| `default` | Data migrator |
+| Namespace | Purpose | Services (after rebuild) |
+|---|---|---|
+| `downloads` | Media management | sonarr, radarr, sabnzbd, hydra2, emby, tinyproxy, jottacloud-backup |
+| `cert-manager` | TLS | cert-manager controller |
+| `traefik` | Ingress | Traefik DaemonSet |
+| `keel` | Auto-updates | keel controller |
+| `backup` | Backup | restic init Job + nightly CronJob |
+
+Retired in the rebuild: immich, ollama, open-webui, komga, jellyfin, mylar3, lazylibrarian, caddy, cloudflared (homelab — VPS keeps its own), postgresql.
+
+## File Conventions
+
+- Each service is **one YAML file** under `homelab/workloads/` containing its Deployment, Service, Ingress, and PVCs separated by `---`.
+- Services use `PUID=1999` / `PGID=1999` for file ownership on shared media (verified against the current sonarr/emby manifests).
+- Secret manifests under `homelab/secrets/` contain only `${VAR}` placeholders. Real values come from 1Password via direnv at apply time.
+- NFS PVs and their PVCs live in the same service file.
+- Every Deployment with auto-updates carries the full keel annotation set:
+  ```yaml
+  keel.sh/policy: force
+  keel.sh/match-tag: "true"   # REQUIRED — without this keel silently downgrades :latest
+  keel.sh/trigger: poll
+  keel.sh/pollSchedule: "@every 6h"
+  ```
 
 ## NFS Servers
 
 | Server | Typical paths |
 |---|---|
+| `10.10.10.1` | `/tank/video/` (emby + *arr media) |
 | `fs.cynexia.net` | `/tank/appdata/*`, `/tank/largeappdata/*` |
-| `10.10.10.1` | `/tank/video/`, `/tank/comics/`, `/tank/largeappdata/immich-data` |
-| `pve2.cynexia.net` | `/tank/comics/`, mylar3 downloads |
 
-## File Conventions
+## Legacy Reference
 
-- Each service is **one YAML file** containing all its resources (Deployment/StatefulSet, Service, Ingress, PV, PVC) separated by `---`.
-- File extensions: `.yaml` and `.yml` are both used (no pattern, just historical).
-- `no_longer_used/` contains deprecated service configs — don't reference these as active.
-- Container images are mostly `linuxserver.io` for media apps.
-- Services use `PUID=1100` / `PGID=1100` (see `create_uid_gid.sh`).
-- Secrets (longhorn backup creds, postgres passwords) use placeholder values — real values are applied manually.
-
-## Helm-Managed Services
-
-Only **immich** uses Helm:
-```
-helm install immich oci://ghcr.io/immich-app/immich-charts/immich -n immich -f immich-values.yaml
-```
-
-## Key Files
-
-| File | Purpose |
-|---|---|
-| `README.md` | Setup guide for microk8s, longhorn, NFS, dashboard |
-| `addresspool.yaml` | MetalLB IP address pool |
-| `ClusterIssuer.yaml` | cert-manager Let's Encrypt config |
-| `persistent-nfs-storage.yaml` | NFS StorageClass |
-| `namespace-downloads.yaml` | Downloads namespace definition |
-| `immich-values.yaml` | Helm values for immich chart |
-| `data-migrator.*` | Custom container for migrating data between NFS paths |
-| `create_uid_gid.sh` | Creates the shared UID/GID (1100) on the host |
+`legacy-microk8s/` contains the original flat-layout microk8s manifests. This directory is **frozen reference only** — do not add new files here. It will be removed once the Talos rebuild is fully operational (see Phase 5.3 of the plan).
 
 ## When Editing
 
-- Keep the one-file-per-service pattern.
-- Put all resources for a service in a single file with `---` separators.
+- Keep the one-file-per-service pattern in `homelab/workloads/`.
+- Put all resources for a service (Deployment, Service, Ingress, PVCs) in a single file with `---` separators.
 - Match the namespace of existing similar services.
-- NFS PVs need both a PV and PVC defined in the same file.
-- Ingress annotations should include cert-manager TLS and basic-auth where appropriate.
+- Every new Deployment must include the full set of keel annotations above.
+- Never commit plaintext secret values. Use `${VAR}` placeholders + direnv + envsubst.
