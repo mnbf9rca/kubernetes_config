@@ -27,20 +27,31 @@ kubernetes_config/
 
 ## Apply Workflow
 
-```bash
-# One-time per shell session
-direnv allow                  # loads 1P-backed env vars
+Secrets are resolved from 1Password at process start via `op run`:
 
-# Regular flow
-make check-tools              # verify kubectl, kustomize, envsubst, op, direnv, talosctl, omnictl
+```bash
+# Launch a shell (or Claude) with resolved env vars
+op run --env-file=.env.tpl -- bash
+op run --env-file=.env.tpl -- claude
+
+# Or run any make target ad-hoc
+op run --env-file=.env.tpl -- make apply-homelab
+```
+
+Inside the launched process, env vars are pre-populated — no direnv, no sourcing. The `.env.tpl` file contains `VAR=op://vault/item/field` lines; `op run` resolves them and injects the values into the child process's environment.
+
+Targets:
+
+```bash
+make check-tools              # verify kubectl, kustomize, envsubst, op, talosctl, omnictl
 make build-homelab            # render kustomize + envsubst to stdout (preview)
 make diff-homelab             # kubectl diff against current cluster state
 make apply-homelab            # apply to the current kubeconfig context
 ```
 
-`make apply-homelab` runs `kustomize build homelab/ | envsubst "$(ENVSUBST_VARS)" | kubectl apply -f -`. Secrets are substituted from direnv-loaded env vars at apply time; no plaintext secret values live in git.
+`make apply-homelab` runs `kustomize build homelab/ | envsubst '$(ENVSUBST_VARS)' | kubectl apply -f -` and asserts `kubectl current-context == cynexia-homelab` via the `check-context` target before any cluster write. Secrets are substituted from `op run`-injected env vars at apply time; no plaintext secret values live in git.
 
-**`ENVSUBST_VARS` is an explicit allowlist** — never call envsubst without one. With no allowlist, envsubst substitutes every `${VAR}` token in the stream, including shell variables embedded in upstream manifests (e.g. `$VOL_DIR` inside local-path-provisioner's helper-pod setup script), breaking them silently. When you add a new secret placeholder to a manifest, add it to `ENVSUBST_VARS` in the Makefile.
+**`ENVSUBST_VARS` is an explicit allowlist, passed single-quoted** — never call envsubst without one. With no allowlist, envsubst substitutes every `${VAR}` token in the stream, including shell variables embedded in upstream manifests (e.g. `$VOL_DIR` inside local-path-provisioner's helper-pod setup script), breaking them silently. With double-quoted args, the shell expands `${VAR}` before envsubst sees them, producing garbage arguments. Single-quoting preserves the literal tokens. When you add a new secret placeholder to a manifest, add both its line to `.env.tpl` and its token to `ENVSUBST_VARS` in the Makefile.
 
 ## Cluster Stack (Target)
 
