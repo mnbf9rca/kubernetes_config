@@ -1,0 +1,27 @@
+# Wildcard TLS cert for *.cynexia.net. One cert for every homelab service
+# instead of per-ingress certs — simpler management, one DNS-01 challenge
+# every ~60 days, and every Ingress references the same TLS secret.
+#
+# The resulting Secret (wildcard-cynexia-net-tls) is created in the traefik
+# namespace so the Traefik DaemonSet can mount it as a default certificate.
+# Workload Ingresses in other namespaces (e.g. downloads) will need the
+# same secret reflected into their namespace — that's handled during
+# Phase 4 workload migration.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: wildcard-cynexia-net
+  namespace: traefik
+spec:
+  secretName: wildcard-cynexia-net-tls
+  issuerRef:
+    name: letsencrypt-dns01
+    kind: ClusterIssuer
+  commonName: "*.cynexia.net"
+  dnsNames:
+    - "*.cynexia.net"
+    - "cynexia.net"
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+    rotationPolicy: Always

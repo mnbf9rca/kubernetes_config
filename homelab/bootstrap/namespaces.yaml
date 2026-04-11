@@ -3,10 +3,17 @@ kind: Namespace
 metadata:
   name: downloads
 ---
-# NOTE: cert-manager, traefik, keel, and local-path-storage namespaces
-# are created by their respective upstream manifests (see homelab/bootstrap/*/).
-# Don't list them here — kustomize rejects duplicate resources.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: traefik
+---
 apiVersion: v1
 kind: Namespace
 metadata:
   name: backup
+---
+# NOTE: cert-manager and local-path-storage namespaces are created by their
+# respective upstream manifests, so they're omitted here (kustomize rejects
+# duplicate resources). keel's upstream manifest may also create its own
+# namespace — verify before adding keel to this file in Task 2.7.
