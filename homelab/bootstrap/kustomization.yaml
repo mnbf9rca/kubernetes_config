@@ -7,3 +7,4 @@ kind: Kustomization
 resources:
   - namespaces.yaml
   - local-path
+  - nfs-csi

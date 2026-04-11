@@ -1,0 +1,13 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# NFS CSI driver v4.13.1 (kubernetes-csi/csi-driver-nfs).
+# Deploys into kube-system (PSA-exempt). The node plugin provides its own
+# mount.nfs binary, so no Talos extensions are needed — the in-kernel NFS
+# client is sufficient.
+
+resources:
+  - https://raw.githubusercontent.com/kubernetes-csi/csi-driver-nfs/v4.13.1/deploy/v4.13.1/rbac-csi-nfs.yaml
+  - https://raw.githubusercontent.com/kubernetes-csi/csi-driver-nfs/v4.13.1/deploy/v4.13.1/csi-nfs-driverinfo.yaml
+  - https://raw.githubusercontent.com/kubernetes-csi/csi-driver-nfs/v4.13.1/deploy/v4.13.1/csi-nfs-controller.yaml
+  - https://raw.githubusercontent.com/kubernetes-csi/csi-driver-nfs/v4.13.1/deploy/v4.13.1/csi-nfs-node.yaml
