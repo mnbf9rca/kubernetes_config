@@ -1,0 +1,7 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Cluster-scoped platform components: namespaces, storage, ingress, TLS, auto-updates.
+# Entries are added in Phase 2 of the rebuild plan, in dependency order.
+
+resources: []

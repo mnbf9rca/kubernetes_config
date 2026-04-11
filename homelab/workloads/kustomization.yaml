@@ -1,0 +1,9 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: downloads
+
+# Application workloads. Each service is a single YAML file containing its
+# Deployment, Service, Ingress, and PVCs separated by ---, matching the
+# one-file-per-service convention from the legacy repo.
+
+resources: []
