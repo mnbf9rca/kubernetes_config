@@ -15,6 +15,21 @@ REQUIRED_VARS := B2_ACCOUNT_ID B2_ACCOUNT_KEY RESTIC_PASSWORD RESTIC_REPOSITORY 
                  ROUTE53_ACCESS_KEY_ID ROUTE53_SECRET_ACCESS_KEY \
                  ACME_EMAIL
 
+# Explicit envsubst allowlist. CRITICAL: envsubst with no allowlist substitutes
+# EVERY $VAR / ${VAR} token in the stream, including shell variables embedded in
+# upstream manifests (e.g. local-path-provisioner's setup script uses "$VOL_DIR"
+# which envsubst would eat, breaking the helper pod). Passing an explicit list
+# limits substitution to only our own placeholders.
+#
+# Add new entries here as new workloads/secrets come online.
+ENVSUBST_VARS := $${B2_ACCOUNT_ID} $${B2_ACCOUNT_KEY} $${RESTIC_PASSWORD} $${RESTIC_REPOSITORY} \
+                 $${ROUTE53_ACCESS_KEY_ID} $${ROUTE53_SECRET_ACCESS_KEY} \
+                 $${ACME_EMAIL} \
+                 $${SONARR_API_KEY} $${RADARR_API_KEY} $${SABNZBD_API_KEY} \
+                 $${HYDRA2_API_KEY} $${EMBY_API_KEY} \
+                 $${JOTTA_USERNAME} $${JOTTA_PASSWORD} \
+                 $${TAILSCALE_AUTH_KEY}
+
 .PHONY: help
 help:
 	@echo "Homelab cluster targets:"
@@ -55,7 +70,7 @@ require-vars:
 
 .PHONY: build-homelab
 build-homelab:
-	@out=$$(kustomize build homelab/ | envsubst); \
+	@out=$$(kustomize build homelab/ | envsubst "$(ENVSUBST_VARS)"); \
 	if [ -z "$$out" ]; then \
 	  echo "OK: kustomize build succeeded (no resources yet)"; \
 	else \
@@ -78,8 +93,8 @@ check-context:
 
 .PHONY: diff-homelab
 diff-homelab: require-vars check-context
-	@kustomize build homelab/ | envsubst | kubectl diff -f - || true
+	@kustomize build homelab/ | envsubst "$(ENVSUBST_VARS)" | kubectl diff -f - || true
 
 .PHONY: apply-homelab
 apply-homelab: require-vars check-context
-	@kustomize build homelab/ | envsubst | kubectl apply -f -
+	@kustomize build homelab/ | envsubst "$(ENVSUBST_VARS)" | kubectl apply -f -

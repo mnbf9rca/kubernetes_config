@@ -43,3 +43,21 @@ patches:
         name: local-path
         annotations:
           storageclass.kubernetes.io/is-default-class: "true"
+      reclaimPolicy: Retain
+
+  # Talos enforces PSA `baseline` cluster-wide, and local-path-provisioner's
+  # helper pod uses hostPath to create directories under /var/mnt/local-path-provisioner.
+  # hostPath violates baseline, so we label the namespace with `privileged` PSA
+  # to allow the helper pod. The rest of the cluster stays at baseline.
+  - target:
+      kind: Namespace
+      name: local-path-storage
+    patch: |-
+      apiVersion: v1
+      kind: Namespace
+      metadata:
+        name: local-path-storage
+        labels:
+          pod-security.kubernetes.io/enforce: privileged
+          pod-security.kubernetes.io/audit: privileged
+          pod-security.kubernetes.io/warn: privileged
