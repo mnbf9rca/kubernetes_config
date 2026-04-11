@@ -6,3 +6,4 @@ namespace: backup
 
 resources:
   - restic-init-job.yaml
+  - restic-cronjob.yaml
