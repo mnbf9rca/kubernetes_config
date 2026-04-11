@@ -4,4 +4,5 @@ namespace: backup
 
 # Backup system: restic init Job and nightly CronJob. Added in Phase 3.
 
-resources: []
+resources:
+  - restic-init-job.yaml

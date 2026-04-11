@@ -1,0 +1,26 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: restic-init
+  namespace: backup
+spec:
+  backoffLimit: 0
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: restic
+          image: restic/restic:0.17.3
+          command: ["sh", "-c"]
+          args:
+            - |
+              set -euo pipefail
+              if restic snapshots >/dev/null 2>&1; then
+                echo "Repository already initialized."
+              else
+                echo "Initializing restic repository..."
+                restic init
+              fi
+          envFrom:
+            - secretRef:
+                name: restic-b2
