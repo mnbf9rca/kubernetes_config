@@ -6,4 +6,5 @@ namespace: downloads
 # Deployment, Service, Ingress, and PVCs separated by ---, matching the
 # one-file-per-service convention from the legacy repo.
 
-resources: []
+resources:
+  - sabnzbd.yaml

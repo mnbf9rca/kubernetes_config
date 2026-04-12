@@ -29,12 +29,6 @@ ACME_EMAIL=op://Homelab/acme/email
 # Tailscale auth key for the siderolabs/tailscale extension (Task 2.8)
 #TAILSCALE_AUTH_KEY=op://Homelab/tailscale/homelab-auth-key
 
-# --- Per-service secrets (uncomment per workload as they migrate in Phase 4) ---
-
-#SONARR_API_KEY=op://Homelab/sonarr/api-key
-#RADARR_API_KEY=op://Homelab/radarr/api-key
-#SABNZBD_API_KEY=op://Homelab/sabnzbd/api-key
-#HYDRA2_API_KEY=op://Homelab/hydra2/api-key
-#EMBY_API_KEY=op://Homelab/emby/api-key
+# Jottacloud backup creds (Phase 4, jottacloud-backup workload)
 #JOTTA_USERNAME=op://Homelab/jottacloud/username
 #JOTTA_PASSWORD=op://Homelab/jottacloud/password
