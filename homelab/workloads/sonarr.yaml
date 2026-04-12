@@ -84,24 +84,6 @@ spec:
               mountPath: /config
             - name: media
               mountPath: /media
-        - name: sqlite-snapshot
-          image: alpine:3.20
-          securityContext:
-            runAsUser: 1999
-            runAsGroup: 1999
-          command: ["sh", "-c"]
-          args:
-            - |
-              apk add --no-cache sqlite
-              while true; do
-                if [ -f /config/sonarr.db ]; then
-                  sqlite3 /config/sonarr.db ".backup /config/sonarr.db.restic" 2>&1 || true
-                fi
-                sleep 43200
-              done
-          volumeMounts:
-            - name: config
-              mountPath: /config
       volumes:
         - name: config
           persistentVolumeClaim: { claimName: sonarr-config }
