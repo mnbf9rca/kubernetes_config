@@ -10,3 +10,4 @@ resources:
   - sabnzbd.yaml
   - hydra2.yaml
   - sonarr.yaml
+  - radarr.yaml
