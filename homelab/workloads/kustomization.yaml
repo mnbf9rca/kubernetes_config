@@ -9,3 +9,4 @@ namespace: downloads
 resources:
   - sabnzbd.yaml
   - hydra2.yaml
+  - sonarr.yaml
