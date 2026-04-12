@@ -11,3 +11,4 @@ resources:
   - hydra2.yaml
   - sonarr.yaml
   - radarr.yaml
+  - emby.yaml
