@@ -29,6 +29,5 @@ ACME_EMAIL=op://Homelab/acme/email
 # Tailscale auth key for the siderolabs/tailscale extension (Task 2.8)
 #TAILSCALE_AUTH_KEY=op://Homelab/tailscale/homelab-auth-key
 
-# Jottacloud backup creds (Phase 4, jottacloud-backup workload)
-#JOTTA_USERNAME=op://Homelab/jottacloud/username
-#JOTTA_PASSWORD=op://Homelab/jottacloud/password
+# Jottacloud backup healthcheck (Phase 4)
+HEALTHCHECK_UUID=op://Homelab/jottacloud-backup/HEALTHCHECK_UUID

@@ -25,7 +25,7 @@ REQUIRED_VARS := B2_ACCOUNT_ID B2_ACCOUNT_KEY RESTIC_PASSWORD RESTIC_REPOSITORY 
 ENVSUBST_VARS := $${B2_ACCOUNT_ID} $${B2_ACCOUNT_KEY} $${RESTIC_PASSWORD} $${RESTIC_REPOSITORY} \
                  $${ROUTE53_ACCESS_KEY_ID} $${ROUTE53_SECRET_ACCESS_KEY} \
                  $${ACME_EMAIL} \
-                 $${JOTTA_USERNAME} $${JOTTA_PASSWORD} \
+                 $${HEALTHCHECK_UUID} \
                  $${TAILSCALE_AUTH_KEY}
 
 .PHONY: help
@@ -96,6 +96,19 @@ diff-homelab: require-vars check-context
 .PHONY: apply-homelab
 apply-homelab: require-vars check-context
 	@kustomize build homelab/ | envsubst '$(ENVSUBST_VARS)' | kubectl apply -f -
+
+# Create jottacloud-backup secret from 1Password. The RCLONE_CONFIG field is
+# multi-line, so it can't go through the envsubst pipeline. This target reads
+# each field via `op read` and feeds them to kubectl directly. Idempotent.
+.PHONY: create-jotta-secret
+create-jotta-secret: check-context
+	@kubectl create secret generic jottacloud-backup-secrets \
+	  --namespace jottacloud-backup \
+	  --from-literal="KOPIA_PASSWORD=$$(op read 'op://Homelab/jottacloud-backup/KOPIA_PASSWORD')" \
+	  --from-literal="S3_ACCESS_KEY=$$(op read 'op://Homelab/jottacloud-backup/S3_ACCESS_KEY')" \
+	  --from-literal="S3_SECRET_KEY=$$(op read 'op://Homelab/jottacloud-backup/S3_SECRET_KEY')" \
+	  --from-literal="RCLONE_CONFIG=$$(op read 'op://Homelab/jottacloud-backup/RCLONE_CONFIG')" \
+	  --dry-run=client -o yaml | kubectl apply -f -
 
 # Apply Talos machine config patches to Omni. Each file under
 # homelab/talos/machineconfig-patches/ is a full ConfigPatch resource YAML.

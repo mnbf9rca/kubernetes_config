@@ -33,6 +33,11 @@ metadata:
     pod-security.kubernetes.io/audit: privileged
     pod-security.kubernetes.io/warn: privileged
 ---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: jottacloud-backup
+---
 # NOTE: cert-manager and local-path-storage namespaces are created by their
 # respective upstream manifests, so they're omitted here (kustomize rejects
 # duplicate resources). keel's upstream manifest may also create its own
