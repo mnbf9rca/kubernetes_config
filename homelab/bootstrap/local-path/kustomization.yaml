@@ -8,9 +8,11 @@ kind: Kustomization
 #   - ConfigMap local-path-config (root path, helper pod spec)
 #   - StorageClass local-path (NOT default by default)
 #
-# We patch the ConfigMap to use /var/mnt/local-path-provisioner (the Talos kubelet
-# bind mount declared in homelab/talos/machineconfig-patches/user-volume-local-path.yaml),
-# and we patch the StorageClass to be the cluster default.
+# We patch the ConfigMap to use /var/mnt/local-path-provisioner. As of the SSD
+# handover, that path is a kubelet bind mount whose source is the SSD user
+# volume (see homelab/talos/machineconfig-patches/300-homelab-local-path-mount.yaml
+# and 400-homelab-user-volume-ssd.yaml). Existing PV hostPaths don't change,
+# but the underlying storage moved to /var/mnt/ssd/local-path-provisioner on XFS.
 
 resources:
   - https://raw.githubusercontent.com/rancher/local-path-provisioner/v0.0.30/deploy/local-path-storage.yaml

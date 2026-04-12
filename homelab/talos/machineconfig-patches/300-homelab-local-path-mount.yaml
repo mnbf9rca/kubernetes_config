@@ -1,3 +1,12 @@
+# Bind-mount /var/mnt/ssd/local-path-provisioner into the kubelet container as
+# /var/mnt/local-path-provisioner. This is the path that local-path-provisioner
+# and every existing local-path PV reference as hostPath. The underlying
+# storage is the XFS user volume on the passthrough SSD (see 400-homelab-user-volume-ssd.yaml).
+#
+# Before the SSD handover this patch was a self-bind from /var/mnt/local-path-provisioner
+# to itself, backed by Talos's EPHEMERAL volume on the OS disk. After the handover
+# the source points at the SSD subdirectory so existing PV hostPaths transparently
+# move to the SSD without needing to rewrite every PV.
 metadata:
   namespace: default
   type: ConfigPatches.omni.sidero.dev
@@ -11,7 +20,7 @@ spec:
         extraMounts:
           - destination: /var/mnt/local-path-provisioner
             type: bind
-            source: /var/mnt/local-path-provisioner
+            source: /var/mnt/ssd/local-path-provisioner
             options:
               - bind
               - rshared
