@@ -21,12 +21,18 @@ REQUIRED_VARS := B2_ACCOUNT_ID B2_ACCOUNT_KEY RESTIC_PASSWORD RESTIC_REPOSITORY 
 # which envsubst would eat, breaking the helper pod). Passing an explicit list
 # limits substitution to only our own placeholders.
 #
-# Add new entries here as new workloads/secrets come online.
-ENVSUBST_VARS := $${B2_ACCOUNT_ID} $${B2_ACCOUNT_KEY} $${RESTIC_PASSWORD} $${RESTIC_REPOSITORY} \
-                 $${ROUTE53_ACCESS_KEY_ID} $${ROUTE53_SECRET_ACCESS_KEY} \
-                 $${ACME_EMAIL} \
-                 $${HEALTHCHECK_UUID}
-# Note: TAILSCALE_AUTH_KEY is deliberately NOT in ENVSUBST_VARS.
+# ENVSUBST_VAR_NAMES is the plain list of substituted var names — single source
+# of truth. ENVSUBST_VARS is the `${VAR}` form that envsubst actually consumes,
+# derived from ENVSUBST_VAR_NAMES via foreach. Add new entries to
+# ENVSUBST_VAR_NAMES only. The check-vars-consistency target below asserts
+# every ENVSUBST_VAR_NAMES entry is also in REQUIRED_VARS so we never
+# silently substitute an empty value into a manifest.
+ENVSUBST_VAR_NAMES := B2_ACCOUNT_ID B2_ACCOUNT_KEY RESTIC_PASSWORD RESTIC_REPOSITORY \
+                     ROUTE53_ACCESS_KEY_ID ROUTE53_SECRET_ACCESS_KEY \
+                     ACME_EMAIL \
+                     HEALTHCHECK_UUID
+ENVSUBST_VARS := $(foreach v,$(ENVSUBST_VAR_NAMES),$${$(v)})
+# Note: TAILSCALE_AUTH_KEY is deliberately NOT in ENVSUBST_VAR_NAMES.
 # Tailscale auth keys are one-shot and only needed for initial node
 # registration. Steady-state Omni config never contains TS_AUTHKEY.
 # For bootstrap/add-a-node, use `make bootstrap-tailscale`, which has
@@ -40,7 +46,8 @@ help:
 	@echo "  build-homelab   - run 'kustomize build | envsubst' and print to stdout"
 	@echo "  diff-homelab    - show kubectl diff against the current cluster"
 	@echo "  apply-homelab   - apply the built manifests to the current cluster"
-	@echo "  require-vars    - assert all REQUIRED_VARS are set (preflight)"
+	@echo "  require-vars    - assert all REQUIRED_VARS are set and resolved (preflight)"
+	@echo "  check-vars-consistency - assert every ENVSUBST_VAR_NAMES entry is in REQUIRED_VARS"
 
 .PHONY: check-tools
 check-tools:
@@ -54,18 +61,45 @@ check-tools:
 	done; \
 	if [ $$ok -eq 0 ]; then exit 1; fi
 
+# Assert every envsubst placeholder is also in REQUIRED_VARS. Prevents the
+# class of bug where a manifest references a ${VAR} that isn't mandatory at
+# apply time and silently substitutes an empty string. Wired into
+# apply-homelab / diff-homelab preflight.
+.PHONY: check-vars-consistency
+check-vars-consistency:
+	@missing=""; \
+	for v in $(ENVSUBST_VAR_NAMES); do \
+	  found=0; \
+	  for r in $(REQUIRED_VARS); do \
+	    if [ "$$v" = "$$r" ]; then found=1; break; fi; \
+	  done; \
+	  if [ $$found -eq 0 ]; then missing="$$missing $$v"; fi; \
+	done; \
+	if [ -n "$$missing" ]; then \
+	  echo "ERROR: envsubst vars not in REQUIRED_VARS:$$missing"; \
+	  echo "Every placeholder must also be required, or apply-homelab will"; \
+	  echo "silently substitute empty strings into manifests. Fix by adding"; \
+	  echo "the missing vars to REQUIRED_VARS in the Makefile."; \
+	  exit 1; \
+	fi; \
+	echo "OK: ENVSUBST_VAR_NAMES is a subset of REQUIRED_VARS"
+
 .PHONY: require-vars
 require-vars:
-	@missing=0; set=0; \
+	@missing=0; unresolved=0; set=0; \
 	for v in $(REQUIRED_VARS); do \
-	  if [ -z "$${!v:-}" ]; then \
+	  val="$${!v:-}"; \
+	  if [ -z "$$val" ]; then \
 	    echo "MISSING: $$v"; missing=1; \
+	  elif [ "$${val#op://}" != "$$val" ]; then \
+	    echo "UNRESOLVED: $$v is still an op:// reference — op inject did not run or failed silently"; \
+	    unresolved=1; \
 	  else \
 	    set=$$((set+1)); \
 	  fi; \
 	done; \
-	if [ $$missing -ne 0 ]; then \
-	  echo "Tip: uncomment the relevant exports in .envrc and run 'direnv reload'"; \
+	if [ $$missing -ne 0 ] || [ $$unresolved -ne 0 ]; then \
+	  echo "Tip: run 'direnv reload' in the shell that launched this (or re-launch Claude from a direnv-active directory)"; \
 	  exit 1; \
 	fi; \
 	echo "OK: $$set / $$set required vars set"
@@ -94,11 +128,11 @@ check-context:
 	echo "OK: context is '$$current'"
 
 .PHONY: diff-homelab
-diff-homelab: require-vars check-context
+diff-homelab: check-vars-consistency require-vars check-context
 	@kustomize build homelab/ | envsubst '$(ENVSUBST_VARS)' | kubectl diff -f - || true
 
 .PHONY: apply-homelab
-apply-homelab: require-vars check-context
+apply-homelab: check-vars-consistency require-vars check-context
 	@kustomize build homelab/ | envsubst '$(ENVSUBST_VARS)' | kubectl apply -f -
 
 # Create jottacloud-backup secret from 1Password. The RCLONE_CONFIG field is

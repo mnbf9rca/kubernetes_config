@@ -40,5 +40,7 @@ metadata:
 ---
 # NOTE: cert-manager and local-path-storage namespaces are created by their
 # respective upstream manifests, so they're omitted here (kustomize rejects
-# duplicate resources). keel's upstream manifest may also create its own
-# namespace — verify before adding keel to this file in Task 2.7.
+# duplicate resources). keel's namespace IS declared above because
+# homelab/bootstrap/keel/keel.yaml is hand-written (upstream keel moved to
+# Helm-only distribution and no longer ships flat manifests), so nothing
+# else creates the `keel` namespace for us.
