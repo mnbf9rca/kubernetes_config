@@ -1,6 +1,6 @@
 # 1Password-backed env var template for the homelab cluster.
 #
-# This file is read by `op inject -i .env.tpl`, which resolves the op:// refs
+# This file is read by `op inject -i .env.tpl`, which resolves the 1Password refs
 # to their real values and outputs plain VAR=value lines. `.envrc` wraps that
 # in `set -a` so every resulting assignment is exported into the shell
 # environment for direnv (and therefore for any child process, including
