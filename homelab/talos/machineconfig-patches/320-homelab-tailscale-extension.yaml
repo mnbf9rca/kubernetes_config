@@ -5,17 +5,31 @@
 # Advertises the home LAN as a subnet route, so any tailnet device can reach
 # *.cynexia.net (which resolves to the node's LAN IP) over the mesh.
 #
-# The TS_AUTHKEY is substituted from the TAILSCALE_AUTH_KEY env var at apply time
-# (see .env.tpl and the Makefile's apply-talos target). Never commit the literal
-# key value — even expired keys are still credentials from a hygiene standpoint.
+# ---
+# NO TS_AUTHKEY HERE, BY DESIGN.
 #
-# Apply with:
-#   envsubst '${TAILSCALE_AUTH_KEY}' < this-file | omnictl apply -f -
+# Tailscale auth keys are one-shot: the extension consumes them on first boot
+# and persists its machine key under /var/lib/tailscale. On every subsequent
+# extension restart, containerboot runs `tailscale up` without --authkey, which
+# is idempotent on an already-logged-in node. Storing a stale/consumed key in
+# this file would be a disaster-recovery tripwire (on a state-volume wipe, the
+# node would try to re-authenticate with a dead key and stay stuck).
 #
-# On the first run, NOTE that an existing UI-created patch (id 500-7ff144ef-...)
-# may already carry the Tailscale extension config from the initial bring-up.
-# Delete that patch via `omnictl delete configpatch 500-<uuid>` after applying
-# this one, so the repo is the single source of truth.
+# To bootstrap a brand-new install OR add a new node to the tailnet, use the
+# dedicated Makefile targets:
+#
+#   # 1. Mint a one-shot reusable=no auth key in the Tailscale admin console
+#   export TAILSCALE_AUTH_KEY=tskey-auth-...
+#   # 2. Apply a temporary machine-scoped patch that injects TS_AUTHKEY
+#   make bootstrap-tailscale                 # or: TALOS_MACHINE_ID=<id> make bootstrap-tailscale
+#   # 3. Verify the node registered (Tailscale admin, `tailscale status`, etc.)
+#   # 4. Remove the temporary patch from Omni
+#   make clear-tailscale-bootstrap           # same TALOS_MACHINE_ID
+#   unset TAILSCALE_AUTH_KEY
+#
+# The bootstrap template lives at:
+#   homelab/talos/machineconfig-patches/bootstrap-tailscale-authkey.yaml.tpl
+# The .tpl extension keeps `make apply-talos` from picking it up.
 metadata:
   namespace: default
   type: ConfigPatches.omni.sidero.dev
@@ -30,6 +44,5 @@ spec:
     kind: ExtensionServiceConfig
     name: tailscale
     environment:
-      - TS_AUTHKEY=${TAILSCALE_AUTH_KEY}
       - TS_HOSTNAME=talos-homelab
       - TS_ROUTES=10.100.0.0/24

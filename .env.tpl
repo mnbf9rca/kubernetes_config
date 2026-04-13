@@ -26,8 +26,5 @@ ROUTE53_SECRET_ACCESS_KEY=op://Homelab/route53-cert-manager/secret-access-key
 # ACME contact email for Let's Encrypt (Task 2.5)
 ACME_EMAIL=op://Homelab/acme/email
 
-# Tailscale auth key for the siderolabs/tailscale extension (Task 2.8)
-#TAILSCALE_AUTH_KEY=op://Homelab/tailscale/homelab-auth-key
-
 # Jottacloud backup healthcheck (Phase 4)
 HEALTHCHECK_UUID=op://Homelab/jottacloud-backup/HEALTHCHECK_UUID

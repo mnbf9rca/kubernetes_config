@@ -25,8 +25,12 @@ REQUIRED_VARS := B2_ACCOUNT_ID B2_ACCOUNT_KEY RESTIC_PASSWORD RESTIC_REPOSITORY 
 ENVSUBST_VARS := $${B2_ACCOUNT_ID} $${B2_ACCOUNT_KEY} $${RESTIC_PASSWORD} $${RESTIC_REPOSITORY} \
                  $${ROUTE53_ACCESS_KEY_ID} $${ROUTE53_SECRET_ACCESS_KEY} \
                  $${ACME_EMAIL} \
-                 $${HEALTHCHECK_UUID} \
-                 $${TAILSCALE_AUTH_KEY}
+                 $${HEALTHCHECK_UUID}
+# Note: TAILSCALE_AUTH_KEY is deliberately NOT in ENVSUBST_VARS.
+# Tailscale auth keys are one-shot and only needed for initial node
+# registration. Steady-state Omni config never contains TS_AUTHKEY.
+# For bootstrap/add-a-node, use `make bootstrap-tailscale`, which has
+# its own dedicated envsubst allowlist.
 
 .PHONY: help
 help:
@@ -116,10 +120,89 @@ create-jotta-secret: check-context
 #
 # omnictl itself has no kustomize/loop support, so we iterate in shell.
 # Idempotent: omnictl apply replaces existing resources by ID.
+#
+# IMPORTANT: `omnictl apply -f -` does NOT accept stdin (the `-` is
+# interpreted as a literal filename and fails `stat -: no such file`).
+# Native stdin support was rejected upstream (siderolabs/omni#1193,
+# closed "not planned" Dec 2025). The only supported pattern is a real
+# file path on disk. Since we need envsubst for ${VAR} placeholders
+# (e.g. TAILSCALE_AUTH_KEY), we write substituted content to a per-patch
+# temp file and shred+unlink it on every exit path via `trap`. Each
+# iteration runs in its own subshell with `set -euo pipefail` so any
+# failure aborts cleanly and the trap fires before exit.
 .PHONY: apply-talos
 apply-talos:
 	@for f in homelab/talos/machineconfig-patches/*.yaml; do \
-	  echo "applying $$f"; \
-	  envsubst '$(ENVSUBST_VARS)' < $$f | omnictl apply -f - || exit 1; \
+	  case "$$f" in *.tpl) continue ;; esac; \
+	  ( \
+	    set -euo pipefail; \
+	    tmp=$$(mktemp -t talos-patch.XXXXXXXX); \
+	    trap '{ shred -u "$$tmp" 2>/dev/null || rm -f "$$tmp"; }' EXIT INT TERM; \
+	    echo "applying $$f"; \
+	    envsubst '$(ENVSUBST_VARS)' < "$$f" > "$$tmp"; \
+	    omnictl apply -f "$$tmp"; \
+	  ) || exit 1; \
 	done; \
 	echo "OK: all Talos patches applied"
+
+# One-shot Tailscale extension bootstrap for a single node. Applies a temporary
+# machine-scoped ConfigPatch to Omni containing only TS_AUTHKEY. After the node
+# registers on the tailnet, run `clear-tailscale-bootstrap` to remove the patch.
+#
+# Requirements:
+#   TAILSCALE_AUTH_KEY must be set in the shell env. Mint a fresh one-shot key
+#     in the Tailscale admin, export it, run this target, unset it. Do NOT cache
+#     consumed keys in 1Password.
+#   TALOS_MACHINE_ID defaults to the single machine in the homelab cluster.
+#     Override explicitly for multi-node rollouts:
+#       TALOS_MACHINE_ID=<id> make bootstrap-tailscale
+#
+# See homelab/talos/machineconfig-patches/320-homelab-tailscale-extension.yaml
+# for the rationale behind the split-patch design.
+TALOS_MACHINE_ID ?= $(shell omnictl get clustermachine -l omni.sidero.dev/cluster=homelab -o jsonpath 2>/dev/null | awk 'NR==1 {print $$1}')
+
+.PHONY: bootstrap-tailscale
+bootstrap-tailscale:
+	@test -n "$$TAILSCALE_AUTH_KEY" || { \
+	  echo "ERROR: TAILSCALE_AUTH_KEY not set in the shell environment."; \
+	  echo "  Mint a one-shot auth key in the Tailscale admin console (Settings → Keys),"; \
+	  echo "  then: export TAILSCALE_AUTH_KEY=tskey-auth-..."; \
+	  exit 1; \
+	}
+	@test -n "$(TALOS_MACHINE_ID)" || { \
+	  echo "ERROR: TALOS_MACHINE_ID not set and could not be auto-detected from omnictl."; \
+	  echo "  Run: omnictl get clustermachines -l omni.sidero.dev/cluster=homelab"; \
+	  echo "  Then: TALOS_MACHINE_ID=<id> make bootstrap-tailscale"; \
+	  exit 1; \
+	}
+	@( \
+	  set -euo pipefail; \
+	  tmp=$$(mktemp -t tailscale-bootstrap.XXXXXXXX); \
+	  trap '{ shred -u "$$tmp" 2>/dev/null || rm -f "$$tmp"; }' EXIT INT TERM; \
+	  TALOS_MACHINE_ID='$(TALOS_MACHINE_ID)' \
+	    envsubst '$${TAILSCALE_AUTH_KEY} $${TALOS_MACHINE_ID}' \
+	    < homelab/talos/machineconfig-patches/bootstrap-tailscale-authkey.yaml.tpl > "$$tmp"; \
+	  omnictl apply -f "$$tmp"; \
+	); \
+	echo ""; \
+	echo "################################################################"; \
+	echo "# Bootstrap patch applied for machine $(TALOS_MACHINE_ID)"; \
+	echo "#"; \
+	echo "# Wait ~30s, then verify the node joined the tailnet:"; \
+	echo "#   tailscale status         (from any tailnet device)"; \
+	echo "#"; \
+	echo "# Once confirmed, CLEAR THE BOOTSTRAP PATCH:"; \
+	echo "#   make clear-tailscale-bootstrap TALOS_MACHINE_ID=$(TALOS_MACHINE_ID)"; \
+	echo "#"; \
+	echo "# Leaving it behind is a disaster-recovery tripwire: on a state-"; \
+	echo "# volume wipe, the node would try to re-auth with a consumed key."; \
+	echo "################################################################"
+
+.PHONY: clear-tailscale-bootstrap
+clear-tailscale-bootstrap:
+	@test -n "$(TALOS_MACHINE_ID)" || { \
+	  echo "ERROR: TALOS_MACHINE_ID not set and could not be auto-detected from omnictl."; \
+	  exit 1; \
+	}
+	@omnictl delete configpatch "900-bootstrap-tailscale-authkey-$(TALOS_MACHINE_ID)" \
+	  && echo "OK: bootstrap patch removed for machine $(TALOS_MACHINE_ID)"
