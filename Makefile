@@ -13,7 +13,7 @@ HOMELAB_CONTEXT ?= cynexia-homelab
 # do not strictly require these — require-vars is called from apply/diff only.
 REQUIRED_VARS := B2_ACCOUNT_ID B2_ACCOUNT_KEY RESTIC_PASSWORD RESTIC_REPOSITORY \
                  ROUTE53_ACCESS_KEY_ID ROUTE53_SECRET_ACCESS_KEY \
-                 ACME_EMAIL
+                 ACME_EMAIL HEALTHCHECK_UUID
 
 # Explicit envsubst allowlist. CRITICAL: envsubst with no allowlist substitutes
 # EVERY $VAR / ${VAR} token in the stream, including shell variables embedded in
