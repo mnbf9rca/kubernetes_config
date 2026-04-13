@@ -1,12 +1,20 @@
 # 1Password-backed env var template for the homelab cluster.
-# Used by `op run --env-file=.env.tpl -- <command>` to inject resolved
-# secret values into a process environment without ever touching disk.
 #
-# Launch Claude with:
-#   op run --env-file=.env.tpl -- claude
+# This file is read by `op inject -i .env.tpl`, which resolves the op:// refs
+# to their real values and outputs plain VAR=value lines. `.envrc` wraps that
+# in `set -a` so every resulting assignment is exported into the shell
+# environment for direnv (and therefore for any child process, including
+# `make apply-homelab`, `kubectl`, `omnictl`, and interactive shells).
 #
-# Or run any make target ad-hoc:
-#   op run --env-file=.env.tpl -- make apply-homelab
+# Launch Claude (or any shell) from a directory where direnv is active and
+# the vars are inherited automatically. No manual sourcing required.
+#
+# Do NOT use `op run --env-file=.env.tpl -- <command>`. `op run`'s masking
+# implementation sets child-process env vars to the literal 24-character
+# string `<concealed by 1Password>` instead of real values. envsubst then
+# substitutes that placeholder into Kubernetes Secret manifests and kubectl
+# stores garbage — silent corruption. See AGENTS.md "Apply Workflow" for
+# the diagnostic tell (`echo "len=${#VAR}"` returns 24).
 #
 # Per-service secrets are commented out and should be uncommented as
 # each workload is migrated (Phase 4).
