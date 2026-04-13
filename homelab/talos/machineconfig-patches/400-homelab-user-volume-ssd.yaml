@@ -1,0 +1,28 @@
+# Talos user volume for the passthrough SSD (nvme0n1p2 on pve3, attached to
+# VM 100 as scsi1). Talos mounts this automatically at /var/mnt/ssd once the
+# disk is present and wiped of any existing filesystem signature.
+#
+# Disk selector matches the 500 GB virtio disk — the 64 GB virtio OS disk
+# (sda) is excluded by size. The local-path-provisioner will be pointed at
+# /var/mnt/ssd/local-path-provisioner after an rsync migration from the
+# current bind mount at /var/mnt/local-path-provisioner.
+metadata:
+  namespace: default
+  type: ConfigPatches.omni.sidero.dev
+  id: 400-homelab-user-volume-ssd
+  labels:
+    omni.sidero.dev/cluster: homelab
+  annotations:
+    name: user-volume-ssd
+spec:
+  data: |-
+    apiVersion: v1alpha1
+    kind: UserVolumeConfig
+    name: ssd
+    provisioning:
+      diskSelector:
+        match: disk.transport == "virtio" && disk.size > 400u * GB
+      grow: true
+      minSize: 400GiB
+    filesystem:
+      type: xfs

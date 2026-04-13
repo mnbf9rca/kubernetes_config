@@ -1,0 +1,24 @@
+metadata:
+  namespace: default
+  type: ConfigPatches.omni.sidero.dev
+  id: 310-homelab-storage-network
+  labels:
+    omni.sidero.dev/cluster: homelab
+spec:
+  data: |-
+    machine:
+      network:
+        interfaces:
+          # Storage-only NIC on Proxmox vmbr100 (host-local Linux bridge, 10.10.10.0/24).
+          # Matched by the MAC assigned to net1 when the NIC was added to the Talos VM.
+          # No gateway — the bridge is pure L2 with Proxmox itself at 10.10.10.1 acting
+          # as the NFS server for /tank/video and other media exports.
+          #
+          # The old microk8s VM holds 10.10.10.9 on this subnet. Using 10.10.10.10 for
+          # the new Talos node so both can coexist during the migration window.
+          - deviceSelector:
+              hardwareAddr: "bc:24:11:a7:43:bb"
+            addresses:
+              - 10.10.10.10/24
+            dhcp: false
+            mtu: 1500

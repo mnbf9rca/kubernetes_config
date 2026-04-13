@@ -1,0 +1,17 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Application workloads. Each service is a single YAML file containing its
+# Deployment, Service, Ingress, and PVCs separated by ---, matching the
+# one-file-per-service convention from the legacy repo.
+#
+# No namespace override here — each manifest declares its own namespace
+# so cross-namespace services (e.g. jottacloud-backup) work correctly.
+
+resources:
+  - sabnzbd.yaml
+  - hydra2.yaml
+  - sonarr.yaml
+  - radarr.yaml
+  - emby.yaml
+  - jottacloud-backup.yaml

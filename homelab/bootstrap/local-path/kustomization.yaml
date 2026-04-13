@@ -1,0 +1,65 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Rancher local-path-provisioner. The upstream manifest creates:
+#   - local-path-storage namespace
+#   - ServiceAccount, ClusterRole, ClusterRoleBinding
+#   - Deployment (local-path-provisioner)
+#   - ConfigMap local-path-config (root path, helper pod spec)
+#   - StorageClass local-path (NOT default by default)
+#
+# We patch the ConfigMap to use /var/mnt/local-path-provisioner. As of the SSD
+# handover, that path is a kubelet bind mount whose source is the SSD user
+# volume (see homelab/talos/machineconfig-patches/300-homelab-local-path-mount.yaml
+# and 400-homelab-user-volume-ssd.yaml). Existing PV hostPaths don't change,
+# but the underlying storage moved to /var/mnt/ssd/local-path-provisioner on XFS.
+
+resources:
+  - https://raw.githubusercontent.com/rancher/local-path-provisioner/v0.0.30/deploy/local-path-storage.yaml
+
+patches:
+  - target:
+      kind: ConfigMap
+      name: local-path-config
+      namespace: local-path-storage
+    patch: |-
+      - op: replace
+        path: /data/config.json
+        value: |-
+          {
+            "nodePathMap":[
+              {
+                "node":"DEFAULT_PATH_FOR_NON_LISTED_NODES",
+                "paths":["/var/mnt/local-path-provisioner"]
+              }
+            ]
+          }
+
+  - target:
+      kind: StorageClass
+      name: local-path
+    patch: |-
+      apiVersion: storage.k8s.io/v1
+      kind: StorageClass
+      metadata:
+        name: local-path
+        annotations:
+          storageclass.kubernetes.io/is-default-class: "true"
+      reclaimPolicy: Retain
+
+  # Talos enforces PSA `baseline` cluster-wide, and local-path-provisioner's
+  # helper pod uses hostPath to create directories under /var/mnt/local-path-provisioner.
+  # hostPath violates baseline, so we label the namespace with `privileged` PSA
+  # to allow the helper pod. The rest of the cluster stays at baseline.
+  - target:
+      kind: Namespace
+      name: local-path-storage
+    patch: |-
+      apiVersion: v1
+      kind: Namespace
+      metadata:
+        name: local-path-storage
+        labels:
+          pod-security.kubernetes.io/enforce: privileged
+          pod-security.kubernetes.io/audit: privileged
+          pod-security.kubernetes.io/warn: privileged

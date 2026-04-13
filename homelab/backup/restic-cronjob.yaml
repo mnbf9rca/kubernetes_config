@@ -1,0 +1,45 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: restic-backup
+  namespace: backup
+spec:
+  schedule: "0 3 * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      ttlSecondsAfterFinished: 86400
+      template:
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: restic
+              image: restic/restic:0.17.3
+              command: ["sh", "-c"]
+              args:
+                - |
+                  set -euo pipefail
+                  restic backup /data \
+                    --tag nightly \
+                    --exclude='*.tmp' \
+                    --exclude='cache/*'
+                  restic forget --prune \
+                    --keep-daily 7 \
+                    --keep-weekly 4 \
+                    --keep-monthly 6
+                  restic check
+              envFrom:
+                - secretRef:
+                    name: restic-b2
+              volumeMounts:
+                - name: data
+                  mountPath: /data
+                  readOnly: true
+          volumes:
+            - name: data
+              hostPath:
+                path: /var/mnt/local-path-provisioner
+                type: Directory

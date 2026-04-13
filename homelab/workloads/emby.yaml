@@ -1,0 +1,127 @@
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: emby-config
+  namespace: downloads
+spec:
+  accessModes: [ReadWriteOnce]
+  resources: { requests: { storage: 100Gi } }
+  storageClassName: local-path
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: emby-videos-nfs-pv
+spec:
+  capacity: { storage: 10Ti }
+  accessModes: [ReadWriteMany]
+  storageClassName: ""
+  persistentVolumeReclaimPolicy: Retain
+  csi:
+    driver: nfs.csi.k8s.io
+    volumeHandle: emby-videos-nfs
+    volumeAttributes:
+      server: "10.10.10.1"
+      share: "/tank/video"
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: emby-videos
+  namespace: downloads
+spec:
+  accessModes: [ReadWriteMany]
+  storageClassName: ""
+  resources: { requests: { storage: 10Ti } }
+  volumeName: emby-videos-nfs-pv
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: emby
+  namespace: downloads
+  annotations:
+    keel.sh/policy: force
+    keel.sh/match-tag: "true"
+    keel.sh/trigger: poll
+    keel.sh/pollSchedule: "@every 6h"
+spec:
+  replicas: 1
+  strategy: { type: Recreate }
+  selector: { matchLabels: { app: emby } }
+  template:
+    metadata:
+      labels: { app: emby }
+    spec:
+      dnsPolicy: None
+      dnsConfig:
+        nameservers: ["8.8.8.8", "8.8.4.4"]
+      containers:
+        - name: emby
+          image: linuxserver/emby:latest
+          imagePullPolicy: Always
+          env:
+            - name: PUID
+              value: "1999"
+            - name: PGID
+              value: "1999"
+            - name: TZ
+              value: Europe/London
+          ports:
+            - containerPort: 8096
+              name: http
+          startupProbe:
+            httpGet: { path: /, port: http }
+            failureThreshold: 10
+            periodSeconds: 60
+          livenessProbe:
+            httpGet: { path: /, port: http }
+            failureThreshold: 3
+            periodSeconds: 60
+          volumeMounts:
+            - name: config
+              mountPath: /config
+            - name: videos
+              mountPath: /mnt
+            - name: transcode
+              mountPath: /transcode
+      volumes:
+        - name: config
+          persistentVolumeClaim: { claimName: emby-config }
+        - name: videos
+          persistentVolumeClaim: { claimName: emby-videos }
+        - name: transcode
+          emptyDir:
+            medium: Memory
+            sizeLimit: 35Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: emby
+  namespace: downloads
+spec:
+  selector: { app: emby }
+  ports:
+    - port: 8096
+      targetPort: http
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: emby
+  namespace: downloads
+spec:
+  ingressClassName: traefik
+  rules:
+    - host: emby.cynexia.net
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: emby
+                port:
+                  number: 8096
