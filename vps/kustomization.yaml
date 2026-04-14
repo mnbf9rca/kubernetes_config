@@ -11,5 +11,5 @@ kind: Kustomization
 resources:
   - bootstrap
   - secrets
-  # - backup      # re-enabled by Task 3.2
+  - backup
   # - workloads   # re-enabled by Task 4.1

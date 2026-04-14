@@ -3,4 +3,4 @@ kind: Kustomization
 
 resources:
   - restic-init-job.yaml
-  - restic-cronjob.yaml
+  # - restic-cronjob.yaml  # re-enabled by Task 3.3
