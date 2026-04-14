@@ -56,6 +56,7 @@ help:
 	@echo "  apply-vps         - apply the built manifests to the current cluster"
 	@echo "  require-vps-vars  - assert all VPS_REQUIRED_VARS are set and resolved"
 	@echo "  create-cloudflared-secret - imperatively recreate the cloudflared creds Secret from 1P"
+	@echo "  route-vps-dns     - create/update CNAMEs for every hostname in the cloudflared ConfigMap"
 
 .PHONY: check-tools
 check-tools:
@@ -322,6 +323,28 @@ diff-vps: check-vps-context require-vps-vars check-vps-vars-consistency
 .PHONY: apply-vps
 apply-vps: check-vps-context require-vps-vars check-vps-vars-consistency
 	@kustomize build vps/ | envsubst '$(VPS_ENVSUBST_VARS)' | kubectl apply -f -
+
+# Re-create CNAMEs for every hostname in the cloudflared ConfigMap. Run once
+# after adding a new hostname to vps/bootstrap/cloudflared/cloudflared.yaml,
+# and once after a full cluster rebuild to re-attach every hostname to the
+# current cynexia-vps tunnel UUID. Idempotent: cloudflared upserts the CNAME.
+#
+# The ConfigMap is the single source of truth for hostname <-> Service routing,
+# so we grep the YAML for `- hostname:` lines rather than keeping a separate
+# list. Not using yq because it's not in our toolchain and adding it for one
+# grep would be silly.
+.PHONY: route-vps-dns
+route-vps-dns:
+	@set -euo pipefail; \
+	hosts=$$(grep -E '^[[:space:]]*- hostname:' vps/bootstrap/cloudflared/cloudflared.yaml | awk '{print $$3}'); \
+	if [ -z "$$hosts" ]; then \
+	  echo "No hostnames found in cloudflared ConfigMap — nothing to route"; \
+	  exit 0; \
+	fi; \
+	for h in $$hosts; do \
+	  echo "==> cloudflared tunnel route dns cynexia-vps $$h"; \
+	  cloudflared tunnel route dns cynexia-vps "$$h"; \
+	done
 
 .PHONY: create-cloudflared-secret
 create-cloudflared-secret: check-vps-context

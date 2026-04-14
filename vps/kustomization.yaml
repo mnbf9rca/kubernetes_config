@@ -12,4 +12,4 @@ resources:
   - bootstrap
   - secrets
   - backup
-  # - workloads   # re-enabled by Task 4.1
+  - workloads

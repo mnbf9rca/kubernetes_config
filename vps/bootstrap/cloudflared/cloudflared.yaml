@@ -12,6 +12,8 @@ data:
     ingress:
       # Workload rules are added to this block as services migrate.
       # Catchall MUST be last.
+      - hostname: rss.cynexia.com
+        service: http://freshrss.vps.svc.cluster.local:80
       - service: http_status:404
 ---
 apiVersion: apps/v1
