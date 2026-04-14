@@ -25,19 +25,29 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: browserless
+  name: sockpuppetbrowser
   namespace: vps
 spec:
   selector:
-    app: browserless
+    app: sockpuppetbrowser
   ports:
     - port: 3000
       targetPort: 3000
 ---
+# sockpuppetbrowser is the canonical upstream browser backend for
+# changedetection.io — dgtlmoon's own Chrome+playwright wrapper. We
+# replaced the plan's browserless/chrome:latest because that image is
+# deprecated v1 (unmaintained for 2 years), and running modern
+# Playwright against it leaks CDP sessions under load.
+#
+# Sockpuppetbrowser launches chrome with --no-sandbox +
+# --disable-dev-shm-usage by default, so it runs cleanly under PSA
+# baseline without SYS_ADMIN capability (the compose docs' SYS_ADMIN
+# hint is from before those chrome flags were added to server.py).
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: browserless
+  name: sockpuppetbrowser
   namespace: vps
   annotations:
     keel.sh/policy: force
@@ -46,38 +56,36 @@ metadata:
     keel.sh/pollSchedule: "@every 24h"
 spec:
   replicas: 1
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
-      app: browserless
+      app: sockpuppetbrowser
   template:
     metadata:
       labels:
-        app: browserless
+        app: sockpuppetbrowser
     spec:
       containers:
-        - name: browserless
-          image: browserless/chrome:latest
+        - name: sockpuppetbrowser
+          image: dgtlmoon/sockpuppetbrowser:latest
           env:
+            # Only four env vars are documented upstream — see
+            # https://github.com/dgtlmoon/changedetection.io/blob/master/docker-compose.yml
             - { name: SCREEN_WIDTH, value: "1920" }
             - { name: SCREEN_HEIGHT, value: "1024" }
             - { name: SCREEN_DEPTH, value: "16" }
-            - { name: ENABLE_DEBUGGER, value: "false" }
-            - { name: PREBOOT_CHROME, value: "true" }
-            - { name: CONNECTION_TIMEOUT, value: "300000" }
-            - { name: MAX_CONCURRENT_SESSIONS, value: "10" }
-            - { name: CHROME_REFRESH_TIME, value: "600000" }
-            - { name: DEFAULT_BLOCK_ADS, value: "true" }
-            - { name: DEFAULT_STEALTH, value: "true" }
+            - { name: MAX_CONCURRENT_CHROME_PROCESSES, value: "10" }
           ports:
             - containerPort: 3000
           resources:
+            # Steady state is FETCH_WORKERS=4 chromes on the changedetection
+            # side driving 4 concurrent sessions here — roughly 150 MiB per
+            # chrome. Cap at 1.5Gi for headroom against occasional bursts.
             requests:
-              memory: 1Gi
+              memory: 512Mi
             limits:
-              # 1Gi was OOMKilled (exit 137) under PREBOOT_CHROME=true with
-              # MAX_CONCURRENT_SESSIONS=10. Chrome processes are hungry; 2Gi
-              # covers a burst of concurrent sessions with headroom.
-              memory: 2Gi
+              memory: 1500Mi
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -105,11 +113,25 @@ spec:
         - name: changedetection
           image: ghcr.io/dgtlmoon/changedetection.io:latest
           env:
-            - { name: PLAYWRIGHT_DRIVER_URL, value: "ws://browserless.vps.svc.cluster.local:3000?stealth=1&--disable-web-security=true" }
+            # Env vars lifted from the operational Coolify container
+            # config on 2026-04-14 (non-Coolify-specific ones only).
+            - { name: PLAYWRIGHT_DRIVER_URL, value: "ws://sockpuppetbrowser.vps.svc.cluster.local:3000" }
             - { name: BASE_URL, value: "https://watch.cynexia.com" }
-            # DO NOT set HTTP_PROXY / HTTPS_PROXY — the old setup pointed at
-            # proxy.cynexia.com which was Cloudflare Access TCP to homelab
-            # tinyproxy and is now broken. VPS egresses directly.
+            - { name: FETCH_WORKERS, value: "4" }
+            - { name: MINIMUM_SECONDS_RECHECK_TIME, value: "3" }
+            - { name: HIDE_REFERER, value: "true" }
+            - { name: DISABLE_VERSION_CHECK, value: "true" }
+            - { name: LOGGER_LEVEL, value: "DEBUG" }
+            - { name: SCREENSHOT_MAX_HEIGHT, value: "16000" }
+            - { name: TZ, value: "Europe/London" }
+            # DO NOT set HTTP_PROXY / HTTPS_PROXY — the old setup routed
+            # through a sibling `proxy-client` container that chained to
+            # homelab's tinyproxy over Cloudflare Access TCP. Homelab was
+            # rebuilt without tinyproxy so the chain is dead. VPS now
+            # egresses directly. Migrated watches that referenced the
+            # named proxy "homelab" had their `"proxy"` field cleared
+            # post-migration (see feedback_changedetection_proxy_cleanup.md
+            # in agent memory).
           ports:
             - containerPort: 5000
           volumeMounts:
