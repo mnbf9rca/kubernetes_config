@@ -1,0 +1,14 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# IMPORTANT: do NOT set a top-level `namespace:` field. Each workload
+# manifest declares its own namespace explicitly. See memory:
+# feedback_workloads_kustomization_no_namespace.md
+
+resources:
+  - freshrss.yaml
+  - uptime-kuma.yaml
+  - changedetection.yaml
+  - umami.yaml
+  - n8n.yaml
+  - karakeep.yaml
