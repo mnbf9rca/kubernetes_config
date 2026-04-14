@@ -4,5 +4,5 @@ kind: Kustomization
 resources:
   - namespaces.yaml
   - local-path
-  - keel
-  - cloudflared
+  # - keel          # re-enabled by Task 2.4
+  # - cloudflared   # re-enabled by Task 2.5
