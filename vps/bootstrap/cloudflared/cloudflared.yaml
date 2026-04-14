@@ -22,6 +22,8 @@ data:
         service: http://umami.vps.svc.cluster.local:3000
       - hostname: n8n.cynexia.com
         service: http://n8n.vps.svc.cluster.local:5678
+      - hostname: keep.cynexia.com
+        service: http://karakeep.vps.svc.cluster.local:3000
       - service: http_status:404
 ---
 apiVersion: apps/v1

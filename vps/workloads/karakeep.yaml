@@ -1,0 +1,147 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: karakeep-data
+  namespace: vps
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 20Gi
+  storageClassName: local-path
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: karakeep-meilisearch
+  namespace: vps
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 5Gi
+  storageClassName: local-path
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: karakeep
+  namespace: vps
+spec:
+  selector:
+    app: karakeep
+  ports:
+    - port: 3000
+      targetPort: 3000
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: meilisearch
+  namespace: vps
+spec:
+  selector:
+    app: meilisearch
+  ports:
+    - port: 7700
+      targetPort: 7700
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: meilisearch
+  namespace: vps
+  annotations:
+    keel.sh/policy: force
+    keel.sh/match-tag: "true"
+    keel.sh/trigger: poll
+    keel.sh/pollSchedule: "@every 24h"
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: meilisearch
+  template:
+    metadata:
+      labels:
+        app: meilisearch
+    spec:
+      containers:
+        - name: meilisearch
+          image: getmeili/meilisearch:v1.13.3
+          env:
+            - { name: MEILI_NO_ANALYTICS, value: "true" }
+            - { name: MEILI_ENV, value: production }
+            - name: MEILI_MASTER_KEY
+              valueFrom: { secretKeyRef: { name: karakeep, key: MEILI_MASTER_KEY } }
+          ports:
+            - containerPort: 7700
+          volumeMounts:
+            - { name: data, mountPath: /meili_data }
+          resources:
+            requests:
+              memory: 512Mi
+            limits:
+              memory: 1Gi
+      volumes:
+        - name: data
+          persistentVolumeClaim: { claimName: karakeep-meilisearch }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: karakeep
+  namespace: vps
+  annotations:
+    keel.sh/policy: force
+    keel.sh/match-tag: "true"
+    keel.sh/trigger: poll
+    keel.sh/pollSchedule: "@every 6h"
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: karakeep
+  template:
+    metadata:
+      labels:
+        app: karakeep
+    spec:
+      containers:
+        - name: karakeep
+          image: ghcr.io/karakeep-app/karakeep:release
+          env:
+            # MEILI_MASTER_KEY must come before MEILI_ADDR is consumed.
+            # MEILI_MASTER_KEY and NEXTAUTH_SECRET are read by karakeep
+            # at startup via process.env, so order within the list is
+            # irrelevant for these (unlike umami's DATABASE_URL which
+            # used k8s $(VAR) expansion).
+            - { name: NEXTAUTH_URL, value: https://keep.cynexia.com }
+            - name: NEXTAUTH_SECRET
+              valueFrom: { secretKeyRef: { name: karakeep, key: NEXTAUTH_SECRET } }
+            - { name: DATA_DIR, value: /data }
+            - { name: DB_WAL_MODE, value: "true" }
+            - { name: MEILI_ADDR, value: "http://meilisearch.vps.svc.cluster.local:7700" }
+            - name: MEILI_MASTER_KEY
+              valueFrom: { secretKeyRef: { name: karakeep, key: MEILI_MASTER_KEY } }
+          ports:
+            - containerPort: 3000
+          volumeMounts:
+            - { name: data, mountPath: /data }
+        - name: sqlite-snapshot
+          image: alpine:3.20
+          command: ["sh", "-c"]
+          args:
+            - |
+              apk add --no-cache sqlite >/dev/null
+              while true; do
+                [ -f /data/db.db ] && sqlite3 /data/db.db ".backup /data/db.db.restic" || true
+                sleep 43200
+              done
+          volumeMounts:
+            - { name: data, mountPath: /data }
+      volumes:
+        - name: data
+          persistentVolumeClaim: { claimName: karakeep-data }

@@ -11,4 +11,4 @@ resources:
   - changedetection.yaml
   - umami.yaml
   - n8n.yaml
-  # - karakeep.yaml         # re-enabled by Task 4.6
+  - karakeep.yaml
