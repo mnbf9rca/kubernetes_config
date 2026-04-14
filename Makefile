@@ -48,6 +48,14 @@ help:
 	@echo "  apply-homelab   - apply the built manifests to the current cluster"
 	@echo "  require-vars    - assert all REQUIRED_VARS are set and resolved (preflight)"
 	@echo "  check-vars-consistency - assert every ENVSUBST_VAR_NAMES entry is in REQUIRED_VARS"
+	@echo ""
+	@echo "VPS cluster targets:"
+	@echo "  check-vps-context - assert kubectl current-context matches VPS_CONTEXT ($(VPS_CONTEXT))"
+	@echo "  build-vps         - run 'kustomize build | envsubst' and print to stdout"
+	@echo "  diff-vps          - show kubectl diff against the current cluster"
+	@echo "  apply-vps         - apply the built manifests to the current cluster"
+	@echo "  require-vps-vars  - assert all VPS_REQUIRED_VARS are set and resolved"
+	@echo "  create-cloudflared-secret - imperatively recreate the cloudflared creds Secret from 1P"
 
 .PHONY: check-tools
 check-tools:
@@ -240,3 +248,85 @@ clear-tailscale-bootstrap:
 	}
 	@omnictl delete configpatch "900-bootstrap-tailscale-authkey-$(TALOS_MACHINE_ID)" \
 	  && echo "OK: bootstrap patch removed for machine $(TALOS_MACHINE_ID)"
+
+# --- VPS cluster ---
+# Mirrors the homelab block. Separate context assertion, separate envsubst
+# allowlist, separate secret preflight. Copy-paste duplication is deliberate —
+# reading `apply-vps` top-to-bottom is clearer than chasing a parameterized
+# macro. Two clusters is not enough to justify abstraction.
+
+VPS_CONTEXT ?= cynexia-vps
+
+VPS_REQUIRED_VARS := VPS_B2_ACCOUNT_ID VPS_B2_ACCOUNT_KEY VPS_RESTIC_PASSWORD \
+                    VPS_RESTIC_REPOSITORY \
+                    N8N_ENCRYPTION_KEY UMAMI_DB_PASSWORD UMAMI_APP_SECRET \
+                    KARAKEEP_MEILI_MASTER_KEY KARAKEEP_NEXTAUTH_SECRET
+
+VPS_ENVSUBST_VAR_NAMES := $(VPS_REQUIRED_VARS)
+VPS_ENVSUBST_VARS := $(foreach v,$(VPS_ENVSUBST_VAR_NAMES),$${$(v)})
+
+.PHONY: check-vps-context
+check-vps-context:
+	@current=$$(kubectl config current-context 2>/dev/null); \
+	if [ "$$current" != "$(VPS_CONTEXT)" ]; then \
+	  echo "ERROR: kubectl context is '$$current', expected '$(VPS_CONTEXT)'"; \
+	  exit 1; \
+	fi
+
+.PHONY: check-vps-vars-consistency
+check-vps-vars-consistency:
+	@missing=""; \
+	for v in $(VPS_ENVSUBST_VAR_NAMES); do \
+	  found=0; \
+	  for r in $(VPS_REQUIRED_VARS); do \
+	    if [ "$$v" = "$$r" ]; then found=1; break; fi; \
+	  done; \
+	  if [ $$found -eq 0 ]; then missing="$$missing $$v"; fi; \
+	done; \
+	if [ -n "$$missing" ]; then \
+	  echo "ERROR: VPS envsubst vars not in VPS_REQUIRED_VARS:$$missing"; \
+	  exit 1; \
+	fi; \
+	echo "OK: VPS_ENVSUBST_VAR_NAMES is a subset of VPS_REQUIRED_VARS"
+
+.PHONY: require-vps-vars
+require-vps-vars:
+	@missing=0; unresolved=0; set=0; \
+	for v in $(VPS_REQUIRED_VARS); do \
+	  val="$${!v:-}"; \
+	  if [ -z "$$val" ]; then echo "MISSING: $$v"; missing=1; \
+	  elif [ "$${val#op://}" != "$$val" ]; then \
+	    echo "UNRESOLVED: $$v still op:// — op inject did not run"; unresolved=1; \
+	  else set=$$((set+1)); \
+	  fi; \
+	done; \
+	if [ $$missing -ne 0 ] || [ $$unresolved -ne 0 ]; then \
+	  echo "Tip: 'direnv reload' in the shell that launched this"; \
+	  exit 1; \
+	fi; \
+	echo "OK: $$set / $$set required VPS vars set"
+
+.PHONY: build-vps
+build-vps:
+	@out=$$(kustomize build vps/ | envsubst '$(VPS_ENVSUBST_VARS)'); \
+	if [ -z "$$out" ]; then \
+	  echo "OK: kustomize build succeeded (no resources yet)"; \
+	else \
+	  echo "$$out"; \
+	fi
+
+.PHONY: diff-vps
+diff-vps: check-vps-context require-vps-vars check-vps-vars-consistency
+	@kustomize build vps/ | envsubst '$(VPS_ENVSUBST_VARS)' | kubectl diff -f - || true
+
+.PHONY: apply-vps
+apply-vps: check-vps-context require-vps-vars check-vps-vars-consistency
+	@kustomize build vps/ | envsubst '$(VPS_ENVSUBST_VARS)' | kubectl apply -f -
+
+.PHONY: create-cloudflared-secret
+create-cloudflared-secret: check-vps-context
+	@op read 'op://VPS/cloudflared/credentials-json' | \
+	  kubectl -n vps create secret generic cloudflared-credentials \
+	    --from-file=credentials.json=/dev/stdin \
+	    --dry-run=client -o yaml | \
+	  kubectl -n vps apply -f -
