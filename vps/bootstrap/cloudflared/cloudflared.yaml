@@ -20,6 +20,8 @@ data:
         service: http://changedetection.vps.svc.cluster.local:5000
       - hostname: analytics.cynexia.com
         service: http://umami.vps.svc.cluster.local:3000
+      - hostname: n8n.cynexia.com
+        service: http://n8n.vps.svc.cluster.local:5678
       - service: http_status:404
 ---
 apiVersion: apps/v1

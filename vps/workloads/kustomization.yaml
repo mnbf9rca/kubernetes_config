@@ -10,5 +10,5 @@ resources:
   - uptime-kuma.yaml
   - changedetection.yaml
   - umami.yaml
-  # - n8n.yaml              # re-enabled by Task 4.5
+  - n8n.yaml
   # - karakeep.yaml         # re-enabled by Task 4.6
