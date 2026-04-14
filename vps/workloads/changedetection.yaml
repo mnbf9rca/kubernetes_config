@@ -72,9 +72,12 @@ spec:
             - containerPort: 3000
           resources:
             requests:
-              memory: 512Mi
-            limits:
               memory: 1Gi
+            limits:
+              # 1Gi was OOMKilled (exit 137) under PREBOOT_CHROME=true with
+              # MAX_CONCURRENT_SESSIONS=10. Chrome processes are hungry; 2Gi
+              # covers a burst of concurrent sessions with headroom.
+              memory: 2Gi
 ---
 apiVersion: apps/v1
 kind: Deployment
