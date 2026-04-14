@@ -9,6 +9,6 @@ resources:
   - freshrss.yaml
   - uptime-kuma.yaml
   - changedetection.yaml
-  # - umami.yaml            # re-enabled by Task 4.4
+  - umami.yaml
   # - n8n.yaml              # re-enabled by Task 4.5
   # - karakeep.yaml         # re-enabled by Task 4.6

@@ -18,6 +18,8 @@ data:
         service: http://uptime-kuma.vps.svc.cluster.local:3001
       - hostname: watch.cynexia.com
         service: http://changedetection.vps.svc.cluster.local:5000
+      - hostname: analytics.cynexia.com
+        service: http://umami.vps.svc.cluster.local:3000
       - service: http_status:404
 ---
 apiVersion: apps/v1
