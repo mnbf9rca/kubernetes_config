@@ -8,7 +8,7 @@ kind: Kustomization
 resources:
   - freshrss.yaml
   - uptime-kuma.yaml
-  # - changedetection.yaml  # re-enabled by Task 4.3
+  - changedetection.yaml
   # - umami.yaml            # re-enabled by Task 4.4
   # - n8n.yaml              # re-enabled by Task 4.5
   # - karakeep.yaml         # re-enabled by Task 4.6

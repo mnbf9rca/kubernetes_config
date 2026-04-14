@@ -1,0 +1,116 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: changedetection-data
+  namespace: vps
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 5Gi
+  storageClassName: local-path
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: changedetection
+  namespace: vps
+spec:
+  selector:
+    app: changedetection
+  ports:
+    - port: 5000
+      targetPort: 5000
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: browserless
+  namespace: vps
+spec:
+  selector:
+    app: browserless
+  ports:
+    - port: 3000
+      targetPort: 3000
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: browserless
+  namespace: vps
+  annotations:
+    keel.sh/policy: force
+    keel.sh/match-tag: "true"
+    keel.sh/trigger: poll
+    keel.sh/pollSchedule: "@every 24h"
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: browserless
+  template:
+    metadata:
+      labels:
+        app: browserless
+    spec:
+      containers:
+        - name: browserless
+          image: browserless/chrome:latest
+          env:
+            - { name: SCREEN_WIDTH, value: "1920" }
+            - { name: SCREEN_HEIGHT, value: "1024" }
+            - { name: SCREEN_DEPTH, value: "16" }
+            - { name: ENABLE_DEBUGGER, value: "false" }
+            - { name: PREBOOT_CHROME, value: "true" }
+            - { name: CONNECTION_TIMEOUT, value: "300000" }
+            - { name: MAX_CONCURRENT_SESSIONS, value: "10" }
+            - { name: CHROME_REFRESH_TIME, value: "600000" }
+            - { name: DEFAULT_BLOCK_ADS, value: "true" }
+            - { name: DEFAULT_STEALTH, value: "true" }
+          ports:
+            - containerPort: 3000
+          resources:
+            requests:
+              memory: 512Mi
+            limits:
+              memory: 1Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: changedetection
+  namespace: vps
+  annotations:
+    keel.sh/policy: force
+    keel.sh/match-tag: "true"
+    keel.sh/trigger: poll
+    keel.sh/pollSchedule: "@every 6h"
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: changedetection
+  template:
+    metadata:
+      labels:
+        app: changedetection
+    spec:
+      containers:
+        - name: changedetection
+          image: ghcr.io/dgtlmoon/changedetection.io:latest
+          env:
+            - { name: PLAYWRIGHT_DRIVER_URL, value: "ws://browserless.vps.svc.cluster.local:3000?stealth=1&--disable-web-security=true" }
+            - { name: BASE_URL, value: "https://watch.cynexia.com" }
+            # DO NOT set HTTP_PROXY / HTTPS_PROXY — the old setup pointed at
+            # proxy.cynexia.com which was Cloudflare Access TCP to homelab
+            # tinyproxy and is now broken. VPS egresses directly.
+          ports:
+            - containerPort: 5000
+          volumeMounts:
+            - { name: data, mountPath: /datastore }
+      volumes:
+        - name: data
+          persistentVolumeClaim: { claimName: changedetection-data }

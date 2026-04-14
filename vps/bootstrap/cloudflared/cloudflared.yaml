@@ -16,6 +16,8 @@ data:
         service: http://freshrss.vps.svc.cluster.local:80
       - hostname: uptime.cynexia.com
         service: http://uptime-kuma.vps.svc.cluster.local:3001
+      - hostname: watch.cynexia.com
+        service: http://changedetection.vps.svc.cluster.local:5000
       - service: http_status:404
 ---
 apiVersion: apps/v1
