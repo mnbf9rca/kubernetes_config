@@ -325,8 +325,13 @@ apply-vps: check-vps-context require-vps-vars check-vps-vars-consistency
 
 .PHONY: create-cloudflared-secret
 create-cloudflared-secret: check-vps-context
-	@op read 'op://VPS/cloudflared/credentials-json' | \
-	  kubectl -n vps create secret generic cloudflared-credentials \
-	    --from-file=credentials.json=/dev/stdin \
-	    --dry-run=client -o yaml | \
+	@set -euo pipefail; \
+	creds=$$(op read 'op://VPS/cloudflared/credentials-json'); \
+	if [ -z "$$creds" ]; then \
+	  echo "ERROR: op read returned empty — refusing to create empty Secret"; \
+	  exit 1; \
+	fi; \
+	printf '%s' "$$creds" | kubectl -n vps create secret generic cloudflared-credentials \
+	  --from-file=credentials.json=/dev/stdin \
+	  --dry-run=client -o yaml | \
 	  kubectl -n vps apply -f -

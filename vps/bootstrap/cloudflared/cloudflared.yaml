@@ -1,0 +1,81 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cloudflared-config
+  namespace: vps
+data:
+  config.yaml: |
+    tunnel: cynexia-vps
+    credentials-file: /etc/cloudflared/creds/credentials.json
+    no-autoupdate: true
+    metrics: 0.0.0.0:2000
+    ingress:
+      # Workload rules are added to this block as services migrate.
+      # Catchall MUST be last.
+      - service: http_status:404
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cloudflared
+  namespace: vps
+  annotations:
+    keel.sh/policy: force
+    keel.sh/match-tag: "true"
+    keel.sh/trigger: poll
+    keel.sh/pollSchedule: "@every 24h"
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: cloudflared
+  template:
+    metadata:
+      labels:
+        app: cloudflared
+    spec:
+      containers:
+        - name: cloudflared
+          image: cloudflare/cloudflared:latest
+          args:
+            - tunnel
+            - --config
+            - /etc/cloudflared/config.yaml
+            - run
+          volumeMounts:
+            - name: config
+              mountPath: /etc/cloudflared/config.yaml
+              subPath: config.yaml
+            - name: creds
+              mountPath: /etc/cloudflared/creds
+              readOnly: true
+          livenessProbe:
+            httpGet:
+              path: /ready
+              port: 2000
+            failureThreshold: 1
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: 2000
+            failureThreshold: 1
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              memory: 256Mi
+      volumes:
+        - name: config
+          configMap:
+            name: cloudflared-config
+            items:
+              - key: config.yaml
+                path: config.yaml
+        - name: creds
+          secret:
+            secretName: cloudflared-credentials
