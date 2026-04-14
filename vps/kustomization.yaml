@@ -10,6 +10,6 @@ kind: Kustomization
 
 resources:
   - bootstrap
-  # - secrets     # re-enabled by Task 3.1
+  - secrets
   # - backup      # re-enabled by Task 3.2
   # - workloads   # re-enabled by Task 4.1
