@@ -18,3 +18,11 @@ metadata:
     pod-security.kubernetes.io/enforce: privileged
     pod-security.kubernetes.io/audit: privileged
     pod-security.kubernetes.io/warn: privileged
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  # Declared here because vps/bootstrap/keel/keel.yaml is hand-written
+  # (upstream keel moved to Helm-only and no longer ships flat manifests),
+  # so nothing else creates the `keel` namespace for us.
+  name: keel
