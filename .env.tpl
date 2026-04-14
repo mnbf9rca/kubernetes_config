@@ -36,3 +36,22 @@ ACME_EMAIL=op://Homelab/acme/email
 
 # Jottacloud backup healthcheck (Phase 4)
 HEALTHCHECK_UUID=op://Homelab/jottacloud-backup/HEALTHCHECK_UUID
+
+# --- VPS cluster secrets (Phase 2) ---
+
+# Restic / Backblaze B2 for VPS (separate bucket, separate repo, separate password)
+VPS_B2_ACCOUNT_ID=op://VPS/b2-restic/account-id
+VPS_B2_ACCOUNT_KEY=op://VPS/b2-restic/account-key
+VPS_RESTIC_PASSWORD=op://VPS/b2-restic/repo-password
+VPS_RESTIC_REPOSITORY=op://VPS/b2-restic/repository
+
+# n8n credential encryption key — load-bearing, extracted from old VPS
+N8N_ENCRYPTION_KEY=op://VPS/n8n/encryption-key
+
+# umami postgres credentials + app secret
+UMAMI_DB_PASSWORD=op://VPS/umami/db-password
+UMAMI_APP_SECRET=op://VPS/umami/app-secret
+
+# karakeep — meilisearch master key + NextAuth signing secret
+KARAKEEP_MEILI_MASTER_KEY=op://VPS/karakeep/meili-master-key
+KARAKEEP_NEXTAUTH_SECRET=op://VPS/karakeep/nextauth-secret
