@@ -14,6 +14,8 @@ data:
       # Catchall MUST be last.
       - hostname: rss.cynexia.com
         service: http://freshrss.vps.svc.cluster.local:80
+      - hostname: uptime.cynexia.com
+        service: http://uptime-kuma.vps.svc.cluster.local:3001
       - service: http_status:404
 ---
 apiVersion: apps/v1
