@@ -161,3 +161,19 @@ The Talos node has three relevant interfaces:
 - Never commit plaintext secret values. Use `${VAR}` placeholders + direnv + envsubst. For multi-line secrets (rclone.conf etc.), create a dedicated `make <service>-secret` target using the `op read` + `kubectl create secret --dry-run=client -o yaml | kubectl apply -f -` pattern.
 - After adding a new secret placeholder: add it to `.env.tpl`, add the token to `ENVSUBST_VARS` in the `Makefile`, and `direnv reload` in your shell.
 - For new `hostPath`/`hostNetwork` workloads: elevate their namespace to PSA `privileged` in `homelab/bootstrap/namespaces.yaml`.
+
+## VPS Cluster (Phase 2)
+
+Public-internet-facing cluster on Hetzner for personal web services.
+
+- **Context:** `cynexia-vps` (Omni-managed, same Omni instance as homelab)
+- **Host:** Hetzner CX43 in `fsn1`, Talos single-node, 75 GB Cloud Volume as user volume at `/var/mnt/data`
+- **Network:** Hetzner Private Network `10.0.0.0/24`; no public :80/:443 on the node; Hetzner Cloud Firewall drops public inbound
+- **Ingress:** cloudflared tunnel only (`cynexia-vps` named tunnel). No Traefik, no cert-manager, no MetalLB, no NFS CSI.
+- **TLS/auth:** terminated at Cloudflare edge. Cloudflare Access with email-OTP in front of every hostname. umami `/script.js` + `/api/send/*` and n8n `/webhook/*` are Access-bypassed for public ingestion.
+- **Domain:** `*.cynexia.com` (Cloudflare-hosted zone, not Route53). Homelab's `cynexia.net` is separate and unrelated.
+- **Namespace:** `vps` for all workloads (no per-service namespaces, no top-level kustomize namespace override)
+- **Backups:** separate B2 bucket, separate restic repo, sqlite quiesce sidecars for n8n/freshrss/karakeep/uptime-kuma, pg_dumpall sidecar for umami's dedicated postgres
+- **Apply:** `make apply-vps` (with `check-vps-context` preflight asserting current kubectl context is `cynexia-vps`)
+- **Secrets:** 1Password `VPS` vault, referenced via `VPS_*` / workload-specific vars in `.env.tpl`. `N8N_ENCRYPTION_KEY` is load-bearing and was extracted from the old n8n container during the rebuild.
+- **DB shape:** per-service sqlite except umami which needs postgres. Shared postgres was researched and rejected — karakeep is sqlite-only (issue #1782), uptime-kuma v2 is sqlite/MariaDB only (issue #5674), and the consolidation saving didn't justify the upgrade-coupling cost.
