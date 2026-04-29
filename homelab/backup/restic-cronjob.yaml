@@ -41,5 +41,5 @@ spec:
           volumes:
             - name: data
               hostPath:
-                path: /var/mnt/local-path-provisioner
+                path: /var/mnt/ssd/local-path-provisioner
                 type: Directory

@@ -19,7 +19,7 @@ kubernetes_config/
 │   ├── bootstrap/            # platform: namespaces (with PSA labels), local-path, NFS CSI, cert-manager, traefik, keel
 │   ├── workloads/            # application workloads (one file per service, --- separated, no ns override)
 │   ├── secrets/              # Secret manifests with ${VAR} envsubst placeholders
-│   └── backup/               # restic init Job + nightly CronJob (hostPath /var/mnt/local-path-provisioner)
+│   └── backup/               # restic init Job + nightly CronJob (hostPath /var/mnt/ssd/local-path-provisioner)
 ├── vps/                      # planned Phase 2 (Hetzner Talos), not yet populated
 ├── legacy-microk8s/          # frozen reference copies of the old microk8s manifests
 └── docs/
@@ -68,7 +68,7 @@ make create-jotta-secret      # imperative secret creation for jottacloud-backup
 - **local-path-provisioner** on the node's SSD (user volume mount)
 - **NFS CSI driver** for NFS-backed media from the Proxmox ZFS pool
 - **keel** for image auto-updates (with `keel.sh/match-tag: "true"` required on every Deployment — without it keel silently downgrades `:latest` via OCI version label)
-- **restic** nightly CronJob to Backblaze B2 (`b2:homelab-restic-d5e15f22`) backing up `/var/mnt/local-path-provisioner`. 7d/4w/6m retention.
+- **restic** nightly CronJob to Backblaze B2 (`b2:homelab-restic-d5e15f22`) backing up `/var/mnt/ssd/local-path-provisioner`. 7d/4w/6m retention.
 - **jottacloud-backup** CronJob in its own namespace: rclone syncs Jottacloud → NFS, kopia backs that up to a separate B2 bucket (`cloud-files-backup`). Reports to healthchecks.io.
 - Apps' own scheduled backups (sonarr, radarr, emby, sabnzbd) should write zips to **`/config/Backups/`** so restic catches them. Do NOT rely on the sonarr/radarr sqlite quiesce sidecar pattern from earlier drafts of the plan — it's redundant because the app's own zip backup handles DB consistency.
 

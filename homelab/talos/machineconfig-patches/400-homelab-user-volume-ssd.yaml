@@ -3,9 +3,8 @@
 # disk is present and wiped of any existing filesystem signature.
 #
 # Disk selector matches the 500 GB virtio disk — the 64 GB virtio OS disk
-# (sda) is excluded by size. The local-path-provisioner will be pointed at
-# /var/mnt/ssd/local-path-provisioner after an rsync migration from the
-# current bind mount at /var/mnt/local-path-provisioner.
+# (sda) is excluded by size. local-path-provisioner writes PV directories
+# directly at /var/mnt/ssd/local-path-provisioner — no kubelet bind mount.
 metadata:
   namespace: default
   type: ConfigPatches.omni.sidero.dev
