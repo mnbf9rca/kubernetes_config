@@ -116,7 +116,7 @@ The Talos node has three relevant interfaces:
 
 | Interface | IP | Purpose |
 |---|---|---|
-| `ens18` (LAN) | `10.100.0.100` | All `*.cynexia.net` A records point here. Reserved on the router. |
+| `ens18` (LAN) | `10.100.0.100` | All `*.cynexia.net` A records point here. Statically assigned in `homelab/talos/machineconfig-patches/305-homelab-lan-network.yaml`; OPNsense Kea reservation kept as defense in depth. |
 | `ens19` (storage) | `10.10.10.10` | NFS traffic to `10.10.10.1`. Kubernetes reports this as `InternalIP` which is misleading. |
 | `tailscale0` | `100.85.18.48` | Remote access via Tailscale mesh |
 
@@ -147,6 +147,7 @@ The Talos node has three relevant interfaces:
   ```
 - **Services migrated in Phase 4** were deployed fresh with empty PVCs. The user exported app-level backups from the old cluster via each service's own UI, then imported them into the new instance via the same UI. No rsync-from-old-cluster data seeding was needed — simpler than the original plan.
 - **Old cluster's jottacloud-backup CronJob is suspended** (`kubectl --context=microk8s -n jottacloud-backup patch cronjob jottacloud-backup-scheduled -p '{"spec":{"suspend":true}}'`) to avoid overlap with the new cluster.
+- **Static-IP the LAN NIC, don't trust DHCP for stable nodes.** Talos v1.12's controller-runtime DHCP4 client can NAK-loop on renewal if the boot lease didn't land on the reserved IP. Kea OFFERs the reservation cleanly but the client REQUEST in the same transaction asks for the cached dynamic-pool IP, so the loop never converges. The DHCP retry storm also trips RFC 5905 KoD rate-limit on the gateway's NTP, surfacing as `time.SyncController` errors that look like a clock issue. `homelab/talos/machineconfig-patches/305-homelab-lan-network.yaml` puts `ens18` on a static config and moves NTP to public servers (time.cloudflare.com / time.google.com / pool.ntp.org) so the cluster doesn't depend on the gateway for either. OPNsense Kea reservation kept as defense in depth.
 
 ## Legacy Reference
 
