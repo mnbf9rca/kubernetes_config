@@ -1,0 +1,70 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: uptime-kuma-data
+  namespace: vps
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 2Gi
+  storageClassName: local-path
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: uptime-kuma
+  namespace: vps
+spec:
+  selector:
+    app: uptime-kuma
+  ports:
+    - port: 3001
+      targetPort: 3001
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: uptime-kuma
+  namespace: vps
+  annotations:
+    keel.sh/policy: force
+    keel.sh/match-tag: "true"
+    keel.sh/trigger: poll
+    keel.sh/pollSchedule: "@every 6h"
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: uptime-kuma
+  template:
+    metadata:
+      labels:
+        app: uptime-kuma
+    spec:
+      containers:
+        - name: uptime-kuma
+          image: louislam/uptime-kuma:2
+          env:
+            - { name: TZ, value: Europe/London }
+          ports:
+            - containerPort: 3001
+          volumeMounts:
+            - { name: data, mountPath: /app/data }
+        - name: sqlite-snapshot
+          image: alpine:3.20
+          command: ["sh", "-c"]
+          args:
+            - |
+              apk add --no-cache sqlite >/dev/null
+              while true; do
+                [ -f /app/data/kuma.db ] && sqlite3 /app/data/kuma.db ".backup /app/data/kuma.db.restic" || true
+                sleep 43200
+              done
+          volumeMounts:
+            - { name: data, mountPath: /app/data }
+      volumes:
+        - name: data
+          persistentVolumeClaim: { claimName: uptime-kuma-data }

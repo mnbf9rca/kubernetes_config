@@ -1,0 +1,87 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: n8n-data
+  namespace: vps
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 5Gi
+  storageClassName: local-path
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: n8n
+  namespace: vps
+spec:
+  selector:
+    app: n8n
+  ports:
+    - port: 5678
+      targetPort: 5678
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: n8n
+  namespace: vps
+  annotations:
+    keel.sh/policy: force
+    keel.sh/match-tag: "true"
+    keel.sh/trigger: poll
+    keel.sh/pollSchedule: "@every 6h"
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: n8n
+  template:
+    metadata:
+      labels:
+        app: n8n
+    spec:
+      securityContext:
+        fsGroup: 1000
+      # Disable automatic service env var injection. By default Kubernetes
+      # injects `<SERVICE_UPPER>_PORT=tcp://<clusterIP>:<port>` for every
+      # Service in the namespace into every container's env. Our Service
+      # is named `n8n`, which produces `N8N_PORT=tcp://...` — collides
+      # with n8n's own N8N_PORT config var (expects integer) and produces
+      # "Invalid number value for N8N_PORT" on startup. n8n falls back
+      # to the default 5678 but the noise is real. Same class of bug
+      # could bite any workload whose Service name matches a prefix of
+      # one of its own config env vars.
+      enableServiceLinks: false
+      containers:
+        - name: n8n
+          image: n8nio/n8n:latest
+          env:
+            - name: N8N_ENCRYPTION_KEY
+              valueFrom: { secretKeyRef: { name: n8n, key: N8N_ENCRYPTION_KEY } }
+            - { name: N8N_HOST, value: n8n.cynexia.com }
+            - { name: N8N_PROTOCOL, value: https }
+            - { name: WEBHOOK_URL, value: "https://n8n.cynexia.com/" }
+            - { name: GENERIC_TIMEZONE, value: Europe/London }
+          ports:
+            - containerPort: 5678
+          volumeMounts:
+            - { name: data, mountPath: /home/node/.n8n }
+        - name: sqlite-snapshot
+          image: alpine:3.20
+          command: ["sh", "-c"]
+          args:
+            - |
+              apk add --no-cache sqlite >/dev/null
+              while true; do
+                [ -f /data/database.sqlite ] && sqlite3 /data/database.sqlite ".backup /data/database.sqlite.restic" || true
+                sleep 43200
+              done
+          volumeMounts:
+            - { name: data, mountPath: /data }
+      volumes:
+        - name: data
+          persistentVolumeClaim: { claimName: n8n-data }

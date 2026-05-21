@@ -25,10 +25,10 @@ kind: Namespace
 metadata:
   name: backup
   labels:
-    # The restic-backup CronJob mounts /var/mnt/local-path-provisioner via
-    # hostPath so it can back up every local-path PV on the node. hostPath
-    # volumes violate PSA baseline (cluster enforce level), so this namespace
-    # must run at PSA privileged.
+    # The restic-backup CronJob mounts /var/mnt/ssd/local-path-provisioner
+    # via hostPath so it can back up every local-path PV on the node.
+    # hostPath volumes violate PSA baseline (cluster enforce level), so this
+    # namespace must run at PSA privileged.
     pod-security.kubernetes.io/enforce: privileged
     pod-security.kubernetes.io/audit: privileged
     pod-security.kubernetes.io/warn: privileged

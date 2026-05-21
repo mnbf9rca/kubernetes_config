@@ -4,7 +4,7 @@ metadata:
   name: restic-backup
   namespace: backup
 spec:
-  schedule: "0 3 * * *"
+  schedule: "0 4 * * *"
   concurrencyPolicy: Forbid
   successfulJobsHistoryLimit: 3
   failedJobsHistoryLimit: 3
@@ -17,20 +17,26 @@ spec:
           restartPolicy: Never
           containers:
             - name: restic
-              image: restic/restic:0.17.3
+              image: restic/restic:latest
               command: ["sh", "-c"]
               args:
                 - |
                   set -euo pipefail
+                  echo "==> snapshots"
+                  restic snapshots || true
+                  echo "==> backup /data"
                   restic backup /data \
                     --tag nightly \
                     --exclude='*.tmp' \
                     --exclude='cache/*'
+                  echo "==> forget + prune"
                   restic forget --prune \
                     --keep-daily 7 \
                     --keep-weekly 4 \
                     --keep-monthly 6
+                  echo "==> check"
                   restic check
+                  echo "==> done"
               envFrom:
                 - secretRef:
                     name: restic-b2
@@ -41,5 +47,5 @@ spec:
           volumes:
             - name: data
               hostPath:
-                path: /var/mnt/ssd/local-path-provisioner
+                path: /var/mnt/data/local-path-provisioner
                 type: Directory

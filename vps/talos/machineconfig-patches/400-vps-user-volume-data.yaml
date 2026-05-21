@@ -1,0 +1,31 @@
+# Talos user volume for the Hetzner Cloud Volume attached to the VPS node.
+# Allocates a partition filling the 80 GB block device and mounts it at
+# /var/mnt/data. local-path-provisioner points its root here.
+#
+# Disk selector: the boot disk (sda, 164 GB, model "QEMU HARDDISK") and the
+# Cloud Volume (sdb, 80 GB, model "Volume") both expose transport=virtio,
+# so filtering on transport alone doesn't work. Size bracket 70-100 GB
+# uniquely identifies the Cloud Volume relative to the boot disk.
+# Cross-checked with `talosctl get disks` at plan time:
+#   sda  164 GB  virtio  QEMU HARDDISK   <-- boot (excluded by size)
+#   sdb   80 GB  virtio  Volume          <-- selected
+metadata:
+  namespace: default
+  type: ConfigPatches.omni.sidero.dev
+  id: 400-vps-user-volume-data
+  labels:
+    omni.sidero.dev/cluster: vps
+  annotations:
+    name: user-volume-data
+spec:
+  data: |-
+    apiVersion: v1alpha1
+    kind: UserVolumeConfig
+    name: data
+    provisioning:
+      diskSelector:
+        match: disk.transport == "virtio" && disk.size > 70u * GB && disk.size < 100u * GB
+      grow: true
+      minSize: 70GiB
+    filesystem:
+      type: xfs

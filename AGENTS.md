@@ -19,7 +19,7 @@ kubernetes_config/
 │   ├── bootstrap/            # platform: namespaces (with PSA labels), local-path, NFS CSI, cert-manager, traefik, keel
 │   ├── workloads/            # application workloads (one file per service, --- separated, no ns override)
 │   ├── secrets/              # Secret manifests with ${VAR} envsubst placeholders
-│   └── backup/               # restic init Job + nightly CronJob (hostPath /var/mnt/local-path-provisioner)
+│   └── backup/               # restic init Job + nightly CronJob (hostPath /var/mnt/ssd/local-path-provisioner)
 ├── vps/                      # planned Phase 2 (Hetzner Talos), not yet populated
 ├── legacy-microk8s/          # frozen reference copies of the old microk8s manifests
 └── docs/
@@ -68,7 +68,7 @@ make create-jotta-secret      # imperative secret creation for jottacloud-backup
 - **local-path-provisioner** on the node's SSD (user volume mount)
 - **NFS CSI driver** for NFS-backed media from the Proxmox ZFS pool
 - **keel** for image auto-updates (with `keel.sh/match-tag: "true"` required on every Deployment — without it keel silently downgrades `:latest` via OCI version label)
-- **restic** nightly CronJob to Backblaze B2 (`b2:homelab-restic-d5e15f22`) backing up `/var/mnt/local-path-provisioner`. 7d/4w/6m retention.
+- **restic** nightly CronJob to Backblaze B2 (`b2:homelab-restic-d5e15f22`) backing up `/var/mnt/ssd/local-path-provisioner`. 7d/4w/6m retention.
 - **jottacloud-backup** CronJob in its own namespace: rclone syncs Jottacloud → NFS, kopia backs that up to a separate B2 bucket (`cloud-files-backup`). Reports to healthchecks.io.
 - Apps' own scheduled backups (sonarr, radarr, emby, sabnzbd) should write zips to **`/config/Backups/`** so restic catches them. Do NOT rely on the sonarr/radarr sqlite quiesce sidecar pattern from earlier drafts of the plan — it's redundant because the app's own zip backup handles DB consistency.
 
@@ -116,7 +116,7 @@ The Talos node has three relevant interfaces:
 
 | Interface | IP | Purpose |
 |---|---|---|
-| `ens18` (LAN) | `10.100.0.100` | All `*.cynexia.net` A records point here. Reserved on the router. |
+| `ens18` (LAN) | `10.100.0.100` | All `*.cynexia.net` A records point here. Statically assigned in `homelab/talos/machineconfig-patches/305-homelab-lan-network.yaml`; OPNsense Kea reservation kept as defense in depth. |
 | `ens19` (storage) | `10.10.10.10` | NFS traffic to `10.10.10.1`. Kubernetes reports this as `InternalIP` which is misleading. |
 | `tailscale0` | `100.85.18.48` | Remote access via Tailscale mesh |
 
@@ -147,6 +147,7 @@ The Talos node has three relevant interfaces:
   ```
 - **Services migrated in Phase 4** were deployed fresh with empty PVCs. The user exported app-level backups from the old cluster via each service's own UI, then imported them into the new instance via the same UI. No rsync-from-old-cluster data seeding was needed — simpler than the original plan.
 - **Old cluster's jottacloud-backup CronJob is suspended** (`kubectl --context=microk8s -n jottacloud-backup patch cronjob jottacloud-backup-scheduled -p '{"spec":{"suspend":true}}'`) to avoid overlap with the new cluster.
+- **Static-IP the LAN NIC, don't trust DHCP for stable nodes.** Talos v1.12's controller-runtime DHCP4 client can NAK-loop on renewal if the boot lease didn't land on the reserved IP. Kea OFFERs the reservation cleanly but the client REQUEST in the same transaction asks for the cached dynamic-pool IP, so the loop never converges. The DHCP retry storm also trips RFC 5905 KoD rate-limit on the gateway's NTP, surfacing as `time.SyncController` errors that look like a clock issue. `homelab/talos/machineconfig-patches/305-homelab-lan-network.yaml` puts `ens18` on a static config and moves NTP to public servers (time.cloudflare.com / time.google.com / pool.ntp.org) so the cluster doesn't depend on the gateway for either. OPNsense Kea reservation kept as defense in depth.
 
 ## Legacy Reference
 
@@ -161,3 +162,19 @@ The Talos node has three relevant interfaces:
 - Never commit plaintext secret values. Use `${VAR}` placeholders + direnv + envsubst. For multi-line secrets (rclone.conf etc.), create a dedicated `make <service>-secret` target using the `op read` + `kubectl create secret --dry-run=client -o yaml | kubectl apply -f -` pattern.
 - After adding a new secret placeholder: add it to `.env.tpl`, add the token to `ENVSUBST_VARS` in the `Makefile`, and `direnv reload` in your shell.
 - For new `hostPath`/`hostNetwork` workloads: elevate their namespace to PSA `privileged` in `homelab/bootstrap/namespaces.yaml`.
+
+## VPS Cluster (Phase 2)
+
+Public-internet-facing cluster on Hetzner for personal web services.
+
+- **Context:** `cynexia-vps` (Omni-managed, same Omni instance as homelab)
+- **Host:** Hetzner CX43 in `fsn1`, Talos single-node, 75 GB Cloud Volume as user volume at `/var/mnt/data`
+- **Network:** Hetzner Private Network `10.0.0.0/24`; no public :80/:443 on the node; Hetzner Cloud Firewall drops public inbound
+- **Ingress:** cloudflared tunnel only (`cynexia-vps` named tunnel). No Traefik, no cert-manager, no MetalLB, no NFS CSI.
+- **TLS/auth:** terminated at Cloudflare edge. Cloudflare Access with email-OTP in front of every hostname. umami `/script.js` + `/api/send/*` and n8n `/webhook/*` are Access-bypassed for public ingestion.
+- **Domain:** `*.cynexia.com` (Cloudflare-hosted zone, not Route53). Homelab's `cynexia.net` is separate and unrelated.
+- **Namespace:** `vps` for all workloads (no per-service namespaces, no top-level kustomize namespace override)
+- **Backups:** separate B2 bucket, separate restic repo, sqlite quiesce sidecars for n8n/freshrss/karakeep/uptime-kuma, pg_dumpall sidecar for umami's dedicated postgres
+- **Apply:** `make apply-vps` (with `check-vps-context` preflight asserting current kubectl context is `cynexia-vps`)
+- **Secrets:** 1Password `VPS` vault, referenced via `VPS_*` / workload-specific vars in `.env.tpl`. `N8N_ENCRYPTION_KEY` is load-bearing and was extracted from the old n8n container during the rebuild.
+- **DB shape:** per-service sqlite except umami which needs postgres. Shared postgres was researched and rejected — karakeep is sqlite-only (issue #1782), uptime-kuma v2 is sqlite/MariaDB only (issue #5674), and the consolidation saving didn't justify the upgrade-coupling cost.

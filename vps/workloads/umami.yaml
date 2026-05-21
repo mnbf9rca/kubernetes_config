@@ -1,0 +1,132 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: umami-pg-data
+  namespace: vps
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 10Gi
+  storageClassName: local-path
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: umami-postgres
+  namespace: vps
+spec:
+  selector:
+    app: umami-postgres
+  ports:
+    - port: 5432
+      targetPort: 5432
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: umami
+  namespace: vps
+spec:
+  selector:
+    app: umami
+  ports:
+    - port: 3000
+      targetPort: 3000
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: umami-postgres
+  namespace: vps
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: umami-postgres
+  template:
+    metadata:
+      labels:
+        app: umami-postgres
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:16-alpine
+          env:
+            - { name: POSTGRES_DB, value: umami }
+            - { name: POSTGRES_USER, value: umami }
+            - name: POSTGRES_PASSWORD
+              valueFrom: { secretKeyRef: { name: umami, key: DB_PASSWORD } }
+            - { name: PGDATA, value: /var/lib/postgresql/data/pgdata }
+          ports:
+            - containerPort: 5432
+          volumeMounts:
+            - { name: data, mountPath: /var/lib/postgresql/data }
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "umami", "-d", "umami"]
+            initialDelaySeconds: 10
+            periodSeconds: 5
+        - name: pg-dump-sidecar
+          image: postgres:16-alpine
+          command: ["sh", "-c"]
+          args:
+            - |
+              while true; do
+                pg_dumpall -U umami -h 127.0.0.1 \
+                  > /var/lib/postgresql/data/dump.sql.restic.tmp \
+                  && mv /var/lib/postgresql/data/dump.sql.restic.tmp \
+                        /var/lib/postgresql/data/dump.sql.restic \
+                  || echo "pg_dumpall failed"
+                sleep 43200
+              done
+          env:
+            - name: PGPASSWORD
+              valueFrom: { secretKeyRef: { name: umami, key: DB_PASSWORD } }
+          volumeMounts:
+            - { name: data, mountPath: /var/lib/postgresql/data }
+      volumes:
+        - name: data
+          persistentVolumeClaim: { claimName: umami-pg-data }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: umami
+  namespace: vps
+  annotations:
+    keel.sh/policy: force
+    keel.sh/match-tag: "true"
+    keel.sh/trigger: poll
+    keel.sh/pollSchedule: "@every 6h"
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: umami
+  template:
+    metadata:
+      labels:
+        app: umami
+    spec:
+      containers:
+        - name: umami
+          image: ghcr.io/umami-software/umami:postgresql-latest
+          env:
+            # DB_PASSWORD MUST be declared before DATABASE_URL so the
+            # $(DB_PASSWORD) reference in DATABASE_URL resolves. k8s env
+            # var expansion only sees variables defined earlier in the
+            # list; out-of-order references pass through literally and
+            # produce "password authentication failed for user umami"
+            # at the prisma layer.
+            - name: DB_PASSWORD
+              valueFrom: { secretKeyRef: { name: umami, key: DB_PASSWORD } }
+            - name: APP_SECRET
+              valueFrom: { secretKeyRef: { name: umami, key: APP_SECRET } }
+            - name: DATABASE_URL
+              value: postgresql://umami:$(DB_PASSWORD)@umami-postgres.vps.svc.cluster.local:5432/umami
+            - { name: HOSTNAME, value: "0.0.0.0" }
+          ports:
+            - containerPort: 3000

@@ -1,0 +1,31 @@
+metadata:
+  namespace: default
+  type: ConfigPatches.omni.sidero.dev
+  id: 305-homelab-lan-network
+  labels:
+    omni.sidero.dev/cluster: homelab
+spec:
+  data: |-
+    machine:
+      network:
+        nameservers:
+          - 10.100.0.1
+        interfaces:
+          # LAN NIC on Proxmox vmbr0 (10.100.0.0/24).
+          # Statically assigned because Talos v1.12's controller-runtime DHCP4
+          # client NAK-looped on renewal — see AGENTS.md "Operational gotchas".
+          # OPNsense Kea reservation for this MAC is kept as defense in depth.
+          - deviceSelector:
+              hardwareAddr: "bc:24:11:e1:d3:c8"
+            addresses:
+              - 10.100.0.100/24
+            dhcp: false
+            mtu: 1500
+            routes:
+              - network: 0.0.0.0/0
+                gateway: 10.100.0.1
+      time:
+        servers:
+          - time.cloudflare.com
+          - time.google.com
+          - pool.ntp.org

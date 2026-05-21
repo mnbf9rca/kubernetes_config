@@ -1,0 +1,27 @@
+# One-shot Job to initialize the restic repo in B2. Safe to re-run because
+# `restic init` errors if the repo already exists — the Job will fail the
+# second time, which is the desired behavior (you shouldn't need to re-init).
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: restic-init
+  namespace: backup
+spec:
+  backoffLimit: 1
+  ttlSecondsAfterFinished: 86400
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: restic
+          image: restic/restic:latest
+          command: ["sh", "-c"]
+          args:
+            - |
+              set -euo pipefail
+              echo "Initializing restic repo at $RESTIC_REPOSITORY"
+              restic init
+              echo "Done."
+          envFrom:
+            - secretRef:
+                name: restic-b2

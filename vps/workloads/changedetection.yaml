@@ -1,0 +1,141 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: changedetection-data
+  namespace: vps
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 5Gi
+  storageClassName: local-path
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: changedetection
+  namespace: vps
+spec:
+  selector:
+    app: changedetection
+  ports:
+    - port: 5000
+      targetPort: 5000
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: sockpuppetbrowser
+  namespace: vps
+spec:
+  selector:
+    app: sockpuppetbrowser
+  ports:
+    - port: 3000
+      targetPort: 3000
+---
+# sockpuppetbrowser is the canonical upstream browser backend for
+# changedetection.io — dgtlmoon's own Chrome+playwright wrapper. We
+# replaced the plan's browserless/chrome:latest because that image is
+# deprecated v1 (unmaintained for 2 years), and running modern
+# Playwright against it leaks CDP sessions under load.
+#
+# Sockpuppetbrowser launches chrome with --no-sandbox +
+# --disable-dev-shm-usage by default, so it runs cleanly under PSA
+# baseline without SYS_ADMIN capability (the compose docs' SYS_ADMIN
+# hint is from before those chrome flags were added to server.py).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sockpuppetbrowser
+  namespace: vps
+  annotations:
+    keel.sh/policy: force
+    keel.sh/match-tag: "true"
+    keel.sh/trigger: poll
+    keel.sh/pollSchedule: "@every 24h"
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: sockpuppetbrowser
+  template:
+    metadata:
+      labels:
+        app: sockpuppetbrowser
+    spec:
+      containers:
+        - name: sockpuppetbrowser
+          image: dgtlmoon/sockpuppetbrowser:latest
+          env:
+            # Only four env vars are documented upstream — see
+            # https://github.com/dgtlmoon/changedetection.io/blob/master/docker-compose.yml
+            - { name: SCREEN_WIDTH, value: "1920" }
+            - { name: SCREEN_HEIGHT, value: "1024" }
+            - { name: SCREEN_DEPTH, value: "16" }
+            - { name: MAX_CONCURRENT_CHROME_PROCESSES, value: "10" }
+          ports:
+            - containerPort: 3000
+          resources:
+            # Steady state is FETCH_WORKERS=4 chromes on the changedetection
+            # side driving 4 concurrent sessions here — roughly 150 MiB per
+            # chrome. Cap at 1.5Gi for headroom against occasional bursts.
+            requests:
+              memory: 512Mi
+            limits:
+              memory: 1500Mi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: changedetection
+  namespace: vps
+  annotations:
+    keel.sh/policy: force
+    keel.sh/match-tag: "true"
+    keel.sh/trigger: poll
+    keel.sh/pollSchedule: "@every 6h"
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: changedetection
+  template:
+    metadata:
+      labels:
+        app: changedetection
+    spec:
+      containers:
+        - name: changedetection
+          image: ghcr.io/dgtlmoon/changedetection.io:latest
+          env:
+            # Env vars lifted from the operational Coolify container
+            # config on 2026-04-14 (non-Coolify-specific ones only).
+            - { name: PLAYWRIGHT_DRIVER_URL, value: "ws://sockpuppetbrowser.vps.svc.cluster.local:3000" }
+            - { name: BASE_URL, value: "https://watch.cynexia.com" }
+            - { name: FETCH_WORKERS, value: "4" }
+            - { name: MINIMUM_SECONDS_RECHECK_TIME, value: "3" }
+            - { name: HIDE_REFERER, value: "true" }
+            - { name: DISABLE_VERSION_CHECK, value: "true" }
+            - { name: LOGGER_LEVEL, value: "DEBUG" }
+            - { name: SCREENSHOT_MAX_HEIGHT, value: "16000" }
+            - { name: TZ, value: "Europe/London" }
+            # DO NOT set HTTP_PROXY / HTTPS_PROXY — the old setup routed
+            # through a sibling `proxy-client` container that chained to
+            # homelab's tinyproxy over Cloudflare Access TCP. Homelab was
+            # rebuilt without tinyproxy so the chain is dead. VPS now
+            # egresses directly. Migrated watches that referenced the
+            # named proxy "homelab" had their `"proxy"` field cleared
+            # post-migration (see feedback_changedetection_proxy_cleanup.md
+            # in agent memory).
+          ports:
+            - containerPort: 5000
+          volumeMounts:
+            - { name: data, mountPath: /datastore }
+      volumes:
+        - name: data
+          persistentVolumeClaim: { claimName: changedetection-data }
