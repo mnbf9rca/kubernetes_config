@@ -123,6 +123,12 @@ The Talos node has three relevant interfaces:
 
 **Do not use `10.10.10.10` as a DNS target** — it's the storage NIC and isn't reachable from the home LAN. Route53 A records for `*.cynexia.net` must use `10.100.0.100`.
 
+## talosctl / Omni access
+
+- talosctl goes through the Omni proxy: context `cynexia-homelab`, node addressed by **node name** (`talosctl -n talos-5yn-s9u ...`) — never by IP (`-n 10.100.0.100` fails with "node not found, cannot resolve its management address").
+- Auth is SideroV1 PGP keys in `~/.talos/keys/`, one per context+user, minted via an Omni browser sign-in on first use. If a command fails with `Could not authenticate: open ~/.talos/keys/<ctx>-<user>.pgp`: remove the stale context(s) (`talosctl config remove <ctx> -y`, switching current context first if needed), refetch with `omnictl talosconfig --cluster homelab` (merges into `~/.talos/config`), then run any talosctl command and complete the browser sign-in. kubectl auth (Omni OIDC) is separate and unaffected.
+- Omni cluster names are `homelab` and `vps` (`omnictl get clusters`); the node name is discoverable via `kubectl get nodes -o name`.
+
 ## DNS (Route53)
 
 - Hosted zone for `cynexia.net`: `Z3409TNW35PGSS`
