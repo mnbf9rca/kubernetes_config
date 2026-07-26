@@ -1,6 +1,9 @@
-# Talos user volume for the passthrough SSD (nvme0n1p2 on pve3, attached to
-# VM 100 as scsi1). Talos mounts this automatically at /var/mnt/ssd once the
-# disk is present and wiped of any existing filesystem signature.
+# Talos user volume for the SSD (nvme0n1p2 on pve3 — since 2026-07-26 wrapped
+# in host-side LUKS2 with TPM2 auto-unlock via clevis; VM 100's scsi1 points at
+# /dev/mapper/talos_ssd_crypt, not the raw partition). Talos mounts it
+# automatically at /var/mnt/ssd; the partition label u-ssd, PARTUUID and xfs
+# UUID were preserved across the encryption migration, so Talos sees the same
+# volume it always had.
 #
 # Disk selector matches the 500 GB virtio disk — the 64 GB virtio OS disk
 # (sda) is excluded by size. local-path-provisioner writes PV directories
