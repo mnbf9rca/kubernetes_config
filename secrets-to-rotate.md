@@ -12,3 +12,6 @@ service docs.
 
 | Date | Secret (op:// reference or k8s secret/key) | How it was disclosed | Disclosed by | Status |
 |------|--------------------------------------------|----------------------|--------------|--------|
+| 2026-07-26 | op://Homelab/health-influxdb/admin-password | `op item get --format json` printed plaintext into local subagent transcript | Task 9 implementer agent | pending |
+| 2026-07-26 | op://Homelab/health-influxdb/admin-token | same event as above | Task 9 implementer agent | pending |
+| 2026-07-26 | op://Homelab/health-influxdb/garmin-v1-password | same event as above | Task 9 implementer agent | pending |
