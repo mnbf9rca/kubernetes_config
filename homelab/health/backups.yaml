@@ -1,0 +1,92 @@
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata: { name: health-backup, namespace: health }
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata: { name: health-backup-exec, namespace: health }
+rules:
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [get, list]
+  - apiGroups: [""]
+    resources: [pods/exec]
+    verbs: [create]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata: { name: health-backup-exec, namespace: health }
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: Role, name: health-backup-exec }
+subjects: [{ kind: ServiceAccount, name: health-backup, namespace: health }]
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: influx-backup
+  namespace: health
+spec:
+  schedule: "30 2 * * *"          # before the 03:00 restic sweep
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      ttlSecondsAfterFinished: 172800
+      template:
+        spec:
+          restartPolicy: Never
+          serviceAccountName: health-backup
+          containers:
+            - name: backup
+              # bitnami/kubectl no longer publishes plain version tags (Bitnami moved
+              # unauthenticated floating tags to bitnamilegacy/*, frozen since 2025-08-22,
+              # capped at 1.33.4 — confirmed via registry API: bitnami/kubectl:1.33 and
+              # :1.36 both 404). bitnamilegacy/kubectl:1.33 exists but has neither wget
+              # nor curl (verified in-cluster), which the hc-ping step below needs.
+              # rancher/kubectl:v1.36.0 exists and matches the server minor but ships no
+              # shell at all. alpine/k8s:1.36.0 matches the cluster's server version
+              # (v1.36.0) exactly and was verified in-cluster to have kubectl v1.36.0,
+              # sh, wget, curl, awk, xargs, date — everything this script needs.
+              image: alpine/k8s:1.36.0
+              command: [/bin/sh, -c]
+              env:
+                - name: HC_UUID
+                  value: "${HEALTH_HC_BACKUP_UUID}"
+              args:
+                - |
+                  set -eu
+                  DATE=$(date +%F)
+                  POD=$(kubectl -n health get pod -l app=influxdb -o jsonpath='{.items[0].metadata.name}')
+                  # native backup (online, via HTTP API, operator token from the pod env):
+                  kubectl -n health exec "$POD" -- sh -c \
+                    'influx backup /backups/native/'"$DATE"' -t "$DOCKER_INFLUXDB_INIT_ADMIN_TOKEN" --host http://localhost:8086'
+                  # portable line-protocol export, per bucket, last 8 days (windowed to avoid
+                  # compaction races and keep runs small; weekly overlap gives continuity):
+                  kubectl -n health exec "$POD" -- sh -c '
+                    set -eu
+                    START=$(date -d "8 days ago" +%FT%TZ 2>/dev/null || date -v-8d +%FT%TZ)
+                    for B in apple_metrics apple_workouts garmin; do
+                      BID=$(influx bucket list -o cynexia -n "$B" --hide-headers -t "$DOCKER_INFLUXDB_INIT_ADMIN_TOKEN" | awk "{print \$1}")
+                      influxd inspect export-lp --bucket-id "$BID" \
+                        --engine-path /var/lib/influxdb2/engine \
+                        --output-path /backups/lp/'"$DATE"'-$B.lp.gz --compress \
+                        --start "$START"
+                    done'
+                  # prune (keep 14 native, 60 lp — restic retention holds the long tail in B2):
+                  ls -1dt /dumps/native/* | tail -n +15 | xargs -r rm -rf
+                  ls -1t  /dumps/lp/*.lp.gz | tail -n +61 | xargs -r rm -f
+                  # dead-man's switch:
+                  wget -q -O- "https://hc-ping.com/$HC_UUID" >/dev/null
+              volumeMounts:
+                - { name: dumps, mountPath: /dumps }
+          initContainers:
+            - name: mkdirs
+              image: busybox:1.37
+              command: [sh, -c, "mkdir -p /dumps/native /dumps/lp"]
+              volumeMounts:
+                - { name: dumps, mountPath: /dumps }
+          volumes:
+            - name: dumps
+              persistentVolumeClaim: { claimName: health-dumps }

@@ -9,3 +9,4 @@ resources:
   - influxdb.yaml
   - apple-health-ingester.yaml
   - garmin-grafana.yaml
+  - backups.yaml
