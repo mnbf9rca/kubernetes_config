@@ -66,6 +66,7 @@ make create-jotta-secret      # imperative secret creation for jottacloud-backup
 - **Traefik** as a hostNetwork DaemonSet for ingress on :80/:443 (no MetalLB)
 - **cert-manager** + Let's Encrypt with **Route53 DNS-01** solver; single wildcard `*.cynexia.net` cert
 - **local-path-provisioner** on the node's SSD (user volume mount)
+- **Encryption at rest** (2026-07-26): both pve3 NVMe partitions backing the Talos VM (vmdata LVM = OS disk/etcd, and the user volume) are LUKS2, auto-unlocked at host boot by the TPM via clevis (PCR 7, requires Secure Boot enabled). VM 100's disks point at `/dev/mapper/vmdata_crypt` LVs and `/dev/mapper/talos_ssd_crypt`. If VMs don't autostart after a pve3 boot, the TPM refused (firmware/SB change): `cryptsetup open` each volume with the recovery passphrases in 1Password (`op://Homelab/TPM/...`), `vgchange -ay`, `systemctl start pve-guests`, then re-run `clevis luks bind`. The jottacloud staging copy on the HDD pool is separately encrypted via rclone crypt (`DEST_REMOTE` in the workload ConfigMap).
 - **NFS CSI driver** for NFS-backed media from the Proxmox ZFS pool
 - **keel** for image auto-updates (with `keel.sh/match-tag: "true"` required on every Deployment — without it keel silently downgrades `:latest` via OCI version label)
 - **restic** nightly CronJob to Backblaze B2 (`b2:homelab-restic-d5e15f22`) backing up `/var/mnt/ssd/local-path-provisioner`. 7d/4w/6m retention.

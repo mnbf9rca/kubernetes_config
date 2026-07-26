@@ -155,6 +155,7 @@ create-jotta-secret: check-context
 	  --from-literal="S3_ACCESS_KEY=$$(op read 'op://Homelab/jottacloud-backup/S3_ACCESS_KEY')" \
 	  --from-literal="S3_SECRET_KEY=$$(op read 'op://Homelab/jottacloud-backup/S3_SECRET_KEY')" \
 	  --from-literal="RCLONE_CONFIG=$$(op read 'op://Homelab/jottacloud-backup/RCLONE_CONFIG')" \
+	  --from-literal="DEST_REMOTE_PASSWORD=$$(op read 'op://Homelab/jottacloud-backup/JOTTA_CRYPT_PASSWORD')" \
 	  --dry-run=client -o yaml | kubectl apply -f -
 
 # Apply Talos machine config patches to Omni. Each file under
