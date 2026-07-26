@@ -1,0 +1,66 @@
+---
+apiVersion: v1
+kind: ConfigMap
+metadata: { name: pomerium-config, namespace: health }
+data:
+  config.yaml: |
+    address: :80
+    insecure_server: true            # TLS terminates at Cloudflare edge; tunnel delivers HTTP
+    authenticate_service_url: https://authenticate.cynexia.com
+    idp_provider: google
+    runtime_flags:
+      mcp: true
+    routes:
+      - from: https://mcp.cynexia.com
+        to: http://influxdb-mcp.health.svc.cluster.local:3000
+        name: Health InfluxDB MCP
+        mcp:
+          server:
+            path: /mcp
+        policy:
+          allow:
+            and:
+              - email:
+                  is: robert.aleck@cynexia.com
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pomerium
+  namespace: health
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: pomerium } }
+  template:
+    metadata:
+      labels: { app: pomerium }
+    spec:
+      containers:
+        - name: pomerium
+          image: pomerium/pomerium:v0.33.0   # pin: latest stable as of 2026-07-26 (v0.32.1 in draft brief superseded; v0.33.0 carries MCP WWW-Authenticate/CORS fixes)
+          env:
+            - name: IDP_CLIENT_ID
+              valueFrom: { secretKeyRef: { name: health-pomerium, key: google-client-id } }
+            - name: IDP_CLIENT_SECRET
+              valueFrom: { secretKeyRef: { name: health-pomerium, key: google-client-secret } }
+            - name: COOKIE_SECRET
+              valueFrom: { secretKeyRef: { name: health-pomerium, key: cookie-secret } }
+            - name: SHARED_SECRET
+              valueFrom: { secretKeyRef: { name: health-pomerium, key: shared-secret } }
+          args: [-config, /pomerium/config.yaml]
+          ports: [{ containerPort: 80, name: http }]
+          volumeMounts:
+            - { name: config, mountPath: /pomerium/config.yaml, subPath: config.yaml }
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }
+            limits: { memory: 512Mi }
+      volumes:
+        - name: config
+          configMap: { name: pomerium-config }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: pomerium, namespace: health }
+spec:
+  selector: { app: pomerium }
+  ports: [{ port: 80, targetPort: http }]

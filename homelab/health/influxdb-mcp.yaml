@@ -1,0 +1,49 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: influxdb-mcp
+  namespace: health
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: influxdb-mcp } }
+  template:
+    metadata:
+      labels: { app: influxdb-mcp }
+    spec:
+      containers:
+        - name: mcp
+          image: ghcr.io/mnbf9rca/influxdb-mcp-server:v0.2.0
+          args: [--http, "3000"]
+          env:
+            - { name: INFLUXDB_URL, value: "http://influxdb.health.svc.cluster.local:8086" }
+            - name: INFLUXDB_TOKEN            # READ-ONLY token: write-data/create-bucket/create-org
+              valueFrom:                      # tools exist but InfluxDB rejects them. Mandatory hardening.
+                secretKeyRef: { name: health-influxdb, key: read-token }
+            - { name: INFLUXDB_ORG, value: cynexia }
+          ports: [{ containerPort: 3000, name: http }]
+          readinessProbe: { tcpSocket: { port: http }, periodSeconds: 10 }
+          resources:
+            requests: { cpu: 50m, memory: 128Mi }
+            limits: { memory: 512Mi }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: influxdb-mcp, namespace: health }
+spec:
+  selector: { app: influxdb-mcp }
+  ports: [{ port: 3000, targetPort: http }]
+---
+# The MCP server is AUTHLESS in HTTP mode. Only Pomerium may reach it.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: influxdb-mcp-only-pomerium
+  namespace: health
+spec:
+  podSelector: { matchLabels: { app: influxdb-mcp } }
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector: { matchLabels: { app: pomerium } }
+      ports: [{ port: 3000 }]

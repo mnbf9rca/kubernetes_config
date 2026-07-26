@@ -10,5 +10,7 @@ resources:
   - apple-health-ingester.yaml
   - garmin-grafana.yaml
   - grafana.yaml
+  - influxdb-mcp.yaml
+  - pomerium.yaml
   - backups.yaml
   - ingest-freshness.yaml
