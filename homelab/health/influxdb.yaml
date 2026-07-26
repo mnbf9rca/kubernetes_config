@@ -1,0 +1,61 @@
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata: { name: influxdb-data, namespace: health }
+spec:
+  accessModes: [ReadWriteOnce]
+  resources: { requests: { storage: 20Gi } }   # personal-scale TSM is ~hundreds of MB/year; local-path is thin anyway
+  storageClassName: local-path
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: influxdb
+  namespace: health
+spec:
+  replicas: 1
+  strategy: { type: Recreate }
+  selector: { matchLabels: { app: influxdb } }
+  template:
+    metadata:
+      labels: { app: influxdb }
+    spec:
+      containers:
+        - name: influxdb
+          image: influxdb:2.9.1
+          env:
+            - { name: DOCKER_INFLUXDB_INIT_MODE, value: setup }
+            - { name: DOCKER_INFLUXDB_INIT_USERNAME, value: rob }
+            - name: DOCKER_INFLUXDB_INIT_PASSWORD
+              valueFrom: { secretKeyRef: { name: health-influxdb, key: admin-password } }
+            - { name: DOCKER_INFLUXDB_INIT_ORG, value: cynexia }
+            - { name: DOCKER_INFLUXDB_INIT_BUCKET, value: apple_metrics }
+            - name: DOCKER_INFLUXDB_INIT_ADMIN_TOKEN
+              valueFrom: { secretKeyRef: { name: health-influxdb, key: admin-token } }
+            # no INIT_RETENTION → infinite retention (lifelong record)
+          ports: [{ containerPort: 8086, name: http }]
+          readinessProbe:
+            httpGet: { path: /health, port: http }
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /health, port: http }
+            failureThreshold: 5
+            periodSeconds: 20
+          volumeMounts:
+            - { name: data, mountPath: /var/lib/influxdb2 }
+            - { name: dumps, mountPath: /backups }
+          resources:
+            requests: { cpu: 250m, memory: 512Mi }
+            limits: { memory: 2Gi }
+      volumes:
+        - name: data
+          persistentVolumeClaim: { claimName: influxdb-data }
+        - name: dumps
+          persistentVolumeClaim: { claimName: health-dumps }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: influxdb, namespace: health }
+spec:
+  selector: { app: influxdb }
+  ports: [{ port: 8086, targetPort: http }]

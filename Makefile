@@ -397,3 +397,29 @@ create-health-cloudflared-secret: check-context
 	if [ -z "$$creds" ]; then echo "ERROR: op document get returned empty"; exit 1; fi; \
 	printf '%s' "$$creds" | kubectl -n health create secret generic health-cloudflared-credentials \
 	  --from-file=credentials.json=/dev/stdin --dry-run=client -o yaml | kubectl -n health apply -f -
+
+# Bootstrap InfluxDB buckets, v1 DBRP mapping, v1-compat auth user, and scoped
+# tokens. Idempotent-ish: duplicate-create commands fail harmlessly (|| true).
+# Prints the two scoped tokens for the operator to paste into 1Password
+# (op://Homelab/health-influxdb/ingester-token and .../read-token) — 2.9 hash-
+# stores tokens server-side, so these printed values are the only copies.
+# Token extraction uses --json + `jq -r .token`, not --hide-headers + awk
+# '{print $2}': influx CLI table output is whitespace/tab-padded, and the -d
+# description strings here are multi-word, which shifts awk's column
+# position and silently captures a description fragment instead of the token.
+.PHONY: health-influx-bootstrap
+health-influx-bootstrap: check-context
+	@set -euo pipefail; \
+	pod() { kubectl -n health exec deploy/influxdb -- "$$@"; }; \
+	pod influx bucket create -n apple_workouts -o cynexia || true; \
+	pod influx bucket create -n garmin -o cynexia || true; \
+	GID=$$(pod influx bucket list -o cynexia -n garmin --hide-headers | awk '{print $$1}'); \
+	AMID=$$(pod influx bucket list -o cynexia -n apple_metrics --hide-headers | awk '{print $$1}'); \
+	AWID=$$(pod influx bucket list -o cynexia -n apple_workouts --hide-headers | awk '{print $$1}'); \
+	pod influx v1 dbrp create --db GarminStats --rp autogen --bucket-id $$GID --default || true; \
+	pod influx v1 auth create --username garmin --password "$$HEALTH_INFLUX_GARMIN_V1_PASSWORD" \
+	  --read-bucket $$GID --write-bucket $$GID -d "garmin-grafana v1-compat" || true; \
+	echo "--- INGESTER TOKEN (paste into op://Homelab/health-influxdb/ingester-token):"; \
+	pod influx auth create -o cynexia --write-bucket $$AMID --write-bucket $$AWID -d "apple ingester write-only" --json | jq -r .token; \
+	echo "--- READ TOKEN (paste into op://Homelab/health-influxdb/read-token):"; \
+	pod influx auth create -o cynexia --read-bucket $$AMID --read-bucket $$AWID --read-bucket $$GID -d "mcp+grafana read-only" --json | jq -r .token
