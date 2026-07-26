@@ -27,7 +27,11 @@ spec:
       securityContext: { fsGroup: 1000 }   # image runs as appuser 1000:1000
       containers:
         - name: garmin-fetch
-          image: thisisarpanghosh/garmin-fetch-data:v0.5.0
+          # Digest-pinned main-branch build (2026-05-19): v0.5.0 crashes on
+          # TAG_MEASUREMENTS_WITH_USER_EMAIL (client.profile AttributeError);
+          # fixed upstream post-release (display_name). Move to the next
+          # tagged release when Renovate proposes it.
+          image: thisisarpanghosh/garmin-fetch-data@sha256:8b7955d3459a42c4cbc2cb7a1b201daed1f77ac959e9063c55b055ad12aecdf2
           env:
             - { name: INFLUXDB_VERSION, value: "1" }
             - { name: INFLUXDB_HOST, value: influxdb.health.svc.cluster.local }
