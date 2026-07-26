@@ -13,7 +13,10 @@ metadata:
   name: garmin-grafana
   namespace: health
 spec:
-  replicas: 1
+  # 0 until the one-time interactive Garmin 2FA login seeds the token cache
+  # (plan Task 11 Step 3) — at 1 before that, the pod crashloops and fires an
+  # MFA SMS at the operator on every restart. Flip to 1 after login.
+  replicas: 0
   strategy: { type: Recreate }
   selector: { matchLabels: { app: garmin-grafana } }
   template:
