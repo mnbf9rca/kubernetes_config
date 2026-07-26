@@ -37,6 +37,11 @@ ACME_EMAIL=op://Homelab/acme/email
 # Jottacloud backup healthcheck (Phase 4)
 HEALTHCHECK_UUID=op://Homelab/jottacloud-backup/HEALTHCHECK_UUID
 
+# health namespace — healthchecks.io ping UUIDs
+HEALTH_HC_APPLE_UUID=op://Homelab/health-healthchecks/apple-uuid
+HEALTH_HC_GARMIN_UUID=op://Homelab/health-healthchecks/garmin-uuid
+HEALTH_HC_BACKUP_UUID=op://Homelab/health-healthchecks/backup-uuid
+
 # --- VPS cluster secrets (Phase 2) ---
 
 # Restic / Backblaze B2 for VPS (separate bucket, separate repo, separate password)

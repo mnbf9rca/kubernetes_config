@@ -13,7 +13,8 @@ HOMELAB_CONTEXT ?= cynexia-homelab
 # do not strictly require these — require-vars is called from apply/diff only.
 REQUIRED_VARS := B2_ACCOUNT_ID B2_ACCOUNT_KEY RESTIC_PASSWORD RESTIC_REPOSITORY \
                  ROUTE53_ACCESS_KEY_ID ROUTE53_SECRET_ACCESS_KEY \
-                 ACME_EMAIL HEALTHCHECK_UUID
+                 ACME_EMAIL HEALTHCHECK_UUID \
+                 HEALTH_HC_APPLE_UUID HEALTH_HC_GARMIN_UUID HEALTH_HC_BACKUP_UUID
 
 # Explicit envsubst allowlist. CRITICAL: envsubst with no allowlist substitutes
 # EVERY $VAR / ${VAR} token in the stream, including shell variables embedded in
@@ -30,7 +31,8 @@ REQUIRED_VARS := B2_ACCOUNT_ID B2_ACCOUNT_KEY RESTIC_PASSWORD RESTIC_REPOSITORY 
 ENVSUBST_VAR_NAMES := B2_ACCOUNT_ID B2_ACCOUNT_KEY RESTIC_PASSWORD RESTIC_REPOSITORY \
                      ROUTE53_ACCESS_KEY_ID ROUTE53_SECRET_ACCESS_KEY \
                      ACME_EMAIL \
-                     HEALTHCHECK_UUID
+                     HEALTHCHECK_UUID \
+                     HEALTH_HC_APPLE_UUID HEALTH_HC_GARMIN_UUID HEALTH_HC_BACKUP_UUID
 ENVSUBST_VARS := $(foreach v,$(ENVSUBST_VAR_NAMES),$${$(v)})
 # Note: TAILSCALE_AUTH_KEY is deliberately NOT in ENVSUBST_VAR_NAMES.
 # Tailscale auth keys are one-shot and only needed for initial node
