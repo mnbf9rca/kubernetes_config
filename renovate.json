@@ -1,11 +1,13 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "extends": ["config:recommended", ":pinDigests"],
-  "kubernetes": { "managerFilePatterns": ["/^homelab/.+\\.yaml$/", "/^vps/.+\\.yaml$/"] },
+  "extends": ["config:recommended"],
+  "enabledManagers": ["kubernetes"],
+  "kubernetes": { "managerFilePatterns": ["/^homelab/health/.+\\.yaml$/"] },
   "packageRules": [
     { "matchFileNames": ["homelab/health/**"],
       "groupName": "health stack",
       "automerge": false,
-      "prPriority": 5 }
+      "prPriority": 5,
+      "pinDigests": true }
   ]
 }
