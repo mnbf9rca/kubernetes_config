@@ -8,3 +8,4 @@ resources:
   - cloudflared.yaml
   - influxdb.yaml
   - apple-health-ingester.yaml
+  - garmin-grafana.yaml
