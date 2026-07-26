@@ -10,3 +10,4 @@ resources:
   - secrets
   - workloads
   - backup
+  - health
