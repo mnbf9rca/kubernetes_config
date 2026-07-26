@@ -77,7 +77,7 @@ help:
 .PHONY: check-tools
 check-tools:
 	@ok=1; \
-	for tool in kubectl kustomize envsubst op direnv talosctl omnictl; do \
+	for tool in kubectl kustomize envsubst op direnv talosctl omnictl jq; do \
 	  if ! command -v $$tool >/dev/null 2>&1; then \
 	    echo "MISSING: $$tool"; ok=0; \
 	  else \
