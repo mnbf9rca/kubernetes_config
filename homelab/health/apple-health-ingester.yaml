@@ -1,0 +1,46 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: apple-health-ingester
+  namespace: health
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: apple-health-ingester } }
+  template:
+    metadata:
+      labels: { app: apple-health-ingester }
+    spec:
+      containers:
+        - name: ingester
+          image: irvinlim/apple-health-ingester:v0.5.0
+          # Config is CLI-flags-only (no env support upstream). Secrets are injected
+          # via $(VAR) expansion from env — k8s substitutes them into args.
+          env:
+            - name: INGESTER_AUTH_TOKEN
+              valueFrom: { secretKeyRef: { name: health-hae, key: auth-token } }
+            - name: INFLUX_TOKEN
+              valueFrom: { secretKeyRef: { name: health-influxdb, key: ingester-token } }
+          args:
+            - --backend.influxdb
+            - --http.authToken=$(INGESTER_AUTH_TOKEN)
+            - --influxdb.serverURL=http://influxdb.health.svc.cluster.local:8086
+            - --influxdb.authToken=$(INFLUX_TOKEN)
+            - --influxdb.orgName=cynexia
+            - --influxdb.metricsBucketName=apple_metrics
+            - --influxdb.workoutsBucketName=apple_workouts
+            - --influxdb.staticTags=person=rob
+          ports: [{ containerPort: 8080, name: http }]
+          # No /healthz upstream — TCP probe.
+          readinessProbe: { tcpSocket: { port: http }, periodSeconds: 10 }
+          livenessProbe: { tcpSocket: { port: http }, failureThreshold: 5, periodSeconds: 20 }
+          resources:
+            requests: { cpu: 50m, memory: 64Mi }
+            limits: { memory: 256Mi }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: apple-health-ingester, namespace: health }
+spec:
+  selector: { app: apple-health-ingester }
+  ports: [{ port: 8080, targetPort: http }]

@@ -7,3 +7,4 @@ resources:
   - backups-storage.yaml
   - cloudflared.yaml
   - influxdb.yaml
+  - apple-health-ingester.yaml
