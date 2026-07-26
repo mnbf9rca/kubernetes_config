@@ -10,6 +10,11 @@ data:
     idp_provider: google
     runtime_flags:
       mcp: true
+    # Pomerium v0.33+ requires an explicit allowlist of MCP client domains
+    # (claude.ai registers via OAuth dynamic client registration).
+    mcp_allowed_client_id_domains:
+      - claude.ai
+      - claude.com
     routes:
       - from: https://mcp.cynexia.com
         to: http://localhost:3000
