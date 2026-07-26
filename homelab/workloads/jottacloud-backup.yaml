@@ -16,6 +16,16 @@ data:
   RCLONE_CONFIG_FILE: "/config/rclone.conf"
   JOTTA_REMOTE: "jotta"
   LOCAL_PATH: "/data/jotta"
+  # Encryption at rest: this one key is the whole switch. The container
+  # derives the crypt remote itself (always wrapping LOCAL_PATH, filename
+  # encryption off); the raw passphrase arrives via the DEST_REMOTE_PASSWORD
+  # key in jottacloud-backup-secrets (make create-jotta-secret). rclone.conf
+  # and the live Jottacloud token in it are never touched.
+  # Uncomment ONLY per the migration runbook: (1) image with DEST_REMOTE
+  # support is live, (2) secret has DEST_REMOTE_PASSWORD, (3) the existing
+  # plaintext copy has been migrated to ciphertext (see
+  # docs/superpowers/specs/2026-07-26-encryption-at-rest-design.md §5).
+  DEST_REMOTE: "jottacrypt"
   KOPIA_CONFIG_FILE: "/config/kopia.config"
   KOPIA_CACHE_DIR: "/config/cache"
   KOPIA_LOG_DIR: "/data/logs/kopia"
@@ -104,7 +114,9 @@ spec:
               type: RuntimeDefault
           containers:
             - name: backup
-              image: ghcr.io/mnbf9rca/jottacloud-backup:latest
+              # Migration-window digest pin (runbook step 4) — revert to :latest
+              # after a few stable encrypted runs (runbook step 8)
+              image: ghcr.io/mnbf9rca/jottacloud-backup@sha256:effc2553f5b9969e50be5ba9f19a4603ec7265793367a45a88c4e43b8115e2c3
               imagePullPolicy: Always
               securityContext:
                 allowPrivilegeEscalation: false
