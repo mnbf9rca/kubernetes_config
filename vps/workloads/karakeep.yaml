@@ -68,7 +68,8 @@ spec:
     spec:
       containers:
         - name: meilisearch
-          image: getmeili/meilisearch:v1.13.3
+          image: getmeili/meilisearch:v1.41.0
+          imagePullPolicy: Always
           env:
             - { name: MEILI_NO_ANALYTICS, value: "true" }
             - { name: MEILI_ENV, value: production }
@@ -112,6 +113,7 @@ spec:
       containers:
         - name: karakeep
           image: ghcr.io/karakeep-app/karakeep:release
+          imagePullPolicy: Always
           env:
             # MEILI_MASTER_KEY must come before MEILI_ADDR is consumed.
             # MEILI_MASTER_KEY and NEXTAUTH_SECRET are read by karakeep
@@ -126,6 +128,19 @@ spec:
             - { name: MEILI_ADDR, value: "http://meilisearch.vps.svc.cluster.local:7700" }
             - name: MEILI_MASTER_KEY
               valueFrom: { secretKeyRef: { name: karakeep, key: MEILI_MASTER_KEY } }
+            # Inference (OpenAI). GPT-5 series is vision-capable so the same
+            # model serves text + image. INFERENCE_USE_MAX_COMPLETION_TOKENS
+            # is required for GPT-5/o-series (uses max_completion_tokens
+            # instead of the deprecated max_tokens). Summarization is opt-in
+            # and ~doubles per-bookmark cost.
+            - name: OPENAI_API_KEY
+              valueFrom: { secretKeyRef: { name: karakeep, key: OPENAI_API_KEY } }
+            - { name: INFERENCE_TEXT_MODEL, value: "gpt-5-mini" }
+            - { name: INFERENCE_IMAGE_MODEL, value: "gpt-5-mini" }
+            - { name: INFERENCE_CONTEXT_LENGTH, value: "8192" }
+            - { name: INFERENCE_USE_MAX_COMPLETION_TOKENS, value: "true" }
+            - { name: INFERENCE_ENABLE_AUTO_SUMMARIZATION, value: "true" }
+            - { name: INFERENCE_NUM_WORKERS, value: "4" }
           ports:
             - containerPort: 3000
           volumeMounts:

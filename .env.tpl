@@ -52,6 +52,10 @@ N8N_ENCRYPTION_KEY=op://VPS/n8n/encryption-key
 UMAMI_DB_PASSWORD=op://VPS/umami/db-password
 UMAMI_APP_SECRET=op://VPS/umami/app-secret
 
-# karakeep — meilisearch master key + NextAuth signing secret
+# karakeep — meilisearch master key + NextAuth signing secret + OpenAI key for AI tagging/summarization
 KARAKEEP_MEILI_MASTER_KEY=op://VPS/karakeep/meili-master-key
 KARAKEEP_NEXTAUTH_SECRET=op://VPS/karakeep/nextauth-secret
+KARAKEEP_OPENAI_API_KEY=op://VPS/karakeep/openai_secret_key
+
+# karakeep admin API key for scripts/karakeep-tag-*.py (NOT used in any manifest — shell env only)
+KARAKEEP_CLEANUP_API_KEY=op://VPS/karakeep/cleanup_api_key

@@ -114,6 +114,7 @@ spec:
       containers:
         - name: umami
           image: ghcr.io/umami-software/umami:postgresql-latest
+          imagePullPolicy: Always
           env:
             # DB_PASSWORD MUST be declared before DATABASE_URL so the
             # $(DB_PASSWORD) reference in DATABASE_URL resolves. k8s env
