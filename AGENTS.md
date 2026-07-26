@@ -166,6 +166,7 @@ The Talos node has three relevant interfaces:
 - Put all resources for a service (Deployment, Service, Ingress, PVCs) in a single file with `---` separators.
 - Every resource in the manifest must declare its own `namespace:` explicitly — do NOT rely on the kustomization-level namespace override.
 - Every new Deployment must include the full set of keel annotations above.
+- When creating 1Password items via `op item create`, explicitly type the fields: bare `field=value` defaults to **concealed**, so mark non-secret fields (emails, IDs, UUIDs, hostnames) as `field[text]=value` and keep only actual secrets concealed. Wrongly-concealed non-secrets make the vault harder to debug; visible secrets are worse.
 - Never commit plaintext secret values. Use `${VAR}` placeholders + direnv + envsubst. For multi-line secrets (rclone.conf etc.), create a dedicated `make <service>-secret` target using the `op read` + `kubectl create secret --dry-run=client -o yaml | kubectl apply -f -` pattern.
 - After adding a new secret placeholder: add it to `.env.tpl`, add the token to `ENVSUBST_VARS` in the `Makefile`, and `direnv reload` in your shell.
 - For new `hostPath`/`hostNetwork` workloads: elevate their namespace to PSA `privileged` in `homelab/bootstrap/namespaces.yaml`.
