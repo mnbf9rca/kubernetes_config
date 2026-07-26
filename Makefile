@@ -360,3 +360,24 @@ create-cloudflared-secret: check-vps-context
 	  --from-file=credentials.json=/dev/stdin \
 	  --dry-run=client -o yaml | \
 	  kubectl -n vps apply -f -
+
+# Re-create CNAMEs for every hostname in the health cloudflared ConfigMap. Run
+# once after adding a new hostname to homelab/health/cloudflared.yaml, and once
+# after a full cluster rebuild to re-attach every hostname to the current
+# cynexia-health tunnel UUID. Idempotent: cloudflared upserts the CNAME.
+.PHONY: route-health-dns
+route-health-dns:
+	@set -euo pipefail; \
+	hosts=$$(grep -E '^[[:space:]]*- hostname:' homelab/health/cloudflared.yaml | awk '{print $$3}'); \
+	for h in $$hosts; do \
+	  echo "==> cloudflared tunnel route dns cynexia-health $$h"; \
+	  cloudflared tunnel route dns cynexia-health "$$h"; \
+	done
+
+.PHONY: create-health-cloudflared-secret
+create-health-cloudflared-secret: check-context
+	@set -euo pipefail; \
+	creds=$$(op document get health-cloudflared --vault Homelab); \
+	if [ -z "$$creds" ]; then echo "ERROR: op document get returned empty"; exit 1; fi; \
+	printf '%s' "$$creds" | kubectl -n health create secret generic health-cloudflared-credentials \
+	  --from-file=credentials.json=/dev/stdin --dry-run=client -o yaml | kubectl -n health apply -f -

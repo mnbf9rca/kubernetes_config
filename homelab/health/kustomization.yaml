@@ -5,3 +5,4 @@ kind: Kustomization
 # ingest-freshness.yaml
 resources:
   - backups-storage.yaml
+  - cloudflared.yaml
