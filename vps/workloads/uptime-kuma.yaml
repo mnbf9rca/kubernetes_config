@@ -47,6 +47,7 @@ spec:
       containers:
         - name: uptime-kuma
           image: louislam/uptime-kuma:2
+          imagePullPolicy: Always
           env:
             - { name: TZ, value: Europe/London }
           ports:
