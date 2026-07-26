@@ -15,6 +15,7 @@ data:
     mcp_allowed_client_id_domains:
       - claude.ai
       - claude.com
+      - chatgpt.com
     routes:
       - from: https://mcp.cynexia.com
         to: http://localhost:3000
