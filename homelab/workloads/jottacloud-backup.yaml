@@ -114,9 +114,7 @@ spec:
               type: RuntimeDefault
           containers:
             - name: backup
-              # Migration-window digest pin (runbook step 4) — revert to :latest
-              # after a few stable encrypted runs (runbook step 8)
-              image: ghcr.io/mnbf9rca/jottacloud-backup@sha256:effc2553f5b9969e50be5ba9f19a4603ec7265793367a45a88c4e43b8115e2c3
+              image: ghcr.io/mnbf9rca/jottacloud-backup:latest
               imagePullPolicy: Always
               securityContext:
                 allowPrivilegeEscalation: false
