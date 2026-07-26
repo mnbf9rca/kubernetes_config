@@ -35,8 +35,9 @@ spec:
           readinessProbe: { tcpSocket: { port: http }, periodSeconds: 10 }
           livenessProbe: { tcpSocket: { port: http }, failureThreshold: 5, periodSeconds: 20 }
           resources:
-            requests: { cpu: 50m, memory: 64Mi }
-            limits: { memory: 256Mi }
+            # large HAE batch exports OOMed 256Mi
+            requests: { cpu: 50m, memory: 128Mi }
+            limits: { memory: 1Gi }
 ---
 apiVersion: v1
 kind: Service
