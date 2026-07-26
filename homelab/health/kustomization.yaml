@@ -11,3 +11,4 @@ resources:
   - garmin-grafana.yaml
   - grafana.yaml
   - backups.yaml
+  - ingest-freshness.yaml

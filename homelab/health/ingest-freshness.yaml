@@ -1,0 +1,37 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: ingest-freshness
+  namespace: health
+spec:
+  schedule: "15 */6 * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      ttlSecondsAfterFinished: 86400
+      template:
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: check
+              image: curlimages/curl:8.14.1
+              command: [/bin/sh, -c]
+              env:
+                - name: TOKEN
+                  valueFrom: { secretKeyRef: { name: health-influxdb, key: read-token } }
+                - { name: HC_APPLE, value: "${HEALTH_HC_APPLE_UUID}" }
+                - { name: HC_GARMIN, value: "${HEALTH_HC_GARMIN_UUID}" }
+              args:
+                - |
+                  set -eu
+                  fresh() {  # $1 bucket → exit 0 if newest point < 24h old
+                    R=$(curl -s http://influxdb.health.svc.cluster.local:8086/api/v2/query?org=cynexia \
+                      -H "Authorization: Token $TOKEN" -H 'Content-Type: application/vnd.flux' \
+                      -d "from(bucket:\"$1\") |> range(start:-24h) |> group() |> last() |> keep(columns:[\"_time\"])")
+                    echo "$R" | grep -q '_time' && echo "$R" | grep -qE '20[0-9]{2}-'
+                  }
+                  fresh apple_metrics && curl -fsS "https://hc-ping.com/$HC_APPLE" >/dev/null || echo "apple STALE"
+                  fresh garmin && curl -fsS "https://hc-ping.com/$HC_GARMIN" >/dev/null || echo "garmin STALE"
