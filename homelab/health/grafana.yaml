@@ -1,0 +1,115 @@
+---
+# SECURITY DEVIATION from task-13-brief.md: the brief specifies a ConfigMap
+# for datasource provisioning (with secureJsonData). envsubst injects the REAL
+# influx read-token and garmin password at apply time, and ConfigMaps are
+# stored PLAINTEXT in etcd — that would sidestep the secretbox-at-rest
+# protection this cluster verified in Task 1. Using a Secret instead; Grafana
+# reads provisioning files identically from a Secret volume mount.
+apiVersion: v1
+kind: Secret
+metadata: { name: grafana-datasources, namespace: health }
+stringData:
+  datasources.yaml: |
+    apiVersion: 1
+    datasources:
+      - name: InfluxDB-Flux
+        uid: health_influx_flux
+        type: influxdb
+        access: proxy
+        url: http://influxdb.health.svc.cluster.local:8086
+        jsonData:
+          version: Flux
+          organization: cynexia
+          defaultBucket: apple_metrics
+        secureJsonData:
+          token: "${HEALTH_INFLUX_READ_TOKEN}"
+      - name: Garmin-InfluxDB
+        uid: garmin_influxdb
+        type: influxdb
+        access: proxy
+        url: http://influxdb.health.svc.cluster.local:8086
+        user: garmin
+        jsonData:
+          dbName: GarminStats
+          httpMode: GET
+        secureJsonData:
+          password: "${HEALTH_INFLUX_GARMIN_V1_PASSWORD}"
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata: { name: grafana-data, namespace: health }
+spec:
+  accessModes: [ReadWriteOnce]
+  resources: { requests: { storage: 10Gi } }
+  storageClassName: local-path
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: grafana
+  namespace: health
+  # NO keel annotations — pinned image, Renovate proposes updates.
+spec:
+  replicas: 1
+  strategy: { type: Recreate }
+  selector: { matchLabels: { app: grafana } }
+  template:
+    metadata:
+      labels: { app: grafana }
+    spec:
+      securityContext: { fsGroup: 472 }   # grafana image runs as uid/gid 472
+      containers:
+        - name: grafana
+          image: grafana/grafana:13.1.1   # pin: latest stable as of 2026-07-26; Renovate proposes updates
+          env:
+            - { name: GF_INSTALL_PLUGINS, value: marcusolsson-hourly-heatmap-panel }
+            - { name: GF_SECURITY_ADMIN_USER, value: rob }
+            - name: GF_SECURITY_ADMIN_PASSWORD
+              valueFrom: { secretKeyRef: { name: health-grafana, key: admin-password } }
+          ports:
+            - containerPort: 3000
+              name: http
+          readinessProbe:
+            httpGet: { path: /api/health, port: http }
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /api/health, port: http }
+            failureThreshold: 5
+            periodSeconds: 20
+          volumeMounts:
+            - { name: data, mountPath: /var/lib/grafana }
+            - { name: datasources, mountPath: /etc/grafana/provisioning/datasources }
+          resources:
+            requests: { cpu: 100m, memory: 128Mi }
+            limits: { memory: 512Mi }
+      volumes:
+        - name: data
+          persistentVolumeClaim: { claimName: grafana-data }
+        - name: datasources
+          secret: { secretName: grafana-datasources }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: grafana, namespace: health }
+spec:
+  selector: { app: grafana }
+  ports: [{ port: 3000, targetPort: http }]
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: grafana
+  namespace: health
+spec:
+  ingressClassName: traefik
+  rules:
+    - host: grafana-health.cynexia.net
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: grafana
+                port:
+                  number: 3000
