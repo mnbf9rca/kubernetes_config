@@ -1,0 +1,11 @@
+# Dump staging on local-path so the existing nightly restic→B2 CronJob
+# (hostPath sweep of /var/mnt/ssd/local-path-provisioner) captures it for free.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: health-dumps
+  namespace: health
+spec:
+  accessModes: [ReadWriteOnce]
+  resources: { requests: { storage: 20Gi } }
+  storageClassName: local-path

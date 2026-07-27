@@ -37,6 +37,36 @@ ACME_EMAIL=op://Homelab/acme/email
 # Jottacloud backup healthcheck (Phase 4)
 HEALTHCHECK_UUID=op://Homelab/jottacloud-backup/HEALTHCHECK_UUID
 
+# health namespace — healthchecks.io ping UUIDs
+HEALTH_HC_APPLE_UUID=op://Homelab/health-healthchecks/apple-uuid
+HEALTH_HC_GARMIN_UUID=op://Homelab/health-healthchecks/garmin-uuid
+HEALTH_HC_BACKUP_UUID=op://Homelab/health-healthchecks/backup-uuid
+
+# health namespace — InfluxDB (admin creds + generated tokens; ingester/read
+# tokens are PENDING until minted in Task 9 and pasted back into 1Password)
+HEALTH_INFLUX_ADMIN_PASSWORD=op://Homelab/health-influxdb/admin-password
+HEALTH_INFLUX_ADMIN_TOKEN=op://Homelab/health-influxdb/admin-token
+HEALTH_INFLUX_GARMIN_V1_PASSWORD=op://Homelab/health-influxdb/garmin-v1-password
+HEALTH_INFLUX_INGESTER_TOKEN=op://Homelab/health-influxdb/ingester-token
+HEALTH_INFLUX_READ_TOKEN=op://Homelab/health-influxdb/read-token
+
+# health namespace — Health Auto Export (HAE) ingest auth token
+HEALTH_HAE_AUTH_TOKEN=op://Homelab/health-hae/auth-token
+
+# health namespace — Garmin credentials (created by the operator, not by automation)
+HEALTH_GARMIN_EMAIL=op://Homelab/health-garmin/email
+HEALTH_GARMIN_B64_PASSWORD=op://Homelab/health-garmin/b64-password
+
+# health namespace — Pomerium (Google OAuth client is PENDING until the operator
+# creates it in Google Cloud console; cookie/shared secrets are generated)
+HEALTH_POMERIUM_GOOGLE_CLIENT_ID=op://Homelab/health-pomerium/google-client-id
+HEALTH_POMERIUM_GOOGLE_CLIENT_SECRET=op://Homelab/health-pomerium/google-client-secret
+HEALTH_POMERIUM_COOKIE_SECRET=op://Homelab/health-pomerium/cookie-secret
+HEALTH_POMERIUM_SHARED_SECRET=op://Homelab/health-pomerium/shared-secret
+
+# health namespace — Grafana admin password
+HEALTH_GRAFANA_ADMIN_PASSWORD=op://Homelab/health-grafana/admin-password
+
 # --- VPS cluster secrets (Phase 2) ---
 
 # Restic / Backblaze B2 for VPS (separate bucket, separate repo, separate password)

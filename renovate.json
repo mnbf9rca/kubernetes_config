@@ -1,0 +1,16 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended"],
+  "enabledManagers": ["kubernetes"],
+  "kubernetes": { "managerFilePatterns": ["/^homelab/health/.+\\.yaml$/"] },
+  "packageRules": [
+    { "matchFileNames": ["homelab/health/**"],
+      "groupName": "health stack",
+      "automerge": false,
+      "prPriority": 5,
+      "pinDigests": true },
+    { "matchPackageNames": ["thisisarpanghosh/garmin-fetch-data"],
+      "enabled": false,
+      "description": "digest-pinned to main build; v0.5.0 latest release is broken (client.profile crash); re-enable when a release newer than v0.5.0 exists" }
+  ]
+}

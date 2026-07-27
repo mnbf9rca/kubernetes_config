@@ -38,6 +38,13 @@ kind: Namespace
 metadata:
   name: jottacloud-backup
 ---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: health
+  # PSA baseline (cluster default). Nothing in health uses hostPath/hostNetwork.
+  # NO keel in this namespace: images are digest/version-pinned (health data pipeline).
+---
 # NOTE: cert-manager and local-path-storage namespaces are created by their
 # respective upstream manifests, so they're omitted here (kustomize rejects
 # duplicate resources). keel's namespace IS declared above because

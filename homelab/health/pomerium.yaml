@@ -1,0 +1,107 @@
+---
+apiVersion: v1
+kind: ConfigMap
+metadata: { name: pomerium-config, namespace: health }
+data:
+  config.yaml: |
+    address: :80
+    insecure_server: true            # TLS terminates at Cloudflare edge; tunnel delivers HTTP
+    authenticate_service_url: https://authenticate.cynexia.com
+    idp_provider: google
+    runtime_flags:
+      mcp: true
+    # Pomerium v0.33+ requires an explicit allowlist of MCP client domains
+    # (claude.ai registers via OAuth dynamic client registration).
+    mcp_allowed_client_id_domains:
+      - claude.ai
+      - claude.com
+      - chatgpt.com
+    routes:
+      - from: https://mcp.cynexia.com
+        to: http://localhost:3000
+        name: Health InfluxDB MCP
+        mcp:
+          server:
+            path: /mcp
+        policy:
+          allow:
+            and:
+              - email:
+                  is: robert.aleck@cynexia.com
+---
+# WHY the InfluxDB MCP server is a sidecar here instead of its own Deployment+Service:
+# the cluster's flannel CNI does NOT enforce NetworkPolicy (see task-14-report.md finding).
+# The old standalone influxdb-mcp Deployment + Service + "only-pomerium" NetworkPolicy was
+# therefore inert fencing — any pod in the cluster could reach influxdb-mcp:3000 directly,
+# bypassing Pomerium's Google-IdP auth, because the MCP server itself is AUTHLESS in HTTP
+# mode. Co-locating it as a second container in this pod and routing Pomerium to it over
+# `localhost` makes the loopback network namespace (kernel-enforced, not CNI-dependent) the
+# isolation boundary: nothing outside this pod's network namespace can reach it via loopback,
+# full stop, regardless of what the CNI does or doesn't enforce. Deleting the Service also
+# removes cluster-DNS discoverability of the old name.
+#
+# RESIDUAL RISK: idoru/influxdb-mcp-server (upstream of ghcr.io/mnbf9rca/influxdb-mcp-server)
+# calls Express's `app.listen(port, ...)` with no host/bind argument, which defaults to
+# listening on 0.0.0.0 — i.e. it accepts connections on the pod IP too, not just loopback.
+# There is no --bind/--host flag in the CLI (checked src/index.js, commander options are only
+# --http [port] and --stdio). So `curl <pod-ip>:3000/mcp` from another pod in the cluster will
+# still get a raw, authless response — this sidecar move only removes the stable Service
+# name/DNS entry and stops routing it through Pomerium's public hostname; it does NOT achieve
+# true kernel-enforced network isolation the way a loopback-only bind would. If flannel is
+# ever swapped for a NetworkPolicy-enforcing CNI (e.g. Cilium), reinstate a NetworkPolicy
+# scoped to this pod's own IP as defense in depth.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pomerium
+  namespace: health
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: pomerium } }
+  template:
+    metadata:
+      labels: { app: pomerium }
+    spec:
+      containers:
+        - name: pomerium
+          image: pomerium/pomerium:v0.33.0   # pin: latest stable as of 2026-07-26 (v0.32.1 in draft brief superseded; v0.33.0 carries MCP WWW-Authenticate/CORS fixes)
+          env:
+            - name: IDP_CLIENT_ID
+              valueFrom: { secretKeyRef: { name: health-pomerium, key: google-client-id } }
+            - name: IDP_CLIENT_SECRET
+              valueFrom: { secretKeyRef: { name: health-pomerium, key: google-client-secret } }
+            - name: COOKIE_SECRET
+              valueFrom: { secretKeyRef: { name: health-pomerium, key: cookie-secret } }
+            - name: SHARED_SECRET
+              valueFrom: { secretKeyRef: { name: health-pomerium, key: shared-secret } }
+          args: [-config, /pomerium/config.yaml]
+          ports: [{ containerPort: 80, name: http }]
+          volumeMounts:
+            - { name: config, mountPath: /pomerium/config.yaml, subPath: config.yaml }
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }
+            limits: { memory: 512Mi }
+        - name: mcp
+          image: ghcr.io/mnbf9rca/influxdb-mcp-server:v0.2.0
+          args: [--http, "3000"]
+          env:
+            - { name: INFLUXDB_URL, value: "http://influxdb.health.svc.cluster.local:8086" }
+            - name: INFLUXDB_TOKEN            # READ-ONLY token: write-data/create-bucket/create-org
+              valueFrom:                      # tools exist but InfluxDB rejects them. Mandatory hardening.
+                secretKeyRef: { name: health-influxdb, key: read-token }
+            - { name: INFLUXDB_ORG, value: cynexia }
+          ports: [{ containerPort: 3000, name: mcp-http }]
+          readinessProbe: { tcpSocket: { port: mcp-http }, periodSeconds: 10 }
+          resources:
+            requests: { cpu: 50m, memory: 128Mi }
+            limits: { memory: 512Mi }
+      volumes:
+        - name: config
+          configMap: { name: pomerium-config }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: pomerium, namespace: health }
+spec:
+  selector: { app: pomerium }
+  ports: [{ port: 80, targetPort: http }]
