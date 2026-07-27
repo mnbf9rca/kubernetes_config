@@ -73,6 +73,11 @@ help:
 	@echo "  require-vps-vars  - assert all VPS_REQUIRED_VARS are set and resolved"
 	@echo "  create-cloudflared-secret - imperatively recreate the cloudflared creds Secret from 1P"
 	@echo "  route-vps-dns     - create/update CNAMEs for every hostname in the cloudflared ConfigMap"
+	@echo ""
+	@echo "Health namespace targets:"
+	@echo "  create-health-cloudflared-secret - imperatively recreate the health cloudflared creds Secret from 1P"
+	@echo "  route-health-dns  - create/update CNAMEs for every hostname in the health cloudflared ConfigMap"
+	@echo "  health-influx-bootstrap - bootstrap InfluxDB buckets/DBRP mapping/tokens for the health stack"
 
 .PHONY: check-tools
 check-tools:

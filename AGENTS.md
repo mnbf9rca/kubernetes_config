@@ -14,11 +14,12 @@ kubernetes_config/
 ├── .env.tpl                  # op-template with VAR=op://... lines (committed; no real secret values)
 ├── Makefile                  # apply/diff/build/check-tools/apply-talos/create-jotta-secret targets
 ├── homelab/                  # new Talos homelab cluster
-│   ├── kustomization.yaml    # top-level: bootstrap + secrets + workloads + backup
+│   ├── kustomization.yaml    # top-level: bootstrap + secrets + workloads + health + backup
 │   ├── talos/                # Omni ConfigPatches resources (applied via `make apply-talos`)
 │   ├── bootstrap/            # platform: namespaces (with PSA labels), local-path, NFS CSI, cert-manager, traefik, keel
 │   ├── workloads/            # application workloads (one file per service, --- separated, no ns override)
 │   ├── secrets/              # Secret manifests with ${VAR} envsubst placeholders
+│   ├── health/               # health-data pipeline (see Health namespace section)
 │   └── backup/               # restic init Job + nightly CronJob (hostPath /var/mnt/ssd/local-path-provisioner)
 ├── vps/                      # Phase 2 Hetzner Talos cluster — live, see "VPS Cluster (Phase 2)" below
 ├── legacy-microk8s/          # frozen reference copies of the old microk8s manifests
@@ -43,12 +44,15 @@ set +a
 Targets:
 
 ```bash
-make check-tools              # verify kubectl, kustomize, envsubst, op, talosctl, omnictl
+make check-tools              # verify kubectl, kustomize, envsubst, op, talosctl, omnictl, jq
 make build-homelab            # render kustomize + envsubst to stdout (preview)
 make diff-homelab             # kubectl diff against current cluster state
 make apply-homelab            # apply to the current kubeconfig context
 make apply-talos              # envsubst + omnictl apply every file in homelab/talos/machineconfig-patches/
 make create-jotta-secret      # imperative secret creation for jottacloud-backup (multi-line rclone config)
+make create-health-cloudflared-secret  # imperative secret creation for the health cloudflared tunnel creds
+make route-health-dns          # create/update CNAMEs for the cynexia-health tunnel hostnames
+make health-influx-bootstrap   # bootstrap InfluxDB buckets/DBRP mapping/tokens for the health stack
 ```
 
 `make apply-homelab` runs `kustomize build homelab/ | envsubst '$(ENVSUBST_VARS)' | kubectl apply -f -` and asserts `kubectl current-context == cynexia-homelab` via the `check-context` target before any cluster write. Secrets are substituted from direnv-loaded env vars at apply time; no plaintext secret values live in git.
@@ -87,8 +91,9 @@ Homelab services resolve on `*.cynexia.net` (Route53). The homelab cluster is **
 | `traefik` | Ingress | Traefik DaemonSet (PSA privileged — hostNetwork) |
 | `keel` | Auto-updates | keel controller |
 | `backup` | Backup | restic init Job + nightly CronJob (PSA privileged — hostPath) |
+| `health` | Personal health data pipeline | influxdb, apple-health-ingester, garmin-grafana, grafana, pomerium+mcp sidecar, cloudflared, backup+freshness CronJobs |
 
-Retired in the rebuild: immich, ollama, open-webui, komga, jellyfin, mylar3, lazylibrarian, caddy, cloudflared (homelab — VPS keeps its own), postgresql.
+Retired in the rebuild: immich, ollama, open-webui, komga, jellyfin, mylar3, lazylibrarian, caddy, postgresql. cloudflared was retired from the original downloads-era stack, but is **not** fully retired homelab-wide — the `health` namespace runs its own dedicated `cynexia-health` tunnel (separate from the VPS cluster's `cynexia-vps` tunnel); see the Health namespace section.
 
 ## File Conventions
 
@@ -156,6 +161,7 @@ The Talos node has three relevant interfaces:
   ```
 - **Services migrated in Phase 4** were deployed fresh with empty PVCs. The user exported app-level backups from the old cluster via each service's own UI, then imported them into the new instance via the same UI. No rsync-from-old-cluster data seeding was needed — simpler than the original plan.
 - **Old cluster's jottacloud-backup CronJob is suspended** (`kubectl --context=microk8s -n jottacloud-backup patch cronjob jottacloud-backup-scheduled -p '{"spec":{"suspend":true}}'`) to avoid overlap with the new cluster.
+- **`make apply-homelab` permanently reports `configured` (not `unchanged`) for a known, benign set of resources — don't chase it.** Every Secret shows `configured` on every apply, forever: `stringData` is write-only server-side (the API server never stores it back for comparison), so client-side-apply's `last-applied-configuration` can never converge. The same happens for objects whose fields the API server silently normalises away (e.g. a PV declaring `storageClassName: ""` — the server drops it from `spec` entirely) and for cert-manager's webhook configs, whose `caBundle` is injected post-apply by cainjector. Verified 2026-07-27: `kubectl diff` over these resources is empty, and a `kubectl apply --dry-run=server` is byte-identical to live state — the `caBundle` survives intact, so this is not the classic cert-manager-caBundle-gets-stripped footgun. `kubectl diff` showing nothing is the ground truth; `configured` in `apply` output is not evidence of drift.
 - **Static-IP the LAN NIC, don't trust DHCP for stable nodes.** Talos v1.12's controller-runtime DHCP4 client can NAK-loop on renewal if the boot lease didn't land on the reserved IP. Kea OFFERs the reservation cleanly but the client REQUEST in the same transaction asks for the cached dynamic-pool IP, so the loop never converges. The DHCP retry storm also trips RFC 5905 KoD rate-limit on the gateway's NTP, surfacing as `time.SyncController` errors that look like a clock issue. `homelab/talos/machineconfig-patches/305-homelab-lan-network.yaml` puts `ens18` on a static config and moves NTP to public servers (time.cloudflare.com / time.google.com / pool.ntp.org) so the cluster doesn't depend on the gateway for either. OPNsense Kea reservation kept as defense in depth.
 
 ## Health namespace
@@ -167,7 +173,7 @@ Personal health-data pipeline (Apple Health + Garmin → InfluxDB → Grafana, p
 - **MCP is a sidecar, not a standalone Deployment+Service+NetworkPolicy** (deviation from the original design): the cluster's flannel CNI doesn't enforce NetworkPolicy, so a "pomerium-only" NetworkPolicy in front of a standalone MCP server would have been inert fencing — the MCP server is authless in HTTP mode. Instead it runs as a second container in the `pomerium` pod, reached over `localhost:3000`, using the kernel-enforced loopback netns as the real isolation boundary. Residual risk: upstream (`ghcr.io/mnbf9rca/influxdb-mcp-server`, built multi-arch from source — no official image, and Mac-local `docker buildx` alone only produces arm64 while the node is amd64) binds `0.0.0.0` with no `--bind` flag, so pod-IP:3000 is still reachable in-cluster; documented in `pomerium.yaml`. Queued: a bind-flag patch, and reinstating a NetworkPolicy if the CNI is ever swapped to Cilium. Pomerium is pinned to **v0.33.0**, not v0.32.1 — needs `mcp_allowed_client_id_domains: [claude.ai, claude.com, chatgpt.com]` or the corresponding connector's OAuth dynamic client registration 401s.
 - **`make health-influx-bootstrap`** creates the InfluxDB buckets, the v1 DBRP mapping + v1-compat auth user (garmin-grafana needs InfluxDB 1.x-style auth), and prints two scoped tokens (ingester write-only, MCP+Grafana read-only) for one-time manual paste into 1Password — InfluxDB 2.9 hash-stores tokens server-side, so the printed value is the only copy, ever. Token extraction is `--json | jq -r .token`, not `--hide-headers` + awk column-parsing (multi-word `-d` descriptions shift awk's column and silently capture a description fragment instead of the token) — **`jq` is a hard dependency**, in `check-tools`.
 - **Backups:** the `influx-backup` CronJob (02:30 daily, ahead of the 03:00 restic sweep) runs on **`alpine/k8s:1.36.0`**, version-matched to the cluster's server minor — not `bitnami/kubectl`, which no longer publishes plain version tags on Docker Hub (moved to the frozen, unauthenticated `bitnamilegacy/*` and that image lacks `wget`, needed for the healthchecks.io ping). It writes a native `influx backup` (14 generations) plus a per-bucket, 8-day-windowed line-protocol export (60 generations, gzip) to the `health-dumps` PVC on `local-path`. Because that PVC lives on the node's SSD, the existing hostPath restic→B2 CronJob picks it up for free — no separate off-cluster wiring needed. Restore drill: `influx restore --full` self-defeats (clobbers its own auth mid-restore) — use scoped `influx restore --bucket <name>` instead; first drill passed 2026-07-26. Quarterly drills should also exercise the untested DR path: `--full` onto a brand-new, never-`setup` instance.
-- **`garmin-grafana`'s image is digest-pinned to a main-branch build** (`thisisarpanghosh/garmin-fetch-data@sha256:8b7955d3...`), not a tagged release — release `v0.5.0` crashes with an `AttributeError` on `client.profile` when `TAG_MEASUREMENTS_WITH_USER_EMAIL` is set, fixed upstream post-release but not yet in a tagged build. Move to the next tagged release once Renovate proposes it.
+- **`garmin-grafana`'s image is digest-pinned to a main-branch build** (`thisisarpanghosh/garmin-fetch-data@sha256:8b7955d3...`), not a tagged release — release `v0.5.0` crashes with an `AttributeError` on `client.profile` when `TAG_MEASUREMENTS_WITH_USER_EMAIL` is set, fixed upstream post-release but not yet in a tagged build. Renovate is **disabled** for this image (`renovate.json` `packageRules` — `enabled: false`, since a digest-tracking rule would eventually propose bumping straight to the broken `v0.5.0` build with no way to encode "this specific release is bad"); the exit path is manual — when upstream publishes a release newer than `v0.5.0`, re-enable the Renovate rule and re-pin the manifest as `tag@digest`.
 - **Garmin re-auth is annual** (tokens on the `garmin-tokens` PVC last ~1yr): scale `garmin-grafana` to 0 *before* redoing the interactive login pod, then back to 1 — a crashlooping pod with an expired token fires an MFA SMS at the operator on every restart. The login pod needs `enableServiceLinks: false` (the influxdb Service's injected `INFLUXDB_PORT=tcp://...` otherwise crashes the script's `int()` parse) plus the full InfluxDB v1 env block, since the script demo-writes to InfluxDB before it shows the login prompt. **Keep `replicas: 0` committed while paused** — `make apply-homelab` resurrects any uncommitted scale-down.
 - **Monitoring:** three healthchecks.io checks (`health-apple-ingest`, `health-garmin-ingest` 1d/12h; `health-influx-backup` 1d/6h; UUIDs in 1Password item `health-healthchecks`). The backup CronJob pings unconditionally; the separate `ingest-freshness` CronJob (every 6h) pings the apple/garmin checks only when that source's InfluxDB data is actually <24h old — so a real ingest gap shows up as a healthchecks.io alert instead of being masked by an unrelated cron firing on schedule.
 - **Rotation** per `health-*` 1Password item: edit the item → `direnv reload` → `make apply-homelab` → restart the consuming pod. InfluxDB tokens specifically: mint the replacement via the `health-influx-bootstrap` pattern, update 1Password, apply, then delete the old auth server-side. See `secrets-to-rotate.md` (repo root) for the disclosure honesty-box rules already covered in the main body of this file.
@@ -184,7 +190,7 @@ Personal health-data pipeline (Apple Health + Garmin → InfluxDB → Grafana, p
 - Keep the one-file-per-service pattern in `homelab/workloads/`.
 - Put all resources for a service (Deployment, Service, Ingress, PVCs) in a single file with `---` separators.
 - Every resource in the manifest must declare its own `namespace:` explicitly — do NOT rely on the kustomization-level namespace override.
-- Every new Deployment must include the full set of keel annotations above.
+- Every new Deployment must include the full set of keel annotations above — **except** in the `health` namespace, which explicitly forbids keel (every image there is version/digest-pinned and Renovate proposes bumps instead; see the Health namespace section).
 - When creating 1Password items via `op item create`, explicitly type the fields: bare `field=value` defaults to **concealed**, so mark non-secret fields (emails, IDs, UUIDs, hostnames) as `field[text]=value` and keep only actual secrets concealed. Wrongly-concealed non-secrets make the vault harder to debug; visible secrets are worse.
 - **Secret disclosure → honesty box.** If you (human or agent) expose a real secret value anywhere it doesn't belong — terminal output, an agent report/transcript, chat, a log or scratch file — do two things immediately: (1) tell the operator in your next message, and (2) append a row to `secrets-to-rotate.md` at the repo root identifying the secret by its `op://` reference or k8s secret/key, how it was disclosed, and by whom. Identifiers only — never the value. Err on the side of logging: a false-positive row costs one unnecessary rotation; a silent disclosure costs the assumption of confidentiality. This applies even when the exposure feels harmless (short-lived token, local-only transcript, immediately-cleared scrollback).
 - Never commit plaintext secret values. Use `${VAR}` placeholders + direnv + envsubst. For multi-line secrets (rclone.conf etc.), create a dedicated `make <service>-secret` target using the `op read` + `kubectl create secret --dry-run=client -o yaml | kubectl apply -f -` pattern.
