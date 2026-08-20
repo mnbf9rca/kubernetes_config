@@ -16,8 +16,13 @@ they never collide with each other, and pile-up is already bounded by
 
 This runs on raw `kustomize build` output, NOT the secret-rendered stream, so
 it needs no 1Password access and no cluster access. Secret values are still
-`${VAR}` placeholders at this point, which is exactly what we want: the check
-is safe to run anywhere, including in CI.
+`${VAR}` placeholders at this point, which is exactly what we want.
+
+It does need NETWORK, though: both clusters' bootstrap layers pull remote bases
+(cert-manager, csi-driver-nfs, local-path-provisioner), and kustomize fetches
+them. A slow fetch can trip kustomize's own git timeout and fail the build,
+which this reports as an ERROR with exit 2 rather than as a missing TTL — the
+two must never be confused. Re-running usually succeeds from kustomize's cache.
 
 Usage:
   scripts/check-job-ttl.py [cluster ...]      default: homelab vps
@@ -96,6 +101,16 @@ def jobs_via_scan(text):
                    FIELD in spec)
 
 
+class CheckUnrunnable(Exception):
+    """The check could not run at all.
+
+    Kept distinct from "a Job is missing its TTL" and given its own exit code,
+    because a build that failed to render tells you NOTHING about the Jobs in
+    it. Collapsing the two would let a network blip report as a rule
+    violation, or worse, a rule violation report as a network blip.
+    """
+
+
 def build(cluster):
     try:
         # check=False: a non-zero build is reported below with its stderr,
@@ -103,12 +118,13 @@ def build(cluster):
         out = subprocess.run(["kustomize", "build", cluster], check=False,
                              capture_output=True, text=True, timeout=180)
     except FileNotFoundError:
-        sys.exit("ERROR: kustomize not on PATH")
+        raise CheckUnrunnable("kustomize not on PATH")
     except subprocess.TimeoutExpired:
-        sys.exit("ERROR: `kustomize build %s` timed out after 180s" % cluster)
+        raise CheckUnrunnable(
+            "`kustomize build %s` timed out after 180s" % cluster)
     if out.returncode != 0:
-        sys.exit("ERROR: `kustomize build %s` failed:\n%s"
-                 % (cluster, out.stderr.strip()[:2000]))
+        raise CheckUnrunnable("`kustomize build %s` failed:\n%s"
+                              % (cluster, out.stderr.strip()[:2000]))
     return out.stdout
 
 
@@ -117,11 +133,15 @@ def main(argv):
     find = jobs_via_yaml if yaml is not None else jobs_via_scan
 
     offenders, checked = [], 0
-    for cluster in clusters:
-        for namespace, name, has_ttl in find(build(cluster)):
-            checked += 1
-            if not has_ttl:
-                offenders.append("%s %s/%s" % (cluster, namespace, name))
+    try:
+        for cluster in clusters:
+            for namespace, name, has_ttl in find(build(cluster)):
+                checked += 1
+                if not has_ttl:
+                    offenders.append("%s %s/%s" % (cluster, namespace, name))
+    except CheckUnrunnable as exc:
+        print("ERROR: %s" % exc, file=sys.stderr)
+        return 2
 
     if offenders:
         print("Job(s) missing spec.%s:\n" % FIELD)
