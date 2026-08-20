@@ -40,7 +40,7 @@ wipe first with `talosctl wipe disk <dev> --method FAST`.
 
 Every container here carries readiness and (where a restart is a safe remedy) liveness
 probes; the per-service targets and the reasoning behind each — including the ones that
-are deliberately shallow — are in [monitoring.md](monitoring.md#vps-cluster-vpsworkloads).
+are deliberately shallow — are in [monitoring.md](monitoring.md#vps-cluster).
 
 `make route-vps-dns` reads the hostname list straight out of
 `vps/bootstrap/cloudflared/cloudflared.yaml` (that ConfigMap is the single source of
@@ -137,7 +137,7 @@ reason the shell is chained with `&&` rather than `set -e`, are in
 
 uptime-kuma at `uptime.cynexia.com` is layer 3 of the detection stack. Its monitors are
 **created by hand in the UI** — v2 has no supported programmatic path — and are documented
-monitor-by-monitor in [monitoring.md](monitoring.md#uptime-kuma-manual-runbook-layer-3),
+monitor-by-monitor in [monitoring.md](monitoring.md#uptime-kuma-runbook-layer-3),
 including the Cloudflare Access trap (a monitor that follows the Access 302 reports UP
 while the origin is dead) and the healthchecks.io dead-man's-switch that watches
 uptime-kuma itself.

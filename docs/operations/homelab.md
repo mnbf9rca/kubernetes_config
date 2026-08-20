@@ -75,7 +75,7 @@ backup verification gate; the VPS one does, because the VPS *does* run quiesce s
 Until 2026-08 neither restic CronJob reported anywhere and neither had a runtime ceiling,
 so a hung run would have blocked every following night silently and been discovered at
 restore time. Both now ping healthchecks.io and carry `activeDeadlineSeconds` —
-[monitoring.md](monitoring.md#scheduled-work-deadlines-and-dead-mans-switches).
+[monitoring.md](monitoring.md#scheduled-work).
 
 ## Node network
 
