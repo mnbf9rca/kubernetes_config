@@ -44,6 +44,8 @@ spec:
               command: ["sh", "-c"]
               args:
                 - |
+                  # shellcheck disable=SC3040  # `set -o pipefail` is not POSIX but is supported by
+                  # the busybox ash in restic/restic:0.17.3 (verified: BusyBox v1.36.1, Alpine 3.20).
                   set -uo pipefail
 
                   # Dead-man's-switch. /start detects started-but-never-finished
@@ -52,34 +54,380 @@ spec:
                   HC="https://hc-ping.com/${HC_UUID}"
                   ping_hc() { wget -q -T 10 -O- "$HC/$1" >/dev/null 2>&1 || true; }
 
+                  # ---- Backup verification gate ---------------------------------------
+                  # WHAT THIS EXISTS TO STOP
+                  # `hostPath: type: Directory` asserts only that the directory EXISTS. If the
+                  # SSD user volume (/var/mnt/ssd, /dev/sdb1) fails to mount while its
+                  # mountpoint survives on the EPHEMERAL partition (/dev/sda6), /data is a bare
+                  # empty directory. restic then backs up an EMPTY TREE, `restic check` passes,
+                  # the job exits 0 and healthchecks.io goes green - restic succeeds on an empty
+                  # tree and pings 0. `forget --prune --keep-daily 7` then expires all seven
+                  # genuine daily recovery points over the following week, leaving nothing but
+                  # snapshots of nothing. This is not hypothetical: snapshot 551bd209 in this
+                  # repository is 12 B and is currently retained as a "monthly" snapshot.
+                  #
+                  # HOMELAB DIFFERS FROM VPS. The VPS gate verifies `*.restic` quiesce snapshots
+                  # written by sqlite/pg sidecars. Homelab has no quiesce sidecars: every
+                  # local-path PVC is backed up as live application state. So the assertions
+                  # here are about the TREE, not about snapshot files:
+                  #
+                  #   1. MOUNT IDENTITY (check_mount)  - AUTHORITATIVE. Direct, first-order.
+                  #   2. TREE SCALE     (check_scale)  - AUTHORITATIVE. Empty/implausibly small.
+                  #   3. EXPECTED SET   (check_expected) - AUTHORITATIVE. Per-application artifacts.
+                  #   4. DUMP FRESHNESS (check_fresh)  - AUTHORITATIVE. The influx dumps are the
+                  #                                      only artifacts here produced on a schedule.
+                  #   5. PER-PVC TABLE  (measure_tree) - the size table is forensic; an empty PVC
+                  #                                      directory only WARNS (a freshly
+                  #                                      provisioned PVC is legitimately empty),
+                  #                                      but an UNREADABLE one FAILS: "I could not
+                  #                                      look" must never be reported as "fine".
+                  #
+                  # MAINTENANCE CONTRACT: a new local-path PVC that holds anything you would miss
+                  # must be added to EXPECTED_ARTIFACTS. Forget, and that application's backup is
+                  # unverified - silently. An explicit list somebody has to maintain beats a
+                  # wildcard that silently accepts nothing at all.
+                  #
+                  # Paths must be globs: local-path-provisioner names each PVC directory
+                  # <pvName>_<namespace>_<pvcName> and pvName is a random UUID. The StorageClass
+                  # is reclaimPolicy: Retain, so deleting and recreating a PVC leaves the old
+                  # directory behind forever; each glob therefore resolves to its MOST RECENTLY
+                  # MODIFIED match so an orphan can neither mask a missing artifact nor poison
+                  # the verdict.
+
+                  # The influx dumps are written nightly at 02:30 by the health/influx-backup
+                  # CronJob, 30 minutes before this job. 30h tolerates one missed or delayed run
+                  # (health/influx-backup has its own healthchecks.io check for that) and fails on
+                  # two consecutive misses or on the dumps disappearing entirely.
+                  STALE_MINUTES=1800
+                  STALE_SECONDS=$(( STALE_MINUTES * 60 ))
+
+                  # Floors, not targets. Measured 2026-08-20: 10 PVC directories, 44,288 files,
+                  # 4.418 GiB (~4,633,000 KiB). Set with ~4x headroom so ordinary shrinkage
+                  # (log rotation, emby cache eviction) never trips them, while an empty or
+                  # single-PVC tree cannot possibly clear them.
+                  MIN_PVC_DIRS=8
+                  MIN_DATA_KIB=1048576
+
+                  # label:glob:min-bytes. Minimums are an order of magnitude below the observed
+                  # sizes: they exist to reject a zero-length or truncated file, not to track
+                  # growth.
+                  EXPECTED_ARTIFACTS="
+                  emby-library:/data/pvc-*_downloads_emby-config/data/library.db:1048576
+                  hydra2-config:/data/pvc-*_downloads_hydra2-config/nzbhydra.yml:4096
+                  radarr-db:/data/pvc-*_downloads_radarr-config/radarr.db:1048576
+                  sabnzbd-ini:/data/pvc-*_downloads_sabnzbd-config/sabnzbd.ini:1024
+                  sonarr-db:/data/pvc-*_downloads_sonarr-config/sonarr.db:1048576
+                  grafana-db:/data/pvc-*_health_grafana-data/grafana.db:262144
+                  influxdb-bolt:/data/pvc-*_health_influxdb-data/influxd.bolt:32768
+                  garmin-tokens:/data/pvc-*_health_garmin-tokens/garmin_tokens.json:256
+                  "
+
+                  # label:glob - existence AND freshness.
+                  FRESH_ARTIFACTS="
+                  influx-native-dump:/data/pvc-*_health_health-dumps/native/*
+                  influx-lp-export:/data/pvc-*_health_health-dumps/lp/*.lp.gz
+                  "
+
+                  # Populated by measure_tree; initialised here so `set -u` cannot bite if
+                  # measure_tree ever returns before assigning.
+                  TREE_DIRS=0
+                  TREE_KIB=0
+                  NOW=0
+
+                  # Resolve a glob to its most recently modified existing match.
+                  # stdout: the path. 0 = found, 1 = nothing matched, 2 = something matched but
+                  # could not be read (never reported as present).
+                  newest_match() {
+                    set +f
+                    # shellcheck disable=SC2086  # deliberate: $1 IS a glob pattern and must be
+                    # word-split and path-expanded here; quoting it defeats the whole function.
+                    set -- $1
+                    set -f
+                    _best=""; _best_m=-1
+                    for _c in "$@"; do
+                      [ -e "$_c" ] || continue
+                      _m=$(stat -c %Y "$_c" 2>/dev/null) || return 2
+                      if [ "$_m" -gt "$_best_m" ]; then _best_m=$_m; _best=$_c; fi
+                    done
+                    [ -n "$_best" ] || return 1
+                    printf '%s\n' "$_best"
+                  }
+
+                  # Age assertion on one resolved path. $1 = path, $2 = label.
+                  assert_fresh() {
+                    _am=$(stat -c %Y "$1" 2>&1) || {
+                      echo "ERROR: $2: cannot stat $1: $_am"
+                      return 1
+                    }
+                    case "$_am" in
+                      ''|*[!0-9]*) echo "ERROR: $2: unparseable mtime for $1: $_am"; return 1 ;;
+                    esac
+                    _aage=$(( NOW - _am ))
+                    [ "$_aage" -lt "$STALE_SECONDS" ] && return 0
+                    echo "ERROR: $2 STALE: $1 is $(( _aage / 3600 ))h old (limit $(( STALE_SECONDS / 3600 ))h)"
+                    return 1
+                  }
+
+                  # Size assertion on one resolved path. $1 = path, $2 = label, $3 = min bytes.
+                  assert_min_size() {
+                    _zs=$(stat -c %s "$1" 2>&1) || {
+                      echo "ERROR: $2: cannot stat $1: $_zs"
+                      return 1
+                    }
+                    case "$_zs" in
+                      ''|*[!0-9]*) echo "ERROR: $2: unparseable size for $1: $_zs"; return 1 ;;
+                    esac
+                    [ "$_zs" -ge "$3" ] && return 0
+                    echo "ERROR: $2 IMPLAUSIBLY SMALL: $1 is ${_zs} B (floor ${3} B)"
+                    return 1
+                  }
+
+                  # ---- 1. MOUNT IDENTITY ----------------------------------------------
+                  # The only check here that observes the mount directly rather than inferring it
+                  # from content. Talos puts the kubelet pod directory on the EPHEMERAL partition
+                  # (/dev/sda6) - the SAME filesystem that /var/mnt/ssd/local-path-provisioner
+                  # falls back to when the SSD user volume fails to mount. /etc/hosts is
+                  # bind-mounted from that pod directory into every non-hostNetwork container, so
+                  # its st_dev IS the EPHEMERAL device, readable from inside this container with
+                  # no host access at all.
+                  #
+                  # Healthy:   /data st_dev = SSD (/dev/sdb1), /etc/hosts st_dev = EPHEMERAL -> DIFFER.
+                  # Unmounted: /data is a bare directory on EPHEMERAL                        -> MATCH -> fail.
+                  # Verified in-cluster 2026-08-20: st_dev 2065 (8:17 /dev/sdb1) vs 2054 (8:6 /dev/sda6).
+                  check_mount() {
+                    _md=$(stat -c %d /data 2>&1) || {
+                      echo "ERROR: mount check: cannot stat /data: $_md"
+                      return 1
+                    }
+                    _mh=$(stat -c %d /etc/hosts 2>&1) || {
+                      echo "ERROR: mount check: cannot stat /etc/hosts: $_mh"
+                      echo "       Without it the SSD mount cannot be distinguished from its"
+                      echo "       fallback, so this is a failure, not a pass."
+                      return 1
+                    }
+                    if [ "$_md" = "$_mh" ]; then
+                      echo "ERROR: /data shares a filesystem with the kubelet pod directory (st_dev $_md)."
+                      echo "       The SSD user volume is NOT mounted - /data is the bare mountpoint"
+                      echo "       on the EPHEMERAL partition. Anything backed up now is not the data."
+                      return 1
+                    fi
+                    echo "note: mount ok - /data st_dev=$_md, kubelet pod dir st_dev=$_mh"
+                    return 0
+                  }
+
+                  # ---- 5. PER-PVC TABLE (and the numbers check_scale uses) -------------
+                  # Walks each local-path PVC directory once. Prints a size table (forensics: the
+                  # night a PVC empties, the diff is in the log), and accumulates the directory
+                  # count and total size that check_scale asserts on.
+                  #
+                  # du's EXIT STATUS is advisory, its OUTPUT is not. busybox du returns non-zero
+                  # when a file vanishes mid-walk, which happens routinely here (sqlite WAL files,
+                  # rotating logs) and must not manufacture a nightly red. But an unparseable
+                  # total IS fatal, and so is a directory that cannot be opened at all - that is
+                  # checked explicitly with -r/-x, which does not race.
+                  dir_is_empty() {
+                    _ed=$1
+                    set +f
+                    set -- "$_ed"/* "$_ed"/.[!.]* "$_ed"/..?*
+                    set -f
+                    for _ec in "$@"; do
+                      if [ -e "$_ec" ] || [ -L "$_ec" ]; then return 1; fi
+                    done
+                    return 0
+                  }
+
+                  measure_tree() {
+                    TREE_DIRS=0
+                    TREE_KIB=0
+                    _mrc=0
+                    set +f
+                    set -- /data/pvc-*_*_*
+                    set -f
+                    for _md in "$@"; do
+                      [ -d "$_md" ] || continue
+                      if [ ! -r "$_md" ] || [ ! -x "$_md" ]; then
+                        echo "ERROR: PVC directory is not readable: $_md"
+                        _mrc=1
+                        continue
+                      fi
+                      _mdu=$(du -sk "$_md" 2>&1) || echo "WARNING (advisory) du reported errors under $_md"
+                      _mk=${_mdu%%[!0-9]*}
+                      case "$_mk" in
+                        ''|*[!0-9]*)
+                          echo "ERROR: unparseable 'du -sk' output for $_md: $_mdu"
+                          _mrc=1
+                          continue
+                          ;;
+                      esac
+                      TREE_DIRS=$(( TREE_DIRS + 1 ))
+                      TREE_KIB=$(( TREE_KIB + _mk ))
+                      if dir_is_empty "$_md"; then
+                        echo "WARNING (advisory, does not fail the job) PVC directory is EMPTY: $_md"
+                      else
+                        echo "note: ${_mk} KiB  $_md"
+                      fi
+                    done
+                    set +f
+                    return $_mrc
+                  }
+
+                  # ---- 2. TREE SCALE ---------------------------------------------------
+                  check_scale() {
+                    _crc=0
+                    if [ "$TREE_DIRS" -lt "$MIN_PVC_DIRS" ]; then
+                      echo "ERROR: only $TREE_DIRS local-path PVC directories under /data (floor $MIN_PVC_DIRS)"
+                      echo "       An unmounted SSD user volume presents as zero."
+                      _crc=1
+                    fi
+                    if [ "$TREE_KIB" -lt "$MIN_DATA_KIB" ]; then
+                      echo "ERROR: /data totals ${TREE_KIB} KiB, below the ${MIN_DATA_KIB} KiB floor."
+                      echo "       This tree is empty or implausibly small - do not trust this backup."
+                      _crc=1
+                    fi
+                    [ "$_crc" -eq 0 ] && echo "note: scale ok - $TREE_DIRS PVC directories, ${TREE_KIB} KiB total"
+                    return $_crc
+                  }
+
+                  # ---- 3. EXPECTED SET -------------------------------------------------
+                  check_expected() {
+                    _rc=0
+                    _ok=0
+                    _tot=0
+                    set -f                      # split the list without glob-expanding it
+                    for _e in $EXPECTED_ARTIFACTS; do
+                      _tot=$(( _tot + 1 ))
+                      _label=${_e%%:*}
+                      _rest=${_e#*:}
+                      _glob=${_rest%:*}
+                      _min=${_rest##*:}
+                      _path=$(newest_match "$_glob"); _s=$?
+                      case "$_s" in
+                        0) if assert_min_size "$_path" "$_label" "$_min"; then _ok=$(( _ok + 1 )); else _rc=1; fi ;;
+                        1) echo "ERROR: $_label MISSING - nothing matches $_glob"; _rc=1 ;;
+                        *) echo "ERROR: $_label UNREADABLE - could not stat a match of $_glob"; _rc=1 ;;
+                      esac
+                    done
+                    set +f
+                    # Announce the pass explicitly. A gate that prints nothing when it is happy
+                    # is indistinguishable from a gate that never ran.
+                    echo "note: expected set - $_ok/$_tot artifacts present and above their size floor"
+                    return $_rc
+                  }
+
+                  # ---- 4. DUMP FRESHNESS -----------------------------------------------
+                  check_fresh() {
+                    _frc=0
+                    _fok=0
+                    _ftot=0
+                    set -f
+                    for _fe in $FRESH_ARTIFACTS; do
+                      _ftot=$(( _ftot + 1 ))
+                      _flabel=${_fe%%:*}
+                      _fglob=${_fe#*:}
+                      _fpath=$(newest_match "$_fglob"); _fs=$?
+                      case "$_fs" in
+                        0) if assert_fresh "$_fpath" "$_flabel"; then _fok=$(( _fok + 1 )); else _frc=1; fi ;;
+                        1) echo "ERROR: $_flabel MISSING - nothing matches $_fglob"; _frc=1 ;;
+                        *) echo "ERROR: $_flabel UNREADABLE - could not stat a match of $_fglob"; _frc=1 ;;
+                      esac
+                    done
+                    set +f
+                    echo "note: dump freshness - $_fok/$_ftot artifacts newer than $(( STALE_SECONDS / 3600 ))h"
+                    return $_frc
+                  }
+
                   ping_hc start
                   rc=0
-                  # Explicit && chaining rather than `set -e` inside a group:
-                  # errexit is ignored for any command in an AND-OR list, so a
-                  # `{ set -e; ... } || rc=$?` block would keep running after a
-                  # failure and report the last command's status.
+
+                  echo "==> snapshots"
+                  restic snapshots || true
+
+                  # Explicit && chaining rather than `set -e` inside a group: errexit is ignored
+                  # for any command in an AND-OR list, so a `{ set -e; ... } || rc=$?` block would
+                  # keep running after a failure and report the last command's status.
                   {
-                    # Removes STALE locks only (no --remove-all). This is what
-                    # actually recovers a lock left by a SIGKILLed previous run.
+                    echo "==> unlock" &&
+                    # Removes STALE locks only (no --remove-all). This is what actually recovers
+                    # a lock left by a SIGKILLed previous run.
                     restic unlock &&
+                    echo "==> backup /data" &&
                     restic backup /data \
                       --tag nightly \
                       --exclude='*.tmp' \
-                      --exclude='cache/*' &&
-                    # --group-by paths is LOAD-BEARING. restic forget defaults to
-                    # grouping by host+paths, and every CronJob pod has a unique
-                    # hostname, so each nightly snapshot landed in a group of its
-                    # own and the policy below kept ALL of them: verified
-                    # 2026-08-20 with 137 snapshots in 137 groups across 131
-                    # hostnames, zero ever pruned. Grouping by paths alone makes
-                    # the retention policy actually apply.
-                    restic forget --prune \
-                      --group-by paths \
-                      --keep-daily 7 \
-                      --keep-weekly 4 \
-                      --keep-monthly 6 &&
-                    restic check
+                      --exclude='cache/*'
                   } || rc=$?
+
+                  # The gate runs AFTER the backup and BEFORE forget --prune. Both halves of that
+                  # placement are deliberate:
+                  #
+                  #   AFTER backup - making the gate a precondition of the backup is the intuitive
+                  #   move and it is wrong: one stale influx dump would then skip the entire
+                  #   night's backup of everything else, and the backup is worth more than the
+                  #   gate. Capturing a bad tree costs one wasted snapshot; skipping a good one
+                  #   costs a day.
+                  #
+                  #   BEFORE forget --prune - this is where homelab deliberately diverges from
+                  #   vps/backup/restic-cronjob.yaml, which runs its gate last. Failing the job
+                  #   after pruning still alerts, but the seven good daily snapshots are already
+                  #   being expired on schedule while the alert goes unread. Skipping retention on
+                  #   an unverified tree makes the destruction impossible rather than merely
+                  #   noticed. The cost of a false positive is a repository that grows in B2 until
+                  #   somebody looks - cheap, and reversible; the cost of the false negative is
+                  #   every recovery point. Do not "simplify" this back into the chain above.
+                  echo "==> backup verification gate"
+                  # NOW is sampled here, not at script start: the backup above can run for hours,
+                  # and an age measured against a stale clock reading would silently loosen the
+                  # freshness threshold.
+                  NOW=$(date +%s)
+                  gate_rc=0
+                  check_mount    || gate_rc=1
+                  measure_tree   || gate_rc=1
+                  check_scale    || gate_rc=1
+                  check_expected || gate_rc=1
+                  check_fresh    || gate_rc=1
+
+                  prune_rc=0
+                  if [ "$rc" -eq 0 ] && [ "$gate_rc" -eq 0 ]; then
+                    {
+                      echo "==> forget + prune" &&
+                      # --group-by paths is LOAD-BEARING. restic forget defaults to grouping by
+                      # host+paths, and every CronJob pod has a unique hostname, so each nightly
+                      # snapshot landed in a group of its own and the policy below kept ALL of
+                      # them: verified 2026-08-20 with 137 snapshots in 137 groups across 131
+                      # hostnames, zero ever pruned. Grouping by paths alone makes the retention
+                      # policy actually apply.
+                      restic forget --prune \
+                        --group-by paths \
+                        --keep-daily 7 \
+                        --keep-weekly 4 \
+                        --keep-monthly 6
+                    } || prune_rc=$?
+                  else
+                    echo "==> forget + prune SKIPPED"
+                    echo "    Retention is deferred on purpose. Expiring daily snapshots against a"
+                    echo "    tree that failed verification (or a backup that failed outright) is"
+                    echo "    precisely how seven good recovery points get replaced by seven"
+                    echo "    snapshots of nothing. The repository grows until this is fixed."
+                  fi
+
+                  # Integrity of the repository is worth knowing either way.
+                  check_rc=0
+                  echo "==> check"
+                  restic check || check_rc=$?
+
+                  # Preserve the most specific failure. A real restic failure keeps its own exit
+                  # code; the gate only promotes to failure when nothing else already did.
+                  if [ "$rc" -eq 0 ]; then
+                    if [ "$prune_rc" -ne 0 ]; then
+                      rc=$prune_rc
+                    elif [ "$check_rc" -ne 0 ]; then
+                      rc=$check_rc
+                    elif [ "$gate_rc" -ne 0 ]; then
+                      rc=$gate_rc
+                    fi
+                  fi
+
+                  echo "==> done (exit $rc)"
                   ping_hc "$rc"
                   exit $rc
               env:

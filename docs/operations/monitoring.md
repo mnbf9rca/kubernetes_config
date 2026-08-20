@@ -143,8 +143,18 @@ Every CronJob sets:
 ### The restic ping wrapper
 
 ```
-ping_hc start → snapshots || true → unlock, backup, forget --prune, check → [VPS: gate] → ping_hc "$rc"
+VPS:      ping_hc start → snapshots → unlock, backup, forget --prune, check → gate → ping_hc "$rc"
+homelab:  ping_hc start → snapshots → unlock, backup → gate → forget --prune (only if the gate
+                                                              passed) → check → ping_hc "$rc"
 ```
+
+The gate sits in a different place on each cluster, deliberately. Both run it after the
+backup — as a precondition it would skip a whole night of everything else over one stale
+artifact. Homelab additionally makes `forget --prune` conditional on the gate, because
+pruning is the step that destroys data: failing the job *after* pruning still alerts, but
+the seven good daily snapshots are already being expired on schedule while the alert goes
+unread. A false positive there costs a repository that grows in B2 until somebody looks;
+the false negative costs every recovery point. `restic check` runs either way.
 
 - The `/start` ping detects a run that starts and never finishes, and records durations.
   The exit-code ping (`hc-ping.com/$UUID/$rc`) separates success from failure. Pings never
@@ -162,12 +172,29 @@ Observed runtimes:
 
 These fell from 88s and 117s once retention started pruning, so `restic check` walks 14
 snapshots instead of 137. The 4h `activeDeadlineSeconds` is an opening guess — resize it
-from recorded durations.
+from recorded durations. Expect `homelab-restic` to rise: its gate adds a `du` walk of the
+same 44,288 files restic just read, which should be cheap against a warm page cache but has
+not been measured in place yet.
+
+### Why both restic jobs need a gate at all
+
+`restic` succeeds on an empty tree. It writes a valid snapshot, `restic check` passes, the
+job exits 0 and healthchecks.io goes green. Nothing in the backup path has an opinion about
+whether the thing it backed up was the data.
+
+Both jobs mount their source as `hostPath` with `type: Directory`, which asserts only that
+the directory *exists*. If the underlying volume fails to mount while its mountpoint
+survives on the root filesystem, the backup captures nothing and reports success. Then
+`forget --prune --keep-daily 7` expires the seven genuine daily recovery points over the
+following week, and the repository ends up holding only snapshots of nothing. This is not
+theoretical: snapshot `551bd209` in the homelab repository is 12 B and is currently retained
+as a "monthly".
+
+The gate is the only thing in either job that asks whether the backup was of anything.
 
 ### The VPS backup verification gate
 
-Homelab has no quiesce sidecars and no gate. The VPS job runs two checks after the backup
-completes.
+The VPS job runs two checks after the backup completes.
 
 **1. Expected-set assertion — authoritative.** Each entry must be present and under 15h
 old, a 3h margin over the sidecars' 12h period. Output names the app and distinguishes
@@ -198,6 +225,88 @@ real fault.
 The gate runs after the backup. As a precondition, one stale snapshot would skip that
 night's backup of everything else. It promotes to failure only when restic itself
 succeeded, so a real restic failure keeps its own exit code.
+
+### The homelab backup verification gate
+
+Homelab has no quiesce sidecars, so there is no `*.restic` artifact to check. Every
+local-path PVC is backed up as live application state. The assertions are therefore about
+the **tree** rather than about snapshot files, in four authoritative checks plus one
+forensic pass.
+
+**1. Mount identity — authoritative, and the only first-order check.** Talos puts the
+kubelet pod directory on the EPHEMERAL partition (`/dev/sda6`) — the same filesystem that
+`/var/mnt/ssd/local-path-provisioner` falls back to when the SSD user volume fails to
+mount. `/etc/hosts` is bind-mounted from that pod directory into every non-hostNetwork
+container, so its `st_dev` *is* the EPHEMERAL device and is readable from inside the
+container with no host access. The gate compares it with `st_dev` of `/data`:
+
+| | `/data` `st_dev` | `/etc/hosts` `st_dev` | Verdict |
+|---|---|---|---|
+| SSD mounted | SSD `/dev/sdb1` (2065) | EPHEMERAL `/dev/sda6` (2054) | differ → pass |
+| SSD not mounted | EPHEMERAL | EPHEMERAL | match → **fail** |
+
+Measured in-cluster 2026-08-20. A `stat` that fails on either path is a failure, not a
+pass: without the reference the mount cannot be distinguished from its fallback.
+
+**2. Tree scale — authoritative.** Floors, not targets: at least `MIN_PVC_DIRS=8` PVC
+directories and `MIN_DATA_KIB=1048576` (1 GiB) in total. Measured 2026-08-20: 10
+directories, 44,288 files, 4.418 GiB. Roughly 4x headroom, so log rotation or emby cache
+eviction cannot trip it, while an empty or single-PVC tree cannot clear it.
+
+**3. Expected set — authoritative.** Each entry must resolve, and must be at least its
+floor in bytes. Floors are an order of magnitude under the observed sizes; they exist to
+reject a zero-length or truncated file, not to track growth.
+
+| Artifact | Path | Floor |
+|---|---|---|
+| emby-library | `/data/pvc-*_downloads_emby-config/data/library.db` | 1 MiB |
+| hydra2-config | `/data/pvc-*_downloads_hydra2-config/nzbhydra.yml` | 4 KiB |
+| radarr-db | `/data/pvc-*_downloads_radarr-config/radarr.db` | 1 MiB |
+| sabnzbd-ini | `/data/pvc-*_downloads_sabnzbd-config/sabnzbd.ini` | 1 KiB |
+| sonarr-db | `/data/pvc-*_downloads_sonarr-config/sonarr.db` | 1 MiB |
+| grafana-db | `/data/pvc-*_health_grafana-data/grafana.db` | 256 KiB |
+| influxdb-bolt | `/data/pvc-*_health_influxdb-data/influxd.bolt` | 32 KiB |
+| garmin-tokens | `/data/pvc-*_health_garmin-tokens/garmin_tokens.json` | 256 B |
+
+Same maintenance contract as VPS: a new local-path PVC holding anything you would miss must
+be added here, or that application's backup goes unverified, silently. Same glob rationale
+too — `local-path-provisioner` names each directory `<pvName>_<namespace>_<pvcName>` with a
+random UUID, and the StorageClass is `reclaimPolicy: Retain`, so a recreated PVC leaves its
+predecessor behind forever. Each glob resolves to its most recently modified match.
+
+**4. Dump freshness — authoritative.** The influx dumps are the only homelab artifacts
+produced on a schedule, so they are the only ones with a meaningful age. Both must be under
+30h old:
+
+| Artifact | Path |
+|---|---|
+| influx-native-dump | `/data/pvc-*_health_health-dumps/native/*` |
+| influx-lp-export | `/data/pvc-*_health_health-dumps/lp/*.lp.gz` |
+
+`influx-backup` writes these at 02:30Z, 30 minutes before this job. 30h therefore tolerates
+one missed or delayed run — `health-influx-backup` is the check for *that* — and fails on
+two consecutive misses or on the dumps vanishing. Nothing else in the tree is
+freshness-checked: applying a deadline to live application state manufactures reds on any
+file an app happens not to touch for a day.
+
+**5. Per-PVC size table — forensic.** Every run prints one line per PVC directory. The night
+a PVC empties, the diff is in the log. Two verdicts sit on top of it, with deliberately
+different force:
+
+- a PVC directory with **no entries at all** prints a `WARNING` and does not fail the job —
+  a freshly provisioned PVC is legitimately empty until its app writes, and that must not
+  pin the one channel that means "restore is broken" permanently red;
+- a PVC directory that **cannot be opened** (`-r`/`-x`) *does* fail. "I could not look" must
+  never be reported as "everything is fine".
+
+`du`'s exit status is the one deliberate exception to that rule: busybox `du` returns
+non-zero when a file vanishes mid-walk, which happens routinely here (sqlite WAL files,
+rotating logs) and would manufacture a nightly red. Its status only warns. Its *output* is
+still authoritative — an unparseable total fails — and unlike `find`, a `du` that could not
+walk still emits a number, so the scale floors catch it.
+
+The gate announces its passes (`8/8 artifacts present`, `2/2 newer than 30h`). A gate that
+prints nothing when it is happy is indistinguishable from a gate that never ran.
 
 ### "Newest of a glob" is a dangerous shape
 
@@ -369,15 +478,18 @@ several of these services is the likelier incident.
 | **pomerium `mcp` sidecar** | Its probes are `tcpSocket`. A wedged HTTP handler with a live listener passes them. The MCP server exposes no health endpoint |
 | **homelab services** | The external layer runs on the VPS, which has no route to `*.cynexia.net`. Only the three health-tunnel hostnames get layer-3 coverage. sonarr, radarr, sabnzbd, emby, hydra2 and grafana have probes and nothing external |
 | **the VPS gate** | It proves each snapshot exists, is recent, and holds at least one schema object. It does not prove the contents are complete or uncorrupted. A snapshot missing rows, or with a corrupt page below the `sqlite_master` read, passes everything here and surfaces at restore time |
+| **the homelab gate** | It proves the SSD is mounted and the tree is the right *shape* — right number of PVC directories, right order of magnitude, the listed files present and non-trivial. It says nothing about *content*. Every homelab PVC is copied live, with no quiesce step: a sqlite database mid-write is captured torn, `sonarr.db` at 14 MiB of corruption passes the size floor exactly as 14 MiB of working database does, and a PVC that stopped being written to weeks ago looks identical to one written a minute ago. Only the two influx dumps are age-checked. The rest surfaces at restore time |
 
 Queued, not configured: a changedetection `overdue_watches` json-query monitor and a
 karakeep queue-depth alert. Both need an API credential in the monitor.
 
-Snapshot integrity stays partly verified by choice. The `sqlite_master` assertion closes the
-worst case — a fresh, valid, empty snapshot from a truncated source — by proving a schema
-exists, not that the data is there. Closing the rest means `sqlite3 <file> 'pragma
-integrity_check'` inside the gate, which means adding sqlite to the `restic/restic` image.
-Until then, a periodic manual restore drill is the only real proof.
+Snapshot integrity stays partly verified by choice. On VPS the `sqlite_master` assertion
+closes the worst case — a fresh, valid, empty snapshot from a truncated source — by proving
+a schema exists, not that the data is there. Homelab has no equivalent, because it has no
+quiesce sidecars to assert against: its gate stops at shape. Closing the rest on either
+cluster means `sqlite3 <file> 'pragma integrity_check'` inside the gate, which means adding
+sqlite to the `restic/restic` image. Until then, a periodic manual restore drill is the only
+real proof, and it is the only thing that covers homelab's torn-copy exposure at all.
 
 ## Explicitly rejected
 
