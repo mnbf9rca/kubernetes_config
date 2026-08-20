@@ -57,6 +57,41 @@ Public ingestion endpoints must be Access-bypassed or they break:
 A bypass path glob of `/foo/*` does **not** match the bare path `/foo` — add both the
 exact and the wildcard destination.
 
+### FreshRSS WebSub push
+
+FreshRSS builds its WebSub callback URL from `base_url` in `data/config.php`. That file
+lives on the `freshrss-data` PVC rather than in this repo, and the image reads the
+`BASE_URL` environment variable only during first install, so setting it on the
+Deployment has no effect on an existing volume. Change it with the CLI:
+
+```bash
+kubectl --context cynexia-vps -n vps exec deployment/freshrss -c freshrss -- \
+  php /var/www/FreshRSS/cli/reconfigure.php --base-url=https://rss.cynexia.com
+```
+
+An `http://` value kills push delivery without any visible symptom. Cloudflare answers
+the hub's delivery POST with a 301 to the HTTPS URL, and hubs treat a redirect as a
+failed delivery instead of following it. Feeds still arrive on the 15-minute polling
+cycle, so the reading experience degrades from real-time to polled and nothing reports
+an error. This was the state from installation until August 20, 2026.
+
+To check whether push works, read the per-feed subscription state:
+
+```bash
+kubectl --context cynexia-vps -n vps exec deployment/freshrss -c freshrss -- \
+  sh -c 'grep -o "\"error\":[a-z]*" /var/www/FreshRSS/data/PubSubHubbub/feeds/*/\!hub.json'
+```
+
+`"error":true` on every feed means push is dead. Never print those files whole: each one
+holds that feed's callback secret.
+
+FreshRSS re-subscribes during the next refresh of any feed whose state carries `error`
+and whose `lease_start` is more than 23 hours old. A corrected `base_url` therefore heals
+every subscribed feed within a refresh cycle, and the callback secrets rotate as a side
+effect. The callback path `/api/pshb.php` falls under the `freshrss api` Access bypass,
+so it stays publicly reachable, and under the zone rate limiting rule of 50 requests per
+10 seconds per IP, which is far above hub delivery volume.
+
 ### Browser backend for changedetection
 
 Use `dgtlmoon/sockpuppetbrowser`. `browserless/chrome:latest` is the deprecated v1 line
