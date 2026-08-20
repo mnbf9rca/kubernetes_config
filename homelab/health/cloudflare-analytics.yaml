@@ -1,0 +1,124 @@
+---
+# Cloudflare edge analytics -> InfluxDB.
+#
+# Cloudflare's Free plan keeps 8 days of per-hostname analytics and rejects any
+# GraphQL query wider than 1 day. This CronJob copies that window into the
+# health namespace's InfluxDB (bucket `cloudflare`, infinite retention) before it
+# expires, so the traffic record outlives Cloudflare's retention and is queryable
+# in the existing Grafana.
+#
+# The script itself is homelab/health/scripts/cloudflare-analytics-ingest.py,
+# mounted at /app/ingest.py by the configMapGenerator in this directory's
+# kustomization.yaml. It is a real file, not an inline YAML string, so it can be
+# imported, unit-tested and linted; see its sibling test_*.py. The generated
+# ConfigMap name carries a content hash, so editing the script rolls the CronJob.
+#
+# WHY THE SCRIPT IS PYTHON, and not inline `sh` like every other scheduled job
+# in this repo:
+#
+#   - Cloudflare returns HTTP 200 with an `errors` array in the body when a query
+#     fails. Distinguishing that from "no traffic" by grepping a JSON body in sh
+#     is exactly the shape that made ingest-freshness report STALE for 25 days.
+#   - Rows must be aggregated in memory before writing: path truncation merges
+#     many source paths into one series, and row-cap subdivision splits one hour
+#     across several responses. Both need keyed summation.
+#   - Tag values are user-controlled URL paths and need real line-protocol
+#     escaping.
+#
+# Python 3 standard library only — no pip install at runtime, so the job depends
+# on nothing but the two APIs it talks to.
+#
+# NO KEEL in this namespace (see docs/operations/homelab-health.md): the image is
+# version-pinned and Renovate proposes bumps.
+#
+# NO PROBES. This is scheduled work, so the instrument is the healthchecks.io
+# dead-man's-switch plus activeDeadlineSeconds, not a probe. See
+# docs/operations/monitoring.md.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: cloudflare-analytics
+  namespace: health
+spec:
+  # Hourly, on an off-minute so it does not pile onto :00 with everything else.
+  # Hourly rather than daily because Cloudflare's 1-day query ceiling makes wide
+  # backfills awkward, so a gap is at most an hour of catching up.
+  schedule: "37 * * * *"
+  timeZone: "UTC"                 # without this the schedule is read in kube-controller-manager's local zone
+  concurrencyPolicy: Forbid
+  # A missed window is retried for 30 minutes, then dropped — the next hourly run
+  # picks the same data up anyway, because the watermark comes from InfluxDB.
+  startingDeadlineSeconds: 1800
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      # 1, not 0: a transient Cloudflare 5xx or rate limit is worth one retry.
+      # The run is idempotent (point overwrite), so a retry cannot double-count.
+      backoffLimit: 1
+      # With concurrencyPolicy: Forbid, a hung run blocks every later run with
+      # nothing alerting until the healthchecks.io grace expires. A steady-state
+      # run is two GraphQL calls and one write; 20 minutes covers a full 8-chunk
+      # backfill with the per-chunk sleep and still bounds a wedged socket.
+      activeDeadlineSeconds: 1200
+      # 3 days, so a Friday failure is still forensically available on Monday.
+      ttlSecondsAfterFinished: 259200
+      template:
+        spec:
+          restartPolicy: Never
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65534
+            runAsGroup: 65534
+            seccompProfile: { type: RuntimeDefault }
+          containers:
+            - name: ingest
+              image: python:3.13-alpine3.22
+              command: ["python3", "/app/ingest.py"]
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities: { drop: ["ALL"] }
+              env:
+                # PYTHONDONTWRITEBYTECODE keeps the read-only root filesystem
+                # from producing __pycache__ write errors on every import.
+                - { name: PYTHONDONTWRITEBYTECODE, value: "1" }
+                - { name: PYTHONUNBUFFERED, value: "1" }
+                - { name: INFLUX_URL, value: "http://influxdb.health.svc.cluster.local:8086" }
+                - { name: INFLUX_ORG, value: "cynexia" }
+                - { name: INFLUX_BUCKET, value: "cloudflare" }
+                # Hostnames whose full request path is kept instead of being
+                # truncated to two segments. Empty by default: every host added
+                # here trades InfluxDB series cardinality for path detail, and
+                # karakeep-style per-asset UUID paths are unbounded. Comma-separated.
+                - { name: FULL_PATH_HOSTS, value: "" }
+                # healthchecks.io check `homelab-cloudflare-analytics`
+                # (op://Homelab/health-healthchecks/cloudflare-uuid). Substituted
+                # by envsubst at apply time; never committed.
+                - name: HC_UUID
+                  value: "${HEALTH_HC_CLOUDFLARE_UUID}"
+                # Cloudflare API token — Zone.Analytics:Read ONLY. This job never
+                # writes to Cloudflare, so an edit scope here would be a strictly
+                # unnecessary blast radius.
+                - name: CF_API_TOKEN
+                  valueFrom: { secretKeyRef: { name: health-cloudflare, key: api-token } }
+                # `name=zonetag,name=zonetag`. Zone IDs live in 1Password rather
+                # than in this manifest because the repo is public and a zone ID
+                # identifies the account.
+                - name: CF_ZONE_TAGS
+                  valueFrom: { secretKeyRef: { name: health-cloudflare, key: zone-tags } }
+                # Read AND write on the `cloudflare` bucket: the watermark is
+                # read back out of the data itself, so this job needs both.
+                - name: INFLUX_TOKEN
+                  valueFrom: { secretKeyRef: { name: health-cloudflare, key: influx-token } }
+              volumeMounts:
+                - { name: script, mountPath: /app, readOnly: true }
+                - { name: tmp, mountPath: /tmp }
+              resources:
+                requests: { cpu: 50m, memory: 64Mi }
+                limits: { memory: 256Mi }
+          volumes:
+            - name: script
+              configMap: { name: cloudflare-analytics-script }
+            - name: tmp
+              emptyDir: {}

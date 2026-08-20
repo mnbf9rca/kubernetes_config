@@ -85,6 +85,7 @@ Defaults, unless a service's entry says otherwise:
 | keel (both clusters) | `/healthz` | Liveness 15s × 6 is laxer than readiness 10s × 3 |
 | jottacloud-backup | none | Its old liveness probe could not fail. `activeDeadlineSeconds: 21600` bounds the run |
 | garmin-grafana | none | It serves nothing. The `health-garmin-ingest` switch is the correct instrument |
+| cloudflare-analytics | none | Scheduled work. `homelab-cloudflare-analytics` plus `activeDeadlineSeconds: 1200` is the instrument |
 
 ## Why the sidecars have no probes
 
@@ -135,9 +136,9 @@ Every CronJob sets:
 | Field | Value | Why |
 |---|---|---|
 | `timeZone: "UTC"` | all jobs | Otherwise the schedule follows kube-controller-manager's local zone |
-| `startingDeadlineSeconds` | 3600; 300 for jottacloud; unset for `ingest-freshness` | A missed window retries for that long, then drops |
-| `activeDeadlineSeconds` | restic 14400, influx-backup 3600, ingest-freshness 300, jottacloud 21600 | With `concurrencyPolicy: Forbid`, one hung run blocks every later run silently |
-| `ttlSecondsAfterFinished` | 259200 on the restic jobs | A Friday failure survives until Monday |
+| `startingDeadlineSeconds` | 3600; 1800 for cloudflare-analytics; 300 for jottacloud; unset for `ingest-freshness` | A missed window retries for that long, then drops |
+| `activeDeadlineSeconds` | restic 14400, influx-backup 3600, cloudflare-analytics 1200, ingest-freshness 300, jottacloud 21600 | With `concurrencyPolicy: Forbid`, one hung run blocks every later run silently |
+| `ttlSecondsAfterFinished` | 259200 on the restic jobs and cloudflare-analytics | A Friday failure survives until Monday |
 | `terminationGracePeriodSeconds` | not set | busybox `ash` runs as PID 1 and never forwards SIGTERM to restic, so a grace period only slows teardown. `restic unlock` at the head of the next run recovers the lock |
 
 ### The restic ping wrapper
@@ -345,11 +346,21 @@ one PVC directory expected to match one path.
 | `health-apple-ingest` | `op://Homelab/health-healthchecks/apple-uuid` | 1d / 12h | `ingest-freshness`, only when InfluxDB data is under 24h old |
 | `health-garmin-ingest` | `op://Homelab/health-healthchecks/garmin-uuid` | 1d / 12h | as above |
 | `health-influx-backup` | `op://Homelab/health-healthchecks/backup-uuid` | 1d / 6h | `influx-backup`, success only: the script is `set -eu` with the ping last |
+| `homelab-cloudflare-analytics` | `op://Homelab/health-healthchecks/cloudflare-uuid` | 1h / 2h | `cloudflare-analytics` CronJob, `/start` and exit code |
 | jottacloud-backup | `op://Homelab/jottacloud-backup/HEALTHCHECK_UUID` | 6-hourly schedule | The image's own `backup.sh` |
 
-Only the two restic jobs send `/start` and an exit code. The other three ping on success
-only, so a failure and a never-scheduled run produce the same signal: silence, then a
-grace-expiry alert. Follow the restic pattern for new jobs.
+The two restic jobs and `cloudflare-analytics` send `/start` and an exit code. The other
+three ping on success only, so a failure and a never-scheduled run produce the same signal:
+silence, then a grace-expiry alert. Follow the restic pattern for new jobs.
+
+`homelab-cloudflare-analytics` goes red for one failure mode that is not a malfunction:
+**an unrecoverable gap**. Cloudflare keeps 8 days, so if the job has been down longer than
+that, the missing hours no longer exist anywhere. It logs the exact range, writes an
+`ingest_gap` marker into InfluxDB so the hole reads as a hole rather than as a quiet week,
+ingests whatever still survives, and exits non-zero. The alarm fires **once** — the next
+run's watermark is current again. Treat a red check here as "read the log and find out
+which hours were lost", not as "the job is broken". Detail:
+[homelab-health.md](homelab-health.md#gaps-are-permanent-so-they-are-loud).
 
 `ingest-freshness` always exits 0. The signal is the absent ping, not a failed Job. Do not
 change it to a non-zero exit.
@@ -494,6 +505,7 @@ several of these services is the likelier incident.
 | **homelab services** | The external layer runs on the VPS, which has no route to `*.cynexia.net`. Only the three health-tunnel hostnames get layer-3 coverage. sonarr, radarr, sabnzbd, emby, hydra2 and grafana have probes and nothing external |
 | **the VPS gate** | It proves each snapshot exists, is recent, and holds at least one schema object. It does not prove the contents are complete or uncorrupted. A snapshot missing rows, or with a corrupt page below the `sqlite_master` read, passes everything here and surfaces at restore time |
 | **the homelab gate** | It proves the SSD is mounted and the tree is the right *shape* — right number of PVC directories, right order of magnitude, the listed files present and non-trivial. It says nothing about *content*. Every homelab PVC is copied live, with no quiesce step: a sqlite database mid-write is captured torn, `sonarr.db` at 14 MiB of corruption passes the size floor exactly as 14 MiB of working database does, and a PVC that stopped being written to weeks ago looks identical to one written a minute ago. Only the two influx dumps are age-checked. A retained orphan directory from a recreated PVC can satisfy an expected-set entry the live PVC no longer can — the resolved paths are printed so it is visible, but nothing fails on it. The rest surfaces at restore time |
+| **cloudflare-analytics** | It proves the hours it fetched were fetched. It cannot prove Cloudflare's own numbers are right, and it does not alert on the *content* — a hostname that stops receiving traffic entirely, or a spike, produces a perfectly green check. That is Phase 3 (Grafana alert rules), deliberately deferred until a baseline exists |
 
 Queued, not configured: a changedetection `overdue_watches` json-query monitor and a
 karakeep queue-depth alert. Both need an API credential in the monitor.

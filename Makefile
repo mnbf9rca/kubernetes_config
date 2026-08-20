@@ -45,13 +45,16 @@ REQUIRED_VARS := B2_ACCOUNT_ID B2_ACCOUNT_KEY RESTIC_PASSWORD RESTIC_REPOSITORY 
                  ROUTE53_ACCESS_KEY_ID ROUTE53_SECRET_ACCESS_KEY \
                  ACME_EMAIL HEALTHCHECK_UUID \
                  HEALTH_HC_APPLE_UUID HEALTH_HC_GARMIN_UUID HEALTH_HC_BACKUP_UUID \
+                 HEALTH_HC_CLOUDFLARE_UUID \
                  HEALTH_INFLUX_ADMIN_PASSWORD HEALTH_INFLUX_ADMIN_TOKEN \
                  HEALTH_INFLUX_GARMIN_V1_PASSWORD HEALTH_INFLUX_INGESTER_TOKEN \
-                 HEALTH_INFLUX_READ_TOKEN HEALTH_HAE_AUTH_TOKEN \
+                 HEALTH_INFLUX_READ_TOKEN HEALTH_INFLUX_CLOUDFLARE_TOKEN \
+                 HEALTH_HAE_AUTH_TOKEN \
                  HEALTH_GARMIN_EMAIL HEALTH_GARMIN_B64_PASSWORD \
                  HEALTH_POMERIUM_GOOGLE_CLIENT_ID HEALTH_POMERIUM_GOOGLE_CLIENT_SECRET \
                  HEALTH_POMERIUM_COOKIE_SECRET HEALTH_POMERIUM_SHARED_SECRET \
-                 HEALTH_GRAFANA_ADMIN_PASSWORD
+                 HEALTH_GRAFANA_ADMIN_PASSWORD \
+                 HEALTH_CF_API_TOKEN HEALTH_CF_ZONE_TAGS
 
 # Explicit envsubst allowlist. CRITICAL: envsubst with no allowlist substitutes
 # EVERY $VAR / ${VAR} token in the stream, including shell variables embedded in
@@ -71,13 +74,16 @@ ENVSUBST_VAR_NAMES := B2_ACCOUNT_ID B2_ACCOUNT_KEY RESTIC_PASSWORD RESTIC_REPOSI
                      ACME_EMAIL \
                      HEALTHCHECK_UUID \
                      HEALTH_HC_APPLE_UUID HEALTH_HC_GARMIN_UUID HEALTH_HC_BACKUP_UUID \
+                     HEALTH_HC_CLOUDFLARE_UUID \
                      HEALTH_INFLUX_ADMIN_PASSWORD HEALTH_INFLUX_ADMIN_TOKEN \
                      HEALTH_INFLUX_GARMIN_V1_PASSWORD HEALTH_INFLUX_INGESTER_TOKEN \
-                     HEALTH_INFLUX_READ_TOKEN HEALTH_HAE_AUTH_TOKEN \
+                     HEALTH_INFLUX_READ_TOKEN HEALTH_INFLUX_CLOUDFLARE_TOKEN \
+                     HEALTH_HAE_AUTH_TOKEN \
                      HEALTH_GARMIN_EMAIL HEALTH_GARMIN_B64_PASSWORD \
                      HEALTH_POMERIUM_GOOGLE_CLIENT_ID HEALTH_POMERIUM_GOOGLE_CLIENT_SECRET \
                      HEALTH_POMERIUM_COOKIE_SECRET HEALTH_POMERIUM_SHARED_SECRET \
-                     HEALTH_GRAFANA_ADMIN_PASSWORD
+                     HEALTH_GRAFANA_ADMIN_PASSWORD \
+                     HEALTH_CF_API_TOKEN HEALTH_CF_ZONE_TAGS
 ENVSUBST_VARS := $(foreach v,$(ENVSUBST_VAR_NAMES),$${$(v)})
 # Note: TAILSCALE_AUTH_KEY is deliberately NOT in ENVSUBST_VAR_NAMES.
 # Tailscale auth keys are one-shot and only needed for initial node
@@ -96,6 +102,7 @@ help:
 	@echo "  require-vars    - assert all REQUIRED_VARS resolve under op run (preflight)"
 	@echo "  check-vars-consistency - assert every ENVSUBST_VAR_NAMES entry is in REQUIRED_VARS"
 	@echo "  check-placeholder-coverage - assert no .env.tpl \$${VAR} survives the render (both clusters)"
+	@echo "  check-job-ttl   - assert every standalone Job sets ttlSecondsAfterFinished (both clusters)"
 	@echo ""
 	@echo "VPS cluster targets:"
 	@echo "  check-vps-context - assert kubectl current-context matches VPS_CONTEXT ($(VPS_CONTEXT))"
@@ -110,6 +117,7 @@ help:
 	@echo "  create-health-cloudflared-secret - imperatively recreate the health cloudflared creds Secret from 1P"
 	@echo "  route-health-dns  - create/update CNAMEs for every hostname in the health cloudflared ConfigMap"
 	@echo "  health-influx-bootstrap - bootstrap InfluxDB buckets/DBRP mapping/tokens for the health stack"
+	@echo "  health-influx-cloudflare-bootstrap - create the 'cloudflare' bucket + mint its ingest/read tokens"
 
 .PHONY: check-tools
 check-tools:
@@ -145,6 +153,15 @@ check-vars-consistency:
 	  exit 1; \
 	fi; \
 	echo "OK: ENVSUBST_VAR_NAMES is a subset of REQUIRED_VARS"
+
+# Assert every standalone `kind: Job` sets spec.ttlSecondsAfterFinished. A
+# completed Job that is never garbage collected pins its own immutable
+# spec.template, and the next apply that changes it then fails quietly. Runs
+# on raw `kustomize build` output, so it needs neither 1Password nor a cluster.
+# Rationale and the incident behind it: AGENTS.md.
+.PHONY: check-job-ttl
+check-job-ttl:
+	@scripts/check-job-ttl.py
 
 .PHONY: require-vars
 require-vars:
@@ -758,6 +775,21 @@ create-health-cloudflared-secret: check-context
 	printf '%s' "$$creds" | kubectl -n health create secret generic health-cloudflared-credentials \
 	  --from-file=credentials.json=/dev/stdin --dry-run=client -o yaml | kubectl -n health apply -f -
 
+# Shell helper shared by both health-influx-*-bootstrap targets: run an influx
+# CLI command inside the influxdb pod, authenticated as admin.
+#
+# The influx CLI reads INFLUX_TOKEN, not DOCKER_INFLUXDB_INIT_ADMIN_TOKEN, and
+# the CLI config the image writes at first init lives on an ephemeral path - so
+# after any pod restart the CLI is unauthenticated and every call returns
+# `401 Unauthorized`. Exporting it from the container's own environment keeps
+# the admin token inside the cluster: reading it here with `op read` would put
+# it in this shell's argv, visible to `ps`.
+#
+# Recursive `=`, so the `$$` survives into the recipe and Make expands it to a
+# single `$` exactly as it did when this was written inline. The trailing `;`
+# is deliberate - this is spliced into a one-shell recipe as its own statement.
+INFLUX_POD_FN = pod() { kubectl -n health exec deploy/influxdb -- sh -c 'export INFLUX_TOKEN="$$DOCKER_INFLUXDB_INIT_ADMIN_TOKEN"; exec "$$@"' _ "$$@"; };
+
 # Bootstrap InfluxDB buckets, v1 DBRP mapping, v1-compat auth user, and scoped
 # tokens. Idempotent-ish: duplicate-create commands fail harmlessly (|| true).
 # Prints the two scoped tokens for the operator to paste into 1Password
@@ -776,7 +808,7 @@ create-health-cloudflared-secret: check-context
 .PHONY: health-influx-bootstrap
 health-influx-bootstrap: check-context
 	@set -euo pipefail; \
-	pod() { kubectl -n health exec deploy/influxdb -- "$$@"; }; \
+	$(INFLUX_POD_FN) \
 	pod influx bucket create -n apple_workouts -o cynexia || true; \
 	pod influx bucket create -n garmin -o cynexia || true; \
 	GID=$$(pod influx bucket list -o cynexia -n garmin --hide-headers | awk '{print $$1}'); \
@@ -789,3 +821,64 @@ health-influx-bootstrap: check-context
 	pod influx auth create -o cynexia --write-bucket $$AMID --write-bucket $$AWID -d "apple ingester write-only" --json | jq -r .token; \
 	echo "--- READ TOKEN (paste into op://Homelab/health-influxdb/read-token):"; \
 	pod influx auth create -o cynexia --read-bucket $$AMID --read-bucket $$AWID --read-bucket $$GID -d "mcp+grafana read-only" --json | jq -r .token
+
+# Bootstrap the `cloudflare` bucket for homelab/health/cloudflare-analytics.yaml.
+#
+# Run this ONCE, before the first `make apply-homelab` that includes the
+# CronJob. Same one-way-door as health-influx-bootstrap: InfluxDB 2.9
+# hash-stores tokens server-side, so the values printed here are the ONLY copy
+# that will ever exist. Paste them into 1Password before closing the terminal.
+#
+# -r 0 is infinite retention. The volume is tiny (~3.5k requests/day across two
+# hostnames) and the entire point of this pipeline is to outlive Cloudflare's
+# 8-day window, so expiring the copy would defeat it.
+#
+# The ingest token needs READ AS WELL AS WRITE: the job's resume point is
+# max(_time) read back out of this bucket, not a stored cursor.
+#
+# It also re-mints the shared mcp+grafana read token to include the new bucket.
+# InfluxDB has no way to add a bucket to an existing auth, so Grafana cannot see
+# `cloudflare` until the read token is replaced. After pasting the new value into
+# 1Password: `make apply-homelab`, restart grafana and pomerium, THEN delete the
+# superseded auth with `influx auth delete`. Deleting it first locks Grafana and
+# the MCP connector out until the new Secret has actually rolled.
+#
+# The `pod` helper exports INFLUX_TOKEN from the admin token already present in
+# the influxdb container's own environment. The influx CLI reads INFLUX_TOKEN,
+# not DOCKER_INFLUXDB_INIT_ADMIN_TOKEN, and the CLI config the image writes at
+# first init lives on an ephemeral path — so after any pod restart the CLI is
+# unauthenticated and every call fails with `401 Unauthorized`. Sourcing it in
+# the pod keeps the admin token inside the cluster: reading it here with
+# `op read` would put it in this shell's argv, visible to `ps`.
+#
+# RUN THIS IN A PLAIN TERMINAL, NOT INSIDE AN AGENT SESSION. It prints two live
+# InfluxDB tokens so you can paste them into 1Password, and the 1Password service
+# account this repo uses is read-only, so there is no CLI path that writes them
+# for you. Any token printed inside an agent session lands in that session's
+# transcript and must then be rotated under the `secrets-to-rotate.md` rule.
+# Running it via Claude Code's `!` prefix does NOT help: that executes in the
+# session and the output still reaches the model.
+.PHONY: health-influx-cloudflare-bootstrap
+health-influx-cloudflare-bootstrap: check-context
+	@set -euo pipefail; \
+	$(INFLUX_POD_FN) \
+	bucket_id() { \
+	  id=$$(pod influx bucket list -o cynexia -n "$$1" --hide-headers | awk '{print $$1}'); \
+	  if [ -z "$$id" ]; then echo "FATAL: bucket '$$1' not found in org cynexia" >&2; exit 1; fi; \
+	  printf '%s' "$$id"; \
+	}; \
+	mint() { \
+	  tok=$$(pod influx auth create -o cynexia "$$@" --json | jq -r '.token // empty'); \
+	  if [ -z "$$tok" ]; then echo "FATAL: influx auth create returned no token" >&2; exit 1; fi; \
+	  printf '%s\n' "$$tok"; \
+	}; \
+	pod influx bucket create -n cloudflare -o cynexia -r 0 || true; \
+	CFID=$$(bucket_id cloudflare); \
+	AMID=$$(bucket_id apple_metrics); \
+	AWID=$$(bucket_id apple_workouts); \
+	GID=$$(bucket_id garmin); \
+	echo "--- CLOUDFLARE INGEST TOKEN (paste into op://Homelab/health-influxdb/cloudflare-token):"; \
+	mint --read-bucket $$CFID --write-bucket $$CFID -d "cloudflare analytics ingest rw"; \
+	echo "--- REPLACEMENT READ TOKEN (paste into op://Homelab/health-influxdb/read-token):"; \
+	mint --read-bucket $$AMID --read-bucket $$AWID --read-bucket $$GID --read-bucket $$CFID -d "mcp+grafana read-only (incl cloudflare)"; \
+	echo "--- then: apply, restart grafana+pomerium, and only THEN delete the old read-only auth"
