@@ -87,12 +87,25 @@ spec:
                   # unverified - silently. An explicit list somebody has to maintain beats a
                   # wildcard that silently accepts nothing at all.
                   #
+                  # This file is the source of truth for the thresholds and both artifact lists
+                  # below. docs/operations/monitoring.md ("The homelab backup verification gate")
+                  # reproduces them with the reasoning behind each one; change them here and
+                  # there in the same commit, or that section quietly becomes fiction.
+                  #
                   # Paths must be globs: local-path-provisioner names each PVC directory
                   # <pvName>_<namespace>_<pvcName> and pvName is a random UUID. The StorageClass
                   # is reclaimPolicy: Retain, so deleting and recreating a PVC leaves the old
                   # directory behind forever; each glob therefore resolves to its MOST RECENTLY
-                  # MODIFIED match so an orphan can neither mask a missing artifact nor poison
-                  # the verdict.
+                  # MODIFIED match, so a live artifact always beats its frozen predecessor.
+                  #
+                  # The residual, stated plainly: if the live artifact is absent ENTIRELY - a PVC
+                  # recreated and not yet written to - the orphan is the only match and the check
+                  # passes on it. Telling bound from orphaned needs the Kubernetes API from inside
+                  # this job, i.e. a ServiceAccount and RBAC on a backup CronJob, which is not
+                  # worth it here: the orphan lives under /data and is backed up too, so this is a
+                  # gate reporting on the wrong file, not a lost recovery point. What it gets
+                  # instead is visibility - every resolved path is printed, so an orphan
+                  # substitution shows up in the job log rather than hiding behind "8/8".
 
                   # The influx dumps are written nightly at 02:30 by the health/influx-backup
                   # CronJob, 30 minutes before this job. 30h tolerates one missed or delayed run
@@ -135,8 +148,16 @@ spec:
                   NOW=0
 
                   # Resolve a glob to its most recently modified existing match.
-                  # stdout: the path. 0 = found, 1 = nothing matched, 2 = something matched but
-                  # could not be read (never reported as present).
+                  # stdout: the path. 0 = found, 1 = nothing matched, 2 = a match existed but
+                  # could not be stat'd (never reported as present).
+                  #
+                  # 2 is returned on the FIRST unreadable candidate, not only once every
+                  # candidate has proved unreadable - deliberately fail-closed. reclaimPolicy:
+                  # Retain leaves orphaned PVC directories behind forever, so "skip what you
+                  # cannot read and take the newest of the rest" would silently validate a
+                  # stale orphan on exactly the night the live artifact became unreadable. A
+                  # red over a file that vanished mid-walk costs one skipped prune; the
+                  # alternative costs a green ping over data nobody could read.
                   newest_match() {
                     set +f
                     # shellcheck disable=SC2086  # deliberate: $1 IS a glob pattern and must be
@@ -225,6 +246,13 @@ spec:
                   # rotating logs) and must not manufacture a nightly red. But an unparseable
                   # total IS fatal, and so is a directory that cannot be opened at all - that is
                   # checked explicitly with -r/-x, which does not race.
+                  #
+                  # du's STDERR is therefore deliberately NOT captured. It goes to the pod log,
+                  # where it belongs. Folding it in with 2>&1 puts "du: can't open ...: Permission
+                  # denied" ahead of the total in the same string, ${_mdu%%[!0-9]*} yields the
+                  # empty prefix, and the advisory walk error is promoted to the fatal
+                  # "unparseable total" branch - defeating this whole paragraph. Verified in
+                  # restic/restic:0.17.3.
                   dir_is_empty() {
                     _ed=$1
                     set +f
@@ -250,7 +278,7 @@ spec:
                         _mrc=1
                         continue
                       fi
-                      _mdu=$(du -sk "$_md" 2>&1) || echo "WARNING (advisory) du reported errors under $_md"
+                      _mdu=$(du -sk "$_md") || echo "WARNING (advisory) du reported errors under $_md"
                       _mk=${_mdu%%[!0-9]*}
                       case "$_mk" in
                         ''|*[!0-9]*)
@@ -302,7 +330,15 @@ spec:
                       _min=${_rest##*:}
                       _path=$(newest_match "$_glob"); _s=$?
                       case "$_s" in
-                        0) if assert_min_size "$_path" "$_label" "$_min"; then _ok=$(( _ok + 1 )); else _rc=1; fi ;;
+                        0) if assert_min_size "$_path" "$_label" "$_min"; then
+                             # Print what the glob actually resolved to. A retained orphan
+                             # directory can satisfy a check the live PVC no longer can; this is
+                             # the only place that becomes visible.
+                             echo "note: $_label -> $_path"
+                             _ok=$(( _ok + 1 ))
+                           else
+                             _rc=1
+                           fi ;;
                         1) echo "ERROR: $_label MISSING - nothing matches $_glob"; _rc=1 ;;
                         *) echo "ERROR: $_label UNREADABLE - could not stat a match of $_glob"; _rc=1 ;;
                       esac
@@ -326,7 +362,12 @@ spec:
                       _fglob=${_fe#*:}
                       _fpath=$(newest_match "$_fglob"); _fs=$?
                       case "$_fs" in
-                        0) if assert_fresh "$_fpath" "$_flabel"; then _fok=$(( _fok + 1 )); else _frc=1; fi ;;
+                        0) if assert_fresh "$_fpath" "$_flabel"; then
+                             echo "note: $_flabel -> $_fpath"
+                             _fok=$(( _fok + 1 ))
+                           else
+                             _frc=1
+                           fi ;;
                         1) echo "ERROR: $_flabel MISSING - nothing matches $_fglob"; _frc=1 ;;
                         *) echo "ERROR: $_flabel UNREADABLE - could not stat a match of $_fglob"; _frc=1 ;;
                       esac

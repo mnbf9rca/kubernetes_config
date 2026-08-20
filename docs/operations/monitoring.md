@@ -233,6 +233,10 @@ local-path PVC is backed up as live application state. The assertions are theref
 the **tree** rather than about snapshot files, in four authoritative checks plus one
 forensic pass.
 
+`homelab/backup/restic-cronjob.yaml` is the source of truth for every threshold and both
+artifact tables below; they are reproduced here for the reasoning, and must be changed in
+the same commit as the manifest.
+
 **1. Mount identity — authoritative, and the only first-order check.** Talos puts the
 kubelet pod directory on the EPHEMERAL partition (`/dev/sda6`) — the same filesystem that
 `/var/mnt/ssd/local-path-provisioner` falls back to when the SSD user volume fails to
@@ -272,7 +276,15 @@ Same maintenance contract as VPS: a new local-path PVC holding anything you woul
 be added here, or that application's backup goes unverified, silently. Same glob rationale
 too — `local-path-provisioner` names each directory `<pvName>_<namespace>_<pvcName>` with a
 random UUID, and the StorageClass is `reclaimPolicy: Retain`, so a recreated PVC leaves its
-predecessor behind forever. Each glob resolves to its most recently modified match.
+predecessor behind forever. Each glob resolves to its most recently modified match, so a
+live artifact always beats its frozen predecessor — with one residual: if the live artifact
+is absent *entirely*, because the PVC was recreated and nothing has written to it yet, the
+orphan is the only match and the check passes on it. Telling bound from orphaned would need
+the Kubernetes API from inside the job, which is not worth a ServiceAccount and RBAC on a
+backup CronJob: the orphan is under `/data` and is backed up too, so this is the gate
+reporting on the wrong file rather than a lost recovery point. The gate prints the path each
+glob resolved to, so the substitution shows up in the job log instead of hiding behind
+"8/8".
 
 **4. Dump freshness — authoritative.** The influx dumps are the only homelab artifacts
 produced on a schedule, so they are the only ones with a meaningful age. Both must be under
@@ -303,7 +315,10 @@ different force:
 non-zero when a file vanishes mid-walk, which happens routinely here (sqlite WAL files,
 rotating logs) and would manufacture a nightly red. Its status only warns. Its *output* is
 still authoritative — an unparseable total fails — and unlike `find`, a `du` that could not
-walk still emits a number, so the scale floors catch it.
+walk still emits a number, so the scale floors catch it. Its *stderr* is deliberately not
+captured: folding it in with `2>&1` puts the diagnostic ahead of the total in the same
+string, the numeric prefix comes out empty, and the advisory warning is promoted to the
+fatal "unparseable total" branch. It goes to the pod log instead.
 
 The gate announces its passes (`8/8 artifacts present`, `2/2 newer than 30h`). A gate that
 prints nothing when it is happy is indistinguishable from a gate that never ran.
@@ -478,7 +493,7 @@ several of these services is the likelier incident.
 | **pomerium `mcp` sidecar** | Its probes are `tcpSocket`. A wedged HTTP handler with a live listener passes them. The MCP server exposes no health endpoint |
 | **homelab services** | The external layer runs on the VPS, which has no route to `*.cynexia.net`. Only the three health-tunnel hostnames get layer-3 coverage. sonarr, radarr, sabnzbd, emby, hydra2 and grafana have probes and nothing external |
 | **the VPS gate** | It proves each snapshot exists, is recent, and holds at least one schema object. It does not prove the contents are complete or uncorrupted. A snapshot missing rows, or with a corrupt page below the `sqlite_master` read, passes everything here and surfaces at restore time |
-| **the homelab gate** | It proves the SSD is mounted and the tree is the right *shape* — right number of PVC directories, right order of magnitude, the listed files present and non-trivial. It says nothing about *content*. Every homelab PVC is copied live, with no quiesce step: a sqlite database mid-write is captured torn, `sonarr.db` at 14 MiB of corruption passes the size floor exactly as 14 MiB of working database does, and a PVC that stopped being written to weeks ago looks identical to one written a minute ago. Only the two influx dumps are age-checked. The rest surfaces at restore time |
+| **the homelab gate** | It proves the SSD is mounted and the tree is the right *shape* — right number of PVC directories, right order of magnitude, the listed files present and non-trivial. It says nothing about *content*. Every homelab PVC is copied live, with no quiesce step: a sqlite database mid-write is captured torn, `sonarr.db` at 14 MiB of corruption passes the size floor exactly as 14 MiB of working database does, and a PVC that stopped being written to weeks ago looks identical to one written a minute ago. Only the two influx dumps are age-checked. A retained orphan directory from a recreated PVC can satisfy an expected-set entry the live PVC no longer can — the resolved paths are printed so it is visible, but nothing fails on it. The rest surfaces at restore time |
 
 Queued, not configured: a changedetection `overdue_watches` json-query monitor and a
 karakeep queue-depth alert. Both need an API credential in the monitor.
