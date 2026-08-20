@@ -5,6 +5,11 @@ metadata:
   namespace: backup
 spec:
   backoffLimit: 0
+  # A Job's spec.template is immutable, so a completed Job that is never
+  # garbage collected blocks every later apply that changes it. Required on
+  # every one-shot Job here; the rule and the incident behind it are in
+  # AGENTS.md, and `make check-job-ttl` enforces it.
+  ttlSecondsAfterFinished: 86400
   template:
     spec:
       restartPolicy: Never
