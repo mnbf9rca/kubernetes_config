@@ -79,7 +79,7 @@ issue #29 tracks whether that was the cause.
 #### What `"error"` in `!hub.json` actually means
 
 It is not a failure counter, and it is not a current-state signal. `p/api/pshb.php` sets
-it `true` when a subscription is verified, with the comment *"Do not assume that WebSub
+it to `true` when a subscription is verified, with the comment *"Do not assume that WebSub
 works until the first successful push"*, and clears it only after a delivery that updates
 at least one feed for at least one user. So:
 
