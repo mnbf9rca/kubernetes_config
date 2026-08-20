@@ -57,6 +57,71 @@ Public ingestion endpoints must be Access-bypassed or they break:
 A bypass path glob of `/foo/*` does **not** match the bare path `/foo` — add both the
 exact and the wildcard destination.
 
+### FreshRSS WebSub push
+
+FreshRSS builds its WebSub callback URL from `base_url` in `data/config.php`. That file
+lives on the `freshrss-data` PVC rather than in this repo, and the image reads the
+`BASE_URL` environment variable only during first install, so setting it on the
+Deployment has no effect on an existing volume. Change it with the CLI:
+
+```bash
+kubectl --context cynexia-vps -n vps exec deployment/freshrss -c freshrss -- \
+  php /var/www/FreshRSS/cli/reconfigure.php --base-url=https://rss.cynexia.com
+```
+
+With an `http://` value, Cloudflare answers each hub callback with a 301 to the HTTPS
+URL. Verification survives that: hubs follow the redirect for the `GET`, and Google's
+FeedFetcher demonstrably did. Whether *delivery* survives it is a different question,
+because a hub is far less likely to replay a `POST` body across a redirect — and no push
+delivery has ever succeeded on this instance. The value was corrected on August 20, 2026;
+issue #29 tracks whether that was the cause.
+
+#### What `"error"` in `!hub.json` actually means
+
+It is not a failure counter, and it is not a current-state signal. `p/api/pshb.php` sets
+it to `true` when a subscription is verified, with the comment *"Do not assume that WebSub
+works until the first successful push"*, and clears it only after a delivery that updates
+at least one feed for at least one user. So:
+
+> `"error": true` means **no push has ever been successfully processed for this feed**.
+
+Two things follow. A quiet feed and a broken one look identical. And
+`FreshRSS_Feed::pubSubHubbubPrepare()` re-subscribes any feed whose state has `error` set
+and whose `lease_start` is over 23 hours old — so a feed that has never received a push
+re-subscribes **daily, permanently**, regardless of how far its lease is from expiring.
+That accounts for 3,040 subscribe requests across twelve feeds in six months here. See
+issue #29.
+
+Grepping for `pubSubHubbubError()` is misleading: that method is only ever called with
+`true`, which makes the flag look like a one-way latch. The clearing path writes the
+array directly in `p/api/pshb.php` and does not go through the method.
+
+**Subscription health is `lease_end` in the future.** Run:
+
+```bash
+./scripts/freshrss-websub-status.py
+```
+
+It reports both columns per feed — whether the lease is live, and whether that feed has
+ever received a push — and exits non-zero if any subscription is not live, so it works as
+a check. It reads the state inside the pod and prints only derived status: never print
+`!hub.json` yourself, because each file holds that feed's callback secret.
+
+As of August 20, 2026 it reports 12 of 12 live and 0 of 12 ever pushed.
+
+A second-order check is the outbound subscribe log, `data/users/_/log_pshb.txt`. Tally
+the trailing HTTP status with `awk '{print $NF}' … | sort | uniq -c`: 2xx is success. As
+of August 20, 2026 that log showed 2,959 successes against 69 transient 5xx over six
+months, and no redirects at all.
+
+Neither check proves end-to-end delivery, only subscription. Delivery is a `POST` to
+`/api/pshb.php` in the pod log, and it only appears when a subscribed feed actually
+publishes something.
+
+The callback path `/api/pshb.php` falls under the `freshrss api` Access bypass, so it
+stays publicly reachable, and under the zone rate limiting rule of 50 requests per 10
+seconds per IP, far above hub delivery volume.
+
 ### Browser backend for changedetection
 
 Use `dgtlmoon/sockpuppetbrowser`. `browserless/chrome:latest` is the deprecated v1 line
