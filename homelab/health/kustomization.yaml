@@ -33,8 +33,26 @@ resources:
 # agree on namespace. Omit it and you get a silent double failure: the ConfigMap
 # is created in `default` AND the CronJob keeps pointing at the unsuffixed name,
 # so the mount dangles and every run fails at container start.
+#
+# GENERATED SCRIPTS ARE NOT INERT TEXT. They ride the same stream as every
+# manifest, so envsubst rewrites them too — and it substitutes the bare `$NAME`
+# form as well as `${NAME}`. A script here must never mention a name in
+# ENVSUBST_VAR_NAMES; `make check-script-substitution` enforces that.
 configMapGenerator:
   - name: cloudflare-analytics-script
     namespace: health
     files:
       - ingest.py=scripts/cloudflare-analytics-ingest.py
+  # Scheduled-job scripts for this namespace. influx-backup.sh runs in the
+  # influx-backup CronJob pod; the two influx-*.sh scripts it ships into the
+  # influxdb pod by `sh -c "$(cat ...)"` are keys here too, because the CronJob
+  # pod is what has to read them. ingest-freshness.sh is a separate CronJob
+  # sharing this one ConfigMap: both are health-namespace scheduled work, and a
+  # second generator would buy nothing but another name to keep in sync.
+  - name: health-backup-scripts
+    namespace: health
+    files:
+      - influx-backup.sh=scripts/influx-backup.sh
+      - influx-native-backup.sh=scripts/influx-native-backup.sh
+      - influx-export-lp.sh=scripts/influx-export-lp.sh
+      - ingest-freshness.sh=scripts/ingest-freshness.sh

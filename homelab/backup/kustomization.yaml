@@ -7,3 +7,26 @@ namespace: backup
 resources:
   - restic-init-job.yaml
   - restic-cronjob.yaml
+
+# Job scripts as real files, mounted at /scripts. The content-hash suffix is
+# left ON, so editing a script recreates the Job that mounts it rather than
+# leaving a stale copy behind.
+#
+# No `namespace:` override is needed on this entry: this kustomization already
+# sets a top-level `namespace: backup`, which applies to generated resources
+# too. (The health and vps kustomizations deliberately set no top-level
+# namespace, so their generators must set one explicitly.)
+#
+# GENERATED SCRIPTS ARE NOT INERT TEXT. They pass through envsubst, which
+# substitutes the bare `$NAME` form as well as `${NAME}`. RESTIC_REPOSITORY,
+# RESTIC_PASSWORD, B2_ACCOUNT_ID and B2_ACCOUNT_KEY are all in
+# ENVSUBST_VAR_NAMES — and are exactly the names restic reads — so a script
+# here that mentions one publishes the real value inside this ConfigMap.
+# `make check-script-substitution` enforces that none do.
+#
+# restic-cronjob.yaml's script is not extracted yet; it is being changed on
+# another branch and will follow.
+configMapGenerator:
+  - name: backup-scripts
+    files:
+      - restic-init.sh=scripts/restic-init.sh

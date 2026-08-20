@@ -4,3 +4,27 @@ kind: Kustomization
 resources:
   - restic-init-job.yaml
   - restic-cronjob.yaml
+
+# Job scripts as real files, mounted at /scripts. The content-hash suffix is
+# left ON, so editing a script rolls the CronJob (and recreates the Job) that
+# mounts it rather than leaving a stale copy behind.
+#
+# `namespace:` is REQUIRED and is not decoration. This kustomization sets no
+# top-level namespace, and a generator inherits one from nowhere; kustomize
+# only rewrites a name reference when referrer and referent agree on namespace.
+# Omit it and you get a silent DOUBLE failure: the ConfigMap is created in
+# `default` AND both workloads keep pointing at the unsuffixed name, so the
+# mount dangles and every run dies at container start.
+#
+# GENERATED SCRIPTS ARE NOT INERT TEXT. They pass through envsubst, which
+# substitutes the bare `$NAME` form as well as `${NAME}`. VPS_RESTIC_REPOSITORY
+# and friends are in VPS_ENVSUBST_VAR_NAMES, and the homelab list holds the
+# unprefixed `RESTIC_*` / `B2_*` names — which is why these two scripts are NOT
+# shared with homelab/backup/scripts/. `make check-script-substitution`
+# enforces both lists against every script in both trees.
+configMapGenerator:
+  - name: backup-scripts
+    namespace: backup
+    files:
+      - restic-backup.sh=scripts/restic-backup.sh
+      - restic-init.sh=scripts/restic-init.sh

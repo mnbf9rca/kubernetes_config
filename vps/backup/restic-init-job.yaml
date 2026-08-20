@@ -16,21 +16,26 @@ spec:
       containers:
         - name: restic
           image: restic/restic:0.17.3
-          command: ["sh", "-c"]
-          args:
-            - |
-              set -euo pipefail
-              echo "Initializing restic repo at $RESTIC_REPOSITORY"
-              # Idempotent: the Job's TTL deletes it, so every later apply recreates
-              # it. A bare `restic init` then fails against the existing repo and
-              # leaves a Failed Job behind on each apply. Probing first makes a
-              # re-run a clean no-op, and a genuine init failure still fails loudly.
-              if restic cat config >/dev/null 2>&1; then
-                echo "Repo already initialized - nothing to do."
-              else
-                restic init
-              fi
-              echo "Done."
+          # The script is vps/backup/scripts/restic-init.sh, mounted at
+          # /scripts by the configMapGenerator in this directory's
+          # kustomization.yaml. It is deliberately NOT shared with the homelab
+          # copy: the two clusters use different envsubst allowlists, so one
+          # file cannot be safe in both trees. See the script's header.
+          command: ["sh", "/scripts/restic-init.sh"]
+          env:
+            # The repository URL again, under a name that is in NEITHER
+            # envsubst allowlist, purely so the script can log it. The script
+            # cannot write `$RESTIC_REPOSITORY`: that name is allowlisted for
+            # the homelab cluster, and a generated script that mentions it
+            # would have the real B2 URL substituted into a ConfigMap. Same
+            # Secret key, so this is a rename, not a second copy of the value.
+            - name: REPO_DISPLAY
+              valueFrom: { secretKeyRef: { name: restic-b2, key: RESTIC_REPOSITORY } }
           envFrom:
             - secretRef:
                 name: restic-b2
+          volumeMounts:
+            - { name: scripts, mountPath: /scripts, readOnly: true }
+      volumes:
+        - name: scripts
+          configMap: { name: backup-scripts }

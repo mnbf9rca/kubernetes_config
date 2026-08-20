@@ -54,51 +54,20 @@ spec:
               # (v1.36.0) exactly and was verified in-cluster to have kubectl v1.36.0,
               # sh, wget, curl, awk, xargs, date — everything this script needs.
               image: alpine/k8s:1.36.0
-              command: [/bin/sh, -c]
+              # The script is homelab/health/scripts/influx-backup.sh, mounted at
+              # /scripts by the configMapGenerator in this directory's
+              # kustomization.yaml. It exec-s two further scripts into the influxdb
+              # pod as TEXT (`sh -c "$(cat ...)"`) rather than mounting this
+              # ConfigMap there: mounting it into influxdb.yaml would couple that
+              # Deployment to the backup ConfigMap and roll influxdb on every script
+              # edit.
+              command: ["sh", "/scripts/influx-backup.sh"]
               env:
                 - name: HC_UUID
                   value: "${HEALTH_HC_BACKUP_UUID}"
-              args:
-                - |
-                  set -eu
-                  DATE=$(date +%F)
-                  POD=$(kubectl -n health get pod -l app=influxdb -o jsonpath='{.items[0].metadata.name}')
-                  # native backup (online, via HTTP API, operator token from the pod env):
-                  kubectl -n health exec "$POD" -- sh -c \
-                    'influx backup /backups/native/'"$DATE"' -t "$DOCKER_INFLUXDB_INIT_ADMIN_TOKEN" --host http://localhost:8086'
-                  # portable line-protocol export, per bucket, last 8 days (windowed to avoid
-                  # compaction races and keep runs small; weekly overlap gives continuity):
-                  #
-                  # The bucket list is EXPLICIT, and a missing bucket is fatal. A new bucket
-                  # must be added here or it is silently never exported — the same class of
-                  # bug as the VPS gate's expected-set assertion. `cloudflare` therefore
-                  # requires `make health-influx-cloudflare-bootstrap` to have been run
-                  # BEFORE the apply that adds it here.
-                  kubectl -n health exec "$POD" -- sh -c '
-                    set -eu
-                    START=$(date -d "8 days ago" +%FT%TZ 2>/dev/null || date -v-8d +%FT%TZ)
-                    for B in apple_metrics apple_workouts garmin cloudflare; do
-                      # A pipeline exits with its LAST command status, so a failed
-                      # `influx bucket list` leaves BID empty and sails past set -e. The
-                      # explicit test is what turns "bucket does not exist" into a named
-                      # failure instead of an opaque export-lp error.
-                      BID=$(influx bucket list -o cynexia -n "$B" --hide-headers -t "$DOCKER_INFLUXDB_INIT_ADMIN_TOKEN" | awk "{print \$1}")
-                      if [ -z "$BID" ]; then
-                        echo "FATAL: bucket $B not found — it is listed for backup but does not exist" >&2
-                        exit 1
-                      fi
-                      influxd inspect export-lp --bucket-id "$BID" \
-                        --engine-path /var/lib/influxdb2/engine \
-                        --output-path /backups/lp/'"$DATE"'-$B.lp.gz --compress \
-                        --start "$START"
-                    done'
-                  # prune (keep 14 native, 60 lp — restic retention holds the long tail in B2):
-                  ls -1dt /dumps/native/* | tail -n +15 | xargs -r rm -rf
-                  ls -1t  /dumps/lp/*.lp.gz | tail -n +61 | xargs -r rm -f
-                  # dead-man's switch:
-                  wget -q -O- "https://hc-ping.com/$HC_UUID" >/dev/null
               volumeMounts:
                 - { name: dumps, mountPath: /dumps }
+                - { name: scripts, mountPath: /scripts, readOnly: true }
           initContainers:
             - name: mkdirs
               image: busybox:1.37
@@ -108,3 +77,5 @@ spec:
           volumes:
             - name: dumps
               persistentVolumeClaim: { claimName: health-dumps }
+            - name: scripts
+              configMap: { name: health-backup-scripts }

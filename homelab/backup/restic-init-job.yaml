@@ -16,32 +16,17 @@ spec:
       containers:
         - name: restic
           image: restic/restic:0.17.3
-          command: ["sh", "-c"]
-          args:
-            - |
-              set -euo pipefail
-              if restic snapshots >/dev/null 2>&1; then
-                echo "Repository already initialized."
-              else
-                echo "Initializing restic repository..."
-                # Idempotent: the Job's TTL deletes it, so every later apply recreates
-                # it. A bare `restic init` then fails against the existing repo and
-                # leaves a Failed Job behind on each apply. Probing first makes a
-                # re-run a clean no-op, and a genuine init failure still fails loudly.
-                if restic cat config >/dev/null 2>&1; then
-                  echo "Repo already initialized - nothing to do."
-                else
-                  # Idempotent: the Job's TTL deletes it, so every later apply recreates
-              # it. A bare `restic init` then fails against the existing repo and
-              # leaves a Failed Job behind on each apply. Probing first makes a
-              # re-run a clean no-op, and a genuine init failure still fails loudly.
-              if restic cat config >/dev/null 2>&1; then
-                echo "Repo already initialized - nothing to do."
-              else
-                restic init
-              fi
-                fi
-              fi
+          # The script is homelab/backup/scripts/restic-init.sh, mounted at
+          # /scripts by the configMapGenerator in this directory's
+          # kustomization.yaml. It is deliberately NOT shared with the VPS
+          # copy: the two clusters use different envsubst allowlists, so one
+          # file cannot be safe in both trees. See the script's header.
+          command: ["sh", "/scripts/restic-init.sh"]
           envFrom:
             - secretRef:
                 name: restic-b2
+          volumeMounts:
+            - { name: scripts, mountPath: /scripts, readOnly: true }
+      volumes:
+        - name: scripts
+          configMap: { name: backup-scripts }

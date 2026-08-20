@@ -1,0 +1,250 @@
+#!/bin/sh
+# Nightly restic backup of the VPS local-path PVC tree, plus the backup
+# verification gate that checks the quiesce sidecars' snapshots.
+#
+# Runs from the `restic-backup` CronJob. Credentials and the repository URL
+# arrive in the environment from the `restic-b2` Secret (envFrom), and nothing
+# here names them: VPS_RESTIC_REPOSITORY and friends are in the VPS envsubst
+# allowlist, and this file passes through envsubst on its way into a ConfigMap.
+# See `make check-script-substitution`. $HC_UUID below is safe: the CronJob's
+# `env:` is where the allowlisted UUID placeholder lives, and only the renamed
+# HC_UUID reaches this file. Do not write the allowlisted name here even in a
+# comment — a comment is substituted exactly like code, which is how the guard
+# first earned its keep.
+#
+# DELIBERATELY NOT SHARED with the homelab restic job for the same reason the
+# two restic-init.sh files are not shared: the two clusters have different
+# allowlists, so one file cannot be safe in both trees.
+#
+# shellcheck disable=SC3040 # `set -o pipefail` is not POSIX, but the
+# restic/restic:0.17.3 image's /bin/sh is busybox ash, which implements it. If
+# a future image did not, this line would fail and the job would stop loudly
+# rather than silently swallowing a broken pipeline.
+set -uo pipefail
+
+# Dead-man's-switch. /start detects started-but-never-finished
+# and records the run duration; the exit-code ping distinguishes
+# success from failure. Pings never fail the job.
+HC="https://hc-ping.com/${HC_UUID}"
+ping_hc() { wget -q -T 10 -O- "$HC/$1" >/dev/null 2>&1 || true; }
+
+# ---- Backup verification gate -----------------------------
+# Verifies the quiesce snapshots that the sqlite sidecars (n8n,
+# karakeep, uptime-kuma, freshrss) and umami's pg_dumpall sidecar
+# refresh every 12h. Two checks with deliberately different
+# authority:
+#
+#   1. EXPECTED SET - AUTHORITATIVE, sets the exit code. Every
+#      snapshot we know must exist is resolved, exists and is
+#      fresh. A bare mtime sweep cannot distinguish "no stale
+#      files because all is well" from "no stale files because
+#      /data is empty, unmounted, or an app's PVC is blank" -
+#      identical output, and the latter is catastrophic: restic
+#      succeeds on an empty tree and pings 0.
+#   2. BROAD SWEEP - ADVISORY, warns only. Its unique value is
+#      catching stale files nobody listed; its false-positive
+#      mode is an orphaned PV directory (recreate a PVC and the
+#      Retain-reclaimed old directory stays behind with a frozen
+#      *.restic in it), which would pin this red forever - alert
+#      fatigue on the one channel that must mean "restore is
+#      broken". So its FINDINGS cannot fail the job. Its
+#      INABILITY TO LOOK still can: a find that exits non-zero
+#      fails the gate, because "I could not look" must never be
+#      reported as "everything is fine".
+#
+# MAINTENANCE CONTRACT: a new sqlite-backed service must be added
+# to EXPECTED_SNAPSHOTS below. Forget, and that service's backups
+# are unverified - silently. That trade is deliberate: an explicit
+# list somebody has to maintain beats a wildcard that silently
+# accepts nothing at all.
+#
+# Entries are "label:glob". They must be globs because
+# local-path-provisioner names each PVC directory
+# <pvName>_<namespace>_<pvcName> and pvName is a random UUID.
+# Each glob resolves to its MOST RECENTLY MODIFIED match, so an
+# orphaned directory can neither mask a missing snapshot nor
+# poison the verdict.
+#
+# Freshness is stat(1) with a checked exit status, never
+# `[ -n "$(find ...)" ]`: that form captures stdout only and
+# ignores find's status, so a permission error, an I/O error or a
+# file vanishing mid-walk yields empty output and a verdict of
+# "fresh". Every inability to read is a failure here, not a pass.
+STALE_MINUTES=900
+STALE_SECONDS=$(( STALE_MINUTES * 60 ))
+
+EXPECTED_SNAPSHOTS="
+n8n:/data/*_vps_n8n-data/database.sqlite.restic
+karakeep:/data/*_vps_karakeep-data/db.db.restic
+uptime-kuma:/data/*_vps_uptime-kuma-data/kuma.db.restic
+umami:/data/*_vps_umami-pg-data/dump.sql.restic
+"
+# shellcheck disable=SC2125 # storing the glob UNEXPANDED is the whole
+# point: newest_match expands it later, under a controlled `set +f`,
+# after the caller has decided how to interpret "nothing matched".
+FRESHRSS_DB_GLOB=/data/*_vps_freshrss-data/users/*/db.sqlite
+
+# Resolve a glob to its most recently modified existing match.
+# stdout: the path. 0 = found, 1 = nothing matched, 2 = something
+# matched but could not be read (never reported as fresh).
+newest_match() {
+  # DANGEROUS SHAPE, PRESERVED DELIBERATELY: this ends with an unconditional
+  # `set -f` and never restores the caller's setting. It is safe ONLY because
+  # every call site is a command substitution, so the change dies with the
+  # subshell. If a refactor ever removes that subshell, globbing stays off for
+  # the rest of the run and check_freshrss's per-user loop silently iterates a
+  # literal, unexpanded pattern and verifies nothing at all. Do not restructure
+  # the call sites; do not "tidy" the set -f pair.
+  set +f
+  # shellcheck disable=SC2086 # unquoted ON PURPOSE — the split-and-glob is how
+  # the pattern in $1 becomes the list of matches. Quoting it would make every
+  # lookup miss and the gate would report every snapshot MISSING.
+  set -- $1
+  set -f
+  _best=""; _best_m=-1
+  for _c in "$@"; do
+    [ -e "$_c" ] || continue
+    _m=$(stat -c %Y "$_c" 2>/dev/null) || return 2
+    if [ "$_m" -gt "$_best_m" ]; then _best_m=$_m; _best=$_c; fi
+  done
+  [ -n "$_best" ] || return 1
+  printf '%s\n' "$_best"
+}
+
+# Age assertion on one resolved path. $1 = path, $2 = label.
+assert_fresh() {
+  _am=$(stat -c %Y "$1" 2>&1) || {
+    echo "ERROR: $2: cannot stat $1: $_am"
+    return 1
+  }
+  _aage=$(( NOW - _am ))
+  [ "$_aage" -lt "$STALE_SECONDS" ] && return 0
+  echo "ERROR: $2 STALE: $1 is $(( _aage / 3600 ))h old (limit $(( STALE_SECONDS / 3600 ))h)"
+  return 1
+}
+
+# FreshRSS keeps one sqlite DB per user, so its expected set is
+# dynamic. Iterate the SOURCE glob and assert a sibling snapshot
+# for EACH user DB. Taking the newest of the snapshot glob would
+# let one healthy user's fresh snapshot mask another user whose DB
+# has never been snapshotted at all - that user's data would then
+# sit in the backup as a raw, unquiesced file with the gate green.
+# NB: POSIX sh has no locals - every variable here is global.
+# This function is called from check_expected, so its working
+# variables are _f-prefixed to avoid clobbering the caller's
+# accumulator. Reusing `_rc` in both silently discarded the
+# caller's verdict, which pinged green over printed errors.
+check_freshrss() {
+  _frc=0
+  _flive=$(newest_match "$FRESHRSS_DB_GLOB"); _fs=$?
+  if [ "$_fs" -eq 1 ]; then
+    echo "note: no freshrss user DBs yet - nothing to verify"
+    return 0
+  fi
+  if [ "$_fs" -ne 0 ]; then
+    echo "ERROR: freshrss user DBs UNREADABLE under $FRESHRSS_DB_GLOB"
+    return 1
+  fi
+  # Only the PVC directory holding the most recently modified user
+  # DB is verified; an orphaned directory is ignored.
+  _fdir=${_flive%/users/*}
+  for _fdb in "$_fdir"/users/*/db.sqlite; do
+    [ -f "$_fdb" ] || continue
+    _fsnap="$_fdb.restic"
+    if [ ! -f "$_fsnap" ]; then
+      echo "ERROR: freshrss user DB has NO snapshot: $_fsnap"
+      _frc=1
+    else
+      assert_fresh "$_fsnap" "freshrss snapshot" || _frc=1
+    fi
+  done
+  return $_frc
+}
+
+check_expected() {
+  _rc=0
+  set -f                      # split the list without glob-expanding it
+  for _e in $EXPECTED_SNAPSHOTS; do
+    _label=${_e%%:*}
+    _glob=${_e#*:}
+    _path=$(newest_match "$_glob"); _s=$?
+    case "$_s" in
+      0) assert_fresh "$_path" "$_label snapshot" || _rc=1 ;;
+      1) echo "ERROR: $_label snapshot MISSING - nothing matches $_glob"; _rc=1 ;;
+      *) echo "ERROR: $_label snapshot UNREADABLE - could not stat a match of $_glob"; _rc=1 ;;
+    esac
+  done
+  set +f
+  check_freshrss || _rc=1
+  return $_rc
+}
+
+sweep_advisory() {
+  _sout=$(find /data -name '*.restic' -mmin +"$STALE_MINUTES" -print 2>&1); _ss=$?
+  if [ "$_ss" -ne 0 ]; then
+    echo "ERROR: advisory sweep could not complete - find exited $_ss: $_sout"
+    return 1
+  fi
+  [ -n "$_sout" ] || return 0
+  echo "WARNING (advisory, does not fail the job) stale *.restic files:"
+  echo "$_sout"
+  return 0
+}
+
+ping_hc start
+rc=0
+# Explicit && chaining rather than `set -e` inside a group:
+# errexit is ignored for any command in an AND-OR list, so a
+# `{ set -e; ... } || rc=$?` block would keep running after a
+# failure and report the last command's status.
+{
+  echo "==> snapshots" &&
+  { restic snapshots || true; } &&
+  echo "==> unlock" &&
+  # Removes STALE locks only (no --remove-all). This is what
+  # actually recovers a lock left by a SIGKILLed previous run.
+  restic unlock &&
+  echo "==> backup /data" &&
+  restic backup /data \
+    --tag nightly \
+    --exclude='*.tmp' \
+    --exclude='cache/*' &&
+  echo "==> forget + prune" &&
+  # --group-by paths is LOAD-BEARING. restic forget defaults to
+  # grouping by host+paths, and every CronJob pod has a unique
+  # hostname, so each nightly snapshot landed in a group of its
+  # own and the policy below kept ALL of them: verified
+  # 2026-08-20 with 137 snapshots in 137 groups across 131
+  # hostnames, zero ever pruned. Grouping by paths alone makes
+  # the retention policy actually apply.
+  restic forget --prune \
+    --group-by paths \
+    --keep-daily 7 \
+    --keep-weekly 4 \
+    --keep-monthly 6 &&
+  echo "==> check" &&
+  restic check &&
+  echo "==> done"
+} || rc=$?
+
+# The gate runs LAST, deliberately. Making it a precondition
+# is the intuitive move and it is wrong: one stale or missing
+# sqlite snapshot would then skip the entire night's backup of
+# everything else, and the backup is worth more than the gate.
+# Protect the data first, then fail the job so the fault still
+# turns the healthchecks.io ping red. Do not "fix" this by
+# moving it back above the chain.
+echo "==> backup verification gate"
+# NOW is sampled here, not at script start: the backup above
+# can run for hours, and an age measured against a stale clock
+# reading would silently loosen the freshness threshold.
+NOW=$(date +%s)
+gate_rc=0
+check_expected || gate_rc=1
+sweep_advisory || gate_rc=1
+# Only promote to failure if the backup itself succeeded - a
+# real restic failure keeps its own, more specific exit code.
+[ "$rc" -ne 0 ] || rc=$gate_rc
+
+ping_hc "$rc"
+exit $rc
