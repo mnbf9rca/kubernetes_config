@@ -783,7 +783,7 @@ create-health-cloudflared-secret: check-context
 .PHONY: health-influx-bootstrap
 health-influx-bootstrap: check-context
 	@set -euo pipefail; \
-	pod() { kubectl -n health exec deploy/influxdb -- "$$@"; }; \
+	pod() { kubectl -n health exec deploy/influxdb -- sh -c 'export INFLUX_TOKEN="$$DOCKER_INFLUXDB_INIT_ADMIN_TOKEN"; exec "$$@"' _ "$$@"; }; \
 	pod influx bucket create -n apple_workouts -o cynexia || true; \
 	pod influx bucket create -n garmin -o cynexia || true; \
 	GID=$$(pod influx bucket list -o cynexia -n garmin --hide-headers | awk '{print $$1}'); \
@@ -818,6 +818,14 @@ health-influx-bootstrap: check-context
 # superseded auth with `influx auth delete`. Deleting it first locks Grafana and
 # the MCP connector out until the new Secret has actually rolled.
 #
+# The `pod` helper exports INFLUX_TOKEN from the admin token already present in
+# the influxdb container's own environment. The influx CLI reads INFLUX_TOKEN,
+# not DOCKER_INFLUXDB_INIT_ADMIN_TOKEN, and the CLI config the image writes at
+# first init lives on an ephemeral path — so after any pod restart the CLI is
+# unauthenticated and every call fails with `401 Unauthorized`. Sourcing it in
+# the pod keeps the admin token inside the cluster: reading it here with
+# `op read` would put it in this shell's argv, visible to `ps`.
+#
 # RUN THIS IN A PLAIN TERMINAL, NOT INSIDE AN AGENT SESSION. It prints two live
 # InfluxDB tokens so you can paste them into 1Password, and the 1Password service
 # account this repo uses is read-only, so there is no CLI path that writes them
@@ -828,7 +836,7 @@ health-influx-bootstrap: check-context
 .PHONY: health-influx-cloudflare-bootstrap
 health-influx-cloudflare-bootstrap: check-context
 	@set -euo pipefail; \
-	pod() { kubectl -n health exec deploy/influxdb -- "$$@"; }; \
+	pod() { kubectl -n health exec deploy/influxdb -- sh -c 'export INFLUX_TOKEN="$$DOCKER_INFLUXDB_INIT_ADMIN_TOKEN"; exec "$$@"' _ "$$@"; }; \
 	bucket_id() { \
 	  id=$$(pod influx bucket list -o cynexia -n "$$1" --hide-headers | awk '{print $$1}'); \
 	  if [ -z "$$id" ]; then echo "FATAL: bucket '$$1' not found in org cynexia" >&2; exit 1; fi; \
