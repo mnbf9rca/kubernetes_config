@@ -78,6 +78,32 @@ spec:
             - { name: MAX_CONCURRENT_CHROME_PROCESSES, value: "10" }
           ports:
             - containerPort: 3000
+            # kubelet-only stats listener. Deliberately NOT added to the
+            # Service — kubelet dials the pod IP directly.
+            - { containerPort: 8080, name: stats }
+          # NEVER httpGet port 3000: it is a websockets listener and rejects a
+          # plain GET with 426 Upgrade Required, which is outside 200-399, so
+          # the probe would fail permanently and restart-loop the pod. /stats
+          # on :8080 shares the asyncio event loop with the CDP server, so a
+          # wedged loop fails it (spec §4 P2). A tcpSocket on :3000 is NOT an
+          # equivalent — the kernel completes handshakes from the backlog while
+          # the event loop is fully blocked, so it detects process death only
+          # (spec §6).
+          startupProbe:
+            httpGet: { path: /stats, port: 8080 }
+            periodSeconds: 10
+            failureThreshold: 12 # 2 min budget
+            timeoutSeconds: 5
+          livenessProbe:
+            httpGet: { path: /stats, port: 8080 }
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 6
+          readinessProbe:
+            httpGet: { path: /stats, port: 8080 }
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 3
           resources:
             # Steady state is FETCH_WORKERS=4 chromes on the changedetection
             # side driving 4 concurrent sessions here — roughly 150 MiB per
@@ -134,6 +160,29 @@ spec:
             # in agent memory).
           ports:
             - containerPort: 5000
+          # There is no upstream HEALTHCHECK (open since 2022) and the image
+          # ships neither curl nor wget, so httpGet / is the available check.
+          # A 302-on-auth counts as probe success, so this survives enabling a
+          # password. It does NOT detect the real risk here: upstream #4214,
+          # where the scheduling ticker died and 134 watches went 23 days
+          # unchecked while / returned 200. That needs an external json-query
+          # alert on overdue_watches from /api/v1/systeminfo — never liveness,
+          # because a restart does not fix a scheduling bug (spec §5).
+          startupProbe:
+            httpGet: { path: /, port: 5000 }
+            periodSeconds: 10
+            failureThreshold: 12 # 2 min budget
+            timeoutSeconds: 5
+          livenessProbe:
+            httpGet: { path: /, port: 5000 }
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 6
+          readinessProbe:
+            httpGet: { path: /, port: 5000 }
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 3
           volumeMounts:
             - { name: data, mountPath: /datastore }
       volumes:

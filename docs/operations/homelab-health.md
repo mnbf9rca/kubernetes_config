@@ -1,0 +1,252 @@
+# Health namespace
+
+Personal health-data pipeline in the homelab cluster: Apple Health + Garmin →
+InfluxDB → Grafana, plus a Claude MCP connector. Added in Phase 0/1 as its own `health`
+namespace. Manifests live in `homelab/health/`.
+
+Design docs are in the separate `~/Downloads/git/HealthRecords` repo —
+`docs/superpowers/specs/2026-07-11-health-platform-vision.md` and
+`docs/superpowers/specs/2026-07-11-health-records-ingestion-design.md`. Phase 2 (facade,
+records store, multi-person registry) is scoped there, not here.
+
+## Image policy
+
+**No keel in this namespace.** This is a data pipeline; auto-upgrading it is not wanted.
+Every image is version- or digest-pinned and Renovate proposes bumps instead. Renovate is
+scoped to `homelab/health/**` only, with `pinDigests` (see `renovate.json`).
+
+`namespaces.yaml` marks `health` as PSA `baseline` (nothing here needs
+hostPath/hostNetwork), but every current workload already trips `restricted`-level PSA
+warnings — a hardening pass to `restricted` is a queued follow-up.
+
+### Pins that carry a reason
+
+- **Pomerium `v0.33.0`**, not v0.32.1 as in the original draft: v0.33.0 carries the MCP
+  `WWW-Authenticate`/CORS fixes, and it needs
+  `mcp_allowed_client_id_domains: [claude.ai, claude.com, chatgpt.com]` or the
+  connector's OAuth dynamic client registration 401s.
+- **`garmin-grafana` is digest-pinned to a main-branch build**
+  (`thisisarpanghosh/garmin-fetch-data@sha256:8b7955d3...`), not a tagged release.
+  Release `v0.5.0` crashes with an `AttributeError` on `client.profile` when
+  `TAG_MEASUREMENTS_WITH_USER_EMAIL` is set — fixed upstream post-release but not yet in
+  a tagged build. Renovate is **disabled** for this image in `renovate.json`
+  `packageRules`: a digest-tracking rule would eventually propose bumping straight to
+  the broken `v0.5.0` build, and there's no way to encode "this specific release is bad".
+  Exit path is manual — when upstream publishes a release newer than `v0.5.0`, re-enable
+  the Renovate rule and re-pin the manifest as `tag@digest`.
+- **`apple-health-ingester` memory limit is 1Gi**, not the original 256Mi: large Health
+  Auto Export batch exports OOMKilled it at 256Mi.
+- **`influx-backup` runs on `alpine/k8s:1.36.0`**, version-matched to the cluster's
+  server minor — not `bitnami/kubectl`, which no longer publishes plain version tags on
+  Docker Hub (moved to the frozen, unauthenticated `bitnamilegacy/*`, and that image
+  lacks `wget`, which the healthchecks.io ping needs).
+
+## Ingress
+
+A dedicated `cloudflared` Deployment runs the **`cynexia-health`** tunnel — separate from
+the VPS cluster's `cynexia-vps` tunnel. Credentials are in 1Password as the **DOCUMENT**
+item `health-cloudflared`: use `op document get`, not `op read` (document items don't
+expose a plain field).
+
+Public `*.cynexia.com` hostnames on this tunnel:
+
+| Hostname | Purpose |
+|---|---|
+| `hae.cynexia.com` | Health Auto Export ingest → `apple-health-ingester` |
+| `mcp.cynexia.com` | Claude MCP connector, via Pomerium |
+| `authenticate.cynexia.com` | Pomerium's Google-OAuth callback |
+
+Grafana is **not** on this tunnel — it is private, Traefik-fronted at
+`grafana-health.cynexia.net` like every other homelab service (LAN/Tailscale only).
+
+After changing hostnames in `homelab/health/cloudflared.yaml`, run `make
+route-health-dns`. To recreate the credentials Secret, `make
+create-health-cloudflared-secret`.
+
+## MCP is a sidecar, not a standalone Deployment
+
+Deviation from the original design, and a deliberate one. The cluster's flannel CNI does
+not enforce NetworkPolicy, so a "pomerium-only" NetworkPolicy in front of a standalone
+MCP server would have been inert fencing — the MCP server is authless in HTTP mode.
+Instead it runs as a second container in the `pomerium` pod, reached over
+`localhost:3000`, using the kernel-enforced loopback netns as the real isolation
+boundary.
+
+Residual risk: upstream `ghcr.io/mnbf9rca/influxdb-mcp-server` (built multi-arch from
+source — there is no official image, and Mac-local `docker buildx` alone only produces
+arm64 while the node is amd64) binds `0.0.0.0` with no `--bind` flag, so pod-IP:3000 is
+still reachable in-cluster. Documented in `pomerium.yaml`. Queued: a bind-flag patch,
+and reinstating a NetworkPolicy if the CNI is ever swapped to Cilium.
+
+## InfluxDB bootstrap
+
+`make health-influx-bootstrap` creates the buckets, the v1 DBRP mapping and the
+v1-compat auth user (garmin-grafana needs InfluxDB 1.x-style auth), then prints two
+scoped tokens — ingester write-only, MCP+Grafana read-only — for one-time manual paste
+into 1Password. InfluxDB 2.9 hash-stores tokens server-side, so **the printed value is
+the only copy, ever**.
+
+Token extraction uses `--json | jq -r .token`, not `--hide-headers` + awk column
+parsing: the multi-word `-d` description strings shift awk's column and it silently
+captures a description fragment instead of the token. `jq` is therefore a hard
+dependency and is asserted by `make check-tools`.
+
+## Backups and restore
+
+The `influx-backup` CronJob runs at 02:30 daily, ahead of the 03:00 restic sweep. It
+writes both:
+
+- a native `influx backup` (14 generations), and
+- a per-bucket, 8-day-windowed line-protocol export (60 generations, gzip)
+
+to the `health-dumps` PVC on `local-path`. Because that PVC lives on the node's SSD, the
+existing hostPath restic→B2 CronJob picks it up for free — no separate off-cluster
+wiring needed.
+
+**Restore drill:** `influx restore --full` self-defeats — it clobbers its own auth
+mid-restore. Use scoped `influx restore --bucket <name>` instead. First drill passed
+2026-07-26. Quarterly drills should also exercise the still-untested DR path: `--full`
+onto a brand-new, never-`setup` instance.
+
+## Garmin re-authentication (annual)
+
+Tokens on the `garmin-tokens` PVC last roughly a year. When they expire:
+
+1. **Scale `garmin-grafana` to 0 first.** A crashlooping pod with an expired token fires
+   an MFA SMS at the operator on every restart.
+2. Run the interactive login pod. It needs `enableServiceLinks: false` — the influxdb
+   Service's injected `INFLUXDB_PORT=tcp://...` otherwise crashes the script's `int()`
+   parse — plus the full InfluxDB v1 env block, because the script demo-writes to
+   InfluxDB before it shows the login prompt.
+3. Scale back to 1.
+
+**Keep `replicas: 0` committed while paused** — `make apply-homelab` resurrects any
+uncommitted scale-down.
+
+## Why probes exist here (2026-08-18 Pomerium wedge)
+
+Do not strip the liveness/readiness probes on the health workloads as cargo cult — they
+were added in response to a real, silent 18.5-hour outage.
+
+On **2026-08-18 at 20:57Z** the Pomerium pod (all-in-one, v0.33.0) stopped serving HTTP
+entirely while its container stayed `Running`/`Ready` with **0 restarts for 12 days**.
+Its control-plane goroutines kept running — the identity-manager logged "updating user
+info" every 10 minutes throughout — but every request, including Pomerium's own
+`/.well-known/*` endpoints, timed out having returned zero bytes. This was verified from
+inside the cluster against the Service, so it was not a tunnel or edge problem; the MCP
+sidecar upstream was healthy the whole time.
+
+Nothing noticed for 18.5 hours, because the `pomerium` container had no liveness or
+readiness probe: Kubernetes considered a process that answered no requests to be
+perfectly healthy, and the healthchecks.io checks in this namespace watch *data
+freshness*, not the auth proxy.
+
+A `kubectl rollout restart` restored service immediately — 401 in 0.86s afterwards
+versus a 20s hang before. **Root cause of the wedge itself is not established**; treat it
+as unknown rather than assuming a specific Pomerium bug. The lesson that *is* established
+is the failure mode: process-alive is not service-alive, so anything in this namespace
+that serves HTTP needs a probe that actually exercises an HTTP endpoint.
+
+### The probe target is deliberately not the documented one
+
+Pomerium's liveness probe here is **`/ping` on :80**, not the `/healthz` on :28080 that
+Pomerium's docs and its Ingress Controller use. This is not an oversight, and "correcting"
+it re-creates the blind spot:
+
+- `:28080` is a plain Go listener with **Envoy nowhere in its path**. Its `envoy.server`
+  field is a ≤30s-stale cache of the Envoy admin thread reporting lifecycle state LIVE —
+  which it was for all 18.5 hours. The documented probe would have stayed green throughout.
+- `:80/ping` traverses listener → worker → HCM → ext_authz → control-plane cluster: the
+  exact path that returned zero bytes. It answered 200 in 6.7 ms unauthenticated when
+  tested, on Envoy's catch-all vhost, so the probe needs no `host:` field (kubelet dials
+  the pod IP).
+- Readiness on `:28080/readyz` is kept as a *complement*, catching databroker/config-sync
+  failures `/ping` cannot see. It required adding `health_check_addr: :28080` to the
+  ConfigMap — the default `127.0.0.1:28080` is unreachable by kubelet, which also makes
+  the upstream example probe broken as written.
+- A startup probe on `/startupz` (5-minute budget) keeps the tight liveness
+  (`periodSeconds: 15`, `failureThreshold: 4` ≈ 60 s to restart) from firing during
+  databroker sync.
+
+Full policy and the cross-cluster probe inventory: [monitoring.md](monitoring.md).
+
+**Upstream status:** this failure matches no known issue across Pomerium v0.32–v0.34
+(searched issues and merged PRs for unresponsive/stuck/hang/deadlock/goroutine-leak/MCP-hang,
+plus every issue opened since 2026-01-01). It may be unreported. One **unconfirmed**
+hypothesis worth attaching if it recurs: v0.33 added an ext_proc filter for MCP response
+interception, enabled per-route on MCP routes, opening a gRPC stream per MCP request with
+`MessageTimeout` = 10s and **no `failure_mode_allow`** — a stream leak there is a plausible
+resource-exhaustion path on an MCP-only deployment. There is no evidence that is what
+happened. Pre-restart logs and the pod description are in the 2026-08-18 session
+scratchpad for comparison.
+
+## Monitoring
+
+Three healthchecks.io checks; UUIDs in 1Password item `health-healthchecks`:
+
+| Check | Period / grace |
+|---|---|
+| `health-apple-ingest` | 1d / 12h |
+| `health-garmin-ingest` | 1d / 12h |
+| `health-influx-backup` | 1d / 6h |
+
+**All three checks signal failure by silence.** Neither CronJob here sends a `/start`
+ping or a failure ping — unlike the two restic jobs, which do both:
+
+- `influx-backup` runs under `set -eu` with the ping as its **last** statement, so it
+  pings **only on success**. Any earlier failure aborts the script before the ping and the
+  check goes red on grace expiry. Nothing distinguishes "failed at step 2" from "never
+  scheduled"; the Job's own status is the only place that detail exists, which is why
+  `ttlSecondsAfterFinished` is 48h here.
+- `ingest-freshness` (every 6h) pings the apple/garmin checks **only when that source's
+  InfluxDB data is actually less than 24h old** — so a real ingest gap surfaces as a
+  healthchecks.io alert instead of being masked by an unrelated cron firing on schedule.
+  It **always exits 0 on purpose**: the signal is the absent ping, not a failed Job. Do
+  not "fix" it into a non-zero exit.
+
+Both are bounded by `timeZone: "UTC"` and `activeDeadlineSeconds` (3600 for
+`influx-backup`, 300 for `ingest-freshness`) — with `concurrencyPolicy: Forbid` and no
+deadline, one hung run blocks every subsequent night with nothing alerting.
+`influx-backup` also sets `startingDeadlineSeconds: 3600`; `ingest-freshness` deliberately
+does not, since it runs again in six hours anyway.
+
+This namespace's checks watch **data freshness**, not the auth proxy — which is why the
+Pomerium wedge above went unnoticed. External availability of `mcp.cynexia.com` and the
+other tunnel hostnames is layer 3, in [monitoring.md](monitoring.md#monitor-list).
+
+## Secret rotation
+
+Per `health-*` 1Password item: edit the item → `make apply-homelab` → restart the
+consuming pod. **No `direnv reload` step**: secrets are resolved per command by `op run`
+at apply time, so nothing is cached in your shell to refresh (reload only matters if
+`OP_SERVICE_ACCOUNT_TOKEN` itself changed). See
+[apply-workflow.md](apply-workflow.md#rotating-a-secret).
+
+InfluxDB tokens specifically: mint the replacement via the `health-influx-bootstrap`
+pattern, update 1Password, apply, then delete the old auth server-side.
+
+If a real secret value is ever disclosed, log it in `secrets-to-rotate.md` at the repo
+root — see the honesty-box rule in `AGENTS.md`.
+
+## Known state
+
+**Verified working 2026-07-26:**
+
+- The Claude.ai connector — read queries succeed, and a write probe correctly 403s
+  (the MCP read-token has no write scope; server-log-verified).
+- The HAE ingest path:
+  `https://hae.cynexia.com/api/healthautoexport/v1/influxdb/ingest?target=iphone-rob`,
+  bearer token `op://Homelab/health-hae/auth-token`, JSON, Batch Requests ON for large
+  exports. Hourly aggregates cover 2020–2025, raw data from 2026-01-01. Keep the same
+  URL and tags on every export or you get duplicate series.
+
+**Tech debt / deferred:**
+
+- Garmin points can't carry a `person` tag (upstream limitation of the v1-compat write
+  path); Apple points get a hardcoded `person=rob` static tag instead of a real
+  multi-person model. The Phase 2 facade / person-registry design is expected to absorb
+  this.
+- Cloudflare Access service-token in front of the tunnel hostnames (the bearer token plus
+  Pomerium's email allowlist suffice for now).
+- Grafana alert rules (Phase 3, pending data accumulation).
+- PSA hardening from `baseline` to `restricted`.

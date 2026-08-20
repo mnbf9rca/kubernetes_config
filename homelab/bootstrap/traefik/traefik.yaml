@@ -124,11 +124,13 @@ spec:
               command: [traefik, healthcheck, --ping]
             initialDelaySeconds: 3
             periodSeconds: 10
+            timeoutSeconds: 5       # 30s to unready (default failureThreshold 3)
           livenessProbe:
             exec:
               command: [traefik, healthcheck, --ping]
             initialDelaySeconds: 10
             periodSeconds: 20
+            timeoutSeconds: 5       # 60s to restart — laxer than readiness above
           volumeMounts:
             - name: wildcard-cert
               mountPath: /certs

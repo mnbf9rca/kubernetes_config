@@ -13,7 +13,7 @@ spec:
         interfaces:
           # LAN NIC on Proxmox vmbr0 (10.100.0.0/24).
           # Statically assigned because Talos v1.12's controller-runtime DHCP4
-          # client NAK-looped on renewal — see AGENTS.md "Operational gotchas".
+          # client NAK-looped on renewal — see docs/operations/homelab.md "Operational gotchas".
           # OPNsense Kea reservation for this MAC is kept as defense in depth.
           - deviceSelector:
               hardwareAddr: "bc:24:11:e1:d3:c8"

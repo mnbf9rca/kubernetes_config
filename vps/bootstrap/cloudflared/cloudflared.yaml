@@ -61,20 +61,26 @@ spec:
             - name: creds
               mountPath: /etc/cloudflared/creds
               readOnly: true
+          # Same shape as the homelab health-tunnel cloudflared: readiness sheds
+          # routing at 30s, liveness only restarts at 60s. A tunnel reconnects on its
+          # own, so the old failureThreshold: 1 restarted the pod on a single slow
+          # /ready response.
           livenessProbe:
             httpGet:
               path: /ready
               port: 2000
-            failureThreshold: 1
             initialDelaySeconds: 10
             periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6     # 60s to restart — strictly laxer than readiness below
           readinessProbe:
             httpGet:
               path: /ready
               port: 2000
-            failureThreshold: 1
             initialDelaySeconds: 5
             periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3     # 30s to unready
           resources:
             requests:
               cpu: 50m

@@ -1,23 +1,26 @@
-# 1Password-backed env var template for the homelab cluster.
+# 1Password-backed env var template for both clusters.
 #
-# This file is read by `op inject -i .env.tpl`, which resolves the 1Password refs
-# to their real values and outputs plain VAR=value lines. `.envrc` wraps that
-# in `set -a` so every resulting assignment is exported into the shell
-# environment for direnv (and therefore for any child process, including
-# `make apply-homelab`, `kubectl`, `omnictl`, and interactive shells).
+# This file is read by `op run --env-file=.env.tpl -- <command>`, which resolves
+# the `op://` references and makes the values available as environment variables
+# to that command only, for the duration of the subprocess. The Makefile's
+# apply/diff/build targets wrap themselves in it; see the header of the Makefile
+# and docs/operations/apply-workflow.md.
 #
-# Launch Claude (or any shell) from a directory where direnv is active and
-# the vars are inherited automatically. No manual sourcing required.
+# `.envrc` deliberately does NOT export these. It exports only a 1Password
+# service-account token, which is what lets `op run` resolve these references
+# non-interactively (no biometric prompt, works headless). Secrets are therefore
+# resolved per-command and never sit in your ambient shell environment.
 #
-# Do NOT use `op run --env-file=.env.tpl -- <command>`. `op run`'s masking
-# implementation sets child-process env vars to the literal 24-character
-# string `<concealed by 1Password>` instead of real values. envsubst then
-# substitutes that placeholder into Kubernetes Secret manifests and kubectl
-# stores garbage — silent corruption. See AGENTS.md "Apply Workflow" for
-# the diagnostic tell (`echo "len=${#VAR}"` returns 24).
+# `op run` masks secrets in the child's stdout/stderr, NOT in its environment —
+# corrected 2026-08-20; the previous warning in this file claimed the opposite
+# and was a misdiagnosis (the `len=${#VAR}` returning 24 tell was a coincidence:
+# that value is genuinely 24 characters long). The real hazard is rendering to a
+# file: `make build-homelab > out.yaml` writes the literal mask string into the
+# Secrets. Never render-then-apply; use `make apply-*`, whose pipeline is a
+# single process and carries real values throughout.
 #
 # Per-service secrets are commented out and should be uncommented as
-# each workload is migrated (Phase 4).
+# each workload is migrated.
 
 # --- Platform secrets (needed from Phase 2 onward) ---
 
@@ -26,6 +29,8 @@ B2_ACCOUNT_ID=op://Homelab/b2-restic/account-id
 B2_ACCOUNT_KEY=op://Homelab/b2-restic/account-key
 RESTIC_PASSWORD=op://Homelab/b2-restic/repo-password
 RESTIC_REPOSITORY=op://Homelab/b2-restic/repository
+# healthchecks.io dead-man's-switch for the nightly restic CronJob
+RESTIC_HC_UUID=op://Homelab/b2-restic/healthcheck-uuid
 
 # Route53 credentials for cert-manager DNS-01 (Task 2.5)
 ROUTE53_ACCESS_KEY_ID=op://Homelab/route53-cert-manager/access-key-id
@@ -43,7 +48,7 @@ HEALTH_HC_GARMIN_UUID=op://Homelab/health-healthchecks/garmin-uuid
 HEALTH_HC_BACKUP_UUID=op://Homelab/health-healthchecks/backup-uuid
 
 # health namespace — InfluxDB (admin creds + generated tokens; ingester/read
-# tokens are PENDING until minted in Task 9 and pasted back into 1Password)
+# tokens are minted via `make health-influx-bootstrap` and pasted into 1Password)
 HEALTH_INFLUX_ADMIN_PASSWORD=op://Homelab/health-influxdb/admin-password
 HEALTH_INFLUX_ADMIN_TOKEN=op://Homelab/health-influxdb/admin-token
 HEALTH_INFLUX_GARMIN_V1_PASSWORD=op://Homelab/health-influxdb/garmin-v1-password
@@ -57,8 +62,8 @@ HEALTH_HAE_AUTH_TOKEN=op://Homelab/health-hae/auth-token
 HEALTH_GARMIN_EMAIL=op://Homelab/health-garmin/email
 HEALTH_GARMIN_B64_PASSWORD=op://Homelab/health-garmin/b64-password
 
-# health namespace — Pomerium (Google OAuth client is PENDING until the operator
-# creates it in Google Cloud console; cookie/shared secrets are generated)
+# health namespace — Pomerium (Google OAuth client created by the operator in
+# the Google Cloud console; cookie/shared secrets are generated locally)
 HEALTH_POMERIUM_GOOGLE_CLIENT_ID=op://Homelab/health-pomerium/google-client-id
 HEALTH_POMERIUM_GOOGLE_CLIENT_SECRET=op://Homelab/health-pomerium/google-client-secret
 HEALTH_POMERIUM_COOKIE_SECRET=op://Homelab/health-pomerium/cookie-secret
@@ -74,6 +79,8 @@ VPS_B2_ACCOUNT_ID=op://VPS/b2-restic/account-id
 VPS_B2_ACCOUNT_KEY=op://VPS/b2-restic/account-key
 VPS_RESTIC_PASSWORD=op://VPS/b2-restic/repo-password
 VPS_RESTIC_REPOSITORY=op://VPS/b2-restic/repository
+# healthchecks.io dead-man's-switch for the nightly restic CronJob
+VPS_RESTIC_HC_UUID=op://VPS/b2-restic/healthcheck-uuid
 
 # n8n credential encryption key — load-bearing, extracted from old VPS
 N8N_ENCRYPTION_KEY=op://VPS/n8n/encryption-key

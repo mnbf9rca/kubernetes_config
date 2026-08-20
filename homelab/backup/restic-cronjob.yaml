@@ -5,32 +5,88 @@ metadata:
   namespace: backup
 spec:
   schedule: "0 3 * * *"
+  # Without timeZone the schedule is interpreted in kube-controller-manager's
+  # local zone, which is not something this repo controls.
+  timeZone: "UTC"
   concurrencyPolicy: Forbid
+  # Tolerate up to an hour of controller/node downtime before a missed run is
+  # written off entirely.
+  startingDeadlineSeconds: 3600
   successfulJobsHistoryLimit: 3
   failedJobsHistoryLimit: 3
   jobTemplate:
     spec:
+      # Hard ceiling on a hung B2 connection. Without this, concurrencyPolicy
+      # Forbid silently skips every subsequent night. 4h is an opening guess —
+      # resize it from the durations healthchecks.io records.
+      activeDeadlineSeconds: 14400
       backoffLimit: 1
-      ttlSecondsAfterFinished: 86400
+      # 3 days, so a Friday-night failure is still forensically available on
+      # Monday morning.
+      ttlSecondsAfterFinished: 259200
       template:
         spec:
           restartPolicy: Never
+          # No terminationGracePeriodSeconds override. A longer grace period is
+          # only useful if the process can act on SIGTERM, and this one cannot:
+          # busybox ash runs as PID 1 and neither forwards TERM to the running
+          # restic child nor acts on it while a foreground child is running
+          # (verified in restic/restic:0.17.3 - a TERM trap in the child never
+          # fired). `exec`ing restic to make it PID 1 is not available either:
+          # the wrapper has to outlive it to send the exit-code ping. So a grace
+          # period would just burn its full length before the inevitable SIGKILL
+          # on every deadline hit, node drain and `kubectl delete`, and the lock
+          # would still be left behind. What actually recovers the lock is the
+          # `restic unlock` at the head of the next run (below).
           containers:
             - name: restic
               image: restic/restic:0.17.3
               command: ["sh", "-c"]
               args:
                 - |
-                  set -euo pipefail
-                  restic backup /data \
-                    --tag nightly \
-                    --exclude='*.tmp' \
-                    --exclude='cache/*'
-                  restic forget --prune \
-                    --keep-daily 7 \
-                    --keep-weekly 4 \
-                    --keep-monthly 6
-                  restic check
+                  set -uo pipefail
+
+                  # Dead-man's-switch. /start detects started-but-never-finished
+                  # and records the run duration; the exit-code ping distinguishes
+                  # success from failure. Pings never fail the job.
+                  HC="https://hc-ping.com/${HC_UUID}"
+                  ping_hc() { wget -q -T 10 -O- "$HC/$1" >/dev/null 2>&1 || true; }
+
+                  ping_hc start
+                  rc=0
+                  # Explicit && chaining rather than `set -e` inside a group:
+                  # errexit is ignored for any command in an AND-OR list, so a
+                  # `{ set -e; ... } || rc=$?` block would keep running after a
+                  # failure and report the last command's status.
+                  {
+                    # Removes STALE locks only (no --remove-all). This is what
+                    # actually recovers a lock left by a SIGKILLed previous run.
+                    restic unlock &&
+                    restic backup /data \
+                      --tag nightly \
+                      --exclude='*.tmp' \
+                      --exclude='cache/*' &&
+                    # --group-by paths is LOAD-BEARING. restic forget defaults to
+                    # grouping by host+paths, and every CronJob pod has a unique
+                    # hostname, so each nightly snapshot landed in a group of its
+                    # own and the policy below kept ALL of them: verified
+                    # 2026-08-20 with 137 snapshots in 137 groups across 131
+                    # hostnames, zero ever pruned. Grouping by paths alone makes
+                    # the retention policy actually apply.
+                    restic forget --prune \
+                      --group-by paths \
+                      --keep-daily 7 \
+                      --keep-weekly 4 \
+                      --keep-monthly 6 &&
+                    restic check
+                  } || rc=$?
+                  ping_hc "$rc"
+                  exit $rc
+              env:
+                # healthchecks.io check UUID (op://Homelab/b2-restic/healthcheck-uuid).
+                # Substituted by envsubst at apply time; never committed.
+                - name: HC_UUID
+                  value: "${RESTIC_HC_UUID}"
               envFrom:
                 - secretRef:
                     name: restic-b2

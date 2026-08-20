@@ -5,6 +5,21 @@ metadata: { name: pomerium-config, namespace: health }
 data:
   config.yaml: |
     address: :80
+    # Pomerium's health listener defaults to 127.0.0.1:28080, which kubelet cannot reach —
+    # it dials the pod IP. Binding it to :28080 is what makes the readiness/startup probes
+    # below possible at all; without this line both would fail 100% of the time.
+    #
+    # RESIDUAL RISK (same class as the MCP sidecar note below, accepted for the same reason):
+    # this listener is AUTHLESS, and binding it off loopback publishes it on the pod IP. Its
+    # /status endpoint dumps every component's status and error strings. flannel does NOT
+    # enforce NetworkPolicy, so any pod in the cluster can read it — there is no in-cluster
+    # boundary in front of it. Accepted because the probes cannot work any other way: kubelet
+    # dials the pod IP, so a loopback-only bind means no readiness or startup probe at all,
+    # which is the state that let the 2026-08-18 wedge run for 18.5h. The exposure is
+    # component status and error strings, not credentials or health data. If flannel is ever
+    # swapped for a NetworkPolicy-enforcing CNI (e.g. Cilium), fence :28080 to the node's
+    # kubelet alongside the MCP NetworkPolicy called for below.
+    health_check_addr: :28080
     insecure_server: true            # TLS terminates at Cloudflare edge; tunnel delivers HTTP
     authenticate_service_url: https://authenticate.cynexia.com
     idp_provider: google
@@ -75,9 +90,50 @@ spec:
             - name: SHARED_SECRET
               valueFrom: { secretKeyRef: { name: health-pomerium, key: shared-secret } }
           args: [-config, /pomerium/config.yaml]
-          ports: [{ containerPort: 80, name: http }]
+          ports:
+            - { containerPort: 80, name: http }
+            - { containerPort: 28080, name: health }   # control-plane health listener (health_check_addr above)
           volumeMounts:
             - { name: config, mountPath: /pomerium/config.yaml, subPath: config.yaml }
+          # Startup gate on the control plane: databroker/config sync can take a while on a
+          # cold start, and this keeps the (deliberately tight) liveness probe from firing
+          # during boot. 5 min budget = 60 x 5s.
+          startupProbe:
+            httpGet: { path: /startupz, port: 28080 }
+            periodSeconds: 5
+            failureThreshold: 60
+            timeoutSeconds: 3
+          # LIVENESS IS ON :80/ping ON PURPOSE — do NOT "fix" this to the vendor-documented
+          # :28080/healthz. See spec 2026-08-19-failure-detection-coverage.md §4 P2.
+          # On 2026-08-18 this pod served zero bytes on :80 for 18.5h while staying
+          # Running/Ready/0-restarts. :28080/healthz is a plain Go listener with Envoy nowhere
+          # in its path, and its `envoy.server` field is a <=30s-stale cache of Envoy's admin
+          # thread reporting lifecycle LIVE — which it was for the entire outage. /ping on :80
+          # is the only endpoint that traverses listener -> worker -> HCM -> ext_authz, i.e.
+          # the exact path that wedged. It is unauthenticated, served by Envoy's catch-all
+          # vhost, and returns 200 "OK" in ~7ms. No `host:` here — kubelet dials the pod IP,
+          # which is precisely what lands on the catch-all vhost.
+          # 15s x 4 ~= 60s to restart, vs the 18.5h we actually took.
+          livenessProbe:
+            httpGet: { path: /ping, port: 80 }
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 4
+          # NOT a second opinion on the same question. Verified on the live pod: /startupz,
+          # /readyz and /healthz return byte-identical bodies — they differ only in the
+          # comparator applied to the same underlying component state, so /readyz observes
+          # nothing /healthz doesn't. What matters is the LISTENER, not the path: /readyz is
+          # served by the Go control plane on :28080 with Envoy nowhere in its path, which is
+          # exactly why it must not carry liveness (see the block above). Its job here is the
+          # cheap, safe half — pull the pod out of Service routing on a databroker/config-sync
+          # fault without killing it. Detecting a wedged data plane is /ping's job alone.
+          # 10s x 3 = 30s to unready, strictly ahead of liveness' 60s to restart — the pod
+          # leaves Service routing well before kubelet kills it.
+          readinessProbe:
+            httpGet: { path: /readyz, port: 28080 }
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
           resources:
             requests: { cpu: 100m, memory: 256Mi }
             limits: { memory: 512Mi }
@@ -91,7 +147,18 @@ spec:
                 secretKeyRef: { name: health-influxdb, key: read-token }
             - { name: INFLUXDB_ORG, value: cynexia }
           ports: [{ containerPort: 3000, name: mcp-http }]
-          readinessProbe: { tcpSocket: { port: mcp-http }, periodSeconds: 10 }
+          readinessProbe: { tcpSocket: { port: mcp-http }, periodSeconds: 10, timeoutSeconds: 5 }
+          # TCP-only ON PURPOSE: the MCP server exposes no health endpoint (upstream ships
+          # only /mcp, which requires a session handshake and is not probe-safe). This
+          # detects process death / a closed listener, NOT a wedged request handler — the
+          # kernel completes handshakes from the accept backlog even with the event loop
+          # blocked. Laxer than the readiness probe above so the pod goes unready long
+          # before kubelet kills it.
+          livenessProbe:
+            tcpSocket: { port: mcp-http }
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 6
           resources:
             requests: { cpu: 50m, memory: 128Mi }
             limits: { memory: 512Mi }

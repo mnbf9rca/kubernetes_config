@@ -19,7 +19,23 @@ spec:
                 echo "Repository already initialized."
               else
                 echo "Initializing restic repository..."
+                # Idempotent: the Job's TTL deletes it, so every later apply recreates
+                # it. A bare `restic init` then fails against the existing repo and
+                # leaves a Failed Job behind on each apply. Probing first makes a
+                # re-run a clean no-op, and a genuine init failure still fails loudly.
+                if restic cat config >/dev/null 2>&1; then
+                  echo "Repo already initialized - nothing to do."
+                else
+                  # Idempotent: the Job's TTL deletes it, so every later apply recreates
+              # it. A bare `restic init` then fails against the existing repo and
+              # leaves a Failed Job behind on each apply. Probing first makes a
+              # re-run a clean no-op, and a genuine init failure still fails loudly.
+              if restic cat config >/dev/null 2>&1; then
+                echo "Repo already initialized - nothing to do."
+              else
                 restic init
+              fi
+                fi
               fi
           envFrom:
             - secretRef:

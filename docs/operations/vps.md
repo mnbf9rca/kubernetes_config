@@ -1,0 +1,147 @@
+# VPS cluster (Phase 2)
+
+Public-internet-facing single-node Talos cluster on Hetzner for personal web services.
+Kubectl context: `cynexia-vps`. Manifests live in `vps/`.
+
+## Shape
+
+| Aspect | Detail |
+|---|---|
+| Host | Hetzner CX43 in `fsn1`, Talos single-node, managed by the same Omni instance as homelab (cluster name `vps`) |
+| Storage | Hetzner Cloud Volume as a Talos user volume mounted at `/var/mnt/data`; local-path-provisioner points there |
+| Network | Hetzner Private Network `10.0.0.0/24`. No public :80/:443 on the node; the Hetzner Cloud Firewall drops public inbound |
+| Ingress | `cloudflared` tunnel only (named tunnel `cynexia-vps`). No Traefik, no cert-manager, no MetalLB, no NFS CSI |
+| TLS / auth | Terminated at the Cloudflare edge. Cloudflare Access with email-OTP in front of every hostname |
+| Domain | `*.cynexia.com` (Cloudflare-hosted zone). Homelab's `cynexia.net` is separate and unrelated |
+| Namespaces | `vps` for all workloads (PSA `baseline`), plus `backup` (PSA `privileged`, hostPath) and `keel` |
+| Secrets | 1Password `VPS` vault, referenced via `VPS_*` / workload-specific vars in `.env.tpl` |
+| Image updates | keel runs here (`vps/bootstrap/keel/`) and workloads carry the standard keel annotation set |
+| Apply | `make apply-vps`, gated by `check-vps-context` |
+
+The Talos user-volume patch (`vps/talos/machineconfig-patches/400-vps-user-volume-data.yaml`)
+selects the Cloud Volume by **size bracket** (70–100 GB), because the boot disk and the
+Cloud Volume both report `transport=virtio` and can't be distinguished by transport
+alone. Note there is no `make` target for VPS Talos patches — apply them with
+`omnictl apply -f <file>` directly.
+
+Fresh Hetzner Cloud Volumes ship pre-formatted and Talos refuses to provision over them;
+wipe first with `talosctl wipe disk <dev> --method FAST`.
+
+## Workloads
+
+| Service | Hostname | DB |
+|---|---|---|
+| freshrss | `rss.cynexia.com` | sqlite |
+| uptime-kuma | `uptime.cynexia.com` | sqlite |
+| changedetection (+ sockpuppetbrowser) | `watch.cynexia.com` | sqlite / `/datastore` |
+| umami | `analytics.cynexia.com` | dedicated postgres |
+| n8n | `n8n.cynexia.com` | sqlite |
+| karakeep (+ meilisearch) | `keep.cynexia.com` | sqlite |
+
+Every container here carries readiness and (where a restart is a safe remedy) liveness
+probes; the per-service targets and the reasoning behind each — including the ones that
+are deliberately shallow — are in [monitoring.md](monitoring.md#vps-cluster).
+
+`make route-vps-dns` reads the hostname list straight out of
+`vps/bootstrap/cloudflared/cloudflared.yaml` (that ConfigMap is the single source of
+truth for hostname → Service routing) and upserts a CNAME per hostname onto the current
+tunnel UUID. Run it after adding a hostname, and after any full cluster rebuild.
+
+### Cloudflare Access bypasses
+
+Public ingestion endpoints must be Access-bypassed or they break:
+
+- umami `/script.js` and `/api/send/*`
+- n8n `/webhook/*`
+
+A bypass path glob of `/foo/*` does **not** match the bare path `/foo` — add both the
+exact and the wildcard destination.
+
+### Browser backend for changedetection
+
+Use `dgtlmoon/sockpuppetbrowser`. `browserless/chrome:latest` is the deprecated v1 line
+and leaks CDP sessions under modern Playwright.
+
+Do **not** set `HTTP_PROXY`/`HTTPS_PROXY` on changedetection. The old setup routed
+through a sibling `proxy-client` container chaining to homelab's tinyproxy over
+Cloudflare Access TCP; homelab was rebuilt without tinyproxy, so that chain is dead and
+the VPS now egresses directly. Migrated watches that referenced the named proxy
+`homelab` had their `proxy` field cleared post-migration — stale proxy references hide
+in `/datastore` inside both the watch entries and `changedetection.json`, and a
+URL-grep misses them because the compose-era proxy URL was a sibling container name
+rather than a hostname.
+
+## Database shape
+
+Per-service sqlite, except umami which needs postgres. A shared postgres was researched
+and rejected: karakeep is sqlite-only (karakeep issue #1782), uptime-kuma v2 supports
+only sqlite/MariaDB (issue #5674), and the remaining consolidation saving didn't justify
+the upgrade-coupling cost.
+
+`N8N_ENCRYPTION_KEY` is load-bearing — it was extracted from the old n8n container
+during the rebuild and n8n credentials are unreadable without it.
+
+## Backups
+
+Separate B2 bucket and separate restic repo from homelab. The restic CronJob runs at
+04:00 UTC and backs up `/var/mnt/data/local-path-provisioner` via hostPath, with the same
+7 daily / 4 weekly / 6 monthly retention as homelab, with `--group-by paths`.
+
+That flag is load-bearing: `restic forget` groups by host+paths by default, and every
+CronJob pod has a unique hostname, so each nightly snapshot formed a group of one and the
+policy kept all of them. Verified on homelab 2026-08-20 — 137 snapshots in 137 groups
+across 131 hostnames, nothing ever pruned since the backup system was built. The image is pinned to
+`restic/restic:0.17.3` (was `:latest` — an unpinned backup tool is a silent-change surface
+on the one job you cannot re-run).
+
+Consistency sidecars run alongside the app containers: sqlite quiesce for
+n8n / freshrss / karakeep / uptime-kuma, and `pg_dumpall` for umami's dedicated postgres.
+Each refreshes a `*.restic` snapshot every 12h.
+
+**None of the five sidecars carries a probe**, and that is deliberate: any failing probe
+on a sidecar takes the *application* offline (readiness directly, liveness via
+CrashLoopBackOff → EndpointSlice), so a backup fault would cost you the service. A
+freshness liveness probe existed here briefly and was removed; the full reasoning, which
+reverses what the original spec endorsed, is in
+[monitoring.md](monitoring.md#why-the-sidecars-have-no-probes).
+
+Instead each loop runs under `set -u` (**not** `set -e` — exiting is the outage path),
+logs failures to stderr, backs off 300 s and retries, publishes atomically via a `.tmp`
+plus `mv`, and — for the four sqlite ones — refuses to publish a snapshot whose
+`sqlite_master` count is zero, so a truncated source can no longer publish a fresh, valid,
+empty database. umami's `pg-dump-sidecar` follows the same shape. **These sidecars fail by
+logging, not by exiting**; their restart counts stay at zero and the alarm comes from the
+restic gate.
+
+The restic job runs a **backup verification gate** after the backup. The authoritative
+half is an expected-set assertion — each known snapshot present and <15h old, named app by
+app, and for FreshRSS a sibling snapshot per *user DB* rather than the newest of a glob. A
+broad sweep for other stale `*.restic` files runs alongside it but is **advisory only**, so
+one orphaned PV directory cannot pin the gate permanently red. Together that turns a
+silently dead sidecar — or one deleted from the manifest, or an empty/unmounted volume —
+into a backup alert rather than years of backing up a stale or absent copy.
+
+**Adding a sqlite-backed service means adding its snapshot to that list.** The gate proves
+a snapshot exists, is fresh and has a schema; it does not prove the contents are complete.
+That, and why the gate runs after rather than before the backup, are in
+[monitoring.md](monitoring.md#the-vps-backup-verification-gate).
+
+The job pings healthchecks.io on start and on exit code, and sets no
+`terminationGracePeriodSeconds` — busybox `ash` as PID 1 never forwards SIGTERM to restic,
+so the old 120 s grace delivered nothing and only slowed teardown; a lock left behind by a
+killed run is cleared by `restic unlock` at the head of the next one. Details, and the
+reason the shell is chained with `&&` rather than `set -e`, are in
+[monitoring.md](monitoring.md#the-restic-ping-wrapper).
+
+## External monitoring
+
+uptime-kuma at `uptime.cynexia.com` is layer 3 of the detection stack. Its monitors are
+**created by hand in the UI** — v2 has no supported programmatic path — and are documented
+monitor-by-monitor in [monitoring.md](monitoring.md#uptime-kuma-runbook-layer-3),
+including the Cloudflare Access trap (a monitor that follows the Access 302 reports UP
+while the origin is dead) and the healthchecks.io dead-man's-switch that watches
+uptime-kuma itself.
+
+Hand-created monitor config lives in `kuma.db`, which the quiesce sidecar snapshots and
+restic backs up nightly — so a cluster rebuild restores the monitors rather than requiring
+them to be retyped.

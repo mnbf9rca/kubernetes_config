@@ -43,6 +43,16 @@ spec:
             httpGet: { path: /ready, port: 2000 }
             initialDelaySeconds: 10
             periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6     # laxer than readiness below, so the pod goes unready before it is killed
+          # /ready reports the tunnel's connector count: 0 registered connections = 503.
+          # Without a readiness probe the pod counts as Ready the instant the process starts,
+          # before any edge connection exists.
+          readinessProbe:
+            httpGet: { path: /ready, port: 2000 }
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
           resources:
             requests: { cpu: 50m, memory: 64Mi }
             limits: { memory: 256Mi }

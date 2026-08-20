@@ -37,10 +37,12 @@ spec:
           readinessProbe:
             httpGet: { path: /health, port: http }
             periodSeconds: 10
+            timeoutSeconds: 5
           livenessProbe:
             httpGet: { path: /health, port: http }
             failureThreshold: 5
             periodSeconds: 20
+            timeoutSeconds: 5
           volumeMounts:
             - { name: data, mountPath: /var/lib/influxdb2 }
             - { name: dumps, mountPath: /backups }
