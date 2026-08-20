@@ -406,6 +406,21 @@ check-context:
 # make is a separate process, so it re-runs the prerequisite). That is cheap.
 # Do not "de-duplicate" these.
 #
+# check-script-substitution-<cluster> is on both halves for the same reason and
+# passes the same cost test: it reads a dozen script files and the Makefile,
+# and the failure it prevents is a real secret resolved into a ConfigMap, which
+# costs a rotation to undo. A guard against that must hold however the recipe
+# is entered.
+#
+# check-job-ttl-<cluster> is deliberately on the PUBLIC half only, and that
+# asymmetry is considered, not an oversight. It shells out to a full
+# `kustomize build`, which fetches the bootstrap layer's remote bases, so
+# duplicating it would double the render cost of every apply — it fails the
+# "that is cheap" test the rest of this block rests on. Its failure mode is
+# also milder and reversible: a Job with no TTL is not garbage collected and
+# the next apply that changes it fails quietly, which `kubectl delete job`
+# undoes. No secret escapes. If it ever becomes cheap to run, put it here too.
+#
 # WHAT IS AND IS NOT PROTECTED IN THE PRINTED DIFF
 #
 # `kubectl diff` output is safe to look at because KUBECTL REDACTS SECRET
@@ -452,7 +467,7 @@ diff-homelab: check-vars-consistency check-context check-script-substitution-hom
 # >1 = kubectl itself failed. Streaming is preserved — the rendered manifest is
 # never buffered into a shell variable.
 .PHONY: _diff-homelab-inner
-_diff-homelab-inner: check-context _assert-vars
+_diff-homelab-inner: check-context check-script-substitution-homelab _assert-vars
 	@kustomize build homelab/ | envsubst '$(ENVSUBST_VARS)' | kubectl diff -f -; \
 	st=($${PIPESTATUS[@]}); \
 	if [ $${st[0]} -ne 0 ]; then echo "ERROR: kustomize build failed (exit $${st[0]}) — diff above is incomplete" >&2; exit 1; fi; \
@@ -480,7 +495,7 @@ apply-homelab: check-vars-consistency check-context check-script-substitution-ho
 # crash, a stray `set -x`, or the next person with read access to /tmp. The
 # variable is local to this recipe's shell, never exported.
 .PHONY: _apply-homelab-inner
-_apply-homelab-inner: check-context _assert-vars
+_apply-homelab-inner: check-context check-script-substitution-homelab _assert-vars
 	@set -o pipefail; \
 	cluster=homelab; allowlist=ENVSUBST_VAR_NAMES; \
 	rendered=$$(kustomize build homelab/ | envsubst '$(ENVSUBST_VARS)') || { \
@@ -736,7 +751,7 @@ diff-vps: check-vps-context check-vps-vars-consistency check-script-substitution
 
 # See _diff-homelab-inner for why this is a PIPESTATUS check and not `|| true`.
 .PHONY: _diff-vps-inner
-_diff-vps-inner: check-vps-context _assert-vps-vars
+_diff-vps-inner: check-vps-context check-script-substitution-vps _assert-vps-vars
 	@kustomize build vps/ | envsubst '$(VPS_ENVSUBST_VARS)' | kubectl diff -f -; \
 	st=($${PIPESTATUS[@]}); \
 	if [ $${st[0]} -ne 0 ]; then echo "ERROR: kustomize build failed (exit $${st[0]}) — diff above is incomplete" >&2; exit 1; fi; \
@@ -750,7 +765,7 @@ apply-vps: check-vps-context check-vps-vars-consistency check-script-substitutio
 
 # Same render-fully-then-apply shape as _apply-homelab-inner; see the note there.
 .PHONY: _apply-vps-inner
-_apply-vps-inner: check-vps-context _assert-vps-vars
+_apply-vps-inner: check-vps-context check-script-substitution-vps _assert-vps-vars
 	@set -o pipefail; \
 	cluster=vps; allowlist=VPS_ENVSUBST_VAR_NAMES; \
 	rendered=$$(kustomize build vps/ | envsubst '$(VPS_ENVSUBST_VARS)') || { \

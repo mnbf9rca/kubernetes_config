@@ -39,8 +39,11 @@ set -u
 # CrashLoopBackOff the sidecar and take the application out of its
 # EndpointSlice. A misconfigured backup must not be able to cause an outage.
 while [ -z "${SNAPSHOT_DB:-}" ]; do
-  echo "FATAL: SNAPSHOT_DB is unset - this sidecar has no database to snapshot;" \
-       "set it in the container's env in the Deployment" >&2
+  echo "MISCONFIGURED (deliberately not fatal; restarting this pod will NOT" \
+       "help): SNAPSHOT_DB is unset, so this sidecar has no database to" \
+       "snapshot. Backups for this app are DISABLED until it is set in the" \
+       "container's env in the Deployment. The restic verification gate" \
+       "reports the missing snapshot meanwhile." >&2
   sleep 300
 done
 DB=$SNAPSHOT_DB
