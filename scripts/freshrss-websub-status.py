@@ -106,17 +106,17 @@ def main():
         hub = str(doc.get("hub", "?"))
         lease_end = doc.get("lease_end")
         if isinstance(lease_end, int) and lease_end > now:
-            lease = "LIVE %9.1fh" % ((lease_end - now) / 3600)
+            lease = "LIVE %7.1fh" % ((lease_end - now) / 3600)
             live += 1
         elif isinstance(lease_end, int):
-            lease = "EXPIRED%6.0fh" % ((now - lease_end) / 3600)
+            lease = "EXPIRED%5.0fh" % ((now - lease_end) / 3600)
         else:
-            lease = "NO LEASE    "
+            lease = "NO LEASE"
 
         # `error` absent or falsey means a push has been processed at least once.
         ever_pushed = not doc.get("error")
         pushed += ever_pushed
-        rows.append((lease, "yes" if ever_pushed else "no ", hub))
+        rows.append((lease, "yes" if ever_pushed else "no", hub))
 
     if not rows:
         sys.exit("ERROR: no WebSub subscriptions found under %s" % PSHB)
