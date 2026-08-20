@@ -19,8 +19,9 @@ resources:
 #
 # The content-hash suffix is left ON, so editing a script rolls the Deployments
 # that mount it. That is the intended behaviour and it has a cost worth knowing
-# about: four of these five Deployments use `strategy: Recreate`, so a script
-# edit means a brief hard-down window for them.
+# about: ALL FIVE of these Deployments use `strategy: Recreate` (n8n, karakeep,
+# uptime-kuma, freshrss and umami-postgres), so a script edit means a brief
+# hard-down window for every one of them, not a rolling update.
 #
 # `namespace:` is REQUIRED on this entry, and it is NOT the same thing as a
 # top-level `namespace:` — do not "simplify" it into one. A top-level namespace

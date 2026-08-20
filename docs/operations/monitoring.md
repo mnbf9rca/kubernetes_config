@@ -141,8 +141,8 @@ Every one of these loops is a real file under a `scripts/` directory, delivered 
 kustomize `configMapGenerator` and mounted at `/scripts`. Four of the five share
 `sqlite-snapshot-lib.sh`; n8n, karakeep and uptime-kuma share `sqlite-snapshot.sh` outright
 and differ only in `$SNAPSHOT_DB`. Editing one rolls the Deployments that mount it, and
-four of those five use `strategy: Recreate`, so a script edit costs a brief hard-down
-window. Generated scripts also pass through envsubst — see `make check-script-substitution`
+all five use `strategy: Recreate`, so a script edit costs a brief hard-down window for
+every one of them, not a rolling update. Generated scripts also pass through envsubst — see `make check-script-substitution`
 and the note in AGENTS.md before writing a `$VAR` into one.
 
 ## Scheduled work

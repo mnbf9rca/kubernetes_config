@@ -9,8 +9,18 @@ resources:
   - restic-cronjob.yaml
 
 # Job scripts as real files, mounted at /scripts. The content-hash suffix is
-# left ON, so editing a script recreates the Job that mounts it rather than
+# left ON, so editing a script rolls the workload that mounts it rather than
 # leaving a stale copy behind.
+#
+# For a Job, "rolls" is not free: `spec.template` is IMMUTABLE, so an edit here
+# while the completed Job still exists (`ttlSecondsAfterFinished`) makes the
+# next apply fail on it with `field is immutable` rather than recreate it. That
+# is tolerable while this generator holds ONE script mounted by ONE Job — the
+# only thing that can move the hash is a change that genuinely should re-run
+# the Job. When restic-cronjob.yaml's script is extracted it must therefore get
+# its OWN generator entry, not a second key in this one; sharing would let a
+# CronJob-script edit break the Job's apply. `vps/backup/kustomization.yaml` is
+# already split that way and explains it at length.
 #
 # No `namespace:` override is needed on this entry: this kustomization already
 # sets a top-level `namespace: backup`, which applies to generated resources

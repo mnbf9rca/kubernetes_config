@@ -6,15 +6,30 @@ resources:
   - restic-cronjob.yaml
 
 # Job scripts as real files, mounted at /scripts. The content-hash suffix is
-# left ON, so editing a script rolls the CronJob (and recreates the Job) that
-# mounts it rather than leaving a stale copy behind.
+# left ON, so editing a script rolls the workload that mounts it rather than
+# leaving a stale copy behind.
+#
+# THE TWO SCRIPTS ARE IN SEPARATE ConfigMaps ON PURPOSE — do not merge them
+# back into one generator to save four lines. `restic-init` is a one-shot Job,
+# and a Job's `spec.template` is IMMUTABLE. Sharing one ConfigMap puts the
+# CronJob's script inside the Job's template by way of the hash-suffixed name,
+# so editing `restic-backup.sh` — which has nothing to do with initialising the
+# repository — changes that template. While the completed Job still exists
+# (`ttlSecondsAfterFinished: 86400`, so for a day after it runs) the next
+# `apply-vps` then fails on it with `field is immutable`, and kubectl carries
+# on past the failed resource and signals only through its exit code. That is
+# the exact quiet failure AGENTS.md records from the 130-day homelab incident,
+# and iterating on the backup script is precisely when it would bite. Split,
+# the Job's template moves only when the init script itself changes, which is
+# a change that genuinely should re-run it.
 #
 # `namespace:` is REQUIRED and is not decoration. This kustomization sets no
 # top-level namespace, and a generator inherits one from nowhere; kustomize
 # only rewrites a name reference when referrer and referent agree on namespace.
 # Omit it and you get a silent DOUBLE failure: the ConfigMap is created in
-# `default` AND both workloads keep pointing at the unsuffixed name, so the
-# mount dangles and every run dies at container start.
+# `default` AND the workload keeps pointing at the unsuffixed name, so the
+# mount dangles and every run dies at container start. It is needed on EVERY
+# generator entry; it is not inherited between them.
 #
 # GENERATED SCRIPTS ARE NOT INERT TEXT. They pass through envsubst, which
 # substitutes the bare `$NAME` form as well as `${NAME}`. VPS_RESTIC_REPOSITORY
@@ -23,8 +38,15 @@ resources:
 # shared with homelab/backup/scripts/. `make check-script-substitution`
 # enforces both lists against every script in both trees.
 configMapGenerator:
+  # Mounted by the restic-backup CronJob. A CronJob's template is mutable, so
+  # this one is free to change as often as it likes.
   - name: backup-scripts
     namespace: backup
     files:
       - restic-backup.sh=scripts/restic-backup.sh
+  # Mounted by the one-shot restic-init Job, and kept apart from the CronJob's
+  # script for the immutability reason above.
+  - name: backup-init-scripts
+    namespace: backup
+    files:
       - restic-init.sh=scripts/restic-init.sh

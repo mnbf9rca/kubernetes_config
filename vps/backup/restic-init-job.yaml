@@ -38,4 +38,7 @@ spec:
             - { name: scripts, mountPath: /scripts, readOnly: true }
       volumes:
         - name: scripts
-          configMap: { name: backup-scripts }
+          # backup-init-scripts, NOT backup-scripts: this Job's spec.template is
+          # immutable, so it must not carry the CronJob's script in its hash.
+          # See vps/backup/kustomization.yaml.
+          configMap: { name: backup-init-scripts }
