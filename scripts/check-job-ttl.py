@@ -40,19 +40,16 @@ FIELD = "ttlSecondsAfterFinished"
 # anchors, merge keys or flow mappings. Both parsers below rely only on that.
 
 try:
-    import yaml  # noqa: F401  (presence, not the name, is what matters here)
-    HAVE_YAML = True
+    import yaml
 except ImportError:
     # PyYAML is not in the stdlib and is absent from stock macOS and Homebrew
     # python3. Rather than make the check unrunnable, or make the repo carry a
     # virtualenv for one assertion, fall back to the structural scan below.
-    HAVE_YAML = False
+    yaml = None
 
 
 def jobs_via_yaml(text):
     """Yield (namespace, name, has_ttl) using a real YAML parse."""
-    import yaml
-
     for doc in yaml.safe_load_all(text):
         if not isinstance(doc, dict) or doc.get("kind") != "Job":
             continue
@@ -101,7 +98,9 @@ def jobs_via_scan(text):
 
 def build(cluster):
     try:
-        out = subprocess.run(["kustomize", "build", cluster],
+        # check=False: a non-zero build is reported below with its stderr,
+        # which is far more useful than a CalledProcessError traceback.
+        out = subprocess.run(["kustomize", "build", cluster], check=False,
                              capture_output=True, text=True, timeout=180)
     except FileNotFoundError:
         sys.exit("ERROR: kustomize not on PATH")
@@ -115,7 +114,7 @@ def build(cluster):
 
 def main(argv):
     clusters = argv[1:] or list(DEFAULT_CLUSTERS)
-    find = jobs_via_yaml if HAVE_YAML else jobs_via_scan
+    find = jobs_via_yaml if yaml is not None else jobs_via_scan
 
     offenders, checked = [], 0
     for cluster in clusters:

@@ -5,3 +5,7 @@ docs/superpowers/
 
 # Agent worktrees (created by Claude Code isolation: worktree)
 .claude/worktrees/
+
+# Byte-code from running the health scripts tests locally.
+__pycache__/
+*.pyc

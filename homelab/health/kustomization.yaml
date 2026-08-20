@@ -15,3 +15,26 @@ resources:
   - backups.yaml
   - ingest-freshness.yaml
   - cloudflare-analytics.yaml
+
+# Scripts that run in this namespace live as real files under scripts/ and reach
+# the cluster through a generator, never as an inline YAML string: a real file
+# can be imported, unit-tested, linted and diffed line by line.
+#
+# The generated name gets a content-hash suffix and kustomize rewrites every
+# reference to it, so editing a script rolls the workload that mounts it instead
+# of leaving a stale copy mounted. Do NOT set disableNameSuffixHash here.
+#
+# The key is the mount filename, not the source filename: cloudflare-analytics
+# mounts this ConfigMap at /app and runs /app/ingest.py.
+#
+# `namespace:` is REQUIRED and is not decoration. A generator inherits no
+# namespace from anywhere (this kustomization deliberately sets no top-level
+# one), and kustomize only rewrites a name reference when referrer and referent
+# agree on namespace. Omit it and you get a silent double failure: the ConfigMap
+# is created in `default` AND the CronJob keeps pointing at the unsuffixed name,
+# so the mount dangles and every run fails at container start.
+configMapGenerator:
+  - name: cloudflare-analytics-script
+    namespace: health
+    files:
+      - ingest.py=scripts/cloudflare-analytics-ingest.py
