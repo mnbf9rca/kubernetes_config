@@ -85,7 +85,12 @@ during the rebuild and n8n credentials are unreadable without it.
 
 Separate B2 bucket and separate restic repo from homelab. The restic CronJob runs at
 04:00 UTC and backs up `/var/mnt/data/local-path-provisioner` via hostPath, with the same
-7 daily / 4 weekly / 6 monthly retention as homelab. The image is pinned to
+7 daily / 4 weekly / 6 monthly retention as homelab, with `--group-by paths`.
+
+That flag is load-bearing: `restic forget` groups by host+paths by default, and every
+CronJob pod has a unique hostname, so each nightly snapshot formed a group of one and the
+policy kept all of them. Verified on homelab 2026-08-20 — 137 snapshots in 137 groups
+across 131 hostnames, nothing ever pruned since the backup system was built. The image is pinned to
 `restic/restic:0.17.3` (was `:latest` — an unpinned backup tool is a silent-change surface
 on the one job you cannot re-run).
 

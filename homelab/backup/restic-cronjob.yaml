@@ -66,7 +66,15 @@ spec:
                       --tag nightly \
                       --exclude='*.tmp' \
                       --exclude='cache/*' &&
+                    # --group-by paths is LOAD-BEARING. restic forget defaults to
+                    # grouping by host+paths, and every CronJob pod has a unique
+                    # hostname, so each nightly snapshot landed in a group of its
+                    # own and the policy below kept ALL of them: verified
+                    # 2026-08-20 with 137 snapshots in 137 groups across 131
+                    # hostnames, zero ever pruned. Grouping by paths alone makes
+                    # the retention policy actually apply.
                     restic forget --prune \
+                      --group-by paths \
                       --keep-daily 7 \
                       --keep-weekly 4 \
                       --keep-monthly 6 &&
