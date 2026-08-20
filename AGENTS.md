@@ -153,6 +153,14 @@ Full mechanics, target-by-target reference and failure modes:
   **start and exit code** — the two restic jobs do; the three older ones ping on success
   only, so a failure shows up as silence. Inventory and per-job semantics:
   `docs/operations/monitoring.md`.
+- **One-shot `Job`s must set `ttlSecondsAfterFinished`.** A Job's `spec.template` is
+  immutable, so a completed Job that is never garbage collected pins the version of
+  itself that ran. The next apply that changes it fails with `field is immutable`, and
+  since `kubectl apply` continues past a failed resource and reports only through its exit
+  code, the failure is quiet: everything else applies and the Job silently does not. The
+  homelab `restic-init` Job lacked the field, survived from 2026-04-11 to 2026-08-20, and
+  broke `diff-homelab` and `apply-homelab` for four months. Deleting the stale Job is the
+  recovery; the TTL is the prevention.
 - For new `hostPath`/`hostNetwork` workloads: elevate their namespace to PSA
   `privileged` in the cluster's `bootstrap/namespaces.yaml`. The cluster-wide enforce
   level is `baseline`.

@@ -5,6 +5,20 @@ metadata:
   namespace: backup
 spec:
   backoffLimit: 0
+  # REQUIRED, and its absence blocked every apply for 130 days. A Job's
+  # spec.template is immutable, so a completed Job that is never garbage
+  # collected makes the next apply that changes this script fail with
+  # `field is immutable` - and because kubectl apply carries on past a failed
+  # resource, signalling only through its exit code, the breakage is easy to
+  # miss. The Job created 2026-04-11 was still present on 2026-08-20, pinning a
+  # stale copy of this script and failing both `diff-homelab` and
+  # `apply-homelab`. Deleting it unblocked them.
+  #
+  # 86400 rather than the 259200 the nightly CronJobs use: this Job runs only
+  # during an interactive `make apply`, so a failure is seen as it happens and
+  # does not need to survive a weekend for post-mortem. Matches the VPS
+  # restic-init, which carried the field all along.
+  ttlSecondsAfterFinished: 86400
   template:
     spec:
       restartPolicy: Never
