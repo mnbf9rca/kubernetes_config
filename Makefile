@@ -102,6 +102,7 @@ help:
 	@echo "  require-vars    - assert all REQUIRED_VARS resolve under op run (preflight)"
 	@echo "  check-vars-consistency - assert every ENVSUBST_VAR_NAMES entry is in REQUIRED_VARS"
 	@echo "  check-placeholder-coverage - assert no .env.tpl \$${VAR} survives the render (both clusters)"
+	@echo "  check-job-ttl   - assert every standalone Job sets ttlSecondsAfterFinished (both clusters)"
 	@echo ""
 	@echo "VPS cluster targets:"
 	@echo "  check-vps-context - assert kubectl current-context matches VPS_CONTEXT ($(VPS_CONTEXT))"
@@ -152,6 +153,15 @@ check-vars-consistency:
 	  exit 1; \
 	fi; \
 	echo "OK: ENVSUBST_VAR_NAMES is a subset of REQUIRED_VARS"
+
+# Assert every standalone `kind: Job` sets spec.ttlSecondsAfterFinished. A
+# completed Job that is never garbage collected pins its own immutable
+# spec.template, and the next apply that changes it then fails quietly. Runs
+# on raw `kustomize build` output, so it needs neither 1Password nor a cluster.
+# Rationale and the incident behind it: AGENTS.md.
+.PHONY: check-job-ttl
+check-job-ttl:
+	@scripts/check-job-ttl.py
 
 .PHONY: require-vars
 require-vars:
