@@ -126,8 +126,24 @@ fault reaches the same CrashLoopBackOff chain. Each loop instead:
 
 These sidecars report failure by logging, not by exiting, so their restart counts stay at
 zero. The gate raises the alarm. To debug a missing snapshot, read the sidecar's stderr.
-`pg-dump-sidecar` uses the same shape without the content assertion; `pg_dumpall`'s exit
-code is the check there.
+
+`pg-dump-sidecar` uses the same shape, with `grep -c '^CREATE TABLE '` as its content
+assertion. `pg_dumpall`'s exit code alone was not enough: it exits 0 against a freshly
+initialised postgres that has no umami schema, because the image's entrypoint creates the
+empty `umami` database either way. That produced a valid roles-only dump of roughly 100
+lines, published with a current mtime, which passed the gate's mtime-only freshness check —
+a green backup that restores to an empty analytics database. Fewer than one `CREATE TABLE`
+now refuses to publish, so the previous dump keeps ageing and turns the check red.
+
+### Where these live
+
+Every one of these loops is a real file under a `scripts/` directory, delivered by a
+kustomize `configMapGenerator` and mounted at `/scripts`. Four of the five share
+`sqlite-snapshot-lib.sh`; n8n, karakeep and uptime-kuma share `sqlite-snapshot.sh` outright
+and differ only in `$SNAPSHOT_DB`. Editing one rolls the Deployments that mount it, and
+all five use `strategy: Recreate`, so a script edit costs a brief hard-down window for
+every one of them, not a rolling update. Generated scripts also pass through envsubst — see `make check-script-substitution`
+and the note in AGENTS.md before writing a `$VAR` into one.
 
 ## Scheduled work
 
@@ -345,7 +361,7 @@ one PVC directory expected to match one path.
 | `vps-uptime-kuma-alive` | `op://VPS/uptime-kuma/healthcheck-uuid` | 5m / 15m | An uptime-kuma monitor — see [the self-monitor](#the-self-monitor-layer-4) |
 | `health-apple-ingest` | `op://Homelab/health-healthchecks/apple-uuid` | 1d / 12h | `ingest-freshness`, only when InfluxDB data is under 24h old |
 | `health-garmin-ingest` | `op://Homelab/health-healthchecks/garmin-uuid` | 1d / 12h | as above |
-| `health-influx-backup` | `op://Homelab/health-healthchecks/backup-uuid` | 1d / 6h | `influx-backup`, success only: the script is `set -eu` with the ping last |
+| `health-influx-backup` | `op://Homelab/health-healthchecks/backup-uuid` | 1d / 6h | `influx-backup`, success only: the script is `set -eu` with the ping last. It is also `set -o pipefail`, without which the prune step's `ls` failure was hidden by `xargs` and the ping fired anyway |
 | `homelab-cloudflare-analytics` | `op://Homelab/health-healthchecks/cloudflare-uuid` | 1h / 2h | `cloudflare-analytics` CronJob, `/start` and exit code |
 | jottacloud-backup | `op://Homelab/jottacloud-backup/HEALTHCHECK_UUID` | 6-hourly schedule | The image's own `backup.sh` |
 

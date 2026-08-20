@@ -103,6 +103,8 @@ help:
 	@echo "  check-vars-consistency - assert every ENVSUBST_VAR_NAMES entry is in REQUIRED_VARS"
 	@echo "  check-placeholder-coverage - assert no .env.tpl \$${VAR} survives the render (both clusters)"
 	@echo "  check-job-ttl   - assert every standalone Job sets ttlSecondsAfterFinished (both clusters)"
+	@echo "  check-script-substitution - assert no configMapGenerator script names an envsubst var"
+	@echo "                    (both of the above also run per-cluster in the diff-*/apply-* preflight)"
 	@echo ""
 	@echo "VPS cluster targets:"
 	@echo "  check-vps-context - assert kubectl current-context matches VPS_CONTEXT ($(VPS_CONTEXT))"
@@ -159,9 +161,53 @@ check-vars-consistency:
 # spec.template, and the next apply that changes it then fails quietly. Runs
 # on raw `kustomize build` output, so it needs neither 1Password nor a cluster.
 # Rationale and the incident behind it: AGENTS.md.
-.PHONY: check-job-ttl
+# Wired into the diff-* / apply-* preflight chains, per cluster: a VPS-only
+# render fault must not block an unrelated `apply-homelab`. `check-job-ttl`
+# with no suffix still checks both, for a manual sweep.
+#
+# It sits LAST in each chain, after the context assert. It shells out to
+# `kustomize build`, which fetches the bootstrap layer's remote bases, so it is
+# the one preflight worth seconds — no reason to pay them before telling you
+# that kubectl is pointed at the wrong cluster.
+#
+# Deliberately NOT wired into build-*: that target's stdout IS the rendered
+# manifest, and a prerequisite's `OK: ...` line would land at the top of it,
+# corrupting `make build-homelab > out.yaml` and anything that parses it.
+# `check-vars-consistency` sits outside build-* for the same reason.
+.PHONY: check-job-ttl check-job-ttl-homelab check-job-ttl-vps
 check-job-ttl:
 	@scripts/check-job-ttl.py
+
+check-job-ttl-homelab:
+	@scripts/check-job-ttl.py homelab
+
+check-job-ttl-vps:
+	@scripts/check-job-ttl.py vps
+
+# Mirror image of check-placeholder-coverage. That one catches a ${VAR} that
+# SURVIVES the render; this one catches a $VAR that must never have been
+# rendered in the first place.
+#
+# Files delivered by a configMapGenerator ride the same stream as every other
+# manifest, so envsubst rewrites them too — and envsubst substitutes the BARE
+# `$NAME` form, not only `${NAME}` (verified). A script that logs
+# `$RESTIC_REPOSITORY` therefore ships the resolved B2 URL inside a ConfigMap,
+# and `$RESTIC_PASSWORD` would ship the repository password in plaintext.
+# Neither leaves a placeholder behind, so coverage-style checks see nothing.
+# Full reasoning and the fix pattern: scripts/check-script-substitution.py.
+# Per-cluster variants scope the SCAN to one cluster tree, not the allowlist:
+# both allowlists are still applied to every script scanned, because a name
+# that is inert under vps/ today goes live the moment a refactor shares that
+# file with homelab/. Same build-* exclusion as check-job-ttl above.
+.PHONY: check-script-substitution check-script-substitution-homelab check-script-substitution-vps
+check-script-substitution:
+	@scripts/check-script-substitution.py
+
+check-script-substitution-homelab:
+	@scripts/check-script-substitution.py homelab
+
+check-script-substitution-vps:
+	@scripts/check-script-substitution.py vps
 
 .PHONY: require-vars
 require-vars:
@@ -360,6 +406,21 @@ check-context:
 # make is a separate process, so it re-runs the prerequisite). That is cheap.
 # Do not "de-duplicate" these.
 #
+# check-script-substitution-<cluster> is on both halves for the same reason and
+# passes the same cost test: it reads a dozen script files and the Makefile,
+# and the failure it prevents is a real secret resolved into a ConfigMap, which
+# costs a rotation to undo. A guard against that must hold however the recipe
+# is entered.
+#
+# check-job-ttl-<cluster> is deliberately on the PUBLIC half only, and that
+# asymmetry is considered, not an oversight. It shells out to a full
+# `kustomize build`, which fetches the bootstrap layer's remote bases, so
+# duplicating it would double the render cost of every apply — it fails the
+# "that is cheap" test the rest of this block rests on. Its failure mode is
+# also milder and reversible: a Job with no TTL is not garbage collected and
+# the next apply that changes it fails quietly, which `kubectl delete job`
+# undoes. No secret escapes. If it ever becomes cheap to run, put it here too.
+#
 # WHAT IS AND IS NOT PROTECTED IN THE PRINTED DIFF
 #
 # `kubectl diff` output is safe to look at because KUBECTL REDACTS SECRET
@@ -394,7 +455,7 @@ check-context:
 # THAT it changed, never WHAT it changed to. Use
 # `kubectl -n <ns> get secret <name> -o jsonpath=...` to confirm a value landed.
 .PHONY: diff-homelab
-diff-homelab: check-vars-consistency check-context
+diff-homelab: check-vars-consistency check-context check-script-substitution-homelab check-job-ttl-homelab
 	@$(OP_RUN) $(MAKE) --no-print-directory _diff-homelab-inner
 
 # The old `|| true` here swallowed EVERYTHING, including a kustomize failure.
@@ -406,7 +467,7 @@ diff-homelab: check-vars-consistency check-context
 # >1 = kubectl itself failed. Streaming is preserved — the rendered manifest is
 # never buffered into a shell variable.
 .PHONY: _diff-homelab-inner
-_diff-homelab-inner: check-context _assert-vars
+_diff-homelab-inner: check-context check-script-substitution-homelab _assert-vars
 	@kustomize build homelab/ | envsubst '$(ENVSUBST_VARS)' | kubectl diff -f -; \
 	st=($${PIPESTATUS[@]}); \
 	if [ $${st[0]} -ne 0 ]; then echo "ERROR: kustomize build failed (exit $${st[0]}) — diff above is incomplete" >&2; exit 1; fi; \
@@ -415,7 +476,7 @@ _diff-homelab-inner: check-context _assert-vars
 	exit 0
 
 .PHONY: apply-homelab
-apply-homelab: check-vars-consistency check-context
+apply-homelab: check-vars-consistency check-context check-script-substitution-homelab check-job-ttl-homelab
 	@$(OP_RUN) $(MAKE) --no-print-directory _apply-homelab-inner
 
 # RENDER FULLY, VERIFY, THEN APPLY — never stream straight into kubectl.
@@ -434,7 +495,7 @@ apply-homelab: check-vars-consistency check-context
 # crash, a stray `set -x`, or the next person with read access to /tmp. The
 # variable is local to this recipe's shell, never exported.
 .PHONY: _apply-homelab-inner
-_apply-homelab-inner: check-context _assert-vars
+_apply-homelab-inner: check-context check-script-substitution-homelab _assert-vars
 	@set -o pipefail; \
 	cluster=homelab; allowlist=ENVSUBST_VAR_NAMES; \
 	rendered=$$(kustomize build homelab/ | envsubst '$(ENVSUBST_VARS)') || { \
@@ -685,12 +746,12 @@ _build-vps-inner:
 # closed on a wrong context no matter how it is entered. See the GUARD
 # PLACEMENT note above diff-homelab.
 .PHONY: diff-vps
-diff-vps: check-vps-context check-vps-vars-consistency
+diff-vps: check-vps-context check-vps-vars-consistency check-script-substitution-vps check-job-ttl-vps
 	@$(OP_RUN) $(MAKE) --no-print-directory _diff-vps-inner
 
 # See _diff-homelab-inner for why this is a PIPESTATUS check and not `|| true`.
 .PHONY: _diff-vps-inner
-_diff-vps-inner: check-vps-context _assert-vps-vars
+_diff-vps-inner: check-vps-context check-script-substitution-vps _assert-vps-vars
 	@kustomize build vps/ | envsubst '$(VPS_ENVSUBST_VARS)' | kubectl diff -f -; \
 	st=($${PIPESTATUS[@]}); \
 	if [ $${st[0]} -ne 0 ]; then echo "ERROR: kustomize build failed (exit $${st[0]}) — diff above is incomplete" >&2; exit 1; fi; \
@@ -699,12 +760,12 @@ _diff-vps-inner: check-vps-context _assert-vps-vars
 	exit 0
 
 .PHONY: apply-vps
-apply-vps: check-vps-context check-vps-vars-consistency
+apply-vps: check-vps-context check-vps-vars-consistency check-script-substitution-vps check-job-ttl-vps
 	@$(OP_RUN) $(MAKE) --no-print-directory _apply-vps-inner
 
 # Same render-fully-then-apply shape as _apply-homelab-inner; see the note there.
 .PHONY: _apply-vps-inner
-_apply-vps-inner: check-vps-context _assert-vps-vars
+_apply-vps-inner: check-vps-context check-script-substitution-vps _assert-vps-vars
 	@set -o pipefail; \
 	cluster=vps; allowlist=VPS_ENVSUBST_VAR_NAMES; \
 	rendered=$$(kustomize build vps/ | envsubst '$(VPS_ENVSUBST_VARS)') || { \

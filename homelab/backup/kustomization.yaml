@@ -7,3 +7,38 @@ namespace: backup
 resources:
   - restic-init-job.yaml
   - restic-cronjob.yaml
+
+# Job scripts as real files, mounted at /scripts. The content-hash suffix is
+# left ON, so editing a script rolls the workload that mounts it rather than
+# leaving a stale copy behind.
+#
+# For a Job, "rolls" is not free: `spec.template` is IMMUTABLE, so an edit here
+# while the completed Job still exists (`ttlSecondsAfterFinished`) makes the
+# next apply fail on it with `field is immutable` rather than recreate it. That
+# is tolerable while this generator holds ONE script mounted by ONE Job — the
+# only thing that can move the hash is a change that genuinely should re-run
+# the Job. When restic-cronjob.yaml's script is extracted it must therefore get
+# its OWN generator entry, not a second key in this one; sharing would let a
+# CronJob-script edit break the Job's apply. `vps/backup/kustomization.yaml` is
+# already split that way and explains it at length.
+#
+# No `namespace:` override is needed on this entry: this kustomization already
+# sets a top-level `namespace: backup`, which applies to generated resources
+# too. (The health and vps kustomizations deliberately set no top-level
+# namespace, so their generators must set one explicitly.)
+#
+# GENERATED SCRIPTS ARE NOT INERT TEXT. They pass through envsubst, which
+# substitutes the bare `$NAME` form as well as `${NAME}`. RESTIC_REPOSITORY,
+# RESTIC_PASSWORD, B2_ACCOUNT_ID and B2_ACCOUNT_KEY are all in
+# ENVSUBST_VAR_NAMES — and are exactly the names restic reads — so a script
+# here that mentions one publishes the real value inside this ConfigMap.
+# `make check-script-substitution` enforces that none do.
+#
+# restic-cronjob.yaml's script is not extracted yet. Its verification gate
+# landed in #33 while this branch was open; extracting it is follow-up work,
+# deliberately not folded in here so the gate and the code motion stay
+# reviewable apart.
+configMapGenerator:
+  - name: backup-scripts
+    files:
+      - restic-init.sh=scripts/restic-init.sh

@@ -12,3 +12,38 @@ resources:
   - umami.yaml
   - n8n.yaml
   - karakeep.yaml
+
+# Backup sidecar scripts as real files, mounted at /scripts. One ConfigMap for
+# all five sidecars: four of them share sqlite-snapshot-lib.sh, and splitting
+# the set per workload would mean five copies of that library to keep in step.
+#
+# The content-hash suffix is left ON, so editing a script rolls the Deployments
+# that mount it. That is the intended behaviour and it has a cost worth knowing
+# about: ALL FIVE of these Deployments use `strategy: Recreate` (n8n, karakeep,
+# uptime-kuma, freshrss and umami-postgres), so a script edit means a brief
+# hard-down window for every one of them, not a rolling update.
+#
+# `namespace:` is REQUIRED on this entry, and it is NOT the same thing as a
+# top-level `namespace:` — do not "simplify" it into one. A top-level namespace
+# would rewrite every resource in this kustomization and break workloads that
+# live outside `vps` (see the note above and
+# memory:feedback_workloads_kustomization_no_namespace.md). A generator, on the
+# other hand, inherits a namespace from nowhere, and kustomize only rewrites a
+# name reference when referrer and referent agree on namespace. Omit it here
+# and you get a silent DOUBLE failure: the ConfigMap is created in `default`
+# AND all five Deployments keep pointing at the unsuffixed name, so every mount
+# dangles and every sidecar dies at container start.
+#
+# GENERATED SCRIPTS ARE NOT INERT TEXT. They pass through envsubst, which
+# substitutes the bare `$NAME` form as well as `${NAME}`. N8N_ENCRYPTION_KEY,
+# UMAMI_DB_PASSWORD, KARAKEEP_OPENAI_API_KEY and the rest of
+# VPS_ENVSUBST_VAR_NAMES must therefore never appear in these files.
+# `make check-script-substitution` enforces it.
+configMapGenerator:
+  - name: sqlite-snapshot-scripts
+    namespace: vps
+    files:
+      - sqlite-snapshot.sh=scripts/sqlite-snapshot.sh
+      - sqlite-snapshot-freshrss.sh=scripts/sqlite-snapshot-freshrss.sh
+      - sqlite-snapshot-lib.sh=scripts/sqlite-snapshot-lib.sh
+      - pg-dump-snapshot.sh=scripts/pg-dump-snapshot.sh
