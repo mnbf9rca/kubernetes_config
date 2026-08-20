@@ -182,6 +182,20 @@ Full mechanics, target-by-target reference and failure modes:
   the content-hash suffix ON, so editing a script rolls the workload that mounts it.
   Short straight-line `sh`/`kubectl` still belongs inline: the rule is about logic, not
   length.
+- **A generated script must never name an `ENVSUBST_VAR_NAMES` variable.** Generator
+  files ride the same stream as every manifest, so envsubst rewrites them — and it
+  substitutes the **bare `$NAME`** form, not just `${NAME}` (verified). The homelab
+  allowlist holds `RESTIC_REPOSITORY`, `RESTIC_PASSWORD`, `B2_ACCOUNT_ID` and
+  `B2_ACCOUNT_KEY`, which are exactly the names restic reads, so
+  `echo "repo at $RESTIC_REPOSITORY"` in a script publishes the real B2 URL inside a
+  **ConfigMap**; `$RESTIC_PASSWORD` publishes the repository password in plaintext. No
+  placeholder survives, so `check-placeholder-coverage` sees nothing. `make
+  check-script-substitution` is the guard. If a script needs such a value, indirect it:
+  give the container a differently named env var (`secretKeyRef` for a secret) and use
+  that name in the script. For the same reason, **do not share one script between the
+  two clusters** when it touches restic: the VPS names are `VPS_`-prefixed and the
+  homelab ones are not, so a shared file is safe under one tree and leaking under the
+  other.
 - For new `hostPath`/`hostNetwork` workloads: elevate their namespace to PSA
   `privileged` in the cluster's `bootstrap/namespaces.yaml`. The cluster-wide enforce
   level is `baseline`.

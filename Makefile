@@ -103,6 +103,7 @@ help:
 	@echo "  check-vars-consistency - assert every ENVSUBST_VAR_NAMES entry is in REQUIRED_VARS"
 	@echo "  check-placeholder-coverage - assert no .env.tpl \$${VAR} survives the render (both clusters)"
 	@echo "  check-job-ttl   - assert every standalone Job sets ttlSecondsAfterFinished (both clusters)"
+	@echo "  check-script-substitution - assert no configMapGenerator script names an envsubst var"
 	@echo ""
 	@echo "VPS cluster targets:"
 	@echo "  check-vps-context - assert kubectl current-context matches VPS_CONTEXT ($(VPS_CONTEXT))"
@@ -162,6 +163,21 @@ check-vars-consistency:
 .PHONY: check-job-ttl
 check-job-ttl:
 	@scripts/check-job-ttl.py
+
+# Mirror image of check-placeholder-coverage. That one catches a ${VAR} that
+# SURVIVES the render; this one catches a $VAR that must never have been
+# rendered in the first place.
+#
+# Files delivered by a configMapGenerator ride the same stream as every other
+# manifest, so envsubst rewrites them too — and envsubst substitutes the BARE
+# `$NAME` form, not only `${NAME}` (verified). A script that logs
+# `$RESTIC_REPOSITORY` therefore ships the resolved B2 URL inside a ConfigMap,
+# and `$RESTIC_PASSWORD` would ship the repository password in plaintext.
+# Neither leaves a placeholder behind, so coverage-style checks see nothing.
+# Full reasoning and the fix pattern: scripts/check-script-substitution.py.
+.PHONY: check-script-substitution
+check-script-substitution:
+	@scripts/check-script-substitution.py
 
 .PHONY: require-vars
 require-vars:
