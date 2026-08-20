@@ -2,3 +2,6 @@
 settings.local.json
 docs/superpowers/
 .playwright-mcp/
+
+# Agent worktrees (created by Claude Code isolation: worktree)
+.claude/worktrees/
