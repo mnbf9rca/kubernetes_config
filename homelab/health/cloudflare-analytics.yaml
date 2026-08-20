@@ -376,8 +376,18 @@ data:
     # --- line protocol ----------------------------------------------------------
 
     def esc_tag(value):
-        """Escape a tag key or value: comma, equals, space, backslash."""
-        return (str(value)
+        """Escape a tag key or value: comma, equals, space, backslash.
+
+        Control characters are STRIPPED before escaping, not escaped. Line
+        protocol has no escape for a newline inside a tag value: a newline ends
+        the point, so one arriving in a tag would split the body and inject an
+        arbitrary extra point. `clientRequestHTTPHost` is derived from the
+        client's Host header, which makes this attacker-influenced input, and a
+        forged point is silent data corruption rather than a loud failure.
+        str.isprintable() keeps the ASCII space, which is escaped below.
+        """
+        text = "".join(ch for ch in str(value) if ch.isprintable())
+        return (text
                 .replace("\\", "\\\\")
                 .replace(",", "\\,")
                 .replace("=", "\\=")

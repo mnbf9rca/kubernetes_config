@@ -817,17 +817,35 @@ health-influx-bootstrap: check-context
 # 1Password: `make apply-homelab`, restart grafana and pomerium, THEN delete the
 # superseded auth with `influx auth delete`. Deleting it first locks Grafana and
 # the MCP connector out until the new Secret has actually rolled.
+#
+# RUN THIS IN A PLAIN TERMINAL, NOT INSIDE AN AGENT SESSION. It prints two live
+# InfluxDB tokens so you can paste them into 1Password, and the 1Password service
+# account this repo uses is read-only, so there is no CLI path that writes them
+# for you. Any token printed inside an agent session lands in that session's
+# transcript and must then be rotated under the `secrets-to-rotate.md` rule.
+# Running it via Claude Code's `!` prefix does NOT help: that executes in the
+# session and the output still reaches the model.
 .PHONY: health-influx-cloudflare-bootstrap
 health-influx-cloudflare-bootstrap: check-context
 	@set -euo pipefail; \
 	pod() { kubectl -n health exec deploy/influxdb -- "$$@"; }; \
+	bucket_id() { \
+	  id=$$(pod influx bucket list -o cynexia -n "$$1" --hide-headers | awk '{print $$1}'); \
+	  if [ -z "$$id" ]; then echo "FATAL: bucket '$$1' not found in org cynexia" >&2; exit 1; fi; \
+	  printf '%s' "$$id"; \
+	}; \
+	mint() { \
+	  tok=$$(pod influx auth create -o cynexia "$$@" --json | jq -r '.token // empty'); \
+	  if [ -z "$$tok" ]; then echo "FATAL: influx auth create returned no token" >&2; exit 1; fi; \
+	  printf '%s\n' "$$tok"; \
+	}; \
 	pod influx bucket create -n cloudflare -o cynexia -r 0 || true; \
-	CFID=$$(pod influx bucket list -o cynexia -n cloudflare --hide-headers | awk '{print $$1}'); \
-	AMID=$$(pod influx bucket list -o cynexia -n apple_metrics --hide-headers | awk '{print $$1}'); \
-	AWID=$$(pod influx bucket list -o cynexia -n apple_workouts --hide-headers | awk '{print $$1}'); \
-	GID=$$(pod influx bucket list -o cynexia -n garmin --hide-headers | awk '{print $$1}'); \
+	CFID=$$(bucket_id cloudflare); \
+	AMID=$$(bucket_id apple_metrics); \
+	AWID=$$(bucket_id apple_workouts); \
+	GID=$$(bucket_id garmin); \
 	echo "--- CLOUDFLARE INGEST TOKEN (paste into op://Homelab/health-influxdb/cloudflare-token):"; \
-	pod influx auth create -o cynexia --read-bucket $$CFID --write-bucket $$CFID -d "cloudflare analytics ingest rw" --json | jq -r .token; \
+	mint --read-bucket $$CFID --write-bucket $$CFID -d "cloudflare analytics ingest rw"; \
 	echo "--- REPLACEMENT READ TOKEN (paste into op://Homelab/health-influxdb/read-token):"; \
-	pod influx auth create -o cynexia --read-bucket $$AMID --read-bucket $$AWID --read-bucket $$GID --read-bucket $$CFID -d "mcp+grafana read-only (incl cloudflare)" --json | jq -r .token; \
+	mint --read-bucket $$AMID --read-bucket $$AWID --read-bucket $$GID --read-bucket $$CFID -d "mcp+grafana read-only (incl cloudflare)"; \
 	echo "--- then: apply, restart grafana+pomerium, and only THEN delete the old read-only auth"
