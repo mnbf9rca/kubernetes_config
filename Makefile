@@ -95,6 +95,7 @@ help:
 	@echo "  apply-homelab   - apply the built manifests to the current cluster"
 	@echo "  require-vars    - assert all REQUIRED_VARS resolve under op run (preflight)"
 	@echo "  check-vars-consistency - assert every ENVSUBST_VAR_NAMES entry is in REQUIRED_VARS"
+	@echo "  check-placeholder-coverage - assert no .env.tpl \$${VAR} survives the render (both clusters)"
 	@echo ""
 	@echo "VPS cluster targets:"
 	@echo "  check-vps-context - assert kubectl current-context matches VPS_CONTEXT ($(VPS_CONTEXT))"
@@ -180,6 +181,86 @@ _assert-vars:
 	  exit 1; \
 	fi; \
 	echo "OK: $$set / $$set required vars set"
+
+# --- placeholder coverage -------------------------------------------------
+#
+# THE GAP THIS CLOSES: a manifest gains a `${SOME_VAR}` placeholder and the
+# author forgets to add SOME_VAR to the envsubst allowlist. Nothing catches it
+# today — check-vars-consistency only compares the allowlist against
+# REQUIRED_VARS, so a placeholder that is in NEITHER list is invisible to it.
+# envsubst leaves an unlisted token completely alone, so the literal string
+# `${SOME_VAR}` is written into a live Secret and the apply reports success.
+#
+# THE RULE, and why the naive version is wrong: the rendered stream is FULL of
+# surviving `${...}` tokens that are entirely correct — runtime shell variables
+# inside CronJob scripts (`${HC_UUID}`, `${STALE_MINUTES}`, `${db}`, ...) which
+# MUST NOT be substituted at render time. So "any leftover token is a bug" would
+# false-positive on every cluster. The discriminator is ownership:
+#
+#   a leftover ${X} is a bug IF AND ONLY IF X is declared in .env.tpl
+#
+# i.e. X is one of OUR secrets (`X=op://...`), which means it was meant to be
+# substituted and was not. Anything else is a runtime variable belonging to the
+# container, and stays silent.
+#
+# Commented-out declarations (`#X=op://...`) count as declared: a token whose
+# secret was deliberately disabled is still a bug if it is left in a manifest.
+#
+# Scans `${X}` only, not bare `$X`. envsubst honours both forms, but every
+# placeholder in this repo uses the braced form, and scanning bare `$X` would
+# match half of every embedded shell script.
+#
+# Requires resolved secrets: an unset var renders as an empty string and its
+# token disappears, which would be a false negative. Hence _assert-vars is a
+# prerequisite everywhere this is used.
+#
+# Callers set two shell vars first: `rendered` (the manifest text) and
+# `cluster` / `allowlist` (for the message).
+define PLACEHOLDER_SCAN
+declared=$$(sed -nE 's|^[[:space:]]*#?[[:space:]]*([A-Za-z_][A-Za-z0-9_]*)=op://.*|\1|p' .env.tpl | sort -u); \
+leftover=$$(printf '%s\n' "$$rendered" | grep -oE '[$$][{][A-Za-z_][A-Za-z0-9_]*[}]' | sed -E 's|^[$$][{]||; s|[}]$$||' | sort -u); \
+bad=""; \
+for t in $$leftover; do \
+  for d in $$declared; do \
+    if [ "$$t" = "$$d" ]; then bad="$$bad $$t"; break; fi; \
+  done; \
+done; \
+if [ -n "$$bad" ]; then \
+  echo "ERROR: [$$cluster] rendered manifests still contain .env.tpl placeholder(s):$$bad" >&2; \
+  echo "  Each name above is declared in .env.tpl but is missing from $$allowlist," >&2; \
+  echo "  so envsubst left it alone and the literal \$${NAME} would be written into" >&2; \
+  echo "  the cluster (silently, inside a Secret). Fix: add it to $$allowlist in" >&2; \
+  echo "  the Makefile. See the placeholder-coverage note above." >&2; \
+  exit 1; \
+fi; \
+echo "OK: [$$cluster] no .env.tpl placeholder left unsubstituted"
+endef
+
+# Standalone entry point. The apply targets do NOT depend on this: they run the
+# identical scan inline against the exact bytes they are about to apply, which
+# costs no extra render. This target exists for running the check on its own
+# (CI, or after editing a manifest), and it renders both trees to do so.
+.PHONY: check-placeholder-coverage
+check-placeholder-coverage:
+	@$(OP_RUN) $(MAKE) --no-print-directory _check-placeholders-homelab _check-placeholders-vps
+
+.PHONY: _check-placeholders-homelab
+_check-placeholders-homelab: _assert-vars
+	@set -o pipefail; \
+	cluster=homelab; allowlist=ENVSUBST_VAR_NAMES; \
+	rendered=$$(kustomize build homelab/ | envsubst '$(ENVSUBST_VARS)') || { \
+	  echo "ERROR: [homelab] render failed (kustomize or envsubst)" >&2; exit 1; \
+	}; \
+	$(PLACEHOLDER_SCAN)
+
+.PHONY: _check-placeholders-vps
+_check-placeholders-vps: _assert-vps-vars
+	@set -o pipefail; \
+	cluster=vps; allowlist=VPS_ENVSUBST_VAR_NAMES; \
+	rendered=$$(kustomize build vps/ | envsubst '$(VPS_ENVSUBST_VARS)') || { \
+	  echo "ERROR: [vps] render failed (kustomize or envsubst)" >&2; exit 1; \
+	}; \
+	$(PLACEHOLDER_SCAN)
 
 # PIPELINE FAILURE HANDLING — every rendering pipeline below needs this.
 #
@@ -320,10 +401,36 @@ _diff-homelab-inner: check-context _assert-vars
 apply-homelab: check-vars-consistency check-context
 	@$(OP_RUN) $(MAKE) --no-print-directory _apply-homelab-inner
 
+# RENDER FULLY, VERIFY, THEN APPLY — never stream straight into kubectl.
+#
+# The obvious shape, `kustomize build | envsubst | kubectl apply -f -`, applies
+# as it goes. If the render dies partway, kubectl has ALREADY applied every
+# document that reached it. pipefail makes the target exit non-zero, so the exit
+# code is right — and the cluster is still half-updated, which is the part that
+# matters. So: render to completion, check the render succeeded, check it is
+# non-empty, run the placeholder scan, and only then invoke kubectl. A failure
+# before that point applies nothing at all, and the message says so, so nobody
+# goes hunting for partial state that does not exist.
+#
+# The rendered manifest is held in a shell variable, deliberately NOT a temp
+# file: it contains real secret values, and a file leaves them on disk for a
+# crash, a stray `set -x`, or the next person with read access to /tmp. The
+# variable is local to this recipe's shell, never exported.
 .PHONY: _apply-homelab-inner
 _apply-homelab-inner: check-context _assert-vars
 	@set -o pipefail; \
-	kustomize build homelab/ | envsubst '$(ENVSUBST_VARS)' | kubectl apply -f -
+	cluster=homelab; allowlist=ENVSUBST_VAR_NAMES; \
+	rendered=$$(kustomize build homelab/ | envsubst '$(ENVSUBST_VARS)') || { \
+	  echo "ERROR: render failed (kustomize or envsubst) — NOTHING was applied." >&2; \
+	  echo "  kubectl was never invoked, so there is no partial state to clean up." >&2; \
+	  exit 1; \
+	}; \
+	if [ -z "$$rendered" ]; then \
+	  echo "ERROR: render produced no output — NOTHING was applied." >&2; \
+	  exit 1; \
+	fi; \
+	$(PLACEHOLDER_SCAN); \
+	printf '%s\n' "$$rendered" | kubectl apply -f -
 
 # Create jottacloud-backup secret from 1Password. The RCLONE_CONFIG field is
 # multi-line, so it can't go through the envsubst pipeline. This target reads
@@ -578,10 +685,22 @@ _diff-vps-inner: check-vps-context _assert-vps-vars
 apply-vps: check-vps-context check-vps-vars-consistency
 	@$(OP_RUN) $(MAKE) --no-print-directory _apply-vps-inner
 
+# Same render-fully-then-apply shape as _apply-homelab-inner; see the note there.
 .PHONY: _apply-vps-inner
 _apply-vps-inner: check-vps-context _assert-vps-vars
 	@set -o pipefail; \
-	kustomize build vps/ | envsubst '$(VPS_ENVSUBST_VARS)' | kubectl apply -f -
+	cluster=vps; allowlist=VPS_ENVSUBST_VAR_NAMES; \
+	rendered=$$(kustomize build vps/ | envsubst '$(VPS_ENVSUBST_VARS)') || { \
+	  echo "ERROR: render failed (kustomize or envsubst) — NOTHING was applied." >&2; \
+	  echo "  kubectl was never invoked, so there is no partial state to clean up." >&2; \
+	  exit 1; \
+	}; \
+	if [ -z "$$rendered" ]; then \
+	  echo "ERROR: render produced no output — NOTHING was applied." >&2; \
+	  exit 1; \
+	fi; \
+	$(PLACEHOLDER_SCAN); \
+	printf '%s\n' "$$rendered" | kubectl apply -f -
 
 # Re-create CNAMEs for every hostname in the cloudflared ConfigMap. Run once
 # after adding a new hostname to vps/bootstrap/cloudflared/cloudflared.yaml,

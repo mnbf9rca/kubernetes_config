@@ -1,6 +1,7 @@
 # One-shot Job to initialize the restic repo in B2. Safe to re-run because
-# `restic init` errors if the repo already exists — the Job will fail the
-# second time, which is the desired behavior (you shouldn't need to re-init).
+# Idempotent: it probes for an existing repo and only initializes if absent,
+# so re-running after the Job's TTL expires is a clean no-op rather than a
+# Failed Job on every apply.
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -20,7 +21,15 @@ spec:
             - |
               set -euo pipefail
               echo "Initializing restic repo at $RESTIC_REPOSITORY"
-              restic init
+              # Idempotent: the Job's TTL deletes it, so every later apply recreates
+              # it. A bare `restic init` then fails against the existing repo and
+              # leaves a Failed Job behind on each apply. Probing first makes a
+              # re-run a clean no-op, and a genuine init failure still fails loudly.
+              if restic cat config >/dev/null 2>&1; then
+                echo "Repo already initialized - nothing to do."
+              else
+                restic init
+              fi
               echo "Done."
           envFrom:
             - secretRef:
