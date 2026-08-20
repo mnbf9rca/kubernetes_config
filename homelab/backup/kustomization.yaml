@@ -24,8 +24,10 @@ resources:
 # here that mentions one publishes the real value inside this ConfigMap.
 # `make check-script-substitution` enforces that none do.
 #
-# restic-cronjob.yaml's script is not extracted yet; it is being changed on
-# another branch and will follow.
+# restic-cronjob.yaml's script is not extracted yet. Its verification gate
+# landed in #33 while this branch was open; extracting it is follow-up work,
+# deliberately not folded in here so the gate and the code motion stay
+# reviewable apart.
 configMapGenerator:
   - name: backup-scripts
     files:
