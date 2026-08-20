@@ -29,6 +29,33 @@ set -o pipefail
 DATE=$(date +%F)
 POD=$(kubectl -n health get pod -l app=influxdb -o jsonpath='{.items[0].metadata.name}')
 
+# ASSERT THE TWO SHIPPED-AS-TEXT SCRIPTS ARE ACTUALLY THERE, BEFORE USING THEM.
+# Both run inside the influxdb pod, which does not mount this ConfigMap, so
+# they cross the boundary as `sh -c "$(cat /scripts/x.sh)"`. That construct
+# fails open in a way the inline block scalar it replaced could not:
+#
+#   - a command substitution in ARGUMENT position does not trip `set -e`, so a
+#     `cat` of a missing file is not fatal, it just yields the empty string;
+#   - `sh -c ''` exits 0.
+#
+# Both exec steps would therefore become silent no-ops, `prune_to` would find
+# the PREVIOUS nights' dumps and succeed, and the healthchecks.io ping at the
+# end would report SUCCESS for a backup that captured nothing. Verified:
+#
+#   $ sh -c 'set -eu; printf "[%s]" "$(cat /nonexistent 2>/dev/null)"; \
+#            sh -c "" n a; echo rc=$?'
+#   [] rc=0
+#
+# A missing key here is not exotic: the ConfigMap mounts fine with a key
+# dropped from the generator, so the pod starts and only the file is absent.
+for _s in /scripts/influx-native-backup.sh /scripts/influx-export-lp.sh; do
+  if [ ! -s "$_s" ]; then
+    echo "FATAL: $_s is missing or empty — refusing to run a backup that would" \
+         "silently capture nothing and then report success" >&2
+    exit 1
+  fi
+done
+
 # Native backup (online, via the HTTP API, operator token read from the influxdb
 # pod's own env). `sh -c CMD name arg` sets $0=name and $1=arg inside the inner
 # shell, so the date crosses the boundary as a positional parameter rather than
