@@ -55,7 +55,7 @@ kubernetes_config/
 │   ├── health/               # health-data pipeline (no keel; pinned images)
 │   └── backup/               # restic init Job + nightly CronJob (hostPath /var/mnt/ssd/local-path-provisioner)
 ├── vps/                      # Hetzner Talos cluster, same sub-layout (bootstrap/secrets/workloads/backup/talos)
-├── scripts/                  # standalone helper scripts (karakeep tag maintenance)
+├── scripts/                  # standalone helper scripts (karakeep tag maintenance, FreshRSS WebSub status)
 ├── legacy-microk8s/          # frozen reference copies of the old microk8s manifests
 └── no_longer_used/           # retired manifests kept for reference
 ```

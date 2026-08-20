@@ -96,20 +96,18 @@ Grepping for `pubSubHubbubError()` is misleading: that method is only ever calle
 `true`, which makes the flag look like a one-way latch. The clearing path writes the
 array directly in `p/api/pshb.php` and does not go through the method.
 
-**Subscription health is `lease_end` in the future.** Check that:
+**Subscription health is `lease_end` in the future.** Run:
 
 ```bash
-kubectl --context cynexia-vps -n vps exec deployment/freshrss -c freshrss -- \
-  sh -c 'for f in /var/www/FreshRSS/data/PubSubHubbub/feeds/*/\!hub.json; do cat "$f"; echo; done' \
-  | python3 -c 'import sys,json,time
-now=time.time()
-for l in sys.stdin:
-    if not l.strip(): continue
-    d=json.loads(l); le=d.get("lease_end")
-    print(("LIVE  %8.1fh"%((le-now)/3600)) if le and le>now else "NOT LIVE     ", d["hub"][:60])'
+./scripts/freshrss-websub-status.py
 ```
 
-Never print those files whole: each one holds that feed's callback secret.
+It reports both columns per feed — whether the lease is live, and whether that feed has
+ever received a push — and exits non-zero if any subscription is not live, so it works as
+a check. It reads the state inside the pod and prints only derived status: never print
+`!hub.json` yourself, because each file holds that feed's callback secret.
+
+As of August 20, 2026 it reports 12 of 12 live and 0 of 12 ever pushed.
 
 A second-order check is the outbound subscribe log, `data/users/_/log_pshb.txt`. Tally
 the trailing HTTP status with `awk '{print $NF}' … | sort | uniq -c`: 2xx is success. As
