@@ -35,6 +35,7 @@ Exit status is 1 if any subscription is not live, so this is usable as a check.
 """
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -51,9 +52,31 @@ REMOTE = (
 )
 
 
+# kubectl identifiers: RFC 1123 names, plus the "/" and "_" a context name may carry.
+#
+# The call below passes an argument LIST, never a shell string, so no shell is
+# involved and a metacharacter cannot become a command — the scanner finding that
+# flagged this is reporting the pattern, not a reachable command injection.
+#
+# What the validation genuinely closes is ARGUMENT injection. These three values
+# come from the environment, and without a check NAMESPACE="--kubeconfig=/tmp/evil"
+# is read by kubectl as a flag rather than as a namespace. Cheap to remove, so
+# removed rather than argued about.
+_SAFE_IDENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]*$")
+
+
+def checked(name, value):
+    if not _SAFE_IDENT.match(value):
+        sys.exit("ERROR: %s=%r is not a valid kubectl identifier" % (name, value))
+    return value
+
+
 def fetch():
-    cmd = ["kubectl", "--context", CONTEXT, "-n", NAMESPACE,
-           "exec", "deployment/%s" % DEPLOYMENT, "-c", DEPLOYMENT,
+    context = checked("KUBECTL_CONTEXT", CONTEXT)
+    namespace = checked("NAMESPACE", NAMESPACE)
+    deployment = checked("DEPLOYMENT", DEPLOYMENT)
+    cmd = ["kubectl", "--context", context, "-n", namespace,
+           "exec", "deployment/%s" % deployment, "-c", deployment,
            "--", "sh", "-c", REMOTE]
     try:
         out = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
