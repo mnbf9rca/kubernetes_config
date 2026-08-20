@@ -79,6 +79,9 @@ def fetch():
            "exec", "deployment/%s" % deployment, "-c", deployment,
            "--", "sh", "-c", REMOTE]
     try:
+        # Audited: argument list, no shell, and the three variable elements are
+        # validated above. The rule is an `-audit` rule; this records the outcome.
+        # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-audit
         out = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
     except FileNotFoundError:
         sys.exit("ERROR: kubectl not on PATH")
