@@ -1,171 +1,66 @@
+# kubernetes_config
 
-# How to implement
+Personal Kubernetes configuration for two single-node [Talos Linux](https://www.talos.dev/)
+clusters managed by [Omni](https://omni.siderolabs.com/):
 
-well, you either implement with [rancher](https://github.com/mnbf9rca/kubernetes_config/blob/master/implement_rancher.md) (assuming you've set up rancher somewhere, e.g. DO), or with microk8s.
+| | Homelab | VPS |
+|---|---|---|
+| Runs on | Proxmox VM at home | Hetzner cloud instance |
+| Domain | `*.cynexia.net` (Route53) | `*.cynexia.com` (Cloudflare) |
+| Exposure | Private — LAN and Tailscale only | Public, via a cloudflared tunnel behind Cloudflare Access |
+| Ingress | Traefik + cert-manager wildcard | cloudflared only |
+| Workloads | Media stack, personal health-data pipeline, backups | RSS, bookmarks, automation, uptime monitoring, analytics |
 
-# microk8s
+Everything is plain manifests plus kustomize — no Helm releases, no GitOps controller.
+Applies are deliberately manual and guarded.
 
-## Disable multipath
-
-Stop and disable the multipath service
-```
-sudo systemctl stop multipathd.socket
-sudo systemctl stop multipathd.service
-sudo systemctl disable multipathd.socket
-sudo systemctl disable multipathd.service
-```
-
-Prevent multipath from loading at boot
-```
-sudo nano /etc/multipath.conf
-```
-Add the following minimal config to explicitly blacklist all devices:
+## Layout
 
 ```
-defaults {
-    user_friendly_names yes
-    find_multipaths no
-}
-
-blacklist {
-    devnode ".*"
-}
-
-```
-Then rebuild the initramfs so it doesn't load multipath on boot:
-
-```
-echo "blacklist dm_multipath" | sudo tee /etc/modprobe.d/blacklist-multipath.conf
-sudo update-initramfs -u
+homelab/          Homelab cluster: talos/ bootstrap/ workloads/ secrets/ health/ backup/
+vps/              VPS cluster, same shape
+docs/operations/  Runbooks and cluster documentation — start here
+AGENTS.md         Repo conventions and rules (also loaded by Claude Code via CLAUDE.md)
+Makefile          build / diff / apply per cluster, plus secret and bootstrap helpers
+.env.tpl          1Password references (op://...) — never real values
 ```
 
+## Applying
 
-## basics
-
-inblock ufw: `sudo ufw allow from 127.0.0.1 port 19001`
-
-in microk8s, enable:
-- dashboard
-- dns
-- metallb:10.100.0.200-10.100.0.254
-- ingress
-- cert-manager
-
-Apply metallb address pool: `kubectl apply -f addresspool.yaml`
-
-install cluster issuer for cert-manager
-
-store kubectl config:
-```
-cd $HOME
-mkdir .kube
-cd .kube
-microk8s config > config
+```bash
+make check-tools                # verify the required CLIs are installed
+make diff-homelab               # server-side dry run against the cluster
+make apply-homelab              # apply (asserts the kubectl context first)
 ```
 
-alias kubectl and helm - add to `~/.bash_aliases` or `~/.bashrc`
-```
-alias kubectl='microk8s kubectl'
-alias helm='microk8s helm'
-```
+`make help` lists every target. The VPS equivalents are `diff-vps` / `apply-vps`.
 
+`build-*` targets are **preview only** — their output has secret values masked, so never
+render to a file and apply that file.
 
-## longhorn
+## Secrets
 
-if implementing Longhorn on Microk8s remember that you need to provide the kubelet path because it's in a non-standard path, and i've mounted a separate drive at /mnt/longhorn
+No secret values live in this repository. Manifests carry `${VAR}` placeholders;
+`.env.tpl` maps those names to `op://` references; and the apply targets resolve them
+per-command through `op run`, so secrets never sit in your shell environment. `.envrc`
+exports only a 1Password service-account token.
 
-follow main instructions from https://longhorn.io/docs/1.8.1/deploy/install/install-with-helm/ but basically:
+See [`docs/operations/apply-workflow.md`](docs/operations/apply-workflow.md) for the full
+mechanism, including the hazards worth knowing before you change it.
 
+## Documentation
 
-```shell
-microk8s helm3 repo add longhorn https://charts.longhorn.io
-microk8s helm3 repo update
-microk8s kubectl create namespace longhorn-system
-# for testing use "/tmp/longhorn" as storage location
-microk8s helm3 install longhorn longhorn/longhorn --namespace longhorn-system \
-  --set defaultSettings.defaultDataPath="/mnt/longhorn" \
-  --set csi.kubeletRootDir="/var/snap/microk8s/common/var/lib/kubelet"
-```
+| Document | Covers |
+|---|---|
+| [omni-access.md](docs/operations/omni-access.md) | **Start here on a new machine** — bootstrapping omnictl, kubectl and talosctl from nothing |
+| [apply-workflow.md](docs/operations/apply-workflow.md) | The secret pipeline, every Makefile target, and how to add a new secret |
+| [homelab.md](docs/operations/homelab.md) | Homelab cluster: stack, storage, networking, DNS, encryption, gotchas |
+| [homelab-health.md](docs/operations/homelab-health.md) | The `health` namespace — Apple Health and Garmin ingest, InfluxDB, Grafana, MCP |
+| [vps.md](docs/operations/vps.md) | VPS cluster: workloads, tunnel, Access, backups |
+| [monitoring.md](docs/operations/monitoring.md) | What is monitored, how, and — importantly — what these checks do **not** catch |
 
-read `longhorn-aws-secret.yml` to create the AWS backup secret and store it - this includes the URL for the target
-install longhorn-ingress.yml - remember to create the secret
-`USER=<USERNAME_HERE>; PASSWORD=<PASSWORD_HERE>; echo "${USER}:$(openssl passwd -stdin -apr1 <<< ${PASSWORD})" >> auth`
-`kubectl -n longhorn-system create secret generic basic-auth-longhorn --from-file=auth`
-longhorn backup config:
-- backup target: s3://<bucket>@<region>/ e.g. `s3://longhorn-backup@nl-ams-1.linodeobjects.com/`
-- backup target credential secret: `aws-secret` or `linode-secret`
+## Legacy
 
-## NFS
-
-install CSI driver for NFS: https://microk8s.io/docs/nfs
-
-```
-microk8s enable helm3
-microk8s helm3 repo add csi-driver-nfs https://raw.githubusercontent.com/kubernetes-csi/csi-driver-nfs/master/charts
-microk8s helm3 repo update
-microk8s helm3 install csi-driver-nfs csi-driver-nfs/csi-driver-nfs \
-    --namespace kube-system \
-    --set kubeletDir=/var/snap/microk8s/common/var/lib/kubelet
-microk8s kubectl wait pod --selector app.kubernetes.io/name=csi-driver-nfs --for condition=ready --namespace kube-system
-```
-
-## dashboard
-
-Because of [CVE-2021-25742](https://github.com/kubernetes/kubernetes/issues/126811) you need to [enable annotation snippets](https://kubernetes.github.io/ingress-nginx/user-guide/nginx-configuration/configmap/#allow-snippet-annotations):
-```
-kubectl patch configmap nginx-load-balancer-microk8s-conf \
-  -n ingress \
-  --type merge \
-  -p '{"data":{"allow-snippet-annotations":"true"}}'
-```
-then restart the deployment
-`kubectl -n ingress rollout restart daemonset nginx-ingress-microk8s-controller`
-check for pods with
-`kubectl get pods -n ingress`
-
-
-- Create admin user `htpasswd -c auth rob`
-- Create secret `kubectl create secret generic basic-auth-dashboard --from-file=auth -n kube-system` 
-  - (you might need `sudo apt-get install apache2-utils`)
-- ignore default which is `microk8s kubectl describe secret -n kube-system microk8s-dashboard-token`
-- retrieve dashbaord token with `microk8s kubectl create token default  --duration 87600h`
-- install `dashboard-ingress.yml`
-
-## downloads
-
-create downloads namespace:
-```
-kubectl create namespace downloads
-```
-
-
-## Install `keel` to manage automatic updates
-
-1. Add the Helm repo and install Keel
-```shell
-helm repo add keel https://charts.keel.sh
-helm repo update
-helm upgrade --install keel keel/keel \
-  --namespace=keel \
-  --create-namespace \
-  --set helmProvider.enabled="false"
-```
-helmProvider.enabled=false is correct since i'm using plain Kubernetes manifests, not Helm-managed releases.
-
-2. Annotate each deployment (if not already done)
-```yaml
-metadata:
-  annotations:
-    keel.sh/policy: force
-    keel.sh/match-tag: "true"
-    keel.sh/trigger: poll
-    keel.sh/pollSchedule: "@every 6h"
-```
-`force` is the policy i want. It detects SHA digest changes on the same tag, which is exactly what happens when linuxserver or wherever pushes a new build behind `:latest`.
-
-`match-tag: "true"` is **required** when tracking `:latest`. Without it, keel's force policy watches the image name (across all tags), finds the newest digest, then rewrites the deployment's tag to whatever is in the image's `org.opencontainers.image.version` label. For linuxserver images that label is the upstream app version (e.g. `3.17.0` for nzbhydra2's core jar), which happens to also exist as an ancient Docker Hub tag — so keel will silently downgrade you to a years-old image. With `match-tag: "true"`, keel watches the specific `:latest` tag and keeps the tag name intact on update.
-
-3. Confirm `imagePullPolicy: Always` on every container spec using `:latest`.
-
-Without it, the kubelet may use its local cache even after Keel triggers the rollout.
-
+`legacy-microk8s/` and `no_longer_used/` are frozen references from the previous microk8s
+cluster. Nothing there is deployed, and nothing new should be added to them; they exist to
+be deleted once nothing is being cross-referenced out of them.
