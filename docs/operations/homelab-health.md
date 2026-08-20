@@ -4,6 +4,13 @@ Personal health-data pipeline in the homelab cluster: Apple Health + Garmin →
 InfluxDB → Grafana, plus a Claude MCP connector. Added in Phase 0/1 as its own `health`
 namespace. Manifests live in `homelab/health/`.
 
+The namespace also hosts one workload that is **not** health data: the Cloudflare
+analytics ingest ([below](#cloudflare-analytics-ingest)). It shares this InfluxDB and
+Grafana rather than standing up a second pair. That is a deliberate trade — infrastructure
+telemetry living in the same database as personal health data — taken because a second
+InfluxDB for ~3,500 rows a day is not worth the operational surface. It stays in its own
+bucket and its own measurements.
+
 Design docs are in the separate `~/Downloads/git/HealthRecords` repo —
 `docs/superpowers/specs/2026-07-11-health-platform-vision.md` and
 `docs/superpowers/specs/2026-07-11-health-records-ingestion-design.md`. Phase 2 (facade,
@@ -91,22 +98,190 @@ parsing: the multi-word `-d` description strings shift awk's column and it silen
 captures a description fragment instead of the token. `jq` is therefore a hard
 dependency and is asserted by `make check-tools`.
 
+`make health-influx-cloudflare-bootstrap` does the same job for the Cloudflare analytics
+bucket. It creates `cloudflare` with `-r 0` (infinite retention — expiring the copy would
+defeat the entire point) and prints **two** tokens:
+
+| Token | Paste into | Scope |
+|---|---|---|
+| Cloudflare ingest | `op://Homelab/health-influxdb/cloudflare-token` | read **and** write on `cloudflare` |
+| Replacement read-only | `op://Homelab/health-influxdb/read-token` | read on all four buckets |
+
+The ingest token needs read as well as write because the job's resume point is
+`max(_time)` read back out of the bucket.
+
+The read token has to be **replaced**, not amended: InfluxDB offers no way to add a bucket
+to an existing auth, so Grafana and the MCP connector cannot see `cloudflare` until a new
+token exists. Order matters — paste, `make apply-homelab`, restart `grafana` and
+`pomerium`, and only **then** `influx auth delete` the superseded auth. Delete it first and
+you lock Grafana and the connector out until the new Secret has actually rolled.
+
 ## Backups and restore
 
 The `influx-backup` CronJob runs at 02:30 daily, ahead of the 03:00 restic sweep. It
 writes both:
 
 - a native `influx backup` (14 generations), and
-- a per-bucket, 8-day-windowed line-protocol export (60 generations, gzip)
+- a per-bucket, 8-day-windowed line-protocol export (60 generations, gzip), over an
+  **explicit** bucket list: `apple_metrics apple_workouts garmin cloudflare`
 
 to the `health-dumps` PVC on `local-path`. Because that PVC lives on the node's SSD, the
 existing hostPath restic→B2 CronJob picks it up for free — no separate off-cluster
 wiring needed.
 
+**Adding a bucket means adding it to that list**, or it is silently never exported — the
+same class of bug as the VPS gate's expected-set assertion, and the reason the list is
+explicit rather than a wildcard over `influx bucket list`. A named bucket that does not
+exist is now a **named fatal error**: the pipeline `influx bucket list | awk` exits with
+awk's status, so a failed lookup used to leave the bucket ID empty and sail straight past
+`set -eu` into an opaque `export-lp` error. Consequence for ordering: run
+`make health-influx-cloudflare-bootstrap` **before** the apply that adds `cloudflare` here,
+or the next night's export fails.
+
 **Restore drill:** `influx restore --full` self-defeats — it clobbers its own auth
 mid-restore. Use scoped `influx restore --bucket <name>` instead. First drill passed
 2026-07-26. Quarterly drills should also exercise the still-untested DR path: `--full`
 onto a brand-new, never-`setup` instance.
+
+## Cloudflare analytics ingest
+
+`homelab/health/cloudflare-analytics.yaml`. Hourly CronJob at `37 * * * *` that copies
+Cloudflare edge traffic data into the `cloudflare` bucket before Cloudflare deletes it.
+
+Cloudflare's Free plan keeps **8 days** of per-hostname analytics and rejects any GraphQL
+query wider than **1 day**. That window is enough to answer "what is happening right now"
+and useless for "was this normal?" — which is what you actually want when a webshell sweep
+shows up. This job is the retention fix; nothing about the Cloudflare configuration
+changes, and the token is read-only.
+
+### Shape
+
+| | |
+|---|---|
+| Zones | `cynexia.com` and `making-tracks.app` |
+| Dataset | `httpRequestsAdaptiveGroups`, grouped by `datetimeHour` |
+| Bucket | `cloudflare`, **infinite** retention, raw hourly rows, no downsampling |
+| Measurement | `http_requests`; tags `zone`, `host`, `path`, `status`, `country`; fields `count`, `sample_interval` |
+| Monitoring | `homelab-cloudflare-analytics`, pinged `/start` and exit code |
+
+Two bookkeeping measurements share the bucket: `ingest_status` (one point per committed
+chunk) and `ingest_gap` (see below).
+
+### Why the script is Python, and in a ConfigMap
+
+Every other scheduled job in this repo is inline POSIX `sh`. This one is not, for three
+reasons that are all about the failure modes this repo has already been bitten by:
+
+- **Cloudflare answers a failed query with HTTP 200 and an `errors` array in the body.**
+  Telling that apart from "no traffic" by grepping JSON in `sh` is precisely the shape
+  that made `ingest-freshness` report STALE for 25 days.
+- Rows must be **aggregated in memory** before writing. Path truncation merges several
+  source paths into one series and row-cap subdivision splits one hour across several
+  responses; both need keyed summation.
+- Tag values are **user-controlled URL paths** and need real line-protocol escaping.
+
+Standard library only, so there is no `pip install` at run time and the job depends on
+nothing but the two APIs it talks to.
+
+### The resume rule
+
+The watermark is `max(_time)` over the `cloudflare` bucket, read back from InfluxDB on
+every run. There is no state file, no PVC and no ConfigMap cursor, because all three can
+disagree with what was actually stored — after a restore, after a manual delete, after a
+partial write. The data is its own watermark and cannot drift from itself.
+
+Every run then rewinds **2 hours** behind that watermark, because the final hour of the
+previous run was almost certainly still in progress when it was written. Re-ingestion is
+free: same measurement, same tag set and same timestamp overwrite in InfluxDB.
+
+Backfill runs in **23-hour chunks** (Cloudflare rejects anything wider than a day), at most
+**8 chunks per run**. Chunks are committed oldest-first and only when *every* zone
+succeeded for that chunk — commit a chunk in which one zone failed and the watermark jumps
+past hours that zone never covered, which Cloudflare then deletes.
+
+A successfully-queried chunk with **zero rows** still writes its `ingest_status` point.
+Without that, eight genuinely quiet days would look identical to eight days of broken
+ingestion and would trip the gap alarm below for no reason.
+
+### Gaps are permanent, so they are loud
+
+If the rewound start is older than Cloudflare's retention, those hours are gone and no
+future run can recover them. The job then:
+
+1. logs the exact missing range,
+2. writes an `ingest_gap` point (fields `missing_hours`, `gap_end`) timestamped at the gap
+   start, so the hole is visible in Grafana instead of reading as a quiet week, and
+3. **exits non-zero**, so `homelab-cloudflare-analytics` goes red.
+
+It still ingests everything that *is* still available in the same run. The alarm fires
+once: the next run's watermark is current again, which is the intended behaviour — a
+permanent hole should be recorded permanently, not re-alerted hourly.
+
+`ingest_gap` deliberately uses a field named `missing_hours`, not `count`. The watermark
+query filters on `_field == "count"`, so a gap marker can never advance the watermark and
+claim the hole was filled.
+
+To surface gaps in Grafana, add an **annotation** query on `ingest_gap` to the Cloudflare
+dashboard. A panel over `http_requests` alone will not show them.
+
+### Cardinality
+
+Path is by far the highest-cardinality dimension — karakeep alone emits a distinct path per
+asset UUID — so paths are truncated to their first two segments, with `/*` appended when
+segments were dropped (`/api/v1` and `/api/v1/*` stay distinguishable). Hosts listed in the
+CronJob's `FULL_PATH_HOSTS` env var keep their full path. It is empty by default; every
+host added there trades series cardinality for path detail.
+
+### Sampling
+
+`sample_interval` is stored per point and **never applied**. Whether Cloudflare's `count`
+is already extrapolated is a property of the dataset, not something this job should
+silently assume, and a chart that quietly switches from real counts to estimates is exactly
+the kind of lie this repo has a rule about. Observed values are 1.03–1.14, i.e. effectively
+unsampled at current volume. **Confirm the relationship once against the Cloudflare
+dashboard for a known hour before building any panel that multiplies by it.**
+
+### Row-cap subdivision
+
+`httpRequestsAdaptiveGroups` caps a response at 10,000 rows and this dataset offers no
+cursor. A chunk returning exactly the cap is assumed truncated, halved, and re-queried —
+recursively, down to a 1-minute floor. Aggregation makes the halves recombine into the
+same per-hour totals. A run is capped at 180 GraphQL calls; exhausting that budget is a
+loud failure, not a silent truncation, so the watermark stays put and the next run retries.
+Cloudflare's user limit is 300 queries per 5 minutes and burning it would break the next
+several hourly runs too.
+
+### First-run setup
+
+The job cannot run until four things exist. None of them are created by `make apply-homelab`.
+
+1. **Cloudflare API token**, scoped **`Zone.Analytics: Read` only**, covering both zones.
+   The job never writes to Cloudflare, so any edit scope is blast radius bought for
+   nothing. Store as `op://Homelab/cloudflare-analytics/api-token`.
+2. **Zone tags**, as one field `op://Homelab/cloudflare-analytics/zone-tags` holding
+   `cynexia.com=<zoneid>,making-tracks.app=<zoneid>`. Zone IDs are not passwords, but they
+   identify the account and this repo is public, so they are resolved at apply time like
+   everything else. Mark it `[text]`, not concealed — it is an identifier, and a concealed
+   value makes the vault harder to debug.
+3. **healthchecks.io check** `homelab-cloudflare-analytics`, period 1h, grace 2h. UUID into
+   `op://Homelab/health-healthchecks/cloudflare-uuid`.
+4. **InfluxDB bucket and token**: `make health-influx-cloudflare-bootstrap`. See below.
+
+Then `make apply-homelab`, and force the first run rather than waiting an hour:
+
+```bash
+kubectl -n health create job --from=cronjob/cloudflare-analytics cf-analytics-manual
+kubectl -n health logs job/cf-analytics-manual
+```
+
+The first run seeds from the retention floor (~8 days back) and reports no gap, because
+nothing was ever lost. Read the log: it names every chunk, the row count per zone, and the
+GraphQL budget consumed.
+
+**Smoke-test the query shape on that first run.** The `avg { sampleInterval }` selection is
+taken from the GraphQL schema, not from a doc page that spells it out; if Cloudflare names
+it differently the run fails loudly with the `errors` array in the log, and the fix is one
+line in the ConfigMap. It cannot fail silently.
 
 ## Garmin re-authentication (annual)
 
@@ -182,16 +357,17 @@ scratchpad for comparison.
 
 ## Monitoring
 
-Three healthchecks.io checks; UUIDs in 1Password item `health-healthchecks`:
+Four healthchecks.io checks; UUIDs in 1Password item `health-healthchecks`:
 
-| Check | Period / grace |
-|---|---|
-| `health-apple-ingest` | 1d / 12h |
-| `health-garmin-ingest` | 1d / 12h |
-| `health-influx-backup` | 1d / 6h |
+| Check | Period / grace | Signals failure by |
+|---|---|---|
+| `health-apple-ingest` | 1d / 12h | silence |
+| `health-garmin-ingest` | 1d / 12h | silence |
+| `health-influx-backup` | 1d / 6h | silence |
+| `homelab-cloudflare-analytics` | 1h / 2h | **`/start` + exit code** |
 
-**All three checks signal failure by silence.** Neither CronJob here sends a `/start`
-ping or a failure ping — unlike the two restic jobs, which do both:
+**The first three signal failure by silence.** Neither of those CronJobs sends a `/start`
+ping or a failure ping — unlike the two restic jobs and the Cloudflare job, which do both:
 
 - `influx-backup` runs under `set -eu` with the ping as its **last** statement, so it
   pings **only on success**. Any earlier failure aborts the script before the ping and the
@@ -204,11 +380,17 @@ ping or a failure ping — unlike the two restic jobs, which do both:
   It **always exits 0 on purpose**: the signal is the absent ping, not a failed Job. Do
   not "fix" it into a non-zero exit.
 
-Both are bounded by `timeZone: "UTC"` and `activeDeadlineSeconds` (3600 for
-`influx-backup`, 300 for `ingest-freshness`) — with `concurrencyPolicy: Forbid` and no
-deadline, one hung run blocks every subsequent night with nothing alerting.
-`influx-backup` also sets `startingDeadlineSeconds: 3600`; `ingest-freshness` deliberately
-does not, since it runs again in six hours anyway.
+- `cloudflare-analytics` (hourly) follows the **restic** pattern instead: `/start` at the
+  top and `hc-ping.com/<uuid>/<rc>` at the exit, so a failure is distinguishable from a
+  never-scheduled run without waiting for grace expiry. Pings are best-effort and can
+  never fail the job.
+
+All three are bounded by `timeZone: "UTC"` and `activeDeadlineSeconds` (3600 for
+`influx-backup`, 300 for `ingest-freshness`, 1200 for `cloudflare-analytics`) — with
+`concurrencyPolicy: Forbid` and no deadline, one hung run blocks every subsequent run with
+nothing alerting. `influx-backup` sets `startingDeadlineSeconds: 3600` and
+`cloudflare-analytics` 1800; `ingest-freshness` deliberately does not, since it runs again
+in six hours anyway.
 
 This namespace's checks watch **data freshness**, not the auth proxy — which is why the
 Pomerium wedge above went unnoticed. External availability of `mcp.cynexia.com` and the

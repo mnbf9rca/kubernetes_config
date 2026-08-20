@@ -1,0 +1,732 @@
+---
+# Cloudflare edge analytics -> InfluxDB.
+#
+# Cloudflare's Free plan keeps 8 days of per-hostname analytics and rejects any
+# GraphQL query wider than 1 day. This CronJob copies that window into the
+# health namespace's InfluxDB (bucket `cloudflare`, infinite retention) before it
+# expires, so the traffic record outlives Cloudflare's retention and is queryable
+# in the existing Grafana.
+#
+# WHY THE SCRIPT IS PYTHON IN A ConfigMap, and not inline `sh` like every other
+# scheduled job in this repo:
+#
+#   - Cloudflare returns HTTP 200 with an `errors` array in the body when a query
+#     fails. Distinguishing that from "no traffic" by grepping a JSON body in sh
+#     is exactly the shape that made ingest-freshness report STALE for 25 days.
+#   - Rows must be aggregated in memory before writing: path truncation merges
+#     many source paths into one series, and row-cap subdivision splits one hour
+#     across several responses. Both need keyed summation.
+#   - Tag values are user-controlled URL paths and need real line-protocol
+#     escaping.
+#
+# Python 3 standard library only — no pip install at runtime, so the job depends
+# on nothing but the two APIs it talks to.
+#
+# NO KEEL in this namespace (see docs/operations/homelab-health.md): the image is
+# version-pinned and Renovate proposes bumps.
+#
+# NO PROBES. This is scheduled work, so the instrument is the healthchecks.io
+# dead-man's-switch plus activeDeadlineSeconds, not a probe. See
+# docs/operations/monitoring.md.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cloudflare-analytics-script
+  namespace: health
+data:
+  ingest.py: |
+    #!/usr/bin/env python3
+    """Pull Cloudflare edge analytics into InfluxDB.
+
+    Cloudflare's Free plan keeps 8 days of per-hostname analytics and rejects any
+    GraphQL query wider than 1 day. This job copies that window into InfluxDB before
+    it expires, so the record outlives Cloudflare's retention.
+
+    THE FOUR RULES THIS SCRIPT EXISTS TO ENFORCE. Read them before changing anything.
+
+      1. THE DATA IS ITS OWN WATERMARK. The resume point is max(_time) over the
+         `cloudflare` bucket, read back from InfluxDB on every run. There is no state
+         file, no PVC and no ConfigMap cursor, because all three can disagree with
+         what was actually stored — after a restore, after a manual delete, after a
+         partial write. This cannot.
+
+      2. A FAILED QUERY IS NOT AN EMPTY ONE. Cloudflare answers a broken query with
+         HTTP 200 and a non-empty `errors` array in the body. Treating that as "no
+         traffic" would advance the watermark over hours that were never fetched and
+         lose them permanently once Cloudflare's 8 days roll past. Zero rows from a
+         clean response is a real answer and may advance the watermark; anything else
+         may not.
+
+      3. AN UNRECOVERABLE GAP IS LOUD. If the resume point is older than Cloudflare's
+         retention, those hours are gone and no future run can get them. The job logs
+         the exact range, writes an `ingest_gap` marker so the hole is visible in
+         Grafana instead of reading as zero traffic, and exits non-zero so the
+         healthchecks.io check goes red. Quietly resuming would be the same bug as a
+         probe that stays green through an outage.
+
+      4. COMMIT IN ORDER, STOP AT THE FIRST FAILURE. Chunks are processed oldest
+         first and a chunk is committed only when EVERY zone succeeded for it. Commit
+         a chunk where one zone failed and the watermark jumps past hours that zone
+         never covered.
+
+    Idempotency comes from InfluxDB point overwrite: same measurement, same tag set
+    and same timestamp replaces. Every run deliberately rewinds OVERLAP_HOURS behind
+    the watermark so a partially written final hour is rewritten rather than
+    half-kept.
+    """
+
+    import json
+    import os
+    import sys
+    import time
+    import urllib.error
+    import urllib.request
+    from datetime import datetime, timedelta, timezone
+
+    # --- tunables ---------------------------------------------------------------
+
+    # Cloudflare rejects any query wider than 1 day, so chunks must be strictly
+    # under 24h. 23h leaves an hour of headroom against boundary interpretation.
+    CHUNK_HOURS = 23
+
+    # Cloudflare Free keeps 8 days. Beyond 8 chunks there is nothing left to fetch,
+    # so a runaway backfill loop would only burn rate limit. 8 * 23h = 184h, a little
+    # short of the 191h retention floor below; a catch-up run therefore converges
+    # over two hourly runs rather than one, which only ever happens after an outage.
+    MAX_CHUNKS = 8
+
+    # Rewind this far behind the watermark on every run. The final hour of the
+    # previous run was almost certainly still in progress when it was written.
+    OVERLAP_HOURS = 2
+
+    # Cloudflare's stated retention, less an hour of margin: the boundary is not
+    # sharp and a query that straddles it returns silently truncated data.
+    RETENTION_HOURS = 8 * 24 - 1
+
+    # httpRequestsAdaptiveGroups caps a single response at this many rows. A chunk
+    # that returns exactly this many is assumed truncated and is subdivided.
+    GRAPHQL_ROW_LIMIT = 10000
+
+    # Floor for subdivision. Below this the halving cannot help and the run reports
+    # an unavoidably truncated window instead of looping forever.
+    MIN_SUBDIVIDE_SECONDS = 60
+
+    # Hard ceiling on GraphQL calls per run. Subdivision is recursive, so a
+    # pathological chunk could fan out to ~2000 queries and trip Cloudflare's
+    # 300-queries-per-5-minutes user limit — at which point every remaining query
+    # fails and the rate limit is burned for the next several hourly runs too.
+    # Exhausting the budget is a loud failure, not a silent truncation: the
+    # watermark stays put and the next run retries.
+    MAX_GRAPHQL_CALLS = 180
+
+    CF_GRAPHQL_URL = "https://api.cloudflare.com/client/v4/graphql"
+    HTTP_TIMEOUT = 60
+
+    QUERY = """
+    query ZoneHourly($zoneTag: string!, $start: Time!, $end: Time!, $limit: Int!) {
+      viewer {
+        zones(filter: {zoneTag: $zoneTag}) {
+          httpRequestsAdaptiveGroups(
+            limit: $limit
+            filter: {datetime_geq: $start, datetime_lt: $end}
+            orderBy: [datetimeHour_ASC]
+          ) {
+            count
+            avg { sampleInterval }
+            dimensions {
+              datetimeHour
+              clientRequestHTTPHost
+              clientRequestPath
+              edgeResponseStatus
+              clientCountryName
+            }
+          }
+        }
+      }
+    }
+    """
+
+
+    class QueryFailed(Exception):
+        """The query did not produce a trustworthy answer.
+
+        Distinct from "the query succeeded and there was no traffic". Raising this
+        must never advance the watermark.
+        """
+
+
+    def log(msg):
+        print(msg, flush=True)
+
+
+    def env(name, default=None):
+        val = os.environ.get(name, default)
+        if val is None or val == "":
+            raise SystemExit("FATAL: %s is unset" % name)
+        return val
+
+
+    def iso(dt):
+        return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+    def parse_zone_tags(raw):
+        """`name=tag,name=tag` -> [(name, tag), ...], order preserved."""
+        zones = []
+        for entry in raw.split(","):
+            entry = entry.strip()
+            if not entry:
+                continue
+            if "=" not in entry:
+                raise SystemExit(
+                    "FATAL: CF_ZONE_TAGS entry %r is not name=zonetag" % entry)
+            name, tag = entry.split("=", 1)
+            name, tag = name.strip(), tag.strip()
+            if not name or not tag:
+                raise SystemExit(
+                    "FATAL: CF_ZONE_TAGS entry %r has an empty half" % entry)
+            zones.append((name, tag))
+        if not zones:
+            raise SystemExit("FATAL: CF_ZONE_TAGS resolved to no zones")
+        return zones
+
+
+    # --- HTTP -------------------------------------------------------------------
+
+    def http_post(url, body, headers, timeout=HTTP_TIMEOUT):
+        """POST and return (status, body_text). Transport errors raise QueryFailed.
+
+        urllib raises HTTPError for non-2xx, which is still a response worth reading:
+        Cloudflare and InfluxDB both put the useful diagnostic in the error body.
+        """
+        req = urllib.request.Request(url, data=body, headers=headers, method="POST")
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                return resp.status, resp.read().decode("utf-8", "replace")
+        except urllib.error.HTTPError as exc:
+            return exc.code, exc.read().decode("utf-8", "replace")
+        except Exception as exc:                       # noqa: BLE001 - transport
+            raise QueryFailed("transport error contacting %s: %r" % (url, exc))
+
+
+    # --- Cloudflare -------------------------------------------------------------
+
+    def cf_query(token, zone_tag, start, end, limit, budget):
+        """Return the raw group rows for one zone and window.
+
+        Raises QueryFailed for every outcome that is not a clean, complete answer.
+        """
+        if budget["used"] >= MAX_GRAPHQL_CALLS:
+            raise QueryFailed(
+                "GraphQL call budget of %d exhausted; refusing to keep querying"
+                % MAX_GRAPHQL_CALLS)
+        budget["used"] += 1
+
+        payload = json.dumps({
+            "query": QUERY,
+            "variables": {
+                "zoneTag": zone_tag,
+                "start": iso(start),
+                "end": iso(end),
+                "limit": limit,
+            },
+        }).encode()
+        headers = {
+            "Authorization": "Bearer %s" % token,
+            "Content-Type": "application/json",
+        }
+
+        status, text = http_post(CF_GRAPHQL_URL, payload, headers)
+
+        try:
+            doc = json.loads(text)
+        except ValueError:
+            raise QueryFailed(
+                "HTTP %s, body is not JSON: %s" % (status, text[:500]))
+
+        # THE 200-WITH-ERRORS TRAP. Cloudflare's GraphQL endpoint reports query
+        # failures — bad token, unknown dimension, window too wide, rate limit — in
+        # an `errors` array with a 200 status line. Checking the status code alone
+        # turns every one of those into "no traffic this hour".
+        errors = doc.get("errors")
+        if errors:
+            raise QueryFailed(
+                "Cloudflare returned errors (HTTP %s): %s"
+                % (status, json.dumps(errors)[:800]))
+
+        if status < 200 or status >= 300:
+            raise QueryFailed("HTTP %s: %s" % (status, text[:500]))
+
+        try:
+            zones = doc["data"]["viewer"]["zones"]
+        except (KeyError, TypeError):
+            raise QueryFailed("unexpected response shape: %s" % text[:500])
+
+        if not isinstance(zones, list):
+            raise QueryFailed("`zones` is not a list: %s" % text[:500])
+        if not zones:
+            # An empty zones list means the token cannot see this zone at all, which
+            # is a configuration fault, not an absence of traffic.
+            raise QueryFailed(
+                "zone %s returned no zone object — token cannot read it" % zone_tag)
+
+        rows = zones[0].get("httpRequestsAdaptiveGroups")
+        if rows is None:
+            raise QueryFailed("no httpRequestsAdaptiveGroups in %s" % text[:500])
+        return rows
+
+
+    def cf_fetch(token, zone_tag, start, end, warnings, budget):
+        """Fetch a window, subdividing when the response looks truncated.
+
+        Cloudflare offers no cursor for this dataset, so the only way past the row
+        cap is a narrower window. Halving works because the caller aggregates: two
+        half-windows summed give the same per-hour totals as one whole window.
+        """
+        rows = cf_query(token, zone_tag, start, end, GRAPHQL_ROW_LIMIT, budget)
+        if len(rows) < GRAPHQL_ROW_LIMIT:
+            return rows
+
+        span = int((end - start).total_seconds())
+        if span <= MIN_SUBDIVIDE_SECONDS:
+            warnings.append(
+                "TRUNCATED: zone %s window %s..%s returned the %d-row cap at the "
+                "%ds subdivision floor; this window's data is incomplete"
+                % (zone_tag, iso(start), iso(end), GRAPHQL_ROW_LIMIT, span))
+            return rows
+
+        mid = start + timedelta(seconds=span // 2)
+        log("  row cap hit for %s %s..%s — subdividing at %s"
+            % (zone_tag, iso(start), iso(end), iso(mid)))
+        return (cf_fetch(token, zone_tag, start, mid, warnings, budget)
+                + cf_fetch(token, zone_tag, mid, end, warnings, budget))
+
+
+    # --- shaping ----------------------------------------------------------------
+
+    def truncate_path(path, keep_full):
+        """Collapse a path to its first two segments unless the host is allowlisted.
+
+        Path is the highest-cardinality dimension by far — karakeep alone emits a
+        distinct path per asset UUID — and unbounded tag cardinality is how an
+        InfluxDB instance dies. `/*` is appended when segments were dropped so that
+        a request for exactly `/api/v1` stays distinguishable from one for something
+        beneath it.
+        """
+        if not path:
+            return "/"
+        path = path.split("?", 1)[0].split("#", 1)[0]
+        path = "".join(ch for ch in path if ch.isprintable())
+        if not path.startswith("/"):
+            path = "/" + path
+        if keep_full:
+            return path[:256]
+        parts = [p for p in path.split("/") if p != ""]
+        if not parts:
+            return "/"
+        head = "/" + "/".join(parts[:2])
+        if len(parts) > 2:
+            head += "/*"
+        return head[:256]
+
+
+    def parse_hour(value):
+        """Cloudflare's datetimeHour, e.g. 2026-08-20T10:00:00Z, to a UTC datetime."""
+        if not value:
+            raise QueryFailed("row is missing datetimeHour")
+        text = value.replace("Z", "+00:00")
+        try:
+            return datetime.fromisoformat(text).astimezone(timezone.utc)
+        except ValueError:
+            raise QueryFailed("unparseable datetimeHour %r" % value)
+
+
+    def aggregate(rows, zone_name, full_path_hosts, acc):
+        """Fold Cloudflare rows into acc, keyed by the output series.
+
+        Aggregation is not an optimisation, it is required twice over: path
+        truncation merges several source paths into one series, and subdivision
+        splits one hour across several responses. Both need summation.
+
+        sample_interval is averaged weighted by count, because that is what an
+        average sampling interval over a merged set of requests means. It is stored,
+        never applied: whether `count` is already extrapolated is a property of
+        Cloudflare's dataset, not something this job should silently assume. See
+        docs/operations/homelab-health.md.
+        """
+        for row in rows:
+            dims = row.get("dimensions") or {}
+            hour = parse_hour(dims.get("datetimeHour"))
+            host = dims.get("clientRequestHTTPHost") or "unknown"
+            keep_full = host in full_path_hosts
+            key = (
+                zone_name,
+                host,
+                truncate_path(dims.get("clientRequestPath"), keep_full),
+                str(dims.get("edgeResponseStatus", "unknown")),
+                dims.get("clientCountryName") or "unknown",
+                int(hour.timestamp()),
+            )
+            count = int(row.get("count") or 0)
+            interval = float((row.get("avg") or {}).get("sampleInterval") or 1.0)
+            total, weighted = acc.get(key, (0, 0.0))
+            acc[key] = (total + count, weighted + count * interval)
+
+
+    # --- line protocol ----------------------------------------------------------
+
+    def esc_tag(value):
+        """Escape a tag key or value: comma, equals, space, backslash."""
+        return (str(value)
+                .replace("\\", "\\\\")
+                .replace(",", "\\,")
+                .replace("=", "\\=")
+                .replace(" ", "\\ ")) or "unknown"
+
+
+    def points(acc):
+        for key, (count, weighted) in sorted(acc.items()):
+            zone, host, path, status, country, ts = key
+            interval = (weighted / count) if count else 1.0
+            yield ("http_requests,zone=%s,host=%s,path=%s,status=%s,country=%s "
+                   "count=%di,sample_interval=%.6f %d"
+                   % (esc_tag(zone), esc_tag(host), esc_tag(path),
+                      esc_tag(status), esc_tag(country), count, interval, ts))
+
+
+    # --- InfluxDB ---------------------------------------------------------------
+
+    def influx_write(cfg, lines):
+        if not lines:
+            return
+        url = ("%s/api/v2/write?org=%s&bucket=%s&precision=s"
+               % (cfg["url"], cfg["org"], cfg["bucket"]))
+        headers = {
+            "Authorization": "Token %s" % cfg["token"],
+            "Content-Type": "text/plain; charset=utf-8",
+        }
+        # Batched so one oversized body cannot be rejected wholesale, and so a
+        # partial failure still leaves earlier hours durably stored.
+        for i in range(0, len(lines), 5000):
+            batch = "\n".join(lines[i:i + 5000]).encode()
+            status, text = http_post(url, batch, headers)
+            if status < 200 or status >= 300:
+                raise QueryFailed("InfluxDB write HTTP %s: %s" % (status, text[:500]))
+
+
+    def influx_watermark(cfg):
+        """Newest point in the bucket, or None if the bucket has never been written.
+
+        DO NOT "tidy" this into a bare group()/keep() over every field. That form
+        collides whenever two fields in the bucket have different value types
+        ("schema collision: cannot group float and string types together") and the
+        resulting error body parses as "no data", which is how ingest-freshness
+        reported STALE for 25 straight days. Filtering to a single integer field
+        before grouping is what makes the merge type-safe.
+
+        `_field == "count"` covers both http_requests and ingest_status, so an hour
+        with genuinely zero traffic still moves the watermark. It deliberately does
+        NOT cover ingest_gap's `missing_hours`: a gap marker records a hole, it must
+        never claim the hole was filled.
+        """
+        flux = (
+            'from(bucket:"%s")\n'
+            '  |> range(start: 1970-01-01T00:00:00Z)\n'
+            '  |> filter(fn: (r) => r._field == "count")\n'
+            '  |> group()\n'
+            '  |> max(column: "_time")\n'
+            '  |> keep(columns: ["_time"])\n' % cfg["bucket"]
+        )
+        url = "%s/api/v2/query?org=%s" % (cfg["url"], cfg["org"])
+        headers = {
+            "Authorization": "Token %s" % cfg["token"],
+            "Content-Type": "application/vnd.flux",
+            "Accept": "application/csv",
+        }
+        status, text = http_post(url, flux.encode(), headers, timeout=60)
+        if status < 200 or status >= 300:
+            raise QueryFailed("watermark query HTTP %s: %s" % (status, text[:500]))
+        # An InfluxDB error arrives as a JSON body even on some 2xx paths.
+        if text.lstrip().startswith("{") and '"code"' in text:
+            raise QueryFailed("watermark query returned an error: %s" % text[:500])
+
+        newest = None
+        for line in text.splitlines():
+            # Annotated CSV data rows start with ",_result,"; annotations start "#".
+            if not line.startswith(",_result,"):
+                continue
+            cell = line.rstrip("\r").split(",")[-1].strip()
+            if not cell:
+                continue
+            try:
+                parsed = datetime.fromisoformat(cell.replace("Z", "+00:00"))
+            except ValueError:
+                raise QueryFailed("watermark row has unparseable _time %r" % cell)
+            parsed = parsed.astimezone(timezone.utc)
+            if newest is None or parsed > newest:
+                newest = parsed
+        return newest
+
+
+    # --- healthchecks.io --------------------------------------------------------
+
+    def make_pinger(uuid):
+        """Dead-man's-switch pinger. A ping must never be able to fail the job."""
+        def ping(suffix):
+            if not uuid:
+                return
+            try:
+                urllib.request.urlopen(
+                    "https://hc-ping.com/%s/%s" % (uuid, suffix), timeout=10).close()
+            except Exception as exc:                   # noqa: BLE001 - best effort
+                log("healthchecks.io ping %r failed (ignored): %r" % (suffix, exc))
+        return ping
+
+
+    # --- main -------------------------------------------------------------------
+
+    def main():
+        cf_token = env("CF_API_TOKEN")
+        zones = parse_zone_tags(env("CF_ZONE_TAGS"))
+        full_path_hosts = {
+            h.strip() for h in os.environ.get("FULL_PATH_HOSTS", "").split(",")
+            if h.strip()
+        }
+        influx = {
+            "url": os.environ.get(
+                "INFLUX_URL", "http://influxdb.health.svc.cluster.local:8086"),
+            "org": os.environ.get("INFLUX_ORG", "cynexia"),
+            "bucket": os.environ.get("INFLUX_BUCKET", "cloudflare"),
+            "token": env("INFLUX_TOKEN"),
+        }
+
+        now = datetime.now(timezone.utc).replace(microsecond=0)
+        retention_floor = now - timedelta(hours=RETENTION_HOURS)
+
+        watermark = influx_watermark(influx)          # raises -> run fails, no writes
+        gap = None
+
+        if watermark is None:
+            # First run, or a restored-from-empty bucket. Nothing was lost, because
+            # nothing was ever held. Start at the oldest data Cloudflare still has.
+            start = retention_floor
+            log("no watermark: bucket is empty, seeding from %s" % iso(start))
+        else:
+            start = watermark - timedelta(hours=OVERLAP_HOURS)
+            log("watermark %s, rewound %dh to %s"
+                % (iso(watermark), OVERLAP_HOURS, iso(start)))
+            if start < retention_floor:
+                missing_hours = int(
+                    (retention_floor - start).total_seconds() // 3600)
+                gap = (start, retention_floor, missing_hours)
+                log("")
+                log("!!! UNRECOVERABLE GAP !!!")
+                log("!!! %s .. %s (%d hours) is older than Cloudflare's %d-hour"
+                    % (iso(start), iso(retention_floor), missing_hours,
+                       RETENTION_HOURS))
+                log("!!! retention and can never be fetched. Writing an ingest_gap")
+                log("!!! marker and exiting non-zero so the check goes red.")
+                log("")
+                start = retention_floor
+
+        if start >= now:
+            # Deliberately NOT an early return. Falling through leaves the loop with
+            # nothing to do but still runs the gap-marker write and the exit-code
+            # logic below, so no code path can decide there is a permanent hole and
+            # then return before recording it.
+            log("watermark is already current; no chunks to fetch")
+
+        warnings = []
+        budget = {"used": 0}
+        chunks_done = 0
+        committed_through = None
+        failure = None
+        cursor = start
+
+        while cursor < now and chunks_done < MAX_CHUNKS:
+            chunk_end = min(cursor + timedelta(hours=CHUNK_HOURS), now)
+            log("chunk %d/%d: %s .. %s"
+                % (chunks_done + 1, MAX_CHUNKS, iso(cursor), iso(chunk_end)))
+
+            acc = {}
+            try:
+                # ALL zones or none. Committing a chunk in which one zone failed
+                # advances the watermark past hours that zone never covered, and
+                # Cloudflare's retention then deletes them.
+                for zone_name, zone_tag in zones:
+                    rows = cf_fetch(
+                        cf_token, zone_tag, cursor, chunk_end, warnings, budget)
+                    log("  %s: %d rows" % (zone_name, len(rows)))
+                    aggregate(rows, zone_name, full_path_hosts, acc)
+            except QueryFailed as exc:
+                failure = "chunk %s..%s: %s" % (iso(cursor), iso(chunk_end), exc)
+                log("  FAILED: %s" % exc)
+                break
+
+            lines = list(points(acc))
+            # An empty chunk is a real answer and must still move the watermark,
+            # otherwise eight genuinely quiet days would be indistinguishable from
+            # eight days of broken ingestion and would raise a false gap alarm.
+            lines.append(
+                "ingest_status,source=cloudflare count=%di,chunk_seconds=%di %d"
+                % (len(acc), int((chunk_end - cursor).total_seconds()),
+                   int(chunk_end.timestamp()) - 1))
+
+            try:
+                influx_write(influx, lines)
+            except QueryFailed as exc:
+                failure = "write for %s..%s: %s" % (iso(cursor), iso(chunk_end), exc)
+                log("  WRITE FAILED: %s" % exc)
+                break
+
+            log("  wrote %d series (%d line-protocol lines)" % (len(acc), len(lines)))
+            committed_through = chunk_end
+            cursor = chunk_end
+            chunks_done += 1
+            if cursor < now:
+                time.sleep(1)          # stay clear of the GraphQL rate limit
+
+        if gap:
+            g_start, g_end, missing_hours = gap
+            try:
+                influx_write(influx, [
+                    "ingest_gap,source=cloudflare,reason=retention "
+                    "missing_hours=%di,gap_end=%di %d"
+                    % (missing_hours, int(g_end.timestamp()),
+                       int(g_start.timestamp()))
+                ])
+                log("wrote ingest_gap marker at %s" % iso(g_start))
+            except QueryFailed as exc:
+                log("could not write the ingest_gap marker: %s" % exc)
+
+        for warning in warnings:
+            log(warning)
+
+        log("%d GraphQL call(s) of a %d budget"
+            % (budget["used"], MAX_GRAPHQL_CALLS))
+        if committed_through:
+            log("committed through %s (%d chunk(s))"
+                % (iso(committed_through), chunks_done))
+        if cursor < now and not failure:
+            log("chunk cap reached with %s .. %s still outstanding; the next hourly "
+                "run continues from the new watermark"
+                % (iso(cursor), iso(now)))
+
+        if failure:
+            log("RUN FAILED: %s" % failure)
+            return 1
+        if gap:
+            return 1
+        if warnings:
+            log("RUN INCOMPLETE: %d truncated window(s)" % len(warnings))
+            return 1
+        return 0
+
+
+    if __name__ == "__main__":
+        ping = make_pinger(os.environ.get("HC_UUID", ""))
+        ping("start")
+        try:
+            rc = main()
+        except SystemExit as exc:
+            rc = exc.code if isinstance(exc.code, int) else 1
+            log("FATAL: exiting %d" % rc)
+        except QueryFailed as exc:
+            log("FATAL: %s" % exc)
+            rc = 1
+        except Exception as exc:                       # noqa: BLE001 - report, then red
+            import traceback
+            traceback.print_exc()
+            log("FATAL: unhandled %r" % exc)
+            rc = 1
+        ping(str(rc))
+        sys.exit(rc)
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: cloudflare-analytics
+  namespace: health
+spec:
+  # Hourly, on an off-minute so it does not pile onto :00 with everything else.
+  # Hourly rather than daily because Cloudflare's 1-day query ceiling makes wide
+  # backfills awkward, so a gap is at most an hour of catching up.
+  schedule: "37 * * * *"
+  timeZone: "UTC"                 # without this the schedule is read in kube-controller-manager's local zone
+  concurrencyPolicy: Forbid
+  # A missed window is retried for 30 minutes, then dropped — the next hourly run
+  # picks the same data up anyway, because the watermark comes from InfluxDB.
+  startingDeadlineSeconds: 1800
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      # 1, not 0: a transient Cloudflare 5xx or rate limit is worth one retry.
+      # The run is idempotent (point overwrite), so a retry cannot double-count.
+      backoffLimit: 1
+      # With concurrencyPolicy: Forbid, a hung run blocks every later run with
+      # nothing alerting until the healthchecks.io grace expires. A steady-state
+      # run is two GraphQL calls and one write; 20 minutes covers a full 8-chunk
+      # backfill with the per-chunk sleep and still bounds a wedged socket.
+      activeDeadlineSeconds: 1200
+      # 3 days, so a Friday failure is still forensically available on Monday.
+      ttlSecondsAfterFinished: 259200
+      template:
+        spec:
+          restartPolicy: Never
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65534
+            runAsGroup: 65534
+            seccompProfile: { type: RuntimeDefault }
+          containers:
+            - name: ingest
+              image: python:3.13-alpine3.22
+              command: ["python3", "/app/ingest.py"]
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities: { drop: ["ALL"] }
+              env:
+                # PYTHONDONTWRITEBYTECODE keeps the read-only root filesystem
+                # from producing __pycache__ write errors on every import.
+                - { name: PYTHONDONTWRITEBYTECODE, value: "1" }
+                - { name: PYTHONUNBUFFERED, value: "1" }
+                - { name: INFLUX_URL, value: "http://influxdb.health.svc.cluster.local:8086" }
+                - { name: INFLUX_ORG, value: "cynexia" }
+                - { name: INFLUX_BUCKET, value: "cloudflare" }
+                # Hostnames whose full request path is kept instead of being
+                # truncated to two segments. Empty by default: every host added
+                # here trades InfluxDB series cardinality for path detail, and
+                # karakeep-style per-asset UUID paths are unbounded. Comma-separated.
+                - { name: FULL_PATH_HOSTS, value: "" }
+                # healthchecks.io check `homelab-cloudflare-analytics`
+                # (op://Homelab/health-healthchecks/cloudflare-uuid). Substituted
+                # by envsubst at apply time; never committed.
+                - name: HC_UUID
+                  value: "${HEALTH_HC_CLOUDFLARE_UUID}"
+                # Cloudflare API token — Zone.Analytics:Read ONLY. This job never
+                # writes to Cloudflare, so an edit scope here would be a strictly
+                # unnecessary blast radius.
+                - name: CF_API_TOKEN
+                  valueFrom: { secretKeyRef: { name: health-cloudflare, key: api-token } }
+                # `name=zonetag,name=zonetag`. Zone IDs live in 1Password rather
+                # than in this manifest because the repo is public and a zone ID
+                # identifies the account.
+                - name: CF_ZONE_TAGS
+                  valueFrom: { secretKeyRef: { name: health-cloudflare, key: zone-tags } }
+                # Read AND write on the `cloudflare` bucket: the watermark is
+                # read back out of the data itself, so this job needs both.
+                - name: INFLUX_TOKEN
+                  valueFrom: { secretKeyRef: { name: health-cloudflare, key: influx-token } }
+              volumeMounts:
+                - { name: script, mountPath: /app, readOnly: true }
+                - { name: tmp, mountPath: /tmp }
+              resources:
+                requests: { cpu: 50m, memory: 64Mi }
+                limits: { memory: 256Mi }
+          volumes:
+            - name: script
+              configMap: { name: cloudflare-analytics-script }
+            - name: tmp
+              emptyDir: {}

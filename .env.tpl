@@ -46,6 +46,7 @@ HEALTHCHECK_UUID=op://Homelab/jottacloud-backup/HEALTHCHECK_UUID
 HEALTH_HC_APPLE_UUID=op://Homelab/health-healthchecks/apple-uuid
 HEALTH_HC_GARMIN_UUID=op://Homelab/health-healthchecks/garmin-uuid
 HEALTH_HC_BACKUP_UUID=op://Homelab/health-healthchecks/backup-uuid
+HEALTH_HC_CLOUDFLARE_UUID=op://Homelab/health-healthchecks/cloudflare-uuid
 
 # health namespace — InfluxDB (admin creds + generated tokens; ingester/read
 # tokens are minted via `make health-influx-bootstrap` and pasted into 1Password)
@@ -54,6 +55,14 @@ HEALTH_INFLUX_ADMIN_TOKEN=op://Homelab/health-influxdb/admin-token
 HEALTH_INFLUX_GARMIN_V1_PASSWORD=op://Homelab/health-influxdb/garmin-v1-password
 HEALTH_INFLUX_INGESTER_TOKEN=op://Homelab/health-influxdb/ingester-token
 HEALTH_INFLUX_READ_TOKEN=op://Homelab/health-influxdb/read-token
+HEALTH_INFLUX_CLOUDFLARE_TOKEN=op://Homelab/health-influxdb/cloudflare-token
+
+# health namespace — Cloudflare analytics ingest. The API token must carry
+# Zone.Analytics:Read and NOTHING else (the job never writes to Cloudflare).
+# zone-tags is a single field holding `name=zonetag,name=zonetag`; zone IDs are
+# kept out of this public repo because they identify the account.
+HEALTH_CF_API_TOKEN=op://Homelab/cloudflare-analytics/api-token
+HEALTH_CF_ZONE_TAGS=op://Homelab/cloudflare-analytics/zone-tags
 
 # health namespace — Health Auto Export (HAE) ingest auth token
 HEALTH_HAE_AUTH_TOKEN=op://Homelab/health-hae/auth-token

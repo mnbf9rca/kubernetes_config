@@ -153,6 +153,11 @@ Full mechanics, target-by-target reference and failure modes:
   **start and exit code** — the two restic jobs do; the three older ones ping on success
   only, so a failure shows up as silence. Inventory and per-job semantics:
   `docs/operations/monitoring.md`.
+- **A new InfluxDB bucket in the `health` namespace means two edits, not one:** create it
+  (a `make health-influx-*-bootstrap` target) **and** add it to the explicit bucket list in
+  `homelab/health/backups.yaml`. A bucket missing from that list is silently never
+  exported; a bucket in the list that does not exist now fails the nightly job by name.
+  Bootstrap before applying (`docs/operations/homelab-health.md`).
 - For new `hostPath`/`hostNetwork` workloads: elevate their namespace to PSA
   `privileged` in the cluster's `bootstrap/namespaces.yaml`. The cluster-wide enforce
   level is `baseline`.

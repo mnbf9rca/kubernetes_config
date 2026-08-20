@@ -68,11 +68,25 @@ spec:
                     'influx backup /backups/native/'"$DATE"' -t "$DOCKER_INFLUXDB_INIT_ADMIN_TOKEN" --host http://localhost:8086'
                   # portable line-protocol export, per bucket, last 8 days (windowed to avoid
                   # compaction races and keep runs small; weekly overlap gives continuity):
+                  #
+                  # The bucket list is EXPLICIT, and a missing bucket is fatal. A new bucket
+                  # must be added here or it is silently never exported — the same class of
+                  # bug as the VPS gate's expected-set assertion. `cloudflare` therefore
+                  # requires `make health-influx-cloudflare-bootstrap` to have been run
+                  # BEFORE the apply that adds it here.
                   kubectl -n health exec "$POD" -- sh -c '
                     set -eu
                     START=$(date -d "8 days ago" +%FT%TZ 2>/dev/null || date -v-8d +%FT%TZ)
-                    for B in apple_metrics apple_workouts garmin; do
+                    for B in apple_metrics apple_workouts garmin cloudflare; do
+                      # A pipeline exits with its LAST command status, so a failed
+                      # `influx bucket list` leaves BID empty and sails past set -e. The
+                      # explicit test is what turns "bucket does not exist" into a named
+                      # failure instead of an opaque export-lp error.
                       BID=$(influx bucket list -o cynexia -n "$B" --hide-headers -t "$DOCKER_INFLUXDB_INIT_ADMIN_TOKEN" | awk "{print \$1}")
+                      if [ -z "$BID" ]; then
+                        echo "FATAL: bucket $B not found — it is listed for backup but does not exist" >&2
+                        exit 1
+                      fi
                       influxd inspect export-lp --bucket-id "$BID" \
                         --engine-path /var/lib/influxdb2/engine \
                         --output-path /backups/lp/'"$DATE"'-$B.lp.gz --compress \
