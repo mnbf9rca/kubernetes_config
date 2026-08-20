@@ -180,9 +180,17 @@ check_expected() {
 }
 
 sweep_advisory() {
-  _sout=$(find /data -name '*.restic' -mmin +"$STALE_MINUTES" -print 2>&1); _ss=$?
+  # find's STDOUT is the file list and its STDERR is diagnostics; the two
+  # must not be merged. With `2>&1` a warning line - an unreadable
+  # subdirectory, a directory that vanished mid-walk - was captured into
+  # $_sout and then printed as though it were the path of a stale
+  # snapshot. Same shape as the `du` stderr bug fixed in the homelab gate
+  # (#33): the exit status is what says whether the walk completed, the
+  # stdout is what says what it found. Diagnostics go to the pod log,
+  # where they are read, rather than into a variable that is parsed.
+  _sout=$(find /data -name '*.restic' -mmin +"$STALE_MINUTES" -print); _ss=$?
   if [ "$_ss" -ne 0 ]; then
-    echo "ERROR: advisory sweep could not complete - find exited $_ss: $_sout"
+    echo "ERROR: advisory sweep could not complete - find exited $_ss (diagnostics on stderr, above)"
     return 1
   fi
   [ -n "$_sout" ] || return 0
