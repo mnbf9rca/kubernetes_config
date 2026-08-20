@@ -21,7 +21,8 @@ OP_RUN := op run --env-file=.env.tpl --
 ```
 
 Targets that need secrets are split in two: a **public target** that runs the guards
-(`check-context`, `check-vars-consistency`) in the parent shell — before anything can
+(`check-context`, `check-vars-consistency`, `check-job-ttl-*`,
+`check-script-substitution-*`) in the parent shell — before anything can
 touch the cluster — and then re-enters make under `$(OP_RUN)`, and a private
 **`_*-inner` target** that does the real work with the values present. `op run` resolves
 the `op://` references in `.env.tpl` against the service-account token and injects the
@@ -187,6 +188,8 @@ Note that 1Password **document** items (e.g. `health-cloudflared`) need
 | `check-tools` | Asserts `kubectl kustomize envsubst op direnv talosctl omnictl jq` are on PATH |
 | `check-context` | Asserts `kubectl current-context == cynexia-homelab` (override with `HOMELAB_CONTEXT=`) |
 | `check-vars-consistency` | Asserts `ENVSUBST_VAR_NAMES` ⊆ `REQUIRED_VARS`. Runs in the parent shell, before the `op run` child exists. Cannot detect a var *missing* from `ENVSUBST_VAR_NAMES` |
+| `check-job-ttl` | Asserts every standalone `kind: Job` sets `ttlSecondsAfterFinished`, across both clusters. `check-job-ttl-homelab` scopes it to one cluster and runs in the `diff-homelab`/`apply-homelab` preflight |
+| `check-script-substitution` | Asserts no `configMapGenerator` script names an envsubst-allowlisted variable, across both cluster trees. `check-script-substitution-homelab` scopes the *scan* to one tree — both allowlists still apply — and runs in the `diff-homelab`/`apply-homelab` preflight |
 | `require-vars` | Re-enters under `op run` and asserts every `REQUIRED_VARS` entry is set and not still an `op://` reference |
 | `build-homelab` | `kustomize build homelab/ \| envsubst` to stdout under `op run`. **PREVIEW ONLY — secret values are masked.** No cluster contact. Never redirect this to a file and apply it |
 | `diff-homelab` | Same pipeline into `kubectl diff`, inside the `op run` child (real values, printed diff masked) |
@@ -202,6 +205,7 @@ Note that 1Password **document** items (e.g. `health-cloudflared`) need
 |---|---|
 | `check-vps-context` | Asserts `kubectl current-context == cynexia-vps` (override with `VPS_CONTEXT=`) |
 | `check-vps-vars-consistency` / `require-vps-vars` | VPS equivalents of the homelab preflights |
+| `check-job-ttl-vps` / `check-script-substitution-vps` | The per-cluster halves of the two repo-wide checks, run in the `diff-vps`/`apply-vps` preflight. Scoping them per cluster is the point: a VPS-only fault must not block `apply-homelab`, and vice versa |
 | `build-vps` / `diff-vps` / `apply-vps` | Same pipeline and the same masking split over `vps/` with `VPS_ENVSUBST_VARS` |
 | `route-vps-dns` | `cloudflared tunnel route dns cynexia-vps <host>` for every hostname in `vps/bootstrap/cloudflared/cloudflared.yaml` |
 | `create-cloudflared-secret` | Imperative Secret creation for the VPS tunnel creds from `op://VPS/cloudflared/credentials-json` |

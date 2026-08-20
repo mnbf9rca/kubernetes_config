@@ -104,6 +104,7 @@ help:
 	@echo "  check-placeholder-coverage - assert no .env.tpl \$${VAR} survives the render (both clusters)"
 	@echo "  check-job-ttl   - assert every standalone Job sets ttlSecondsAfterFinished (both clusters)"
 	@echo "  check-script-substitution - assert no configMapGenerator script names an envsubst var"
+	@echo "                    (both of the above also run per-cluster in the diff-*/apply-* preflight)"
 	@echo ""
 	@echo "VPS cluster targets:"
 	@echo "  check-vps-context - assert kubectl current-context matches VPS_CONTEXT ($(VPS_CONTEXT))"
@@ -160,9 +161,28 @@ check-vars-consistency:
 # spec.template, and the next apply that changes it then fails quietly. Runs
 # on raw `kustomize build` output, so it needs neither 1Password nor a cluster.
 # Rationale and the incident behind it: AGENTS.md.
-.PHONY: check-job-ttl
+# Wired into the diff-* / apply-* preflight chains, per cluster: a VPS-only
+# render fault must not block an unrelated `apply-homelab`. `check-job-ttl`
+# with no suffix still checks both, for a manual sweep.
+#
+# It sits LAST in each chain, after the context assert. It shells out to
+# `kustomize build`, which fetches the bootstrap layer's remote bases, so it is
+# the one preflight worth seconds — no reason to pay them before telling you
+# that kubectl is pointed at the wrong cluster.
+#
+# Deliberately NOT wired into build-*: that target's stdout IS the rendered
+# manifest, and a prerequisite's `OK: ...` line would land at the top of it,
+# corrupting `make build-homelab > out.yaml` and anything that parses it.
+# `check-vars-consistency` sits outside build-* for the same reason.
+.PHONY: check-job-ttl check-job-ttl-homelab check-job-ttl-vps
 check-job-ttl:
 	@scripts/check-job-ttl.py
+
+check-job-ttl-homelab:
+	@scripts/check-job-ttl.py homelab
+
+check-job-ttl-vps:
+	@scripts/check-job-ttl.py vps
 
 # Mirror image of check-placeholder-coverage. That one catches a ${VAR} that
 # SURVIVES the render; this one catches a $VAR that must never have been
@@ -175,9 +195,19 @@ check-job-ttl:
 # and `$RESTIC_PASSWORD` would ship the repository password in plaintext.
 # Neither leaves a placeholder behind, so coverage-style checks see nothing.
 # Full reasoning and the fix pattern: scripts/check-script-substitution.py.
-.PHONY: check-script-substitution
+# Per-cluster variants scope the SCAN to one cluster tree, not the allowlist:
+# both allowlists are still applied to every script scanned, because a name
+# that is inert under vps/ today goes live the moment a refactor shares that
+# file with homelab/. Same build-* exclusion as check-job-ttl above.
+.PHONY: check-script-substitution check-script-substitution-homelab check-script-substitution-vps
 check-script-substitution:
 	@scripts/check-script-substitution.py
+
+check-script-substitution-homelab:
+	@scripts/check-script-substitution.py homelab
+
+check-script-substitution-vps:
+	@scripts/check-script-substitution.py vps
 
 .PHONY: require-vars
 require-vars:
@@ -410,7 +440,7 @@ check-context:
 # THAT it changed, never WHAT it changed to. Use
 # `kubectl -n <ns> get secret <name> -o jsonpath=...` to confirm a value landed.
 .PHONY: diff-homelab
-diff-homelab: check-vars-consistency check-context
+diff-homelab: check-vars-consistency check-context check-script-substitution-homelab check-job-ttl-homelab
 	@$(OP_RUN) $(MAKE) --no-print-directory _diff-homelab-inner
 
 # The old `|| true` here swallowed EVERYTHING, including a kustomize failure.
@@ -431,7 +461,7 @@ _diff-homelab-inner: check-context _assert-vars
 	exit 0
 
 .PHONY: apply-homelab
-apply-homelab: check-vars-consistency check-context
+apply-homelab: check-vars-consistency check-context check-script-substitution-homelab check-job-ttl-homelab
 	@$(OP_RUN) $(MAKE) --no-print-directory _apply-homelab-inner
 
 # RENDER FULLY, VERIFY, THEN APPLY — never stream straight into kubectl.
@@ -701,7 +731,7 @@ _build-vps-inner:
 # closed on a wrong context no matter how it is entered. See the GUARD
 # PLACEMENT note above diff-homelab.
 .PHONY: diff-vps
-diff-vps: check-vps-context check-vps-vars-consistency
+diff-vps: check-vps-context check-vps-vars-consistency check-script-substitution-vps check-job-ttl-vps
 	@$(OP_RUN) $(MAKE) --no-print-directory _diff-vps-inner
 
 # See _diff-homelab-inner for why this is a PIPESTATUS check and not `|| true`.
@@ -715,7 +745,7 @@ _diff-vps-inner: check-vps-context _assert-vps-vars
 	exit 0
 
 .PHONY: apply-vps
-apply-vps: check-vps-context check-vps-vars-consistency
+apply-vps: check-vps-context check-vps-vars-consistency check-script-substitution-vps check-job-ttl-vps
 	@$(OP_RUN) $(MAKE) --no-print-directory _apply-vps-inner
 
 # Same render-fully-then-apply shape as _apply-homelab-inner; see the note there.
