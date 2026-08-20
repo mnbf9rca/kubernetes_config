@@ -18,6 +18,13 @@
 # and must not start doing so: mounting it there would couple influxdb.yaml to
 # the backup ConfigMap and force an influxdb rollout on every script edit.
 set -eu
+# shellcheck disable=SC3040 # `set -o pipefail` is not POSIX, but the
+# alpine/k8s:1.36.0 image's /bin/sh is busybox ash, which implements it. It is
+# required by the prune step below, whose failure was previously masked by the
+# last command in its pipeline. If a future image lacked it, this line would
+# fail under `set -e` and the job would stop loudly rather than silently
+# swallowing a broken pipeline.
+set -o pipefail
 
 DATE=$(date +%F)
 POD=$(kubectl -n health get pod -l app=influxdb -o jsonpath='{.items[0].metadata.name}')
@@ -35,13 +42,48 @@ kubectl -n health exec "$POD" -- sh -c "$(cat /scripts/influx-export-lp.sh)" \
 
 # Prune: keep 14 native dumps and 60 line-protocol exports. restic retention
 # holds the long tail in B2.
-# shellcheck disable=SC2012 # every name here is written by the two scripts
-# above as `<YYYY-MM-DD>` or `<YYYY-MM-DD>-<bucket>.lp.gz`, so the whitespace
-# and newline hazards behind SC2012 cannot occur; `ls -t` also sorts by mtime,
-# which `find` alone does not.
-ls -1dt /dumps/native/* | tail -n +15 | xargs -r rm -rf
-# shellcheck disable=SC2012 # as above
-ls -1t  /dumps/lp/*.lp.gz | tail -n +61 | xargs -r rm -f
+#
+# THE PIPELINE STATUS HERE IS LOAD-BEARING. This used to be a bare
+#
+#   ls -1dt /dumps/native/* | tail -n +15 | xargs -r rm -rf
+#
+# under `set -eu`, and a pipeline exits with its LAST command's status — so the
+# verdict came from `xargs`, which succeeds at doing nothing. Every way `ls`
+# can fail (an unmatched glob, the PVC not mounted, a permissions problem)
+# therefore produced exit 0, `set -e` never fired, the script ran on to the
+# healthchecks.io ping below, and the check went GREEN. Retention would have
+# stopped silently, health-dumps would have filled, and the failure would first
+# have surfaced as the next influx backup dying on ENOSPC.
+#
+# Two things close that: `set -o pipefail` above, so `ls` failing fails the
+# pipeline, and the explicit `-e` test in prune_to, which turns the commonest
+# case — a glob that matched nothing — into a named error instead of a bare
+# `ls: No such file or directory`.
+#
+# An unmatched glob really is a fault here, not an empty first run: both
+# directories are created by the mkdirs initContainer, and the two exec'd
+# scripts above have already written today's dump into each of them by the time
+# this runs. Nothing matching means something upstream did not happen.
+prune_to() {
+  # $1 = label for the error message, $2 = how many newest entries to keep,
+  # $3.. = the already-expanded paths.
+  _label=$1
+  _keep=$2
+  shift 2
+  if [ ! -e "$1" ]; then
+    echo "FATAL: prune $_label: nothing matches $1 — retention has nothing to" \
+         "work on, which means the dump above did not land" >&2
+    return 1
+  fi
+  # shellcheck disable=SC2012 # every name here is written by the two scripts
+  # above as `<YYYY-MM-DD>` or `<YYYY-MM-DD>-<bucket>.lp.gz`, so the whitespace
+  # and newline hazards behind SC2012 cannot occur; `ls -t` also sorts by
+  # mtime, which `find` alone does not.
+  ls -1dt "$@" | tail -n "+$((_keep + 1))" | xargs -r rm -rf
+}
+
+prune_to native 14 /dumps/native/*
+prune_to lp     60 /dumps/lp/*.lp.gz
 
 # Dead-man's switch. Last line on purpose: this script is `set -eu`, so the
 # ping is only reached when everything above succeeded, and healthchecks.io

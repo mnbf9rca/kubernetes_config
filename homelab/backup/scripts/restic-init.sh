@@ -22,17 +22,15 @@ else
   # it. A bare `restic init` then fails against the existing repo and
   # leaves a Failed Job behind on each apply. Probing first makes a
   # re-run a clean no-op, and a genuine init failure still fails loudly.
+  #
+  # This `restic cat config` probe and its comment used to appear TWICE, the
+  # second copy nested inside this one's `else`. Behaviourally that was a
+  # no-op — the inner probe could only ever take the same branch as the outer
+  # — but it was a bad merge that no reviewer could read past. Extracting the
+  # script out of the block scalar is what made it visible.
   if restic cat config >/dev/null 2>&1; then
     echo "Repo already initialized - nothing to do."
   else
-    # Idempotent: the Job's TTL deletes it, so every later apply recreates
-    # it. A bare `restic init` then fails against the existing repo and
-    # leaves a Failed Job behind on each apply. Probing first makes a
-    # re-run a clean no-op, and a genuine init failure still fails loudly.
-    if restic cat config >/dev/null 2>&1; then
-      echo "Repo already initialized - nothing to do."
-    else
-      restic init
-    fi
+    restic init
   fi
 fi
