@@ -72,10 +72,12 @@ spec:
           readinessProbe:
             httpGet: { path: /api/health, port: http }
             periodSeconds: 10
+            timeoutSeconds: 5
           livenessProbe:
             httpGet: { path: /api/health, port: http }
             failureThreshold: 5
             periodSeconds: 20
+            timeoutSeconds: 5
           volumeMounts:
             - { name: data, mountPath: /var/lib/grafana }
             - { name: datasources, mountPath: /etc/grafana/provisioning/datasources }

@@ -24,7 +24,7 @@ data:
   # Uncomment ONLY per the migration runbook: (1) image with DEST_REMOTE
   # support is live, (2) secret has DEST_REMOTE_PASSWORD, (3) the existing
   # plaintext copy has been migrated to ciphertext (see
-  # docs/superpowers/specs/2026-07-26-encryption-at-rest-design.md §5).
+  # docs/operations/homelab.md, "Encryption at rest").
   DEST_REMOTE: "jottacrypt"
   KOPIA_CONFIG_FILE: "/config/kopia.config"
   KOPIA_CACHE_DIR: "/config/cache"
@@ -160,16 +160,13 @@ spec:
               resources:
                 requests: { memory: "512Mi", cpu: "250m" }
                 limits: { memory: "4Gi", cpu: "2000m" }
-              livenessProbe:
-                exec:
-                  command:
-                    - /bin/sh
-                    - -c
-                    - "ps aux | grep -v grep | grep -E '(rclone|kopia|backup.sh)' || test -f /tmp/backup-completed"
-                initialDelaySeconds: 600
-                periodSeconds: 300
-                timeoutSeconds: 30
-                failureThreshold: 5
+              # No livenessProbe: the previous one was a verified no-op — backup.sh is PID 1
+              # for the whole run and never execs over itself (so the ps|grep always matched),
+              # and its /tmp/backup-completed fallback is written by no upstream script. It also
+              # measured process presence, not progress, so a stalled rclone looked healthy.
+              # activeDeadlineSeconds above is what actually bounds a hung run.
+              # See docs/operations/monitoring.md ("Explicitly rejected") for why this was
+              # removed rather than fixed.
           volumes:
             - name: data
               persistentVolumeClaim:

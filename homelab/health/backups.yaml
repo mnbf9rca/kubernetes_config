@@ -27,12 +27,16 @@ metadata:
   namespace: health
 spec:
   schedule: "30 2 * * *"          # before the 03:00 restic sweep
+  timeZone: "UTC"                 # without this the schedule is read in kube-controller-manager's local zone
   concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 3600   # a missed window is retried for an hour, then skipped (not silently lost forever)
   successfulJobsHistoryLimit: 3
   failedJobsHistoryLimit: 3
   jobTemplate:
     spec:
       backoffLimit: 1
+      activeDeadlineSeconds: 3600 # with concurrencyPolicy: Forbid, a hung run would otherwise
+                                  # block every subsequent night with nothing alerting
       ttlSecondsAfterFinished: 172800
       template:
         spec:

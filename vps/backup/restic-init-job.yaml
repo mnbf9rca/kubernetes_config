@@ -14,7 +14,7 @@ spec:
       restartPolicy: Never
       containers:
         - name: restic
-          image: restic/restic:latest
+          image: restic/restic:0.17.3
           command: ["sh", "-c"]
           args:
             - |

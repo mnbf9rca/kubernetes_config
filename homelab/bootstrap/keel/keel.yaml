@@ -74,18 +74,25 @@ spec:
           ports:
             - containerPort: 9300
               name: http
+          # Readiness sheds routing at 30s; liveness only restarts at 90s. keel polls
+          # registries every 6h, so nothing here is urgent and an eager restart risks
+          # interrupting an in-flight image update.
           livenessProbe:
             httpGet:
               path: /healthz
               port: http
             initialDelaySeconds: 30
+            periodSeconds: 15
             timeoutSeconds: 10
+            failureThreshold: 6     # 90s to restart — strictly laxer than readiness below
           readinessProbe:
             httpGet:
               path: /healthz
               port: http
             initialDelaySeconds: 10
-            periodSeconds: 20
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3     # 30s to unready
           resources:
             requests:
               cpu: 50m

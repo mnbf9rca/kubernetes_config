@@ -32,8 +32,8 @@ spec:
             - --influxdb.staticTags=person=rob
           ports: [{ containerPort: 8080, name: http }]
           # No /healthz upstream — TCP probe.
-          readinessProbe: { tcpSocket: { port: http }, periodSeconds: 10 }
-          livenessProbe: { tcpSocket: { port: http }, failureThreshold: 5, periodSeconds: 20 }
+          readinessProbe: { tcpSocket: { port: http }, periodSeconds: 10, timeoutSeconds: 5 }
+          livenessProbe: { tcpSocket: { port: http }, failureThreshold: 5, periodSeconds: 20, timeoutSeconds: 5 }
           resources:
             # large HAE batch exports OOMed 256Mi
             requests: { cpu: 50m, memory: 128Mi }

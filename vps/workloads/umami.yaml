@@ -64,23 +64,77 @@ spec:
             - containerPort: 5432
           volumeMounts:
             - { name: data, mountPath: /var/lib/postgresql/data }
+          # Same `test $? -lt 2` form as liveness, and for a sharper reason:
+          # while a startupProbe is pending, liveness AND readiness are
+          # suppressed entirely, so a naive exit-0-only startup probe becomes
+          # the killer instead. After an unclean stop with more than 5 min of
+          # WAL replay, kubelet would SIGKILL the postmaster at 300s, recovery
+          # would restart from scratch, and it would never converge — the exact
+          # non-convergence loop the spec rejects (§4 P2, §6), one probe up.
+          # `strategy: Recreate` means there is no second postgres to fall
+          # back to. Exit 1 ("rejecting connections") satisfies this probe, so
+          # startup completes as soon as the postmaster binds and readiness —
+          # which correctly uses the strict form — gates traffic from there.
+          startupProbe:
+            exec:
+              command: ["sh", "-c", "pg_isready -q -U umami -d umami -h 127.0.0.1; test $? -lt 2"]
+            periodSeconds: 10
+            failureThreshold: 30
+            timeoutSeconds: 5
+          # -h 127.0.0.1 matters: without it pg_isready probes the UNIX
+          # SOCKET, while startup and liveness probe TCP. Readiness could then
+          # stay green while the TCP listener — the only path umami actually
+          # uses — is broken. Strict form (exit 0 only) is correct HERE: while
+          # recovering, postgres should carry no traffic.
           readinessProbe:
             exec:
-              command: ["pg_isready", "-U", "umami", "-d", "umami"]
+              command: ["pg_isready", "-U", "umami", "-d", "umami", "-h", "127.0.0.1"]
             initialDelaySeconds: 10
             periodSeconds: 5
+            timeoutSeconds: 5
+            failureThreshold: 3
+          # Liveness MUST use the `test $? -lt 2` form. pg_isready exit 1 means
+          # "server is rejecting connections", e.g. during crash recovery, and
+          # must count as ALIVE. A plain exit-0-only liveness probe SIGKILLs
+          # the postmaster mid-recovery and never converges on a single-replica
+          # local-path PVC (spec §4 P2, §6). Only exit 2 (no response at all)
+          # is treated as dead.
+          livenessProbe:
+            exec:
+              command: ["sh", "-c", "pg_isready -q -U umami -d umami -h 127.0.0.1; test $? -lt 2"]
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 6
         - name: pg-dump-sidecar
           image: postgres:16-alpine
           command: ["sh", "-c"]
           args:
+            # Retries after 5 min on failure instead of sleeping 12h past it.
+            # The old form slept 43200 unconditionally, including on failure.
+            # That matters now that the restic job has a staleness gate: with
+            # `strategy: Recreate` this container starts concurrently with the
+            # postmaster, so the first dump after every apply or keel update
+            # races startup and usually fails — the existing dump.sql.restic
+            # would then age past the 15h threshold and turn the backup job
+            # red for something that is not a backup fault.
+            #
+            # `set -e` is DELIBERATELY ABSENT here for the same reason as the
+            # sqlite sidecars: exiting on a failed dump would CrashLoopBackOff
+            # this container, making the whole Pod not Ready and taking the
+            # postgres Service's only endpoint down — i.e. a failed backup
+            # would take umami itself offline.
             - |
+              set -u
+              DUMP=/var/lib/postgresql/data/dump.sql
               while true; do
-                pg_dumpall -U umami -h 127.0.0.1 \
-                  > /var/lib/postgresql/data/dump.sql.restic.tmp \
-                  && mv /var/lib/postgresql/data/dump.sql.restic.tmp \
-                        /var/lib/postgresql/data/dump.sql.restic \
-                  || echo "pg_dumpall failed"
-                sleep 43200
+                if pg_dumpall -U umami -h 127.0.0.1 > "$DUMP.restic.tmp"; then
+                  mv "$DUMP.restic.tmp" "$DUMP.restic"
+                  sleep 43200
+                else
+                  echo "ERROR: pg_dumpall failed; retrying in 5m" >&2
+                  rm -f "$DUMP.restic.tmp"
+                  sleep 300
+                fi
               done
           env:
             - name: PGPASSWORD
@@ -131,3 +185,23 @@ spec:
             - { name: HOSTNAME, value: "0.0.0.0" }
           ports:
             - containerPort: 3000
+          # Upstream's own compose healthcheck target, but be clear about what
+          # it buys: /api/heartbeat is a static {ok:true} that never touches
+          # Prisma, so it returns 200 straight through a database outage
+          # (upstream #3417, connection-pool exhaustion). This is Node-wedge
+          # detection only, not DB-outage detection (spec §5).
+          startupProbe:
+            httpGet: { path: /api/heartbeat, port: 3000 }
+            periodSeconds: 10
+            failureThreshold: 30 # 5 min budget for migrations
+            timeoutSeconds: 5
+          livenessProbe:
+            httpGet: { path: /api/heartbeat, port: 3000 }
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 6
+          readinessProbe:
+            httpGet: { path: /api/heartbeat, port: 3000 }
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 3

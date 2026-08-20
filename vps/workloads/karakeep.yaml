@@ -77,6 +77,32 @@ spec:
               valueFrom: { secretKeyRef: { name: karakeep, key: MEILI_MASTER_KEY } }
           ports:
             - containerPort: 7700
+          # /health is the only genuinely deep check of this set — it probes
+          # the search queue, task DB and auth store. Liveness is correct
+          # here: Meilisearch's `mustRestart` state literally asks to be
+          # recycled (spec §4 P2).
+          #
+          # Pin-sensitive: from v1.43.0 a successful POST /tasks/compact sets
+          # a static AtomicBool that is never reset, after which /health
+          # returns 500 permanently until the process restarts. We are pinned
+          # to v1.41.0 so this is latent, but a Renovate bump past v1.43.0
+          # would turn a routine compaction into a liveness restart loop.
+          # Re-check upstream before accepting that bump.
+          startupProbe:
+            httpGet: { path: /health, port: 7700 }
+            periodSeconds: 10
+            failureThreshold: 18 # 3 min budget for index recovery
+            timeoutSeconds: 5
+          livenessProbe:
+            httpGet: { path: /health, port: 7700 }
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 6
+          readinessProbe:
+            httpGet: { path: /health, port: 7700 }
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 3
           volumeMounts:
             - { name: data, mountPath: /meili_data }
           resources:
@@ -143,18 +169,142 @@ spec:
             - { name: INFERENCE_NUM_WORKERS, value: "4" }
           ports:
             - containerPort: 3000
+          # Upstream Dockerfile HEALTHCHECK and the official Helm chart both
+          # use /api/health. It is a hardcoded literal in the *web* process
+          # and cannot observe the worker at all — stuck-queue incidents
+          # (#1802, #2704) all leave it returning 200. The detector for that
+          # is the karakeep_queue_jobs metric, not a probe (spec §5).
+          startupProbe:
+            httpGet: { path: /api/health, port: 3000 }
+            periodSeconds: 10
+            failureThreshold: 30 # 5 min budget for migrations
+            timeoutSeconds: 5
+          livenessProbe:
+            httpGet: { path: /api/health, port: 3000 }
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 6
+          readinessProbe:
+            httpGet: { path: /api/health, port: 3000 }
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 3
           volumeMounts:
             - { name: data, mountPath: /data }
         - name: sqlite-snapshot
           image: alpine:3.20
           command: ["sh", "-c"]
           args:
+            # No output suppression, an explicit busy timeout and an atomic
+            # publish. The original form swallowed every failure mode
+            # (`apk add ... >/dev/null` with no set -e, `|| true` on the
+            # sqlite3 call), so it could produce no snapshot forever while the
+            # pod stayed Ready. See spec §4 P1.
+            # karakeep is the sharp case: its worker writes this DB
+            # continuously, so a busy-timeout failure here is expected, not
+            # exotic.
+            #
+            # `set -e` is DELIBERATELY ABSENT — do not "harden" it back in.
+            # If this sidecar exits, kubelet restarts it, the retry is
+            # immediate, and a persistent fault (SQLITE_BUSY past the 30s
+            # timeout, disk full, a corrupt page, an apk/CDN blip) becomes
+            # CrashLoopBackOff. A container that is not Running is not Ready,
+            # which makes the whole POD not Ready, which drops karakeep from its
+            # EndpointSlice and 502s it at cloudflared — a backup fault taking
+            # the application offline. That is exactly the outage the spec
+            # rejected sidecar readiness probes to avoid (§4 P1, §6), and
+            # exiting is strictly worse because the snapshotter stops running
+            # too. Instead: log loudly to stderr, back off 5 min, keep going.
+            # Detecting "no fresh snapshot" is not this container's job at
+            # all — it belongs to the restic verification gate, which reports
+            # it to healthchecks.io without ever touching Pod readiness. See
+            # the comment on the (deliberately absent) probes below.
+            #
+            # "No source DB present" is likewise a tolerated state, not an
+            # error: on a fresh volume the app has not created its database
+            # yet, so there is genuinely nothing to snapshot. The loop logs
+            # and re-polls every 5 min. That tolerance is not a hole — an
+            # empty or wrongly-mounted volume is caught by the restic gate.
             - |
-              apk add --no-cache sqlite >/dev/null
+              set -u
+              DB=/data/db.db
+
+              # Publish a snapshot only if it actually contains a schema. A
+              # 0-byte or truncated source makes `.backup` succeed and emit a
+              # structurally valid but EMPTY database with a current mtime —
+              # which sails straight through the restic staleness gate,
+              # because mtime is the only property that gate checks.
+              # `count(*) from sqlite_master` is a schema-only read, cheap
+              # enough to run every cycle against a live DB.
+              snapshot() {
+                src=$1
+                tmp="$src.restic.tmp"
+                if ! sqlite3 -cmd '.timeout 30000' "$src" ".backup $tmp"; then
+                  rm -f "$tmp"
+                  return 1
+                fi
+                objs=$(sqlite3 "$tmp" 'select count(*) from sqlite_master' 2>/dev/null)
+                case "$objs" in
+                  ''|*[!0-9]*) objs=0 ;;
+                esac
+                if [ "$objs" -lt 1 ]; then
+                  echo "ERROR: snapshot of $src has no schema objects - refusing to publish" >&2
+                  rm -f "$tmp"
+                  return 1
+                fi
+                mv "$tmp" "$src.restic"
+              }
+
               while true; do
-                [ -f /data/db.db ] && sqlite3 /data/db.db ".backup /data/db.db.restic" || true
-                sleep 43200
+                if ! command -v sqlite3 >/dev/null 2>&1; then
+                  if ! apk add --no-cache sqlite; then
+                    echo "ERROR: apk add sqlite failed; retrying in 5m" >&2
+                    sleep 300
+                    continue
+                  fi
+                fi
+                if [ ! -f "$DB" ]; then
+                  echo "no source DB at $DB yet - nothing to snapshot; retrying in 5m"
+                  sleep 300
+                  continue
+                fi
+                if snapshot "$DB"; then
+                  sleep 43200
+                else
+                  echo "ERROR: snapshot of $DB failed; retrying in 5m" >&2
+                  sleep 300
+                fi
               done
+          # NO PROBES OF ANY KIND ON THIS SIDECAR — the freshness liveness
+          # probe that used to live here was DELIBERATELY REMOVED. Do not add
+          # it back.
+          #
+          # Its original justification was self-healing: a failed `apk add`
+          # left the container with no sqlite3, and a restart repaired that.
+          # The loop above now retries `apk add` itself on a 5 min backoff, so
+          # that justification is gone — against a transient fault the probe
+          # would only duplicate what the loop already does.
+          #
+          # Against a PERMANENT fault (corrupt DB, disk full, a path that
+          # moved under an upgrade) it is actively harmful: it restarts a
+          # container that restarting cannot repair, the restarts back off
+          # into CrashLoopBackOff, a container that is not Running is not
+          # Ready, and a Pod with a non-Ready container is dropped from its
+          # EndpointSlice — so karakeep goes offline, at cloudflared, because a
+          # backup failed. That is the same outage the spec refused sidecar
+          # readiness probes to avoid (§4 P1, §6), and it is the spec's own
+          # rule (§2): if restarting cannot plausibly fix the failure, a probe
+          # is the wrong instrument.
+          #
+          # Detection is not lost, it moves to the artifact where it belongs.
+          # The restic verification gate asserts that a per-app snapshot
+          # exists and is fresh, and pings healthchecks.io red otherwise.
+          # Latency goes from ~45 min to at worst a day, which is the right
+          # scale for a backup fault and buys immunity from ever taking an
+          # application offline for one.
+          #
+          # This also matches umami's pg-dump-sidecar, which has no probe for
+          # the same reason — the consistency is deliberate, not an oversight.
           volumeMounts:
             - { name: data, mountPath: /data }
       volumes:
