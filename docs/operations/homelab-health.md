@@ -257,8 +257,8 @@ The job cannot run until four things exist. None of them are created by `make ap
 
 1. **Cloudflare API token**, scoped **`Zone.Analytics: Read` only**, covering both zones.
    The job never writes to Cloudflare, so any edit scope is blast radius bought for
-   nothing. Store as `op://Homelab/cloudflare-analytics/api-token`.
-2. **Zone tags**, as one field `op://Homelab/cloudflare-analytics/zone-tags` holding
+   nothing. Store as `op://Homelab/cloudflare/api-token`.
+2. **Zone tags**, as one field `op://Homelab/cloudflare/zone-ids` holding
    `cynexia.com=<zoneid>,making-tracks.app=<zoneid>`. Zone IDs are not passwords, but they
    identify the account and this repo is public, so they are resolved at apply time like
    everything else. Mark it `[text]`, not concealed — it is an identifier, and a concealed

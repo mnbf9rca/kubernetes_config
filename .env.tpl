@@ -61,8 +61,8 @@ HEALTH_INFLUX_CLOUDFLARE_TOKEN=op://Homelab/health-influxdb/cloudflare-token
 # Zone.Analytics:Read and NOTHING else (the job never writes to Cloudflare).
 # zone-tags is a single field holding `name=zonetag,name=zonetag`; zone IDs are
 # kept out of this public repo because they identify the account.
-HEALTH_CF_API_TOKEN=op://Homelab/cloudflare-analytics/api-token
-HEALTH_CF_ZONE_TAGS=op://Homelab/cloudflare-analytics/zone-tags
+HEALTH_CF_API_TOKEN=op://Homelab/cloudflare/api-token
+HEALTH_CF_ZONE_TAGS=op://Homelab/cloudflare/zone-ids
 
 # health namespace — Health Auto Export (HAE) ingest auth token
 HEALTH_HAE_AUTH_TOKEN=op://Homelab/health-hae/auth-token
