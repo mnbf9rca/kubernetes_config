@@ -167,7 +167,7 @@ changes, and the token is read-only.
 Two bookkeeping measurements share the bucket: `ingest_status` (one point per committed
 chunk) and `ingest_gap` (see below).
 
-### Why the script is Python, and in a ConfigMap
+### Why the script is Python, and a file rather than an inline string
 
 Every other scheduled job in this repo is inline POSIX `sh`. This one is not, for three
 reasons that are all about the failure modes this repo has already been bitten by:
@@ -202,6 +202,16 @@ past hours that zone never covered, which Cloudflare then deletes.
 A successfully-queried chunk with **zero rows** still writes its `ingest_status` point.
 Without that, eight genuinely quiet days would look identical to eight days of broken
 ingestion and would trip the gap alarm below for no reason.
+
+**A chunk's points are written oldest-first, and that ordering is part of the resume
+rule.** A chunk over 5,000 series is sent to InfluxDB in several batches, so a later batch
+can fail with earlier ones already durably stored. Because the watermark is `max(_time)`
+over what *is* stored and the next run rewinds only 2 hours behind it, a surviving partial
+write has to be a **prefix** of the chunk in time. Ordered any other way — the code once
+sorted on the tag tuple, zone first — a surviving first batch could carry points from the
+last hour of a 23-hour chunk while its first hours went unwritten; the watermark would
+jump past them, the 2-hour rewind would fall short, and Cloudflare would delete them. The
+`ingest_status` marker is appended after every data point for the same reason.
 
 ### Gaps are permanent, so they are loud
 
@@ -281,7 +291,8 @@ GraphQL budget consumed.
 **Smoke-test the query shape on that first run.** The `avg { sampleInterval }` selection is
 taken from the GraphQL schema, not from a doc page that spells it out; if Cloudflare names
 it differently the run fails loudly with the `errors` array in the log, and the fix is one
-line in the ConfigMap. It cannot fail silently.
+line in `homelab/health/scripts/cloudflare-analytics-ingest.py`. It cannot fail
+silently.
 
 ## Garmin re-authentication (annual)
 

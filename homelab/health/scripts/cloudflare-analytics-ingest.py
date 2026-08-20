@@ -358,7 +358,27 @@ def esc_tag(value):
 
 
 def points(acc):
-    for key, (count, weighted) in sorted(acc.items()):
+    """Yield line protocol for every accumulated series, OLDEST FIRST.
+
+    The timestamp ordering is load-bearing, not cosmetic. influx_write() sends
+    these in batches, so a later batch can fail with earlier ones already
+    durably stored; the watermark is max(_time) over what IS stored, and the
+    next run rewinds only OVERLAP_HOURS behind it. Ordered by anything else —
+    this previously sorted on the tag tuple, zone first and timestamp last — a
+    surviving first batch carries points from the END of a 23-hour chunk while
+    hours near its START go unwritten. The watermark then jumps past them, the
+    2-hour rewind does not reach back far enough, and Cloudflare deletes them:
+    silent permanent loss of exactly the hours this job exists to preserve.
+
+    Sorting by timestamp makes any partial commit a PREFIX of the chunk, which
+    is the one shape the rewind can recover from. The remaining key fields are
+    kept in the sort only to make the output deterministic.
+    """
+    def oldest_first(item):
+        zone, host, path, status, country, ts = item[0]
+        return (ts, zone, host, path, status, country)
+
+    for key, (count, weighted) in sorted(acc.items(), key=oldest_first):
         zone, host, path, status, country, ts = key
         interval = (weighted / count) if count else 1.0
         yield ("http_requests,zone=%s,host=%s,path=%s,status=%s,country=%s "
@@ -379,7 +399,10 @@ def influx_write(cfg, lines):
         "Content-Type": "text/plain; charset=utf-8",
     }
     # Batched so one oversized body cannot be rejected wholesale, and so a
-    # partial failure still leaves earlier hours durably stored.
+    # partial failure still leaves earlier hours durably stored. That second
+    # property depends entirely on `lines` arriving oldest-first — see points().
+    # The caller appends its ingest_status marker last, after every data point,
+    # for the same reason.
     for i in range(0, len(lines), 5000):
         batch = "\n".join(lines[i:i + 5000]).encode()
         status, text = http_post(url, batch, headers)

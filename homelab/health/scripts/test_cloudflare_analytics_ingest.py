@@ -238,7 +238,40 @@ class Points(unittest.TestCase):
         acc = {}
         cf.aggregate([row(status=500), row(status=200), row(status=404)],
                      "z", set(), acc)
-        self.assertEqual(list(cf.points(acc)), sorted(cf.points(acc)))
+        self.assertEqual(list(cf.points(acc)), list(cf.points(acc)))
+
+    def test_lines_are_ordered_oldest_first(self):
+        # THE PARTIAL-COMMIT RULE. influx_write() batches, so a later batch can
+        # fail with earlier ones already stored. The watermark is max(_time)
+        # over what is stored and the next run rewinds only OVERLAP_HOURS
+        # behind it, so a surviving prefix must never contain a point from
+        # later in the chunk than a point that was NOT written. Ordering by
+        # timestamp is what guarantees that; ordering by the tag tuple (zone
+        # first, as this once did) does not, and loses those hours silently.
+        acc = {}
+        cf.aggregate(
+            [row(dt="2026-08-20T12:00:00Z", host="zzz.example"),
+             row(dt="2026-08-20T10:00:00Z", host="mmm.example"),
+             row(dt="2026-08-20T11:00:00Z", host="aaa.example")],
+            "z", set(), acc)
+        stamps = [int(line.rsplit(" ", 1)[1]) for line in cf.points(acc)]
+        self.assertEqual(stamps, sorted(stamps))
+        self.assertEqual(
+            stamps,
+            [int(hour(h).timestamp()) for h in (10, 11, 12)])
+
+    def test_ordering_beats_tag_ordering_across_zones(self):
+        # The specific regression: two zones over the same window. Sorted on
+        # the tag tuple, every point of zone `a` (including the newest hour)
+        # sorts ahead of every point of zone `b`, so a first batch that
+        # committed only zone `a` would carry the chunk's END timestamp while
+        # zone `b`'s earliest hours were never written.
+        acc = {}
+        cf.aggregate([row(dt="2026-08-20T10:00:00Z"),
+                      row(dt="2026-08-20T12:00:00Z")], "a", set(), acc)
+        cf.aggregate([row(dt="2026-08-20T11:00:00Z")], "b", set(), acc)
+        stamps = [int(line.rsplit(" ", 1)[1]) for line in cf.points(acc)]
+        self.assertEqual(stamps, sorted(stamps))
 
     def test_tags_are_escaped_in_output(self):
         acc = {}
