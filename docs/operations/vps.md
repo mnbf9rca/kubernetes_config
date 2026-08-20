@@ -70,29 +70,33 @@ kubectl --context cynexia-vps -n vps exec deployment/freshrss -c freshrss -- \
 ```
 
 With an `http://` value, Cloudflare answers each hub callback with a 301 to the HTTPS
-URL, so every verification depends on the hub choosing to follow a redirect. Google's
-FeedFetcher does. Relying on it is still wrong, which is why the value was corrected on
-August 20, 2026, but it was not causing an outage.
+URL. Verification survives that: hubs follow the redirect for the `GET`, and Google's
+FeedFetcher demonstrably did. Whether *delivery* survives it is a different question,
+because a hub is far less likely to replay a `POST` body across a redirect — and no push
+delivery has ever succeeded on this instance. The value was corrected on August 20, 2026;
+issue #29 tracks whether that was the cause.
 
-#### Do not use `"error"` as the health signal
+#### What `"error"` in `!hub.json` actually means
 
-`!hub.json` carries an `"error"` key, and it is a **one-way latch**. FreshRSS calls
-`pubSubHubbubError()` with `true` in exactly one place
-(`app/Controllers/feedController.php`) and never calls it with `false` anywhere. Nothing
-clears the flag. A feed that failed once shows `"error":true` forever, including after
-thousands of successful re-subscriptions.
+It is not a failure counter, and it is not a current-state signal. `p/api/pshb.php` sets
+it `true` when a subscription is verified, with the comment *"Do not assume that WebSub
+works until the first successful push"*, and clears it only after a delivery that updates
+at least one feed for at least one user. So:
 
-All twelve feeds on this instance latched on February 21, 2026 at 10:57 — the first nine
-lines of `log_pshb.txt`, the day the instance was built — when the hubs' verification
-challenges failed. Every one of them has been subscribed and healthy since, and every one
-still reads `"error":true`.
+> `"error": true` means **no push has ever been successfully processed for this feed**.
 
-The flag has one real consequence. `pubSubHubbubPrepare()` re-subscribes any feed whose
-state carries `error` and whose `lease_start` is over 23 hours old, so a latched feed
-re-subscribes daily and permanently: roughly 3,040 subscribe requests across twelve feeds
-in six months. It is wasteful rather than harmful.
+Two things follow. A quiet feed and a broken one look identical. And
+`FreshRSS_Feed::pubSubHubbubPrepare()` re-subscribes any feed whose state has `error` set
+and whose `lease_start` is over 23 hours old — so a feed that has never received a push
+re-subscribes **daily, permanently**, regardless of how far its lease is from expiring.
+That accounts for 3,040 subscribe requests across twelve feeds in six months here. See
+issue #29.
 
-**The signal that means push is working is `lease_end` in the future.** Check that:
+Grepping for `pubSubHubbubError()` is misleading: that method is only ever called with
+`true`, which makes the flag look like a one-way latch. The clearing path writes the
+array directly in `p/api/pshb.php` and does not go through the method.
+
+**Subscription health is `lease_end` in the future.** Check that:
 
 ```bash
 kubectl --context cynexia-vps -n vps exec deployment/freshrss -c freshrss -- \
