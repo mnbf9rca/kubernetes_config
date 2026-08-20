@@ -69,28 +69,56 @@ kubectl --context cynexia-vps -n vps exec deployment/freshrss -c freshrss -- \
   php /var/www/FreshRSS/cli/reconfigure.php --base-url=https://rss.cynexia.com
 ```
 
-An `http://` value kills push delivery without any visible symptom. Cloudflare answers
-the hub's delivery POST with a 301 to the HTTPS URL, and hubs treat a redirect as a
-failed delivery instead of following it. Feeds still arrive on the 15-minute polling
-cycle, so the reading experience degrades from real-time to polled and nothing reports
-an error. This was the state from installation until August 20, 2026.
+With an `http://` value, Cloudflare answers each hub callback with a 301 to the HTTPS
+URL, so every verification depends on the hub choosing to follow a redirect. Google's
+FeedFetcher does. Relying on it is still wrong, which is why the value was corrected on
+August 20, 2026, but it was not causing an outage.
 
-To check whether push works, read the per-feed subscription state:
+#### Do not use `"error"` as the health signal
+
+`!hub.json` carries an `"error"` key, and it is a **one-way latch**. FreshRSS calls
+`pubSubHubbubError()` with `true` in exactly one place
+(`app/Controllers/feedController.php`) and never calls it with `false` anywhere. Nothing
+clears the flag. A feed that failed once shows `"error":true` forever, including after
+thousands of successful re-subscriptions.
+
+All twelve feeds on this instance latched on February 21, 2026 at 10:57 — the first nine
+lines of `log_pshb.txt`, the day the instance was built — when the hubs' verification
+challenges failed. Every one of them has been subscribed and healthy since, and every one
+still reads `"error":true`.
+
+The flag has one real consequence. `pubSubHubbubPrepare()` re-subscribes any feed whose
+state carries `error` and whose `lease_start` is over 23 hours old, so a latched feed
+re-subscribes daily and permanently: roughly 3,040 subscribe requests across twelve feeds
+in six months. It is wasteful rather than harmful.
+
+**The signal that means push is working is `lease_end` in the future.** Check that:
 
 ```bash
 kubectl --context cynexia-vps -n vps exec deployment/freshrss -c freshrss -- \
-  sh -c 'grep -o "\"error\":[a-z]*" /var/www/FreshRSS/data/PubSubHubbub/feeds/*/\!hub.json'
+  sh -c 'for f in /var/www/FreshRSS/data/PubSubHubbub/feeds/*/\!hub.json; do cat "$f"; echo; done' \
+  | python3 -c 'import sys,json,time
+now=time.time()
+for l in sys.stdin:
+    if not l.strip(): continue
+    d=json.loads(l); le=d.get("lease_end")
+    print(("LIVE  %8.1fh"%((le-now)/3600)) if le and le>now else "NOT LIVE     ", d["hub"][:60])'
 ```
 
-`"error":true` on every feed means push is dead. Never print those files whole: each one
-holds that feed's callback secret.
+Never print those files whole: each one holds that feed's callback secret.
 
-FreshRSS re-subscribes during the next refresh of any feed whose state carries `error`
-and whose `lease_start` is more than 23 hours old. A corrected `base_url` therefore heals
-every subscribed feed within a refresh cycle, and the callback secrets rotate as a side
-effect. The callback path `/api/pshb.php` falls under the `freshrss api` Access bypass,
-so it stays publicly reachable, and under the zone rate limiting rule of 50 requests per
-10 seconds per IP, which is far above hub delivery volume.
+A second-order check is the outbound subscribe log, `data/users/_/log_pshb.txt`. Tally
+the trailing HTTP status with `awk '{print $NF}' … | sort | uniq -c`: 2xx is success. As
+of August 20, 2026 that log showed 2,959 successes against 69 transient 5xx over six
+months, and no redirects at all.
+
+Neither check proves end-to-end delivery, only subscription. Delivery is a `POST` to
+`/api/pshb.php` in the pod log, and it only appears when a subscribed feed actually
+publishes something.
+
+The callback path `/api/pshb.php` falls under the `freshrss api` Access bypass, so it
+stays publicly reachable, and under the zone rate limiting rule of 50 requests per 10
+seconds per IP, far above hub delivery volume.
 
 ### Browser backend for changedetection
 
