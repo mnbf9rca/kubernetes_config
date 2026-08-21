@@ -457,8 +457,10 @@ root — see the honesty-box rule in `AGENTS.md`.
 **Verified working 2026-08-22:** the Access Managed OAuth path — unauthenticated
 `GET /mcp` 401s at the edge with a `resource_metadata` pointer, the advertised
 discovery chain serves Access metadata with a `registration_endpoint`. The
-claude.ai connector reconnect through the one-time-PIN flow is pending (manual,
-interactive).
+claude.ai connector is reconnected through the one-time-PIN flow and verified
+2026-08-22: reads return data. Still open: Hermes fails dynamic client
+registration with a redirect URI that is not yet identified — a client-side
+issue, under investigation.
 
 **Tech debt / deferred:**
 
