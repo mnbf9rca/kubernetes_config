@@ -436,6 +436,21 @@ byte size, a path built from a literal glob, or a verdict from a fixed enum.
 Also never emitted: any ping UUID, anything from a Secret, the restic repository URL or B2
 bucket name, any personal health *value*, and pod or node names.
 
+**Reading a restic failure body.** `failed_step=` names the phase that set the exit code —
+`unlock|backup|forget|check` for restic's own failures, `gate` for the verification gate —
+and on homelab it is captured at the point the chain aborts, *before* the gate and
+`restic check` run, because both of those run unconditionally afterwards and would
+otherwise overwrite it. A restic failure is therefore never reported as a gate failure,
+even when the gate also fails.
+
+`prune=` has three states and they are not interchangeable. `ran` is the good one.
+`skipped` means the gate deferred retention on purpose — benign and self-describing; the
+repository grows in B2 until the gate goes green. `failed` means `forget --prune` started
+and died, which may have partially expired snapshots and wants looking at tonight.
+Reporting the third as the second is the reading that makes an operator not look, so the
+script distinguishes them. `restic_check=` reads the same way: `ok`, `failed`, or
+`not-reached` only when the run never got that far.
+
 **Named accepted residual.** `last_point` and `last_point_age` on the two ingest checks are
 emitted every 6h, and over the retained window they constitute a sync-and-absence timeline
 for an identified individual — when the operator last wore and synced a watch, and by
@@ -443,6 +458,23 @@ inference when they were away, asleep or not wearing a device. They are emitted 
 `last_point_age` *is* the finding the whole change exists to deliver, and coarsening it to
 a bucket would throw it away. The data subject is the operator, on the operator's own
 account, at a processor already chosen for this data.
+
+**Open item — the recipient list is not known.** That justification names *one* processor,
+and the transports above mean a failure body reaches more than one. When a check flips
+DOWN, upstream reads the body of the last ping regardless of its kind
+(`Transport.last_ping()` filters on time, not on kind), so the body attached to an ingest
+check's alert is the most recent 6-hourly `/log` body — the STALE one, carrying
+`last_point` and `last_point_age`. Which channels that reaches has **not** been
+established: the key in `op://Homelab/healthchecks.io/read-only-api-key` is read-only, and
+`GET /api/v3/channels/` (and `/api/v1/`) returns **401** with it, while a check object
+fetched with a read-only key omits its `channels` field entirely. There is no full-access
+key in the vault.
+
+Before `make apply-homelab` runs this change, read the account's Integrations page and
+record the configured channels here. If anything beyond email is configured, decide
+explicitly whether `last_point` and `last_point_age` may travel to it; the cheap mitigation
+is to withhold those two lines from the `/log` (stale) body only, where a flip can attach
+them to a notification, and keep them on the success ping where it cannot.
 
 **Bodies die with their ping-log entry.** `Check.prune()` removes the objects and then the
 ping rows, so retention is plan-dependent: 100 entries per check on Hobbyist, 1000 on

@@ -152,16 +152,20 @@ Full mechanics, target-by-target reference and failure modes:
   hung run silently blocks every later run), plus `startingDeadlineSeconds` where a missed
   window should be retried rather than dropped. New jobs should ping healthchecks.io on
   **start and exit code** — the two restic jobs, `cloudflare-analytics` and `influx-backup`
-  do; the two ingest checks deliberately ping on success only, so a failure shows up as
-  silence. Inventory and per-job semantics: `docs/operations/monitoring.md`.
+  do; the two ingest checks and `jottacloud backup` ping on success only, so a failure
+  shows up as silence. For the ingest checks that is deliberate and must not change;
+  jottacloud's ping comes from `backup.sh` inside a third-party image. Inventory and
+  per-job semantics: `docs/operations/monitoring.md`.
 - **A ping body is a disclosure channel.** Every ping carries a short `key=value` summary
   (`summary=` first, printable ASCII), and **never a command's output** — restic quotes the
   repository URL, the exec'd influx scripts carry the operator token on argv, and a failing
   `wget` quotes the ping URL, which is the check's write credential. Emit a count, an age, a
   size, a path built from a literal glob, or a verdict from a fixed enum.
   `make check-ping-bodies` enforces it and is the only thing that catches
-  `M=$(cmd); emit "error=$M"`. The body also travels with the alert email and every
-  configured integration. Policy and the accepted residuals:
+  `M=$(cmd); emit "error=$M"`. The body also travels with the alert: upstream's email,
+  webhook, Slack, Telegram, Matrix, GitHub and MS Teams transports all read it into the
+  notification, so a failure body reaches every channel this account has configured — a
+  list nobody has enumerated. Policy, the accepted residuals and that open item:
   `docs/operations/monitoring.md`.
 - **A new InfluxDB bucket in the `health` namespace means two edits, not one:** create it
   (a `make health-influx-*-bootstrap` target) **and** add it to the explicit bucket list in
