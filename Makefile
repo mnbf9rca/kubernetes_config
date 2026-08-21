@@ -104,7 +104,8 @@ help:
 	@echo "  check-placeholder-coverage - assert no .env.tpl \$${VAR} survives the render (both clusters)"
 	@echo "  check-job-ttl   - assert every standalone Job sets ttlSecondsAfterFinished (both clusters)"
 	@echo "  check-script-substitution - assert no configMapGenerator script names an envsubst var"
-	@echo "                    (both of the above also run per-cluster in the diff-*/apply-* preflight)"
+	@echo "  check-ping-bodies - assert no healthchecks.io ping body is built from a command's output"
+	@echo "                    (the three above also run per-cluster in the diff-*/apply-* preflight)"
 	@echo ""
 	@echo "VPS cluster targets:"
 	@echo "  check-vps-context - assert kubectl current-context matches VPS_CONTEXT ($(VPS_CONTEXT))"
@@ -208,6 +209,32 @@ check-script-substitution-homelab:
 
 check-script-substitution-vps:
 	@scripts/check-script-substitution.py vps
+
+# Third guard in the same family, and the one that keeps a ping BODY honest.
+#
+# A ping body leaves the estate: healthchecks.io is a third-party SaaS, the body
+# is stored in their object storage, and it is repeated on every run until
+# somebody fixes the script. So an `emit` call is a line in a public file.
+#
+# The rule it enforces (spec section 9.2) is: never build a body from a
+# command's output. restic error messages quote the repository URL; the two
+# scripts influx-backup.sh execs into the influxdb pod pass the InfluxDB
+# OPERATOR token on argv, so anything echoing argv would ship it nightly; a
+# failing wget quotes the ping URL, which IS the check's write credential.
+#
+# Reads source files only — no cluster, no 1Password, no kustomize. So it is on
+# BOTH halves of diff-*/apply-*, like check-script-substitution and unlike
+# check-job-ttl: a leak guard must fail closed however the target is entered.
+# Same build-* exclusion as the other two — build-*'s stdout IS the manifest.
+.PHONY: check-ping-bodies check-ping-bodies-homelab check-ping-bodies-vps
+check-ping-bodies:
+	@scripts/check-ping-bodies.py
+
+check-ping-bodies-homelab:
+	@scripts/check-ping-bodies.py homelab
+
+check-ping-bodies-vps:
+	@scripts/check-ping-bodies.py vps
 
 .PHONY: require-vars
 require-vars:
@@ -455,7 +482,7 @@ check-context:
 # THAT it changed, never WHAT it changed to. Use
 # `kubectl -n <ns> get secret <name> -o jsonpath=...` to confirm a value landed.
 .PHONY: diff-homelab
-diff-homelab: check-vars-consistency check-context check-script-substitution-homelab check-job-ttl-homelab
+diff-homelab: check-vars-consistency check-context check-script-substitution-homelab check-job-ttl-homelab check-ping-bodies-homelab
 	@$(OP_RUN) $(MAKE) --no-print-directory _diff-homelab-inner
 
 # The old `|| true` here swallowed EVERYTHING, including a kustomize failure.
@@ -467,7 +494,7 @@ diff-homelab: check-vars-consistency check-context check-script-substitution-hom
 # >1 = kubectl itself failed. Streaming is preserved — the rendered manifest is
 # never buffered into a shell variable.
 .PHONY: _diff-homelab-inner
-_diff-homelab-inner: check-context check-script-substitution-homelab _assert-vars
+_diff-homelab-inner: check-context check-script-substitution-homelab check-ping-bodies-homelab _assert-vars
 	@kustomize build homelab/ | envsubst '$(ENVSUBST_VARS)' | kubectl diff -f -; \
 	st=($${PIPESTATUS[@]}); \
 	if [ $${st[0]} -ne 0 ]; then echo "ERROR: kustomize build failed (exit $${st[0]}) — diff above is incomplete" >&2; exit 1; fi; \
@@ -476,7 +503,7 @@ _diff-homelab-inner: check-context check-script-substitution-homelab _assert-var
 	exit 0
 
 .PHONY: apply-homelab
-apply-homelab: check-vars-consistency check-context check-script-substitution-homelab check-job-ttl-homelab
+apply-homelab: check-vars-consistency check-context check-script-substitution-homelab check-job-ttl-homelab check-ping-bodies-homelab
 	@$(OP_RUN) $(MAKE) --no-print-directory _apply-homelab-inner
 
 # RENDER FULLY, VERIFY, THEN APPLY — never stream straight into kubectl.
@@ -495,7 +522,7 @@ apply-homelab: check-vars-consistency check-context check-script-substitution-ho
 # crash, a stray `set -x`, or the next person with read access to /tmp. The
 # variable is local to this recipe's shell, never exported.
 .PHONY: _apply-homelab-inner
-_apply-homelab-inner: check-context check-script-substitution-homelab _assert-vars
+_apply-homelab-inner: check-context check-script-substitution-homelab check-ping-bodies-homelab _assert-vars
 	@set -o pipefail; \
 	cluster=homelab; allowlist=ENVSUBST_VAR_NAMES; \
 	rendered=$$(kustomize build homelab/ | envsubst '$(ENVSUBST_VARS)') || { \
@@ -746,12 +773,12 @@ _build-vps-inner:
 # closed on a wrong context no matter how it is entered. See the GUARD
 # PLACEMENT note above diff-homelab.
 .PHONY: diff-vps
-diff-vps: check-vps-context check-vps-vars-consistency check-script-substitution-vps check-job-ttl-vps
+diff-vps: check-vps-context check-vps-vars-consistency check-script-substitution-vps check-job-ttl-vps check-ping-bodies-vps
 	@$(OP_RUN) $(MAKE) --no-print-directory _diff-vps-inner
 
 # See _diff-homelab-inner for why this is a PIPESTATUS check and not `|| true`.
 .PHONY: _diff-vps-inner
-_diff-vps-inner: check-vps-context check-script-substitution-vps _assert-vps-vars
+_diff-vps-inner: check-vps-context check-script-substitution-vps check-ping-bodies-vps _assert-vps-vars
 	@kustomize build vps/ | envsubst '$(VPS_ENVSUBST_VARS)' | kubectl diff -f -; \
 	st=($${PIPESTATUS[@]}); \
 	if [ $${st[0]} -ne 0 ]; then echo "ERROR: kustomize build failed (exit $${st[0]}) — diff above is incomplete" >&2; exit 1; fi; \
@@ -760,12 +787,12 @@ _diff-vps-inner: check-vps-context check-script-substitution-vps _assert-vps-var
 	exit 0
 
 .PHONY: apply-vps
-apply-vps: check-vps-context check-vps-vars-consistency check-script-substitution-vps check-job-ttl-vps
+apply-vps: check-vps-context check-vps-vars-consistency check-script-substitution-vps check-job-ttl-vps check-ping-bodies-vps
 	@$(OP_RUN) $(MAKE) --no-print-directory _apply-vps-inner
 
 # Same render-fully-then-apply shape as _apply-homelab-inner; see the note there.
 .PHONY: _apply-vps-inner
-_apply-vps-inner: check-vps-context check-script-substitution-vps _assert-vps-vars
+_apply-vps-inner: check-vps-context check-script-substitution-vps check-ping-bodies-vps _assert-vps-vars
 	@set -o pipefail; \
 	cluster=vps; allowlist=VPS_ENVSUBST_VAR_NAMES; \
 	rendered=$$(kustomize build vps/ | envsubst '$(VPS_ENVSUBST_VARS)') || { \
