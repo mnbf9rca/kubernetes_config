@@ -105,7 +105,8 @@ help:
 	@echo "  check-job-ttl   - assert every standalone Job sets ttlSecondsAfterFinished (both clusters)"
 	@echo "  check-script-substitution - assert no configMapGenerator script names an envsubst var"
 	@echo "  check-ping-bodies - assert no healthchecks.io ping body is built from a command's output"
-	@echo "                    (the three above also run per-cluster in the diff-*/apply-* preflight)"
+	@echo "  check-script-lint - shellcheck (-s sh) every script in the RENDER + compile/test the Python"
+	@echo "                    (the four above also run per-cluster in the diff-*/apply-* preflight)"
 	@echo ""
 	@echo "VPS cluster targets:"
 	@echo "  check-vps-context - assert kubectl current-context matches VPS_CONTEXT ($(VPS_CONTEXT))"
@@ -125,7 +126,7 @@ help:
 .PHONY: check-tools
 check-tools:
 	@ok=1; \
-	for tool in kubectl kustomize envsubst op direnv talosctl omnictl jq; do \
+	for tool in kubectl kustomize envsubst op direnv talosctl omnictl jq shellcheck; do \
 	  if ! command -v $$tool >/dev/null 2>&1; then \
 	    echo "MISSING: $$tool"; ok=0; \
 	  else \
@@ -235,6 +236,48 @@ check-ping-bodies-homelab:
 
 check-ping-bodies-vps:
 	@scripts/check-ping-bodies.py vps
+
+# ---------------------------------------------------------------------------
+# check-script-lint — shellcheck + Python syntax/tests over the RENDERED stream
+# ---------------------------------------------------------------------------
+# Fourth guard in the same family, and the third instance of the same defect
+# check-job-ttl and check-script-substitution were each created to fix: sixteen
+# shell and Python scripts run this repo's backups and ingest jobs, and until
+# this landed NOTHING the repo could run looked at any of them. No shellcheck
+# target, no ruff, no test runner, no CI workflow, no pre-commit hook. Every
+# shellcheck result that ever reached a review came from an agent typing the
+# command by hand.
+#
+# It lints the RENDER, not the source tree: homelab/backup/restic-cronjob.yaml
+# carries ~430 lines of shell inline in a block scalar, which a source-tree
+# lint walks straight past. Shell is checked as POSIX `sh`, never bash — these
+# run under busybox ash and dash, and `-s bash` would suppress SC3040 and the
+# rest of the SC3xxx portability family, which are the findings that matter.
+#
+# Same shape as the three checks above: per-cluster variants so a VPS-only render
+# fault cannot block an unrelated `apply-homelab`, the bare target sweeps both,
+# and the recipe is a one-line shell-out — no inline Python, no inline shell.
+# The Python phase is repo-wide whichever cluster is named; it needs no render
+# and no cluster, so scoping it would only leave repo tooling unguarded.
+#
+# Wired into the PUBLIC half of the diff-*/apply-* chains only, exactly like
+# check-job-ttl and for the same reason: it shells out to `kustomize build`, so
+# duplicating it onto the `_inner` targets would double the render cost of
+# every apply. Excluded from build-* like the others, because a prerequisite's
+# `OK:` line at the top of that target's stdout would corrupt the manifest.
+#
+# Requires shellcheck on PATH (`make check-tools` lists it) and treats its
+# absence as exit 2 — "could not run", never a silent pass.
+.PHONY: check-script-lint check-script-lint-homelab check-script-lint-vps
+check-script-lint:
+	@scripts/check-script-lint.py
+
+check-script-lint-homelab:
+	@scripts/check-script-lint.py homelab
+
+check-script-lint-vps:
+	@scripts/check-script-lint.py vps
+# --------------------------- end check-script-lint -------------------------
 
 .PHONY: require-vars
 require-vars:
@@ -448,6 +491,11 @@ check-context:
 # the next apply that changes it fails quietly, which `kubectl delete job`
 # undoes. No secret escapes. If it ever becomes cheap to run, put it here too.
 #
+# check-script-lint-<cluster> is on the PUBLIC half only for exactly the same
+# reason — it shells out to the same full `kustomize build` — and its failure
+# mode is likewise recoverable: a lint finding is a bug you have not shipped
+# yet, not a secret you have to rotate.
+#
 # WHAT IS AND IS NOT PROTECTED IN THE PRINTED DIFF
 #
 # `kubectl diff` output is safe to look at because KUBECTL REDACTS SECRET
@@ -482,7 +530,7 @@ check-context:
 # THAT it changed, never WHAT it changed to. Use
 # `kubectl -n <ns> get secret <name> -o jsonpath=...` to confirm a value landed.
 .PHONY: diff-homelab
-diff-homelab: check-vars-consistency check-context check-script-substitution-homelab check-job-ttl-homelab check-ping-bodies-homelab
+diff-homelab: check-vars-consistency check-context check-script-substitution-homelab check-job-ttl-homelab check-ping-bodies-homelab check-script-lint-homelab
 	@$(OP_RUN) $(MAKE) --no-print-directory _diff-homelab-inner
 
 # The old `|| true` here swallowed EVERYTHING, including a kustomize failure.
@@ -503,7 +551,7 @@ _diff-homelab-inner: check-context check-script-substitution-homelab check-ping-
 	exit 0
 
 .PHONY: apply-homelab
-apply-homelab: check-vars-consistency check-context check-script-substitution-homelab check-job-ttl-homelab check-ping-bodies-homelab
+apply-homelab: check-vars-consistency check-context check-script-substitution-homelab check-job-ttl-homelab check-ping-bodies-homelab check-script-lint-homelab
 	@$(OP_RUN) $(MAKE) --no-print-directory _apply-homelab-inner
 
 # RENDER FULLY, VERIFY, THEN APPLY — never stream straight into kubectl.
@@ -773,7 +821,7 @@ _build-vps-inner:
 # closed on a wrong context no matter how it is entered. See the GUARD
 # PLACEMENT note above diff-homelab.
 .PHONY: diff-vps
-diff-vps: check-vps-context check-vps-vars-consistency check-script-substitution-vps check-job-ttl-vps check-ping-bodies-vps
+diff-vps: check-vps-context check-vps-vars-consistency check-script-substitution-vps check-job-ttl-vps check-ping-bodies-vps check-script-lint-vps
 	@$(OP_RUN) $(MAKE) --no-print-directory _diff-vps-inner
 
 # See _diff-homelab-inner for why this is a PIPESTATUS check and not `|| true`.
@@ -787,7 +835,7 @@ _diff-vps-inner: check-vps-context check-script-substitution-vps check-ping-bodi
 	exit 0
 
 .PHONY: apply-vps
-apply-vps: check-vps-context check-vps-vars-consistency check-script-substitution-vps check-job-ttl-vps check-ping-bodies-vps
+apply-vps: check-vps-context check-vps-vars-consistency check-script-substitution-vps check-job-ttl-vps check-ping-bodies-vps check-script-lint-vps
 	@$(OP_RUN) $(MAKE) --no-print-directory _apply-vps-inner
 
 # Same render-fully-then-apply shape as _apply-homelab-inner; see the note there.
