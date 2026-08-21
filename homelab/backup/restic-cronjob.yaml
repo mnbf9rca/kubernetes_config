@@ -473,6 +473,8 @@ spec:
                     return $_frc
                   }
 
+                  hc_reset
+                  emit "summary=starting"
                   ping_hc start
                   rc=0
 
@@ -568,6 +570,54 @@ spec:
                   fi
 
                   echo "==> done (exit $rc)"
+
+                  # ---- ping body ----------------------------------------------------
+                  # Built AFTER the exit status is final and AFTER the promotion block
+                  # above, and never inside an && chain or an rc-determining pipeline:
+                  # this gate's `du` exits non-zero routinely (sqlite WAL files,
+                  # rotating logs) and that status is deliberately tolerated, so
+                  # weaving an emit into the chain would manufacture a nightly false
+                  # red on a healthy backup. Every value here is a number the gate had
+                  # already computed. NOTHING CAPTURED, EVER.
+                  #
+                  # "shape gate passed" is deliberate wording. This gate proves SHAPE
+                  # only: every homelab PVC is copied live with no quiesce step, and a
+                  # retained orphan directory from a recreated PVC can satisfy an
+                  # expected-set entry the live PVC no longer can. A bare "8/8
+                  # artifacts" would read as content verification and make the body
+                  # more confident than the check it reports on.
+                  TREE_GIB=$(awk -v k="$TREE_KIB" 'BEGIN{printf "%.2f", k/1048576}' 2>/dev/null) || TREE_GIB=unknown
+                  case "$TREE_GIB" in ''|*[!0-9.]*) TREE_GIB=unknown ;; esac
+                  # check-ping-bodies: untaint TREE_GIB - awk formatting of TREE_KIB, gated to digits and dots by the case above
+                  if [ "$rc" -eq 0 ]; then
+                    emit "summary=ok - shape gate passed: $ART_OK/$ART_TOT artifacts, $FRESH_OK/$FRESH_TOT dumps fresh, $TREE_DIRS PVC dirs, $TREE_GIB GiB"
+                  elif [ "$MOUNT_OK" = no ]; then
+                    emit "summary=FAILED rc=$rc - SSD not mounted; /data is the bare mountpoint"
+                    emit "failed_step=gate"
+                  elif [ "$gate_rc" -ne 0 ] && [ "$STEP" != backup ] && [ "$STEP" != unlock ] && [ "$STEP" != snapshots ]; then
+                    emit "summary=FAILED rc=$rc - shape gate failed"
+                    emit "failed_step=gate"
+                  else
+                    # restic's own failure - the commonest real failure of this job (a
+                    # B2 outage, a credential rotation, a lock conflict, a corrupt
+                    # pack). NOTHING CAPTURED: restic error messages quote the
+                    # repository URL.
+                    emit "summary=FAILED rc=$rc - restic exited non-zero"
+                    emit "failed_step=$STEP"
+                    emit "error=restic exited non-zero; see pod log"
+                  fi
+                  emit "mount_ok=$MOUNT_OK"
+                  emit "pvc_dirs=$TREE_DIRS"
+                  emit "tree_kib=$TREE_KIB"
+                  emit "artifacts=$ART_OK/$ART_TOT"
+                  emit "dumps_fresh=$FRESH_OK/$FRESH_TOT"
+                  # The highest-value single field in this body: this job defers
+                  # `forget --prune` whenever the gate fails, and the repository then
+                  # grows in B2 until somebody looks. This field is somebody looking.
+                  emit "prune=$PRUNE"
+                  emit "restic_check=$RESTIC_CHECK"
+                  flush_errors
+
                   ping_hc "$rc"
                   exit $rc
               env:
