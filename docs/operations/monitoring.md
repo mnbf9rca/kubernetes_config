@@ -380,7 +380,7 @@ roughly 30 hours later:
 | Pod killed / never scheduled | Red at `last_ping + 1d + 6h` | Red at `last_start + 6h` |
 | Success | Green | Green, with a measured duration |
 
-The accepted cost is that a transient failure — an influxdb pod mid-restart when
+The accepted cost is that a transient failure — an InfluxDB pod mid-restart when
 `kubectl exec` lands, an API-server blip — that used to self-heal into silence now pages
 immediately. Thirty hours of silence on a hard failure is the larger defect.
 
