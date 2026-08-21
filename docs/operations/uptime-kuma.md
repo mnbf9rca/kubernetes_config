@@ -100,7 +100,19 @@ pod. The accepted set is pinned to exactly `["401"]` on purpose and must never
 be widened: an outage (timeout, 5xx, `1033`) falls outside it, and so does a
 2xx/404 from a naked origin — which is what a deleted or disabled Access app
 looks like, because that gate fails OPEN
-([homelab-health.md](homelab-health.md#mcp-behind-cloudflare-access)). Accepted
+([homelab-health.md](homelab-health.md#mcp-behind-cloudflare-access)).
+
+**The monitor must send `{"Accept": "application/json"}` in its Headers field.**
+Access decides browser-vs-client on the `Accept` header: uptime-kuma's default
+is browser-like (`text/html,…`), so Access classifies the probe as a browser
+and answers `302` to the login page instead of the non-browser `401` —
+verified 2026-08-22 with two curls differing only in that header. Without the
+custom header the monitor sits down forever on a perfectly healthy edge. Do
+not "fix" that by accepting `302` — keep the pinned `["401"]` and fix the
+header instead, so the accepted set keeps meaning "Access challenged a
+non-browser client".
+
+Accepted
 residual: the mcp tunnel route and the influxdb-mcp HTTP handler have no
 external monitor; a wedged handler surfaces only when a client fails. An Access
 service token + Service Auth policy (the standing tech-debt item) is the path
