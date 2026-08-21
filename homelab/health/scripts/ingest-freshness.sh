@@ -55,8 +55,13 @@ LOOKBACK=30d            # how far back the STALE body looks for the last point
 # URL is built conditionally. `true >`, not `: >`: a redirection error on a
 # POSIX special built-in aborts the shell even behind `|| true`.
 HC_BODY=/tmp/hc-body
-hc_reset() { true > "$HC_BODY" 2>/dev/null || true; }
-emit() { { printf '%s' "$*" | LC_ALL=C tr -cd '\040-\176'; printf '\n'; } >> "$HC_BODY" 2>/dev/null || true; }
+# The stderr redirection PRECEDES the body redirection in both. Redirections
+# are applied left to right, so `>> "$HC_BODY" 2>/dev/null` cannot suppress the
+# shell's own "cannot create" diagnostic - only this order can (verified in dash
+# and busybox 1.36.1). Property 4 above is what keeps the job alive on that day;
+# this is what keeps its log readable.
+hc_reset() { true 2>/dev/null > "$HC_BODY" || true; }
+emit() { { printf '%s' "$*" | LC_ALL=C tr -cd '\040-\176'; printf '\n'; } 2>/dev/null >> "$HC_BODY" || true; }
 
 # hc_ping UUID [SUFFIX] - SUFFIX is "" | log. Always returns 0.
 hc_ping() {
@@ -174,10 +179,21 @@ newest_time() {  # $1 bucket, $2 lookback → newest ISO-8601 _time, or nothing
 
 epoch_of() {  # $1 ISO-8601 Z → epoch seconds, or nothing
   [ -n "${1:-}" ] || return 0
+  # TRUNCATE THE FRACTION FIRST. InfluxDB formats _time as RFC3339Nano and drops
+  # the fractional part only when it is exactly zero, so a point written with
+  # sub-second precision arrives as 2026-08-21T05:03:00.123456789Z - and NEITHER
+  # form below parses that (verified in curlimages/curl:8.14.1: the GNU form and
+  # the busybox -D form both return "invalid date", because -D's strptime wants a
+  # literal Z immediately after %S). Without this the body silently loses
+  # last_point_age and degrades to "has a point inside 24h", which is the one bit
+  # this whole change exists to replace. Truncating to whole seconds is lossless
+  # for an age rendered as NdNhNm; last_point= still carries the raw timestamp.
+  _es=${1%%.*}
+  case "$_es" in *Z) ;; *) _es="${_es}Z" ;; esac
   # GNU date first, busybox's -D form second. If neither parses it, the body
   # simply omits last_point_age; that is a designed degradation.
-  _ep=$(date -u -d "$1" +%s 2>/dev/null) \
-    || _ep=$(date -u -D '%Y-%m-%dT%H:%M:%SZ' -d "$1" +%s 2>/dev/null) \
+  _ep=$(date -u -d "$_es" +%s 2>/dev/null) \
+    || _ep=$(date -u -D '%Y-%m-%dT%H:%M:%SZ' -d "$_es" +%s 2>/dev/null) \
     || return 0
   case "$_ep" in ''|*[!0-9]*) return 0 ;; esac
   printf '%s' "$_ep"

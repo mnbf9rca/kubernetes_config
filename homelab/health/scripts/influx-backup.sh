@@ -53,8 +53,13 @@ set -o pipefail
 # `true >`, not `: >`: a redirection error on a POSIX special built-in aborts
 # the shell even behind `|| true`.
 HC_BODY=/tmp/hc-body
-hc_reset() { true > "$HC_BODY" 2>/dev/null || true; }
-emit() { { printf '%s' "$*" | LC_ALL=C tr -cd '\040-\176'; printf '\n'; } >> "$HC_BODY" 2>/dev/null || true; }
+# The stderr redirection PRECEDES the body redirection in both. Redirections
+# are applied left to right, so `>> "$HC_BODY" 2>/dev/null` cannot suppress the
+# shell's own "cannot create" diagnostic - only this order can (verified in dash
+# and busybox 1.36.1). Property 4 above is what keeps the job alive on that day;
+# this is what keeps its log readable.
+hc_reset() { true 2>/dev/null > "$HC_BODY" || true; }
+emit() { { printf '%s' "$*" | LC_ALL=C tr -cd '\040-\176'; printf '\n'; } 2>/dev/null >> "$HC_BODY" || true; }
 
 # ping_hc [SUFFIX] - "" | start | <exit-status>. Always returns 0.
 ping_hc() {
