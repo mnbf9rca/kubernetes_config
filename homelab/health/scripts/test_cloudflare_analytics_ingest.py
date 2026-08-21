@@ -27,6 +27,7 @@ No network, no cluster, no InfluxDB: every Cloudflare call is stubbed by
 replacing the module's `http_post`.
 """
 import importlib.util
+import io
 import json
 import os
 import unittest
@@ -471,6 +472,128 @@ class Tunables(unittest.TestCase):
         # it, a run would query windows Cloudflare has already dropped.
         self.assertLessEqual(cf.MAX_CHUNKS * cf.CHUNK_HOURS,
                              cf.RETENTION_HOURS)
+
+
+class Pinger(unittest.TestCase):
+    """A ping must never fail the job, and a body must never cost a ping.
+
+    These two are the whole reason the pinger is not three lines. The exit-code
+    ping is the difference between "the job failed" and "the job never ran", so
+    anything that can stop it reaching hc-ping.com is a monitoring outage.
+    """
+
+    def setUp(self):
+        self.calls = []
+        self._real = cf.urllib.request.urlopen
+        cf.urllib.request.urlopen = self._fake
+        self.logged = []
+        self._real_log = cf.log
+        cf.log = self.logged.append
+
+    def tearDown(self):
+        cf.urllib.request.urlopen = self._real
+        cf.log = self._real_log
+
+    def _fake(self, url, data=None, timeout=None):
+        self.calls.append((url, data))
+        if data is not None and self.fail_bodied:
+            # Built and registered for cleanup before it is raised: an
+            # HTTPError is file-like, and an unclosed one emits a
+            # ResourceWarning at teardown, which `-W error::ResourceWarning`
+            # is there to catch for real faults rather than for this stub.
+            err = cf.urllib.error.HTTPError(
+                url, 400, "Bad Request", {}, io.BytesIO(b""))
+            self.addCleanup(err.close)
+            raise err
+
+        class _R:
+            def close(self_inner):
+                pass
+        return _R()
+
+    def test_body_post_failure_falls_back_to_a_bodiless_ping(self):
+        # A failed body POST must not cost the ping. It retries the SAME url
+        # with no body; the check still records an event.
+        self.fail_bodied = True
+        cf.make_pinger("uu")("0", "summary=ok\n")
+        self.assertEqual([c[0] for c in self.calls],
+                         ["https://hc-ping.com/uu/0"] * 2)
+        self.assertIsNotNone(self.calls[0][1])
+        self.assertIsNone(self.calls[1][1])
+
+    def test_ping_failure_is_swallowed_entirely(self):
+        self.fail_bodied = True
+
+        def boom(url, data=None, timeout=None):
+            raise OSError("no route to host")
+        cf.urllib.request.urlopen = boom
+        cf.make_pinger("uu")("1", "summary=x\n")     # must not raise
+
+    def test_unencodable_body_still_pings(self):
+        # The encode is inside the try. Evaluated outside it, this would
+        # propagate past sys.exit(rc) and the exit-code ping would be lost.
+        self.fail_bodied = False
+
+        class Unencodable:
+            def encode(self, *a, **k):
+                raise UnicodeEncodeError("ascii", "x", 0, 1, "boom")
+        cf.make_pinger("uu")("0", Unencodable())
+        self.assertEqual(len(self.calls), 1)
+        self.assertIsNone(self.calls[0][1])
+
+    def test_ping_failure_log_names_the_class_not_the_repr(self):
+        # repr(exc) is banned: the exception in hand may be a QueryFailed whose
+        # message carries a zone tag from CF_ZONE_TAGS or a raw response body.
+        self.fail_bodied = False
+
+        def boom(url, data=None, timeout=None):
+            raise cf.QueryFailed("zone tag abc123 said: <secret payload>")
+        cf.urllib.request.urlopen = boom
+        cf.make_pinger("uu")("1")
+        self.assertTrue(self.logged, "the failure should be logged")
+        for line in self.logged:
+            self.assertNotIn("abc123", line)
+            self.assertNotIn("secret payload", line)
+            self.assertIn("QueryFailed", line)
+
+    def test_empty_uuid_pings_nothing(self):
+        self.fail_bodied = False
+        cf.make_pinger("")("0", "summary=x\n")
+        self.assertEqual(self.calls, [])
+
+
+class PingBody(unittest.TestCase):
+    """Format rules from spec section 5, enforced rather than trusted."""
+
+    def setUp(self):
+        cf.SUMMARY[0] = "summary=FAILED - see pod log"
+        del cf.BODY_LINES[:]
+
+    tearDown = setUp
+
+    def test_summary_is_always_line_one(self):
+        cf.hc_emit("chunks=3/8")
+        cf.hc_summary("ok - 3 chunks")
+        body = cf.hc_body()
+        self.assertEqual(body.splitlines()[0], "summary=ok - 3 chunks")
+        self.assertIn("chunks=3/8", body.splitlines())
+
+    def test_every_line_is_a_key_value_pair_in_printable_ascii(self):
+        cf.hc_summary("ok \u2014 em dash and caf\u00e9")
+        cf.hc_emit("lag=37m")
+        cf.hc_emit("note=a\nb")
+        body = cf.hc_body()
+        self.assertTrue(body.endswith("\n"))
+        for line in body.splitlines():
+            self.assertRegex(line, r"^[a-z0-9_]+=")
+            self.assertTrue(all(" " <= ch <= "~" for ch in line), line)
+        # The newline inside a value was stripped, not allowed to forge a
+        # keyless record: three emits in, three lines out.
+        self.assertEqual(len(body.splitlines()), 3)
+
+    def test_default_summary_is_a_failure_not_a_success(self):
+        # If nothing ever calls hc_summary, the body must not claim success.
+        self.assertTrue(cf.hc_body().startswith("summary=FAILED"))
 
 
 if __name__ == "__main__":

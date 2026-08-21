@@ -40,6 +40,7 @@ half-kept.
 
 import json
 import os
+import re
 import sys
 import time
 import urllib.error
@@ -120,6 +121,50 @@ class QueryFailed(Exception):
 
 def log(msg):
     print(msg, flush=True)
+
+
+# --- healthchecks.io ping body ----------------------------------------------
+# A short key=value summary of what this run observed, POSTed with the
+# exit-code ping so the Events log answers "what did it see?" without a pod log
+# that may have aged out. Same format as the four shell emitters; one format
+# across the estate is worth more than one job's convenience.
+#
+# NEVER PUT A QueryFailed MESSAGE, A RESPONSE BODY OR repr(exc) IN HERE.
+# QueryFailed is raised at ten sites below and those messages splice in
+# `zone_tag` - which comes from CF_ZONE_TAGS, a secretKeyRef whose own manifest
+# comment says a zone ID identifies the account - plus up to 800 bytes of raw
+# Cloudflare and InfluxDB response (`text[:500]`, `json.dumps(errors)[:800]`).
+# `make check-ping-bodies` checks every hc_emit/hc_summary argument against an
+# explicit value allowlist.
+#
+# The plumbing is a module-level accumulator that main() appends to and the
+# __main__ block joins, because ping(str(rc)) is called at module scope while
+# every emittable value lives in main()'s locals - and main() must keep
+# returning an int, which the test suite asserts on. Do not refactor main() to
+# return a tuple.
+#
+# SUMMARY is a one-element list rather than a `global` so that line 1 of the
+# body is always `summary=`, whatever order things were emitted in.
+_UNPRINTABLE = re.compile(r"[^\040-\176]")
+SUMMARY = ["summary=FAILED - see pod log"]
+BODY_LINES = []
+
+
+def _clean(text):
+    """One line, printable ASCII. Mirrors the shell emitters' `tr -cd`."""
+    return _UNPRINTABLE.sub("", str(text))
+
+
+def hc_summary(text):
+    SUMMARY[0] = "summary=" + _clean(text)
+
+
+def hc_emit(key_value):
+    BODY_LINES.append(_clean(key_value))
+
+
+def hc_body():
+    return "\n".join(SUMMARY + BODY_LINES) + "\n"
 
 
 def env(name, default=None):
@@ -467,15 +512,36 @@ def influx_watermark(cfg):
 # --- healthchecks.io --------------------------------------------------------
 
 def make_pinger(uuid):
-    """Dead-man's-switch pinger. A ping must never be able to fail the job."""
-    def ping(suffix):
+    """Dead-man's-switch pinger. A ping must never be able to fail the job,
+    and a body must never cost a ping."""
+    def ping(suffix, body=None):
         if not uuid:
             return
+        # This pinger is only ever called with "start" or str(rc), never with
+        # an empty suffix, so it cannot build the trailing-slash URL that
+        # hc-ping.com answers with HTTP 400. Keep it that way.
+        url = "https://hc-ping.com/%s/%s" % (uuid, suffix)
+        if body:
+            try:
+                # THE ENCODE IS INSIDE THE TRY. Evaluated on the line before
+                # urlopen, a UnicodeEncodeError would propagate out of ping()
+                # past sys.exit(rc) and the exit-code ping would never be sent
+                # - a body costing a ping, in the one emitter with an exception
+                # mechanism to do it with.
+                data = body.encode("ascii", "replace")
+                urllib.request.urlopen(url, data=data, timeout=10).close()
+                return
+            except Exception as exc:               # noqa: BLE001 - best effort
+                # THE CLASS NAME ONLY, never repr(exc). The exception in hand
+                # may be a QueryFailed whose message carries a zone tag or a
+                # response body.
+                log("healthchecks.io body POST %r failed (ignored): %s"
+                    % (suffix, type(exc).__name__))
         try:
-            urllib.request.urlopen(
-                "https://hc-ping.com/%s/%s" % (uuid, suffix), timeout=10).close()
+            urllib.request.urlopen(url, timeout=10).close()
         except Exception as exc:                   # noqa: BLE001 - best effort
-            log("healthchecks.io ping %r failed (ignored): %r" % (suffix, exc))
+            log("healthchecks.io ping %r failed (ignored): %s"
+                % (suffix, type(exc).__name__))
     return ping
 
 
@@ -538,6 +604,9 @@ def main():
     committed_through = None
     failure = None
     cursor = start
+    rows_total = 0
+    series_total = 0
+    gap_marker = "not-needed"
 
     while cursor < now and chunks_done < MAX_CHUNKS:
         chunk_end = min(cursor + timedelta(hours=CHUNK_HOURS), now)
@@ -552,6 +621,7 @@ def main():
             for zone_name, zone_tag in zones:
                 rows = cf_fetch(
                     cf_token, zone_tag, cursor, chunk_end, warnings, budget)
+                rows_total += len(rows)
                 log("  %s: %d rows" % (zone_name, len(rows)))
                 aggregate(rows, zone_name, full_path_hosts, acc)
         except QueryFailed as exc:
@@ -575,6 +645,7 @@ def main():
             log("  WRITE FAILED: %s" % exc)
             break
 
+        series_total += len(acc)
         log("  wrote %d series (%d line-protocol lines)" % (len(acc), len(lines)))
         committed_through = chunk_end
         cursor = chunk_end
@@ -591,8 +662,10 @@ def main():
                 % (missing_hours, int(g_end.timestamp()),
                    int(g_start.timestamp()))
             ])
+            gap_marker = "written"
             log("wrote ingest_gap marker at %s" % iso(g_start))
         except QueryFailed as exc:
+            gap_marker = "failed"
             log("could not write the ingest_gap marker: %s" % exc)
 
     for warning in warnings:
@@ -608,32 +681,90 @@ def main():
             "run continues from the new watermark"
             % (iso(cursor), iso(now)))
 
+    # --- ping body ----------------------------------------------------------
+    # Counts, timestamps and classified verdicts only. Nothing derived from a
+    # QueryFailed message, a response body or an exception's repr - see the
+    # comment above hc_emit.
+    if watermark is not None:
+        hc_emit("watermark=%s" % iso(watermark))
+        hc_emit("rewound_to=%s" % iso(start))
+    hc_emit("chunks=%d/%d" % (chunks_done, MAX_CHUNKS))
+    hc_emit("rows=%d" % rows_total)
+    hc_emit("series=%d" % series_total)
+    if committed_through:
+        lag_minutes = int((now - committed_through).total_seconds() // 60)
+        hc_emit("committed_through=%s" % iso(committed_through))
+        hc_emit("lag=%dm" % lag_minutes)
+
     if failure:
         log("RUN FAILED: %s" % failure)
+        hc_summary("FAILED - query or write failed; see pod log")
+        hc_emit("failure=queryfailed")
+        hc_emit("detail=see pod log")
         return 1
     if gap:
+        g_start, g_end, missing_hours = gap
+        # The summary names the FAULT (the job had not ingested for over a
+        # week) rather than only the symptom (which hours were lost), and
+        # cause=unknown stops the body reading as a complete account. This
+        # branch can only fire after the check has been red for eight days with
+        # nobody acting, and it fires ONCE, so the body is the only record.
+        # Ceiling, not floor: RETENTION_HOURS is `8 * 24 - 1`, an hour of
+        # margin under Cloudflare's stated 8 days, and `// 24` would round that
+        # to "7-day" - understating the window everything else in this repo
+        # calls eight days.
+        hc_summary("GAP - job had not ingested since %s; %dh now past "
+                   "Cloudflare's %d-day retention"
+                   % (iso(g_start), missing_hours, (RETENTION_HOURS + 23) // 24))
+        hc_emit("gap_start=%s" % iso(g_start))
+        hc_emit("gap_end=%s" % iso(g_end))
+        hc_emit("gap_hours=%d" % missing_hours)
+        hc_emit("gap_marker=%s" % gap_marker)
+        hc_emit("cause=unknown - see pod log")
         return 1
     if warnings:
         log("RUN INCOMPLETE: %d truncated window(s)" % len(warnings))
+        hc_summary("INCOMPLETE - %d truncated window(s)" % len(warnings))
+        hc_emit("truncated_windows=%d" % len(warnings))
+        hc_emit("detail=see pod log")
         return 1
+    if committed_through:
+        hc_summary("ok - %d chunks, %d series, committed through %s"
+                   % (chunks_done, series_total, iso(committed_through)))
+    else:
+        hc_summary("ok - nothing new to ingest")
     return 0
 
 
 if __name__ == "__main__":
     ping = make_pinger(os.environ.get("HC_UUID", ""))
-    ping("start")
+    ping("start", "summary=starting\n")
     try:
         rc = main()
     except SystemExit as exc:
         rc = exc.code if isinstance(exc.code, int) else 1
         log("FATAL: exiting %d" % rc)
+        hc_summary("FAILED - startup check failed; see pod log")
+        hc_emit("failure=fatal")
+        hc_emit("detail=see pod log")
     except QueryFailed as exc:
         log("FATAL: %s" % exc)
         rc = 1
+        hc_summary("FAILED - query failed; see pod log")
+        hc_emit("failure=queryfailed")
+        hc_emit("detail=see pod log")
     except Exception as exc:                       # noqa: BLE001 - report, then red
         import traceback
         traceback.print_exc()
-        log("FATAL: unhandled %r" % exc)
+        # THE CLASS NAME ONLY. repr(exc) is banned not because urllib
+        # exceptions carry the URL (they do not - `<HTTPError 400: 'Bad
+        # Request'>`), but because the exception in hand may be a QueryFailed
+        # whose message carries a zone tag or a response body.
+        log("FATAL: unhandled %s" % type(exc).__name__)
+        hc_summary("FAILED - unhandled exception; see pod log")
+        hc_emit("failure=unhandled")
+        hc_emit("exception=%s" % type(exc).__name__)
+        hc_emit("detail=see pod log")
         rc = 1
-    ping(str(rc))
+    ping(str(rc), hc_body())
     sys.exit(rc)
