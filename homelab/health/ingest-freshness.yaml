@@ -12,7 +12,11 @@ spec:
   jobTemplate:
     spec:
       backoffLimit: 1
-      activeDeadlineSeconds: 300  # bounds a hung curl; this job is two queries and two pings
+      # Bounds a hung curl. Worst case per run: 2 freshness queries at -m 30, 2
+      # last-point queries at -m 10, and up to 4 ping attempts at -m 15 (a body
+      # POST plus a bodiless fallback, per check) = ~140s. 300 leaves headroom
+      # without letting a wedged run block the next window.
+      activeDeadlineSeconds: 300
       ttlSecondsAfterFinished: 86400
       template:
         spec:
