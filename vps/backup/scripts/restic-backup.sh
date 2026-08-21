@@ -218,6 +218,8 @@ assert_fresh() {
 # caller's verdict, which pinged green over printed errors.
 check_freshrss() {
   _frc=0
+  FRS_OK=0
+  FRS_TOT=0
   _flive=$(newest_match "$FRESHRSS_DB_GLOB"); _fs=$?
   if [ "$_fs" -eq 1 ]; then
     echo "note: no freshrss user DBs yet - nothing to verify"
@@ -233,11 +235,14 @@ check_freshrss() {
   for _fdb in "$_fdir"/users/*/db.sqlite; do
     [ -f "$_fdb" ] || continue
     _fsnap="$_fdb.restic"
+    FRS_TOT=$(( FRS_TOT + 1 ))
     if [ ! -f "$_fsnap" ]; then
       say_err "freshrss user DB has NO snapshot: $_fsnap"
       _frc=1
+    elif assert_fresh "$_fsnap" "freshrss snapshot"; then
+      FRS_OK=$(( FRS_OK + 1 ))
     else
-      assert_fresh "$_fsnap" "freshrss snapshot" || _frc=1
+      _frc=1
     fi
   done
   return $_frc
@@ -245,19 +250,33 @@ check_freshrss() {
 
 check_expected() {
   _rc=0
+  # EXP_OK/EXP_TOT feed `expected=` in the ping body. freshrss counts as one
+  # entry of the expected set, and its per-user detail is FRS_OK/FRS_TOT.
+  EXP_OK=0
+  EXP_TOT=0
   set -f                      # split the list without glob-expanding it
   for _e in $EXPECTED_SNAPSHOTS; do
+    EXP_TOT=$(( EXP_TOT + 1 ))
     _label=${_e%%:*}
     _glob=${_e#*:}
     _path=$(newest_match "$_glob"); _s=$?
     case "$_s" in
-      0) assert_fresh "$_path" "$_label snapshot" || _rc=1 ;;
+      0) if assert_fresh "$_path" "$_label snapshot"; then
+           EXP_OK=$(( EXP_OK + 1 ))
+         else
+           _rc=1
+         fi ;;
       1) say_err "$_label snapshot MISSING - nothing matches $_glob"; _rc=1 ;;
       *) say_err "$_label snapshot UNREADABLE - could not stat a match of $_glob"; _rc=1 ;;
     esac
   done
   set +f
-  check_freshrss || _rc=1
+  EXP_TOT=$(( EXP_TOT + 1 ))
+  if check_freshrss; then
+    EXP_OK=$(( EXP_OK + 1 ))
+  else
+    _rc=1
+  fi
   return $_rc
 }
 
@@ -272,15 +291,27 @@ sweep_advisory() {
   # where they are read, rather than into a variable that is parsed.
   _sout=$(find /data -name '*.restic' -mmin +"$STALE_MINUTES" -print); _ss=$?
   if [ "$_ss" -ne 0 ]; then
+    ADV_STALE=unknown
     say_err "advisory sweep could not complete - find exited $_ss (diagnostics on stderr, above)"
     return 1
   fi
-  [ -n "$_sout" ] || return 0
+  [ -n "$_sout" ] || { ADV_STALE=0; return 0; }
+  # A COUNT, never the list. The paths go to the pod log below; only how many
+  # there were reaches the ping body, and only after a digits-only gate.
+  ADV_STALE=$(printf '%s\n' "$_sout" | grep -c .)
+  case "$ADV_STALE" in ''|*[!0-9]*) ADV_STALE=unknown ;; esac
+  # check-ping-bodies: untaint ADV_STALE - gated to digits by the case above; it is a count, never find's output
   echo "WARNING (advisory, does not fail the job) stale *.restic files:"
   echo "$_sout"
   return 0
 }
 
+# Initialised before the run so `set -u` cannot bite in the body block below
+# if the chain aborts before a gate function ever ran.
+EXP_OK=0; EXP_TOT=0; FRS_OK=0; FRS_TOT=0; ADV_STALE=unknown; RESTIC_CHECK=not-reached
+
+hc_reset
+emit "summary=starting"
 ping_hc start
 rc=0
 # Explicit && chaining rather than `set -e` inside a group:
@@ -335,6 +366,31 @@ sweep_advisory || gate_rc=1
 # Only promote to failure if the backup itself succeeded - a
 # real restic failure keeps its own, more specific exit code.
 [ "$rc" -ne 0 ] || rc=$gate_rc
+
+# ---- ping body ----------------------------------------------------
+# Built AFTER the exit status is final, and never inside an && chain
+# or an rc-determining pipeline. Every value is a count this gate had
+# already computed; nothing is captured from a command. Spec 9.2.
+[ "$STEP" != finished ] || RESTIC_CHECK=ok
+if [ "$rc" -eq 0 ]; then
+  emit "summary=ok - $EXP_OK/$EXP_TOT expected snapshots fresh, $FRS_OK/$FRS_TOT freshrss users, $ADV_STALE advisory"
+elif [ "$STEP" = finished ]; then
+  emit "summary=FAILED rc=$rc - backup verification gate failed"
+  emit "failed_step=gate"
+else
+  # restic's own failure: a B2 outage, a credential rotation, a lock
+  # conflict, a corrupt pack. NOTHING CAPTURED, EVER - not restic's
+  # stdout, not its stderr, not a slice of either. Its messages quote
+  # the repository URL.
+  emit "summary=FAILED rc=$rc - restic exited non-zero"
+  emit "failed_step=$STEP"
+  emit "error=restic exited non-zero; see pod log"
+fi
+emit "expected=$EXP_OK/$EXP_TOT"
+emit "freshrss_users=$FRS_OK/$FRS_TOT"
+emit "advisory_stale=$ADV_STALE"
+emit "restic_check=$RESTIC_CHECK"
+flush_errors
 
 ping_hc "$rc"
 exit $rc
