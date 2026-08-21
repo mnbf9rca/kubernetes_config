@@ -1,0 +1,93 @@
+---
+# InfluxDB MCP server for mcp.cynexia.com, fronted by CLOUDFLARE ACCESS (Managed
+# OAuth) — NOT by an in-cluster proxy. Pomerium was removed 2026-08-22: its MCP
+# session expiry forced daily re-auth and its disabled dynamic client registration
+# locked out non-allowlisted MCP clients. Auth now happens at the Cloudflare edge:
+# Access app "influxdb-mcp" on mcp.cynexia.com (email policy + one-time-PIN IdP,
+# Managed OAuth with DCR). See docs/operations/homelab-health.md
+# ("MCP behind Cloudflare Access").
+#
+# THE AUTH BOUNDARY IS THE CLOUDFLARE EDGE. This origin is AUTHLESS in HTTP mode
+# and does not validate the Cf-Access-Jwt-Assertion header Access injects
+# (Cloudflare's docs say the MCP server "must" validate it; ours cannot — accepted,
+# because Pomerium likewise fronted this same authless origin, which ignored
+# Pomerium's injected identity too). From the internet the only path here is the
+# cynexia-health cloudflared tunnel, and the hostname is gated by Access. Edge
+# enforcement was the real boundary in the old design as well.
+#
+# RESIDUAL RISK — THE GATE IS UNVERSIONED EXTERNAL STATE AND FAILS OPEN. This is
+# the one way the new design is weaker than the old one. The old gate (Pomerium's
+# policy) was committed to this repo, applied by `make apply-homelab`, and failed
+# CLOSED: delete Pomerium and the hostname 502s. Now the only gate on a public
+# hostname fronting an authless origin holding a live InfluxDB read token
+# (personal health data) is the Access app — dashboard/API state tracked nowhere
+# in this repo — and it fails OPEN: delete or disable the app (or its policy) and
+# cloudflared serves this origin raw to the internet, silently. `git revert` +
+# `apply-homelab` can restore everything about the old design EXCEPT this; and a
+# cluster rebuild from this repo (`make apply-homelab` + `make route-health-dns`,
+# which upserts a CNAME for EVERY hostname in the cloudflared ConfigMap)
+# republishes mcp.cynexia.com with no guarantee the Access app survived
+# account-side changes. Mitigations, both mandatory:
+#   1. After ANY rollback, rebuild, or account-side change:
+#      `curl -s -o /dev/null -D - https://mcp.cynexia.com/mcp` must return 401
+#      before the hostname is trusted.
+#   2. The health-mcp uptime-kuma monitor accepts EXACTLY ["401"], so a 2xx/404
+#      from a vanished gate alarms instead of masking
+#      (docs/operations/uptime-kuma.md).
+#
+# IN-CLUSTER EXPOSURE — unchanged in kind from the 2026-08 sidecar era. flannel
+# does NOT enforce NetworkPolicy, and upstream calls Express `app.listen(port)`
+# with no bind host (no --bind/--host flag exists; checked src/index.js), so the
+# server listens on 0.0.0.0 and was already reachable on pod-IP:3000 from any pod
+# even while it was a sidecar. The Service below therefore restores cluster-DNS
+# discoverability of something that was reachable anyway. Any in-cluster pod can
+# query InfluxDB READ-ONLY through it (the token has no write scope; a write
+# probe 403s, server-log-verified 2026-07-26). If flannel is ever swapped for a
+# NetworkPolicy-enforcing CNI (e.g. Cilium), reinstate a NetworkPolicy scoped to
+# this pod; the queued upstream bind-flag patch remains the real fix.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: influxdb-mcp
+  namespace: health
+  # NO keel annotations — health namespace policy: pinned images, Renovate proposes updates.
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: influxdb-mcp } }
+  template:
+    metadata:
+      labels: { app: influxdb-mcp }
+    spec:
+      containers:
+        - name: mcp
+          image: ghcr.io/mnbf9rca/influxdb-mcp-server:v0.2.0   # pin: built multi-arch from source; upstream ships no official image
+          args: [--http, "3000"]
+          env:
+            - { name: INFLUXDB_URL, value: "http://influxdb.health.svc.cluster.local:8086" }
+            - name: INFLUXDB_TOKEN            # READ-ONLY token: write-data/create-bucket/create-org
+              valueFrom:                      # tools exist but InfluxDB rejects them. Mandatory hardening.
+                secretKeyRef: { name: health-influxdb, key: read-token }
+            - { name: INFLUXDB_ORG, value: cynexia }
+          ports: [{ containerPort: 3000, name: mcp-http }]
+          readinessProbe: { tcpSocket: { port: mcp-http }, periodSeconds: 10, timeoutSeconds: 5 }
+          # TCP-only ON PURPOSE: the MCP server exposes no health endpoint (upstream ships
+          # only /mcp, which requires a session handshake and is not probe-safe). This
+          # detects process death / a closed listener, NOT a wedged request handler — the
+          # kernel completes handshakes from the accept backlog even with the event loop
+          # blocked. Laxer than the readiness probe above so the pod goes unready long
+          # before kubelet kills it.
+          livenessProbe:
+            tcpSocket: { port: mcp-http }
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 6
+          resources:
+            requests: { cpu: 50m, memory: 128Mi }
+            limits: { memory: 512Mi }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: influxdb-mcp, namespace: health }
+spec:
+  selector: { app: influxdb-mcp }
+  ports: [{ port: 3000, targetPort: mcp-http }]

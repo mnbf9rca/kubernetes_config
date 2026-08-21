@@ -71,13 +71,6 @@ HEALTH_HAE_AUTH_TOKEN=op://Homelab/health-hae/auth-token
 HEALTH_GARMIN_EMAIL=op://Homelab/health-garmin/email
 HEALTH_GARMIN_B64_PASSWORD=op://Homelab/health-garmin/b64-password
 
-# health namespace — Pomerium (Google OAuth client created by the operator in
-# the Google Cloud console; cookie/shared secrets are generated locally)
-HEALTH_POMERIUM_GOOGLE_CLIENT_ID=op://Homelab/health-pomerium/google-client-id
-HEALTH_POMERIUM_GOOGLE_CLIENT_SECRET=op://Homelab/health-pomerium/google-client-secret
-HEALTH_POMERIUM_COOKIE_SECRET=op://Homelab/health-pomerium/cookie-secret
-HEALTH_POMERIUM_SHARED_SECRET=op://Homelab/health-pomerium/shared-secret
-
 # health namespace — Grafana admin password
 HEALTH_GRAFANA_ADMIN_PASSWORD=op://Homelab/health-grafana/admin-password
 

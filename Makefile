@@ -51,8 +51,6 @@ REQUIRED_VARS := B2_ACCOUNT_ID B2_ACCOUNT_KEY RESTIC_PASSWORD RESTIC_REPOSITORY 
                  HEALTH_INFLUX_READ_TOKEN HEALTH_INFLUX_CLOUDFLARE_TOKEN \
                  HEALTH_HAE_AUTH_TOKEN \
                  HEALTH_GARMIN_EMAIL HEALTH_GARMIN_B64_PASSWORD \
-                 HEALTH_POMERIUM_GOOGLE_CLIENT_ID HEALTH_POMERIUM_GOOGLE_CLIENT_SECRET \
-                 HEALTH_POMERIUM_COOKIE_SECRET HEALTH_POMERIUM_SHARED_SECRET \
                  HEALTH_GRAFANA_ADMIN_PASSWORD \
                  HEALTH_CF_API_TOKEN HEALTH_CF_ZONE_TAGS
 
@@ -80,8 +78,6 @@ ENVSUBST_VAR_NAMES := B2_ACCOUNT_ID B2_ACCOUNT_KEY RESTIC_PASSWORD RESTIC_REPOSI
                      HEALTH_INFLUX_READ_TOKEN HEALTH_INFLUX_CLOUDFLARE_TOKEN \
                      HEALTH_HAE_AUTH_TOKEN \
                      HEALTH_GARMIN_EMAIL HEALTH_GARMIN_B64_PASSWORD \
-                     HEALTH_POMERIUM_GOOGLE_CLIENT_ID HEALTH_POMERIUM_GOOGLE_CLIENT_SECRET \
-                     HEALTH_POMERIUM_COOKIE_SECRET HEALTH_POMERIUM_SHARED_SECRET \
                      HEALTH_GRAFANA_ADMIN_PASSWORD \
                      HEALTH_CF_API_TOKEN HEALTH_CF_ZONE_TAGS
 ENVSUBST_VARS := $(foreach v,$(ENVSUBST_VAR_NAMES),$${$(v)})
@@ -975,7 +971,7 @@ health-influx-bootstrap: check-context
 # It also re-mints the shared mcp+grafana read token to include the new bucket.
 # InfluxDB has no way to add a bucket to an existing auth, so Grafana cannot see
 # `cloudflare` until the read token is replaced. After pasting the new value into
-# 1Password: `make apply-homelab`, restart grafana and pomerium, THEN delete the
+# 1Password: `make apply-homelab`, restart grafana and influxdb-mcp, THEN delete the
 # superseded auth with `influx auth delete`. Deleting it first locks Grafana and
 # the MCP connector out until the new Secret has actually rolled.
 #
@@ -1017,4 +1013,4 @@ health-influx-cloudflare-bootstrap: check-context
 	mint --read-bucket $$CFID --write-bucket $$CFID -d "cloudflare analytics ingest rw"; \
 	echo "--- REPLACEMENT READ TOKEN (paste into op://Homelab/health-influxdb/read-token):"; \
 	mint --read-bucket $$AMID --read-bucket $$AWID --read-bucket $$GID --read-bucket $$CFID -d "mcp+grafana read-only (incl cloudflare)"; \
-	echo "--- then: apply, restart grafana+pomerium, and only THEN delete the old read-only auth"
+	echo "--- then: apply, restart grafana+influxdb-mcp, and only THEN delete the old read-only auth"

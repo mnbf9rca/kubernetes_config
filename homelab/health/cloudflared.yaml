@@ -11,12 +11,16 @@ data:
     no-autoupdate: true
     metrics: 0.0.0.0:2000
     ingress:
+      # SECURITY: every hostname below that fronts an AUTHLESS origin must have a
+      # matching Cloudflare Access app — the auth gate is account-side state this
+      # repo cannot express or verify. Adding an ingress line here (plus
+      # `make route-health-dns`, which mints a CNAME for every hostname in this
+      # ConfigMap) publishes the origin to the internet with whatever auth the
+      # Access dashboard happens to have. See influxdb-mcp.yaml's header.
       - hostname: hae.cynexia.com
         service: http://apple-health-ingester.health.svc.cluster.local:8080
       - hostname: mcp.cynexia.com
-        service: http://pomerium.health.svc.cluster.local:80
-      - hostname: authenticate.cynexia.com
-        service: http://pomerium.health.svc.cluster.local:80
+        service: http://influxdb-mcp.health.svc.cluster.local:3000
       - service: http_status:404
 ---
 apiVersion: apps/v1

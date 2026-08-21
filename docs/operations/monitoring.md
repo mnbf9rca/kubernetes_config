@@ -89,8 +89,7 @@ Defaults, unless a service's entry below says otherwise:
 
 | Container | Target | Note |
 |---|---|---|
-| pomerium | liveness `/ping` (:80), readiness `/readyz` (:28080), startup `/startupz` (:28080) | Liveness targets the data plane, against the vendor documentation. Reasoning: [homelab-health.md](homelab-health.md#the-probe-target-is-deliberately-not-the-documented-one) |
-| pomerium `mcp` sidecar | liveness and readiness `tcpSocket` | The MCP server exposes no health endpoint. TCP detects process death, not a wedged handler |
+| influxdb-mcp | liveness and readiness `tcpSocket` | The MCP server exposes no health endpoint. TCP detects process death, not a wedged handler |
 | cloudflared (both clusters) | liveness and readiness `/ready` (:2000) | Neither Deployment has a Service, so readiness gates the rolling update and shows connector state. It routes nothing |
 | influxdb | `/health` | — |
 | grafana | `/api/health` | — |
@@ -421,7 +420,7 @@ Probes fix hung request paths, not silently stopped background work — often th
 | **karakeep** | `/api/health` is a hardcoded literal in the web process and cannot observe the worker. Stuck-queue reports (#1802, #2704) all leave it returning 200. The detector is the `karakeep_queue_jobs` metric (`pending > 0 && running == 0`) |
 | **freshrss** | `/api/` never opens the database, and feed refresh runs from a separate `crond`. A dead cron serves the UI perfectly and stops fetching news |
 | **garmin-grafana** | `write_points_to_influxdb()` catches InfluxDB errors, logs them and returns normally, after which the caller advances the watermark. An InfluxDB outage causes permanent data loss for that window with the process Running and Ready. `ingest-freshness` covers it; no probe improves on that |
-| **pomerium `mcp` sidecar** | Its probes are `tcpSocket`. A wedged HTTP handler with a live listener passes them. The MCP server exposes no health endpoint |
+| **influxdb-mcp** | Its probes are `tcpSocket`. A wedged HTTP handler with a live listener passes them. The MCP server exposes no health endpoint |
 | **homelab services** | The external layer runs on the VPS, which has no route to `*.cynexia.net`. Only the three health-tunnel hostnames get layer-3 coverage. sonarr, radarr, sabnzbd, emby, hydra2 and grafana have probes and nothing external |
 | **the VPS gate** | It proves each snapshot exists and is recent, and — through the sidecar's own refusal to publish a schema-less snapshot — that it holds at least one schema object. It does not prove the contents are complete or uncorrupted. A snapshot missing rows, or with a corrupt page below the `sqlite_master` read, passes everything here and surfaces at restore time |
 | **the homelab gate** | It proves the SSD is mounted and the tree is the right *shape*: right number of PVC directories, right order of magnitude, the listed files present and non-trivial. It says nothing about *content*. Every homelab PVC is copied live, with no quiesce step: a sqlite database mid-write is captured torn, `sonarr.db` at 14 MiB of corruption passes the size floor exactly as 14 MiB of working database does, and a PVC that stopped being written to weeks ago looks identical to one written a minute ago. Only the two influx dumps are age-checked. A retained orphan directory from a recreated PVC can satisfy an expected-set entry the live PVC no longer can — the resolved paths are printed so it is visible, but nothing fails on it. The rest surfaces at restore time |
@@ -480,7 +479,7 @@ These are settled. Do not relitigate them without new evidence.
 - **`tcpSocket` on sockpuppetbrowser :3000 as a hang fix.** The kernel completes handshakes from
   the accept backlog while the event loop is blocked, so it detects process death only.
 - **A NetworkPolicy in front of the MCP server.** Inert on flannel — see
-  [homelab-health.md](homelab-health.md#mcp-is-a-sidecar-not-a-standalone-deployment).
+  [homelab-health.md](homelab-health.md#mcp-behind-cloudflare-access).
 - **Converting the two ingest checks to `/fail`.** It trades a 36-hour tolerance for a 6-hour one
   on a signal that depends on a human syncing a watch.
 

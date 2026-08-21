@@ -1,9 +1,10 @@
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 # populated task-by-task: cloudflared.yaml, influxdb.yaml, apple-health-ingester.yaml,
-# garmin-grafana.yaml, grafana.yaml, pomerium.yaml, backups.yaml, ingest-freshness.yaml,
-# cloudflare-analytics.yaml
-# (influxdb-mcp.yaml retired: MCP server now runs as a sidecar inside pomerium.yaml's pod)
+# garmin-grafana.yaml, grafana.yaml, influxdb-mcp.yaml, backups.yaml,
+# ingest-freshness.yaml, cloudflare-analytics.yaml
+# (pomerium.yaml retired 2026-08-22: auth moved to a Cloudflare Access app at the
+# edge, and the MCP server is a plain Deployment+Service again — influxdb-mcp.yaml)
 resources:
   - backups-storage.yaml
   - cloudflared.yaml
@@ -11,7 +12,7 @@ resources:
   - apple-health-ingester.yaml
   - garmin-grafana.yaml
   - grafana.yaml
-  - pomerium.yaml
+  - influxdb-mcp.yaml
   - backups.yaml
   - ingest-freshness.yaml
   - cloudflare-analytics.yaml

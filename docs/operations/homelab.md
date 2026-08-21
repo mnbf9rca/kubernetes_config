@@ -38,7 +38,7 @@ Helm-only distribution and `homelab/bootstrap/keel/keel.yaml` is hand-written.
 | `traefik` | Ingress | Traefik DaemonSet (PSA privileged — hostNetwork) |
 | `keel` | Auto-updates | keel controller |
 | `backup` | Backup | restic init Job + nightly CronJob (PSA privileged — hostPath) |
-| `health` | Personal health data pipeline | influxdb, apple-health-ingester, garmin-grafana, grafana, pomerium + MCP sidecar, cloudflared, backup + freshness CronJobs — see [homelab-health.md](homelab-health.md) |
+| `health` | Personal health data pipeline | influxdb, apple-health-ingester, garmin-grafana, grafana, influxdb-mcp (behind Cloudflare Access), cloudflared, backup + freshness CronJobs — see [homelab-health.md](homelab-health.md) |
 
 Ingress hostnames are `*.cynexia.net` (Route53), Traefik-fronted, LAN/Tailscale only:
 `sonarr`, `radarr`, `sab`, `hydra`, `emby`, `grafana-health`.
