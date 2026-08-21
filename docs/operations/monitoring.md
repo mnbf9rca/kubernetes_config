@@ -423,10 +423,13 @@ reaches the mail provider and every configured integration. Treat an `emit` call
 like a line in a committed file.
 
 **Never build a body from a command's output.** healthchecks.io's own documentation teaches
-the opposite, and for this estate that pattern leaks: `restic` error messages quote the
-repository URL; the two scripts `influx-backup.sh` execs into the influxdb pod pass the
-InfluxDB **operator** token on argv, so anything echoing argv would ship it nightly; a
-failing `wget` quotes the ping URL, which *is* the check's write credential. `emit` is only
+the opposite, and for this estate that pattern leaks genuine credentials: the two scripts
+`influx-backup.sh` execs into the influxdb pod pass the InfluxDB **operator** token on argv,
+so anything echoing argv would ship it nightly, and a failing `wget` quotes the ping URL,
+which *is* the check's write credential. `restic` error messages also quote the repository
+URL, though that is an ordinary identifier rather than a secret (see the three tiers in
+`AGENTS.md`). The rule is blanket precisely because a script cannot sort those tiers apart
+at runtime — command output is unclassifiable, so none of it is eligible. `emit` is only
 ever called with a literal key and a value the script itself computed — a count, an age, a
 byte size, a path built from a literal glob, or a verdict from a fixed enum.
 `make check-ping-bodies` enforces it, including the one-intermediate-variable evasion
@@ -437,8 +440,13 @@ parameter-expansion form, not just `$NAME` and `${NAME}`: `${HC_UUID:-}`, `${HC_
 reference pattern required the closing brace, so any expansion carrying an operator
 matched neither alternative and the guard reported OK on a body containing the ping URL.
 
-Also never emitted: any ping UUID, anything from a Secret, the restic repository URL or B2
-bucket name, any personal health *value*, and pod or node names.
+Also never emitted, and these are two different reasons. **Forbidden** because they grant
+access or enable nuisance: anything from a Secret, and any ping UUID. **Simply not useful**,
+and so left out rather than banned: the restic repository URL, B2 and InfluxDB bucket names,
+and pod or node names — all ordinary identifiers under the `AGENTS.md` tiers, which would be
+harmless in a body and are omitted only because nothing reads them. Personal health *values*
+stay out on their own footing: freshness *timestamps* for the Apple and Garmin checks are
+sent by explicit operator decision, but a reading itself never is.
 
 **Reading a restic failure body.** `failed_step=` names the phase that set the exit code —
 `unlock|backup|forget|check` for restic's own failures, `gate` for the verification gate —
