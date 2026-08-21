@@ -361,13 +361,35 @@ one PVC directory expected to match one path.
 | `vps-uptime-kuma-alive` | `op://VPS/uptime-kuma/healthcheck-uuid` | 5m / 15m | An uptime-kuma monitor — see [the self-monitor](#the-self-monitor-layer-4) |
 | `health-apple-ingest` | `op://Homelab/health-healthchecks/apple-uuid` | 1d / 12h | `ingest-freshness`, only when InfluxDB data is under 24h old |
 | `health-garmin-ingest` | `op://Homelab/health-healthchecks/garmin-uuid` | 1d / 12h | as above |
-| `health-influx-backup` | `op://Homelab/health-healthchecks/backup-uuid` | 1d / 6h | `influx-backup`, success only: the script is `set -eu` with the ping last. It is also `set -o pipefail`, without which the prune step's `ls` failure was hidden by `xargs` and the ping fired anyway |
+| `health-influx-backup` | `op://Homelab/health-healthchecks/backup-uuid` | 1d / 6h | `influx-backup`, `/start` and exit code, from an EXIT trap. It is `set -eu -o pipefail`, without which the prune step's `ls` failure was hidden by `xargs` and the ping fired anyway |
 | `homelab-cloudflare-analytics` | `op://Homelab/health-healthchecks/cloudflare-uuid` | 1h / 2h | `cloudflare-analytics` CronJob, `/start` and exit code |
 | jottacloud-backup | `op://Homelab/jottacloud-backup/HEALTHCHECK_UUID` | 6-hourly schedule | The image's own `backup.sh` |
 
-The two restic jobs and `cloudflare-analytics` send `/start` and an exit code. The other
-three ping on success only, so a failure and a never-scheduled run produce the same signal:
-silence, then a grace-expiry alert. Follow the restic pattern for new jobs.
+Four of the five jobs this repo pings send `/start` and an exit code: both restic jobs,
+`cloudflare-analytics`, and — since 2026-08-21 — `influx-backup`. Follow that pattern for
+new jobs.
+
+`influx-backup` was converted deliberately, and **it changed when that check alerts**. It
+is `set -eu` with the ping formerly on the last line, so a failing prune, a missing
+ConfigMap key or a dead influxdb pod produced *exactly nothing* until the 6h grace expired
+roughly 30 hours later:
+
+| Failure | Before | After |
+|---|---|---|
+| Script exits non-zero | Silence; red ~30h later | Red within a minute, with `failed_step=` in the body |
+| Pod killed / never scheduled | Red at `last_ping + 1d + 6h` | Red at `last_start + 6h` |
+| Success | Green | Green, with a measured duration |
+
+The accepted cost is that a transient failure — an influxdb pod mid-restart when
+`kubectl exec` lands, an API-server blip — that used to self-heal into silence now pages
+immediately. Thirty hours of silence on a hard failure is the larger defect.
+
+The two ingest checks were **not** converted and must not be. A `/fail` on a stale bucket
+would flip the check DOWN on the first 6-hourly run that found nothing, replacing a
+36-hour tolerance with a 6-hour one — on a signal that depends on the operator syncing a
+watch, which is the same reason this document rejects staleness-driven remedies elsewhere.
+They get an inert `/log` ping instead (see *Ping bodies* below). `jottacloud backup` stays
+success-only: its ping comes from `backup.sh` inside the third-party image.
 
 `homelab-cloudflare-analytics` goes red for one failure mode that is not a malfunction:
 **an unrecoverable gap**. Cloudflare keeps 8 days, so if the job has been down longer than
@@ -381,12 +403,76 @@ which hours were lost", not as "the job is broken". Detail:
 `ingest-freshness` always exits 0. The signal is the absent ping, not a failed Job. Do not
 change it to a non-zero exit.
 
+### Ping bodies
+
+Every ping this repo sends carries a short `key=value` body — one pair per line, printable
+ASCII, first line always `summary=` — so the healthchecks.io Events log answers "what did
+it see?" without a pod log that may already have aged out. The one bit is still the
+alerting signal; the body is what makes a green check legible. It exists because
+`health-apple-ingest` was green on 2026-08-21 while Apple Health data had been stale for
+five days: nothing malfunctioned, but a ping is one bit and green could not distinguish
+"fresh" from "stale but the window has not expired yet".
+
+**A ping body is a disclosure channel.** healthchecks.io is a third-party SaaS in the EU.
+The body leaves the estate, is stored in their object storage, is repeated on every run
+until somebody fixes the script, and is not something we can shorten on demand short of
+deleting the check. **It also travels with the alert**: upstream's email, webhook, Slack,
+Telegram, Matrix, GitHub and MS Teams transports all read the last ping's body into the
+notification, and the alert email renders it verbatim. So a failure body additionally
+reaches the mail provider and every configured integration. Treat an `emit` call exactly
+like a line in a committed file.
+
+**Never build a body from a command's output.** healthchecks.io's own documentation teaches
+the opposite, and for this estate that pattern leaks: `restic` error messages quote the
+repository URL; the two scripts `influx-backup.sh` execs into the influxdb pod pass the
+InfluxDB **operator** token on argv, so anything echoing argv would ship it nightly; a
+failing `wget` quotes the ping URL, which *is* the check's write credential. `emit` is only
+ever called with a literal key and a value the script itself computed — a count, an age, a
+byte size, a path built from a literal glob, or a verdict from a fixed enum.
+`make check-ping-bodies` enforces it, including the one-intermediate-variable evasion
+(`M=$(cmd); emit "error=$M"`), and a taint is cleared only by an explicit
+`# check-ping-bodies: untaint <NAME> <reason>` line.
+
+Also never emitted: any ping UUID, anything from a Secret, the restic repository URL or B2
+bucket name, any personal health *value*, and pod or node names.
+
+**Named accepted residual.** `last_point` and `last_point_age` on the two ingest checks are
+emitted every 6h, and over the retained window they constitute a sync-and-absence timeline
+for an identified individual — when the operator last wore and synced a watch, and by
+inference when they were away, asleep or not wearing a device. They are emitted anyway:
+`last_point_age` *is* the finding the whole change exists to deliver, and coarsening it to
+a bucket would throw it away. The data subject is the operator, on the operator's own
+account, at a processor already chosen for this data.
+
+**Bodies die with their ping-log entry.** `Check.prune()` removes the objects and then the
+ping rows, so retention is plan-dependent: 100 entries per check on Hobbyist, 1000 on
+Business. For a daily check that is roughly three months or roughly two and a half years;
+for a 6-hourly check, roughly 25 days or 250. For the two ingest checks that number is how
+long a third party holds the timeline above.
+
+`ingest-freshness` uses `/log` for its stale and query-failure paths. A `log` ping sets no
+`last_ping`, no `last_start` and no `status`, and `alert_after` is recomputed from unchanged
+inputs — so it cannot postpone, suppress or trigger an alert. It has one cosmetic side
+effect: `has_confirmation_link` is set from the body on every action, `log` included, which
+drives a UI nag. No body here contains the substring `confirm`, and none should.
+
 The read-only API key is `op://Homelab/healthchecks.io/read-only-api-key`. If that path
 returns 404, the item is still spelled `healtchecks.io` — a rename is in progress.
 
 Adding a check takes [four edits](apply-workflow.md#adding-a-secret-is-four-edits-not-three).
 Nothing catches a missing `ENVSUBST_VAR_NAMES` entry, which ships the literal `${VAR}` as
 the ping UUID and silently disables the check.
+
+### Checks in the account that this repo does not ping
+
+The Management API returns **14** checks; the table above lists the 8 this repo is
+responsible for. The other six are pinged from Proxmox hosts, Home Assistant and host cron,
+and are deliberately outside this repo: `adsb.cynexia.net`, `pve3.cynexia.net`,
+`fs.cynexia.net`, `tailscale unattended upgrades`, `Home Assistant`, `upsd.cynexia.net`.
+Recorded here so that "not in the table" can be told from "does not exist".
+
+**`upsd.cynexia.net` has `n_pings=0` and `status=new`.** It has never been pinged. It is a
+check that monitors nothing, and it should be either wired up or deleted.
 
 ## uptime-kuma runbook (layer 3)
 
