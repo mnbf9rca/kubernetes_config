@@ -185,11 +185,12 @@ Note that 1Password **document** items (e.g. `health-cloudflared`) need
 
 | Target | What it does |
 |---|---|
-| `check-tools` | Asserts `kubectl kustomize envsubst op direnv talosctl omnictl jq` are on PATH |
+| `check-tools` | Asserts `kubectl kustomize envsubst op direnv talosctl omnictl jq shellcheck` are on PATH |
 | `check-context` | Asserts `kubectl current-context == cynexia-homelab` (override with `HOMELAB_CONTEXT=`) |
 | `check-vars-consistency` | Asserts `ENVSUBST_VAR_NAMES` ⊆ `REQUIRED_VARS`. Runs in the parent shell, before the `op run` child exists. Cannot detect a var *missing* from `ENVSUBST_VAR_NAMES` |
 | `check-job-ttl` | Asserts every standalone `kind: Job` sets `ttlSecondsAfterFinished`, across both clusters. `check-job-ttl-homelab` scopes it to one cluster and runs in the `diff-homelab`/`apply-homelab` preflight |
 | `check-script-substitution` | Asserts no `configMapGenerator` script names an envsubst-allowlisted variable, across both cluster trees. `check-script-substitution-homelab` scopes the *scan* to one tree — both allowlists still apply — and runs in the `diff-homelab`/`apply-homelab` preflight |
+| `check-script-lint` | Lints every script the clusters run, from the **rendered** stream rather than the source tree, plus the repo's Python. `check-script-lint-homelab` scopes the render to one cluster and runs in the `diff-homelab`/`apply-homelab` preflight. See below |
 | `require-vars` | Re-enters under `op run` and asserts every `REQUIRED_VARS` entry is set and not still an `op://` reference |
 | `build-homelab` | `kustomize build homelab/ \| envsubst` to stdout under `op run`. **PREVIEW ONLY — secret values are masked.** No cluster contact. Never redirect this to a file and apply it |
 | `diff-homelab` | Same pipeline into `kubectl diff`, inside the `op run` child (real values, printed diff masked) |
@@ -205,7 +206,7 @@ Note that 1Password **document** items (e.g. `health-cloudflared`) need
 |---|---|
 | `check-vps-context` | Asserts `kubectl current-context == cynexia-vps` (override with `VPS_CONTEXT=`) |
 | `check-vps-vars-consistency` / `require-vps-vars` | VPS equivalents of the homelab preflights |
-| `check-job-ttl-vps` / `check-script-substitution-vps` | The per-cluster halves of the two repo-wide checks, run in the `diff-vps`/`apply-vps` preflight. Scoping them per cluster is the point: a VPS-only fault must not block `apply-homelab`, and vice versa |
+| `check-job-ttl-vps` / `check-script-substitution-vps` / `check-script-lint-vps` | The per-cluster halves of the repo-wide checks, run in the `diff-vps`/`apply-vps` preflight. Scoping them per cluster is the point: a VPS-only fault must not block `apply-homelab`, and vice versa |
 | `build-vps` / `diff-vps` / `apply-vps` | Same pipeline and the same masking split over `vps/` with `VPS_ENVSUBST_VARS` |
 | `route-vps-dns` | `cloudflared tunnel route dns cynexia-vps <host>` for every hostname in `vps/bootstrap/cloudflared/cloudflared.yaml` |
 | `create-cloudflared-secret` | Imperative Secret creation for the VPS tunnel creds from `op://VPS/cloudflared/credentials-json` |
@@ -226,6 +227,64 @@ generated target, and two clusters is not enough to justify the abstraction.
 | `create-health-cloudflared-secret` | Recreates the health tunnel creds Secret via `op document get health-cloudflared` |
 | `route-health-dns` | CNAMEs for every hostname in `homelab/health/cloudflared.yaml` onto the `cynexia-health` tunnel |
 | `health-influx-bootstrap` | InfluxDB buckets, v1 DBRP mapping, v1-compat auth user, and the two scoped tokens — see [homelab-health.md](homelab-health.md) |
+
+### `check-script-lint`: linting what the cluster actually runs
+
+Until this landed, nothing the repo could run looked at any of its sixteen
+shell and Python scripts. There was no shellcheck target, no ruff, no pyflakes,
+no test runner, no `.github/workflows` and no pre-commit hook — every
+shellcheck result that ever appeared in a review came from an agent typing the
+command by hand. That is the same defect `check-job-ttl` and
+`check-script-substitution` were each created to fix, and it is fixed the same
+way: `scripts/check-script-lint.py`, wired as a per-cluster preflight
+prerequisite of `diff-*` and `apply-*`.
+
+Four decisions in it are load-bearing.
+
+**It lints the render, not the source tree.** `homelab/backup/restic-cronjob.yaml`
+carries roughly 430 lines of shell inline in a YAML block scalar, which a
+source-tree lint walks straight past. So the check runs `kustomize build` and
+pulls the shell back out of the rendered stream — from ConfigMap `data:` keys
+(what a `configMapGenerator` produces) and from block scalars inside a
+container's `args:`/`command:` list. The language of an inline block comes from
+the interpreter the same container names in its `command:`. A block whose
+interpreter cannot be identified is reported as *could not run*, never skipped:
+an unlinted block of shell is exactly the hole the check exists to close.
+
+Findings are reported against the source file wherever the snippet can be
+located there — exact contiguous match allowing a constant indent — so
+`homelab/backup/restic-cronjob.yaml:52` is somewhere you can go and edit, not a
+line number in a 19,000-line render.
+
+**`shellcheck -s sh`, never `-s bash`.** These scripts run under busybox ash
+(`restic/restic`, `alpine/k8s`) and dash. `-s bash` would suppress SC3040 and
+the whole SC3xxx portability family, which are the findings that matter here: a
+bashism in an ash container is a backup job failing at 03:00, not a style nit.
+`-s` overrides the shebang, which is the point. The deliberate
+`# shellcheck disable=` directives in the scripts are honoured as written.
+
+**Upstream findings are advisory.** `local-path-config`'s `setup`/`teardown`
+keys really do run on the node, so they are linted and reported — but they come
+from a remote base and cannot be fixed here, only forked. Failing every apply on
+somebody else's style warning produces a gate people route around, and a
+routed-around gate protects nothing. A snippet counts as ours when it can be
+located in a repo file; the upstream ones are named in the OK output, so one of
+your own that stops resolving is visible rather than silently downgraded.
+
+**Missing tools are reported, never silently passed.** Exit 1 means a finding;
+exit 2 means the check could not run — same convention as `check-job-ttl`, and
+it matters for the same reason: a `kustomize build` that never rendered tells
+you nothing about the scripts in it. `shellcheck` is treated as required (it is
+in `check-tools`; `brew install shellcheck`) because skipping it restores the
+hole. The Python phase always compiles every `*.py` and runs every `test_*.py`
+— both stdlib, so both always available — and runs a real linter only if `ruff`,
+`pyflakes` or `flake8` is genuinely installed, printing an explicit `SKIP`
+naming what it probed when none is. As of 2026-08-21 none is installed on the
+workstation, so Python is syntax-checked and tested but **not** linted.
+
+The Python phase is repo-wide whichever cluster is named: it needs no render
+and no cluster, so scoping it per-cluster would only leave the repo's own
+tooling scripts unguarded.
 
 ## Talos machine config patches
 

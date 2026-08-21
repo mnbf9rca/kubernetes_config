@@ -56,7 +56,7 @@ kubernetes_config/
 │   │   └── scripts/          # job scripts as real files + their tests; mounted via configMapGenerator
 │   └── backup/               # restic init Job + nightly CronJob (hostPath /var/mnt/ssd/local-path-provisioner)
 ├── vps/                      # Hetzner Talos cluster, same sub-layout (bootstrap/secrets/workloads/backup/talos)
-├── scripts/                  # repo-level helpers (karakeep tags, FreshRSS WebSub status, check-job-ttl)
+├── scripts/                  # repo-level helpers (karakeep tags, FreshRSS WebSub status, the check-* guards)
 ├── legacy-microk8s/          # frozen reference copies of the old microk8s manifests
 └── no_longer_used/           # retired manifests kept for reference
 ```
@@ -214,6 +214,18 @@ Full mechanics, target-by-target reference and failure modes:
   two clusters** when it touches restic: the VPS names are `VPS_`-prefixed and the
   homelab ones are not, so a shared file is safe under one tree and leaking under the
   other.
+- **Every script is linted from the RENDER, as POSIX `sh`.** `make check-script-lint`
+  runs `kustomize build`, pulls the shell back out of ConfigMap `data:` keys *and* out
+  of inline `args:`/`command:` block scalars, and runs `shellcheck -s sh` over it — plus
+  compiling every `*.py` and running every `test_*.py`. `diff-*`/`apply-*` run the
+  per-cluster variant as a preflight, so it cannot be forgotten. Two rules when working
+  on a script: never "fix" a finding by switching the check to `-s bash` (these run under
+  busybox ash and dash, and SC3xxx is the whole point), and if a warning is genuinely
+  wrong add a narrow `# shellcheck disable=SCxxxx` **with a stated reason**, as the
+  existing ones do. `shellcheck` is now a required tool (`make check-tools`);
+  `brew install shellcheck`. Findings from upstream bases are advisory and do not fail
+  the check. Rationale and the extraction rules:
+  `docs/operations/apply-workflow.md`.
 - For new `hostPath`/`hostNetwork` workloads: elevate their namespace to PSA
   `privileged` in the cluster's `bootstrap/namespaces.yaml`. The cluster-wide enforce
   level is `baseline`.
