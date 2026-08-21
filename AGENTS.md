@@ -157,10 +157,11 @@ Full mechanics, target-by-target reference and failure modes:
   jottacloud's ping comes from `backup.sh` inside a third-party image. Inventory and
   per-job semantics: `docs/operations/monitoring.md`.
 - **A ping body is a disclosure channel.** Every ping carries a short `key=value` summary
-  (`summary=` first, printable ASCII), and **never a command's output** — restic quotes the
-  repository URL, the exec'd influx scripts carry the operator token on argv, and a failing
-  `wget` quotes the ping URL, which is the check's write credential. Emit a count, an age, a
-  size, a path built from a literal glob, or a verdict from a fixed enum.
+  (`summary=` first, printable ASCII), and **never a command's output** — the exec'd influx
+  scripts carry the operator token on argv, and a failing `wget` quotes the ping URL, which is
+  the check's write credential. The rule is blanket because a script cannot sort the tiers
+  below apart at runtime. Emit a count, an age, a size, a path built from a literal glob, or a
+  verdict from a fixed enum.
   `make check-ping-bodies` enforces it and is the only thing that catches
   `M=$(cmd); emit "error=$M"`. The body also travels with the alert: upstream's email,
   webhook, Slack, Telegram, Matrix, GitHub and MS Teams transports all read it into the
