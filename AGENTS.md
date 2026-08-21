@@ -218,6 +218,26 @@ Full mechanics, target-by-target reference and failure modes:
   costs one unnecessary rotation; a silent disclosure costs the assumption of
   confidentiality. This applies even when the exposure feels harmless (short-lived token,
   local-only transcript, immediately-cleared scrollback).
+- **Know the difference between a secret and an identifier.** Conflating them wastes
+  rotations, clutters the honesty box, and — worse — makes agents refuse to log or print
+  things that are perfectly fine, which hides real diagnostics. Three tiers:
+  1. **Secrets grant access.** Tokens, passwords, private keys, API keys, session cookies,
+     the 1Password service-account token. Disclosure means honesty box **and** rotation.
+  2. **Spam-target identifiers grant no access but let a stranger cause a nuisance.**
+     healthchecks.io ping UUIDs are the case that matters here: anyone holding one can ping
+     your check and mask a genuine failure. Keep them out of this public repo (`op://`
+     reference only) — but a transcript or a pod log is **not** a disclosure, they need
+     **no rotation**, and they get **no honesty-box row**. This has been ruled three times.
+  3. **Ordinary identifiers are not sensitive at all.** Restic repository URIs, B2 and
+     InfluxDB bucket names, Cloudflare zone IDs, PVC UUIDs, namespaces, FreshRSS usernames,
+     hostnames. They grant nothing and enable nothing. They are fine in pod logs, in ping
+     bodies and in agent output. Keep the account-identifying ones out of committed files;
+     otherwise leave them alone.
+  When in doubt ask "what can someone *do* with this?" — not "does it look secret?".
+- **`ENVSUBST_VAR_NAMES` membership is not a secrecy classification.** `RESTIC_REPOSITORY`
+  and the bucket names are on that list because envsubst would *substitute* them into a
+  rendered ConfigMap, which is a mechanical hazard, not because the values are secret. Do
+  not infer sensitivity from that list.
 - **This repo is public.** Never write the Omni service URL, sign-in identity, or any
   other credential-adjacent value into a committed file — reference it as an `op://`
   path and read it at run time.
