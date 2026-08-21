@@ -102,11 +102,24 @@ prune_to() {
          "work on, which means the dump above did not land" >&2
     return 1
   fi
+  # THE PIPELINE STATUS IS STILL LOAD-BEARING. Capturing the victim list into
+  # a variable does not weaken it: under `set -e` the status of an assignment
+  # IS the status of the command substitution, and `set -o pipefail` above
+  # makes that the pipeline's worst status. So an `ls` that fails still aborts
+  # the script, exactly as it did when the pipeline ran inline. What the
+  # capture buys is a COUNT, which is the only new thing here.
+  #
   # shellcheck disable=SC2012 # every name here is written by the two scripts
   # above as `<YYYY-MM-DD>` or `<YYYY-MM-DD>-<bucket>.lp.gz`, so the whitespace
   # and newline hazards behind SC2012 cannot occur; `ls -t` also sorts by
   # mtime, which `find` alone does not.
-  ls -1dt "$@" | tail -n "+$((_keep + 1))" | xargs -r rm -rf
+  _victims=$(ls -1dt "$@" | tail -n "+$((_keep + 1))")
+  PRUNED=0
+  [ -n "$_victims" ] || return 0
+  PRUNED=$(printf '%s\n' "$_victims" | grep -c .)
+  case "$PRUNED" in ''|*[!0-9]*) PRUNED=unknown ;; esac
+  # check-ping-bodies: untaint PRUNED - a count of lines, gated to digits by the case above; the paths themselves never leave this function
+  printf '%s\n' "$_victims" | xargs -r rm -rf
 }
 
 prune_to native 14 /dumps/native/*
