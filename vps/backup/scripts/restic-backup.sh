@@ -25,8 +25,89 @@ set -uo pipefail
 # Dead-man's-switch. /start detects started-but-never-finished
 # and records the run duration; the exit-code ping distinguishes
 # success from failure. Pings never fail the job.
+#
+# EACH PING CARRIES A BODY - a short key=value summary of what this
+# run observed, so the healthchecks.io Events log answers "what did
+# it see?" without a pod log that may already have aged out. Four
+# properties here are load-bearing:
+#
+#   1. A PING MUST NEVER FAIL THE JOB, AND A BODY MUST NEVER COST A
+#      PING. A failed body POST falls back to a bodiless ping on the
+#      SAME file - no intermediate copy, because `head -c src > cpy`
+#      truncates cpy BEFORE head runs, so any head failure leaves an
+#      empty file and --post-file=<empty> is a SUCCESSFUL post of a
+#      blank body that never falls back.
+#   2. NEVER EMIT A COMMAND'S OUTPUT. restic's error messages quote
+#      the repository URL, and this body goes to a third party who
+#      keeps it until the ping log rotates. `make check-ping-bodies`
+#      enforces it; read spec section 9.2 before adding a field.
+#   3. A BARE TRAILING SLASH IS AN HTTP 400 (verified live against
+#      hc-ping.com), so the URL is built conditionally. Unconditional
+#      "$HC/$1" would break the plain success ping, and the bodiless
+#      fallback would rebuild the same broken URL and not rescue it.
+#   4. `true >`, NOT `: >`. `:` is a POSIX special built-in and a
+#      redirection error on one aborts a non-interactive shell even
+#      behind `|| true` (verified in dash: exits 2 without reaching
+#      the next line). This matters the day this job gains
+#      readOnlyRootFilesystem.
+#
+# hc_ping resets the body after every ping, so the exit body can
+# never open with "summary=starting". That is a construction, not a
+# discipline at call sites.
+HC_BODY=/tmp/hc-body
+hc_reset() { true > "$HC_BODY" 2>/dev/null || true; }
+emit() { { printf '%s' "$*" | LC_ALL=C tr -cd '\040-\176'; printf '\n'; } >> "$HC_BODY" 2>/dev/null || true; }
+
 HC="https://hc-ping.com/${HC_UUID}"
-ping_hc() { wget -q -T 10 -O- "$HC/$1" >/dev/null 2>&1 || true; }
+# ping_hc [SUFFIX] - "" | start | <exit-status>.
+ping_hc() {
+  _sf=${1:-}
+  _u=$HC
+  [ -z "$_sf" ] || _u="$HC/$_sf"
+  if [ -s "$HC_BODY" ]; then
+    if wget -q -T 10 -O- --post-file="$HC_BODY" "$_u" >/dev/null 2>&1; then
+      hc_reset; return 0
+    fi
+    echo "hc: body POST failed, retrying without a body" >&2
+  fi
+  # A failed ping prints FIXED text. No URL, no tool output: for a
+  # ping the URL IS the write credential, and a pod log is not a
+  # place to put one either.
+  wget -q -T 10 -O- "$_u" >/dev/null 2>&1 || echo "hc: ping not delivered" >&2
+  hc_reset
+  return 0
+}
+
+# ONE SINK PER DIAGNOSTIC. The gate's ERROR lines go to the pod log
+# AND into the ping body from a single call, so the first reword
+# cannot desynchronise the log from the third-party body - on the
+# one channel that exists to be trusted once the log has aged out.
+# Do not write `echo "ERROR: x"; emit "error=x"` at ten sites.
+#
+# Lines are held in a variable rather than a second file because
+# spec section 5 makes `summary=` line 1 of the body, and the errors
+# are known before the summary is; they are flushed after it.
+HC_ERR_LINES=""
+say_err() {
+  echo "ERROR: $*"
+  HC_ERR_LINES="$HC_ERR_LINES
+error=$*"
+}
+flush_errors() {
+  [ -n "$HC_ERR_LINES" ] || return 0
+  printf '%s\n' "$HC_ERR_LINES" | while read -r _fl; do
+    # check-ping-bodies: untaint _fl - every line here was produced by say_err, whose argument the same check validated at its call site
+    [ -z "$_fl" ] || emit "$_fl"
+  done
+}
+
+# STEP names the phase for failed_step= in the ping body. `step NAME
+# [TEXT]` echoes TEXT (or NAME) exactly as the plain echoes it
+# replaces did, so the pod log is byte-identical. The last step is
+# named `finished` rather than `done` because `done` is a shell
+# keyword and shellcheck rejects it unquoted in a test.
+STEP=start
+step() { STEP=$1; echo "==> ${2:-$1}"; }
 
 # ---- Backup verification gate -----------------------------
 # Verifies the quiesce snapshots that the sqlite sidecars (n8n,
@@ -114,12 +195,13 @@ newest_match() {
 # Age assertion on one resolved path. $1 = path, $2 = label.
 assert_fresh() {
   _am=$(stat -c %Y "$1" 2>&1) || {
-    echo "ERROR: $2: cannot stat $1: $_am"
+    # check-ping-bodies: untaint _am - stat's own message, not emitted: say_err below names the label and path only
+    say_err "$2: cannot stat $1"
     return 1
   }
   _aage=$(( NOW - _am ))
   [ "$_aage" -lt "$STALE_SECONDS" ] && return 0
-  echo "ERROR: $2 STALE: $1 is $(( _aage / 3600 ))h old (limit $(( STALE_SECONDS / 3600 ))h)"
+  say_err "$2 STALE: $1 is $(( _aage / 3600 ))h old (limit $(( STALE_SECONDS / 3600 ))h)"
   return 1
 }
 
@@ -142,7 +224,7 @@ check_freshrss() {
     return 0
   fi
   if [ "$_fs" -ne 0 ]; then
-    echo "ERROR: freshrss user DBs UNREADABLE under $FRESHRSS_DB_GLOB"
+    say_err "freshrss user DBs UNREADABLE under $FRESHRSS_DB_GLOB"
     return 1
   fi
   # Only the PVC directory holding the most recently modified user
@@ -152,7 +234,7 @@ check_freshrss() {
     [ -f "$_fdb" ] || continue
     _fsnap="$_fdb.restic"
     if [ ! -f "$_fsnap" ]; then
-      echo "ERROR: freshrss user DB has NO snapshot: $_fsnap"
+      say_err "freshrss user DB has NO snapshot: $_fsnap"
       _frc=1
     else
       assert_fresh "$_fsnap" "freshrss snapshot" || _frc=1
@@ -170,8 +252,8 @@ check_expected() {
     _path=$(newest_match "$_glob"); _s=$?
     case "$_s" in
       0) assert_fresh "$_path" "$_label snapshot" || _rc=1 ;;
-      1) echo "ERROR: $_label snapshot MISSING - nothing matches $_glob"; _rc=1 ;;
-      *) echo "ERROR: $_label snapshot UNREADABLE - could not stat a match of $_glob"; _rc=1 ;;
+      1) say_err "$_label snapshot MISSING - nothing matches $_glob"; _rc=1 ;;
+      *) say_err "$_label snapshot UNREADABLE - could not stat a match of $_glob"; _rc=1 ;;
     esac
   done
   set +f
@@ -190,7 +272,7 @@ sweep_advisory() {
   # where they are read, rather than into a variable that is parsed.
   _sout=$(find /data -name '*.restic' -mmin +"$STALE_MINUTES" -print); _ss=$?
   if [ "$_ss" -ne 0 ]; then
-    echo "ERROR: advisory sweep could not complete - find exited $_ss (diagnostics on stderr, above)"
+    say_err "advisory sweep could not complete - find exited $_ss (diagnostics on stderr, above)"
     return 1
   fi
   [ -n "$_sout" ] || return 0
@@ -206,18 +288,18 @@ rc=0
 # `{ set -e; ... } || rc=$?` block would keep running after a
 # failure and report the last command's status.
 {
-  echo "==> snapshots" &&
+  step snapshots &&
   { restic snapshots || true; } &&
-  echo "==> unlock" &&
+  step unlock &&
   # Removes STALE locks only (no --remove-all). This is what
   # actually recovers a lock left by a SIGKILLed previous run.
   restic unlock &&
-  echo "==> backup /data" &&
+  step backup "backup /data" &&
   restic backup /data \
     --tag nightly \
     --exclude='*.tmp' \
     --exclude='cache/*' &&
-  echo "==> forget + prune" &&
+  step forget "forget + prune" &&
   # --group-by paths is LOAD-BEARING. restic forget defaults to
   # grouping by host+paths, and every CronJob pod has a unique
   # hostname, so each nightly snapshot landed in a group of its
@@ -230,9 +312,9 @@ rc=0
     --keep-daily 7 \
     --keep-weekly 4 \
     --keep-monthly 6 &&
-  echo "==> check" &&
+  step check &&
   restic check &&
-  echo "==> done"
+  step finished "done"
 } || rc=$?
 
 # The gate runs LAST, deliberately. Making it a precondition
