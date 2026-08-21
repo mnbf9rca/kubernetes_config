@@ -51,8 +51,82 @@ spec:
                   # Dead-man's-switch. /start detects started-but-never-finished
                   # and records the run duration; the exit-code ping distinguishes
                   # success from failure. Pings never fail the job.
+                  #
+                  # EACH PING CARRIES A BODY - a short key=value summary of what this run
+                  # observed, so the healthchecks.io Events log answers "what did it see?"
+                  # without a pod log that may already have aged out. Four properties are
+                  # load-bearing:
+                  #
+                  #   1. A PING MUST NEVER FAIL THE JOB, AND A BODY MUST NEVER COST A PING.
+                  #      A failed body POST falls back to a bodiless ping on the SAME file -
+                  #      no intermediate copy, because `head -c src > cpy` truncates cpy
+                  #      BEFORE head runs, so any head failure leaves an empty file and
+                  #      --post-file=<empty> is a SUCCESSFUL post of a blank body that never
+                  #      falls back.
+                  #   2. NEVER EMIT A COMMAND'S OUTPUT. restic's error messages quote the
+                  #      repository URL, and this body goes to a third party who keeps it
+                  #      until the ping log rotates. `make check-ping-bodies` enforces it;
+                  #      read spec section 9.2 before adding a field.
+                  #   3. A BARE TRAILING SLASH IS AN HTTP 400 (verified live against
+                  #      hc-ping.com), so the URL is built conditionally.
+                  #   4. `true >`, NOT `: >`. `:` is a POSIX special built-in and a
+                  #      redirection error on one aborts a non-interactive shell even behind
+                  #      `|| true` (verified in dash).
+                  #
+                  # hc_ping resets the body after every ping, so the exit body can never
+                  # open with "summary=starting". That is a construction, not a discipline.
+                  HC_BODY=/tmp/hc-body
+                  hc_reset() { true > "$HC_BODY" 2>/dev/null || true; }
+                  emit() { { printf '%s' "$*" | LC_ALL=C tr -cd '\040-\176'; printf '\n'; } >> "$HC_BODY" 2>/dev/null || true; }
+
                   HC="https://hc-ping.com/${HC_UUID}"
-                  ping_hc() { wget -q -T 10 -O- "$HC/$1" >/dev/null 2>&1 || true; }
+                  # ping_hc [SUFFIX] - "" | start | <exit-status>.
+                  ping_hc() {
+                    _sf=${1:-}
+                    _u=$HC
+                    [ -z "$_sf" ] || _u="$HC/$_sf"
+                    if [ -s "$HC_BODY" ]; then
+                      if wget -q -T 10 -O- --post-file="$HC_BODY" "$_u" >/dev/null 2>&1; then
+                        hc_reset; return 0
+                      fi
+                      echo "hc: body POST failed, retrying without a body" >&2
+                    fi
+                    # Fixed text. No URL, no tool output: for a ping the URL IS the write
+                    # credential, and a pod log is not a place to put one either.
+                    wget -q -T 10 -O- "$_u" >/dev/null 2>&1 || echo "hc: ping not delivered" >&2
+                    hc_reset
+                    return 0
+                  }
+
+                  # ONE SINK PER DIAGNOSTIC. Every ERROR: line below goes to the pod log AND
+                  # into the ping body from a single call, so the first reword cannot
+                  # desynchronise the log from the third-party body. Do not write
+                  # `echo "ERROR: x"; emit "error=x"` at fifteen sites.
+                  #
+                  # Lines are held in a variable rather than a second file because spec
+                  # section 5 makes `summary=` line 1, and the errors are known before the
+                  # summary is; they are flushed after it.
+                  HC_ERR_LINES=""
+                  say_err() {
+                    echo "ERROR: $*"
+                    HC_ERR_LINES="$HC_ERR_LINES
+                  error=$*"
+                  }
+                  flush_errors() {
+                    [ -n "$HC_ERR_LINES" ] || return 0
+                    printf '%s\n' "$HC_ERR_LINES" | while read -r _fl; do
+                      # check-ping-bodies: untaint _fl - every line here was produced by say_err, whose argument the same check validated at its call site
+                      [ -z "$_fl" ] || emit "$_fl"
+                    done
+                  }
+
+                  # STEP names the phase for failed_step= in the ping body. `step NAME [TEXT]`
+                  # echoes TEXT (or NAME) exactly as the plain echoes it replaces did, so the
+                  # pod log is byte-identical. The last step is `finished`, not `done`,
+                  # because `done` is a shell keyword and shellcheck rejects it unquoted in a
+                  # test.
+                  STEP=start
+                  step() { STEP=$1; echo "==> ${2:-$1}"; }
 
                   # ---- Backup verification gate ---------------------------------------
                   # WHAT THIS EXISTS TO STOP
@@ -146,6 +220,16 @@ spec:
                   TREE_DIRS=0
                   TREE_KIB=0
                   NOW=0
+                  # Body fields. Initialised here so `set -u` cannot bite in the
+                  # ping-body block if the run aborts before a gate function ran.
+                  MOUNT_OK=unknown
+                  ART_OK=0
+                  ART_TOT=0
+                  FRESH_OK=0
+                  FRESH_TOT=0
+                  PRUNE=skipped
+                  RESTIC_CHECK=not-reached
+                  TREE_GIB=unknown
 
                   # Resolve a glob to its most recently modified existing match.
                   # stdout: the path. 0 = found, 1 = nothing matched, 2 = a match existed but
@@ -177,29 +261,31 @@ spec:
                   # Age assertion on one resolved path. $1 = path, $2 = label.
                   assert_fresh() {
                     _am=$(stat -c %Y "$1" 2>&1) || {
-                      echo "ERROR: $2: cannot stat $1: $_am"
+                      # check-ping-bodies: untaint _am - stat's own message, not emitted: say_err names the label and path only
+                      say_err "$2: cannot stat $1"
                       return 1
                     }
                     case "$_am" in
-                      ''|*[!0-9]*) echo "ERROR: $2: unparseable mtime for $1: $_am"; return 1 ;;
+                      ''|*[!0-9]*) say_err "$2: unparseable mtime for $1"; return 1 ;;
                     esac
                     _aage=$(( NOW - _am ))
                     [ "$_aage" -lt "$STALE_SECONDS" ] && return 0
-                    echo "ERROR: $2 STALE: $1 is $(( _aage / 3600 ))h old (limit $(( STALE_SECONDS / 3600 ))h)"
+                    say_err "$2 STALE: $1 is $(( _aage / 3600 ))h old (limit $(( STALE_SECONDS / 3600 ))h)"
                     return 1
                   }
 
                   # Size assertion on one resolved path. $1 = path, $2 = label, $3 = min bytes.
                   assert_min_size() {
                     _zs=$(stat -c %s "$1" 2>&1) || {
-                      echo "ERROR: $2: cannot stat $1: $_zs"
+                      # check-ping-bodies: untaint _zs - gated to digits by the case below before it is ever emitted
+                      say_err "$2: cannot stat $1"
                       return 1
                     }
                     case "$_zs" in
-                      ''|*[!0-9]*) echo "ERROR: $2: unparseable size for $1: $_zs"; return 1 ;;
+                      ''|*[!0-9]*) say_err "$2: unparseable size for $1"; return 1 ;;
                     esac
                     [ "$_zs" -ge "$3" ] && return 0
-                    echo "ERROR: $2 IMPLAUSIBLY SMALL: $1 is ${_zs} B (floor ${3} B)"
+                    say_err "$2 IMPLAUSIBLY SMALL: $1 is ${_zs} B (floor ${3} B)"
                     return 1
                   }
 
@@ -217,21 +303,27 @@ spec:
                   # Verified in-cluster 2026-08-20: st_dev 2065 (8:17 /dev/sdb1) vs 2054 (8:6 /dev/sda6).
                   check_mount() {
                     _md=$(stat -c %d /data 2>&1) || {
-                      echo "ERROR: mount check: cannot stat /data: $_md"
+                      MOUNT_OK=no
+                      # check-ping-bodies: untaint _md - stat's own message on the failure arm; only the st_dev integer is emitted, and only on the success arm
+                      say_err "mount check: cannot stat /data"
                       return 1
                     }
                     _mh=$(stat -c %d /etc/hosts 2>&1) || {
-                      echo "ERROR: mount check: cannot stat /etc/hosts: $_mh"
+                      MOUNT_OK=no
+                      # check-ping-bodies: untaint _mh - as above
+                      say_err "mount check: cannot stat /etc/hosts"
                       echo "       Without it the SSD mount cannot be distinguished from its"
                       echo "       fallback, so this is a failure, not a pass."
                       return 1
                     }
                     if [ "$_md" = "$_mh" ]; then
-                      echo "ERROR: /data shares a filesystem with the kubelet pod directory (st_dev $_md)."
+                      MOUNT_OK=no
+                      say_err "/data shares a filesystem with the kubelet pod directory (st_dev $_md)."
                       echo "       The SSD user volume is NOT mounted - /data is the bare mountpoint"
                       echo "       on the EPHEMERAL partition. Anything backed up now is not the data."
                       return 1
                     fi
+                    MOUNT_OK=yes
                     echo "note: mount ok - /data st_dev=$_md, kubelet pod dir st_dev=$_mh"
                     return 0
                   }
@@ -274,7 +366,7 @@ spec:
                     for _md in "$@"; do
                       [ -d "$_md" ] || continue
                       if [ ! -r "$_md" ] || [ ! -x "$_md" ]; then
-                        echo "ERROR: PVC directory is not readable: $_md"
+                        say_err "PVC directory is not readable: $_md"
                         _mrc=1
                         continue
                       fi
@@ -282,7 +374,7 @@ spec:
                       _mk=${_mdu%%[!0-9]*}
                       case "$_mk" in
                         ''|*[!0-9]*)
-                          echo "ERROR: unparseable 'du -sk' output for $_md: $_mdu"
+                          say_err "unparseable 'du -sk' output for $_md"
                           _mrc=1
                           continue
                           ;;
@@ -303,12 +395,12 @@ spec:
                   check_scale() {
                     _crc=0
                     if [ "$TREE_DIRS" -lt "$MIN_PVC_DIRS" ]; then
-                      echo "ERROR: only $TREE_DIRS local-path PVC directories under /data (floor $MIN_PVC_DIRS)"
+                      say_err "only $TREE_DIRS local-path PVC directories under /data (floor $MIN_PVC_DIRS)"
                       echo "       An unmounted SSD user volume presents as zero."
                       _crc=1
                     fi
                     if [ "$TREE_KIB" -lt "$MIN_DATA_KIB" ]; then
-                      echo "ERROR: /data totals ${TREE_KIB} KiB, below the ${MIN_DATA_KIB} KiB floor."
+                      say_err "/data totals ${TREE_KIB} KiB, below the ${MIN_DATA_KIB} KiB floor."
                       echo "       This tree is empty or implausibly small - do not trust this backup."
                       _crc=1
                     fi
@@ -339,13 +431,15 @@ spec:
                            else
                              _rc=1
                            fi ;;
-                        1) echo "ERROR: $_label MISSING - nothing matches $_glob"; _rc=1 ;;
-                        *) echo "ERROR: $_label UNREADABLE - could not stat a match of $_glob"; _rc=1 ;;
+                        1) say_err "$_label MISSING - nothing matches $_glob"; _rc=1 ;;
+                        *) say_err "$_label UNREADABLE - could not stat a match of $_glob"; _rc=1 ;;
                       esac
                     done
                     set +f
                     # Announce the pass explicitly. A gate that prints nothing when it is happy
                     # is indistinguishable from a gate that never ran.
+                    ART_OK=$_ok
+                    ART_TOT=$_tot
                     echo "note: expected set - $_ok/$_tot artifacts present and above their size floor"
                     return $_rc
                   }
@@ -368,11 +462,13 @@ spec:
                            else
                              _frc=1
                            fi ;;
-                        1) echo "ERROR: $_flabel MISSING - nothing matches $_fglob"; _frc=1 ;;
-                        *) echo "ERROR: $_flabel UNREADABLE - could not stat a match of $_fglob"; _frc=1 ;;
+                        1) say_err "$_flabel MISSING - nothing matches $_fglob"; _frc=1 ;;
+                        *) say_err "$_flabel UNREADABLE - could not stat a match of $_fglob"; _frc=1 ;;
                       esac
                     done
                     set +f
+                    FRESH_OK=$_fok
+                    FRESH_TOT=$_ftot
                     echo "note: dump freshness - $_fok/$_ftot artifacts newer than $(( STALE_SECONDS / 3600 ))h"
                     return $_frc
                   }
@@ -380,18 +476,18 @@ spec:
                   ping_hc start
                   rc=0
 
-                  echo "==> snapshots"
+                  step snapshots
                   restic snapshots || true
 
                   # Explicit && chaining rather than `set -e` inside a group: errexit is ignored
                   # for any command in an AND-OR list, so a `{ set -e; ... } || rc=$?` block would
                   # keep running after a failure and report the last command's status.
                   {
-                    echo "==> unlock" &&
+                    step unlock &&
                     # Removes STALE locks only (no --remove-all). This is what actually recovers
                     # a lock left by a SIGKILLed previous run.
                     restic unlock &&
-                    echo "==> backup /data" &&
+                    step backup "backup /data" &&
                     restic backup /data \
                       --tag nightly \
                       --exclude='*.tmp' \
@@ -415,7 +511,7 @@ spec:
                   #   noticed. The cost of a false positive is a repository that grows in B2 until
                   #   somebody looks - cheap, and reversible; the cost of the false negative is
                   #   every recovery point. Do not "simplify" this back into the chain above.
-                  echo "==> backup verification gate"
+                  step gate "backup verification gate"
                   # NOW is sampled here, not at script start: the backup above can run for hours,
                   # and an age measured against a stale clock reading would silently loosen the
                   # freshness threshold.
@@ -430,7 +526,7 @@ spec:
                   prune_rc=0
                   if [ "$rc" -eq 0 ] && [ "$gate_rc" -eq 0 ]; then
                     {
-                      echo "==> forget + prune" &&
+                      step forget "forget + prune" &&
                       # --group-by paths is LOAD-BEARING. restic forget defaults to grouping by
                       # host+paths, and every CronJob pod has a unique hostname, so each nightly
                       # snapshot landed in a group of its own and the policy below kept ALL of
@@ -443,7 +539,9 @@ spec:
                         --keep-weekly 4 \
                         --keep-monthly 6
                     } || prune_rc=$?
+                    [ "$prune_rc" -ne 0 ] || PRUNE=ran
                   else
+                    PRUNE=skipped
                     echo "==> forget + prune SKIPPED"
                     echo "    Retention is deferred on purpose. Expiring daily snapshots against a"
                     echo "    tree that failed verification (or a backup that failed outright) is"
@@ -453,8 +551,9 @@ spec:
 
                   # Integrity of the repository is worth knowing either way.
                   check_rc=0
-                  echo "==> check"
+                  step check
                   restic check || check_rc=$?
+                  [ "$check_rc" -ne 0 ] || RESTIC_CHECK=ok
 
                   # Preserve the most specific failure. A real restic failure keeps its own exit
                   # code; the gate only promotes to failure when nothing else already did.
