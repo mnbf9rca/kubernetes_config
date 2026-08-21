@@ -37,10 +37,15 @@ set -uo pipefail
 #      truncates cpy BEFORE head runs, so any head failure leaves an
 #      empty file and --post-file=<empty> is a SUCCESSFUL post of a
 #      blank body that never falls back.
-#   2. NEVER EMIT A COMMAND'S OUTPUT. restic's error messages quote
-#      the repository URL, and this body goes to a third party who
-#      keeps it until the ping log rotates. `make check-ping-bodies`
-#      enforces it; read spec section 9.2 before adding a field.
+#   2. NEVER EMIT A COMMAND'S OUTPUT. A script cannot classify its own
+#      command output at runtime, and this body goes to a third party
+#      who keeps it until the ping log rotates. The concrete leaks: the
+#      scripts influx-backup.sh execs pass the InfluxDB operator token
+#      on argv, and a failing wget quotes the ping URL, which IS the
+#      check's write credential. (A restic repository URI is NOT a
+#      reason - it grants nothing; see the tiers in AGENTS.md.)
+#      `make check-ping-bodies` enforces it; read spec section 9.2
+#      before adding a field.
 #   3. A BARE TRAILING SLASH IS AN HTTP 400 (verified live against
 #      hc-ping.com), so the URL is built conditionally. Unconditional
 #      "$HC/$1" would break the plain success ping, and the bodiless
@@ -401,8 +406,9 @@ elif [ "$STEP" = finished ]; then
 else
   # restic's own failure: a B2 outage, a credential rotation, a lock
   # conflict, a corrupt pack. NOTHING CAPTURED, EVER - not restic's
-  # stdout, not its stderr, not a slice of either. Its messages quote
-  # the repository URL.
+  # stdout, not its stderr, not a slice of either. Not because a
+  # repository URI is sensitive (it is not), but because output this
+  # script did not construct cannot be classified at runtime.
   emit "summary=FAILED rc=$rc - restic exited non-zero"
   emit "failed_step=$STEP"
   emit "error=restic exited non-zero; see pod log"
