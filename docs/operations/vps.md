@@ -189,7 +189,7 @@ into a backup alert rather than years of backing up a stale or absent copy.
 **Adding a sqlite-backed service means adding its snapshot to that list.** The gate proves
 a snapshot exists, is fresh and has a schema; it does not prove the contents are complete.
 That, and why the gate runs after rather than before the backup, are in
-[monitoring.md](monitoring.md#the-vps-backup-verification-gate).
+[monitoring.md](monitoring.md#the-backup-verification-gates).
 
 The job pings healthchecks.io on start and on exit code, and sets no
 `terminationGracePeriodSeconds` — busybox `ash` as PID 1 never forwards SIGTERM to restic,
@@ -202,7 +202,7 @@ reason the shell is chained with `&&` rather than `set -e`, are in
 
 uptime-kuma at `uptime.cynexia.com` is layer 3 of the detection stack. Its monitors are
 **created by hand in the UI** — v2 has no supported programmatic path — and are documented
-monitor-by-monitor in [monitoring.md](monitoring.md#uptime-kuma-runbook-layer-3),
+monitor-by-monitor in [uptime-kuma.md](uptime-kuma.md),
 including the Cloudflare Access trap (a monitor that follows the Access 302 reports UP
 while the origin is dead) and the healthchecks.io dead-man's-switch that watches
 uptime-kuma itself.
