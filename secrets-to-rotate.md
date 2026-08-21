@@ -6,6 +6,19 @@ a log or scratch file — the discloser records it here immediately, even when
 unsure whether the exposure "counts". Entries are identifiers only: **never write
 the secret value itself in this file.**
 
+**What does NOT belong here.** Only values that *grant access* — tokens, passwords,
+keys. Identifiers do not, however awkward their exposure feels:
+
+- **healthchecks.io ping UUIDs** grant no access. Holding one lets a stranger ping a check
+  and mask a real failure, which is why they stay out of this public repo, but a transcript
+  or a pod log is not a disclosure. No row, no rotation. Ruled three times; the existing
+  UUID rows below are kept only as a record of that decision.
+- **Restic repository URIs, bucket names, zone IDs, PVC UUIDs, namespaces, usernames and
+  hostnames** are not sensitive at all. They belong in pod logs and diagnostics.
+
+A row for one of these is not a harmless false positive: it implies a rotation nobody
+should perform, and it trains the next reader to treat the file as noise.
+
 An entry here means: assume compromised, rotate at the next opportunity, then mark
 it rotated. The rule that puts entries here is in `AGENTS.md` ("Secret disclosure →
 honesty box"); the rotation *procedures* are in the docs tree — the general one in
