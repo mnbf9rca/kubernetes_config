@@ -405,7 +405,7 @@ in six hours anyway.
 
 This namespace's checks watch **data freshness**, not the auth proxy — which is why the
 Pomerium wedge above went unnoticed. External availability of `mcp.cynexia.com` and the
-other tunnel hostnames is layer 3, in [monitoring.md](monitoring.md#monitor-list).
+other tunnel hostnames is layer 3, in [uptime-kuma.md](uptime-kuma.md#monitor-list).
 
 ## Secret rotation
 

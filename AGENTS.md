@@ -17,7 +17,8 @@ procedures live under `docs/` and are referenced from here rather than duplicate
 | `docs/operations/homelab.md` | Homelab cluster: platform stack, namespaces/workloads, NFS and storage, node network, DNS/Route53, encryption at rest, operational gotchas |
 | `docs/operations/homelab-health.md` | The `health` namespace: ingest pipeline, image-pin rationale, InfluxDB bootstrap, backups/restore, Garmin re-auth, monitoring, probe rationale |
 | `docs/operations/vps.md` | VPS cluster: shape, workloads, Cloudflare tunnel/Access, DB decisions, backups |
-| `docs/operations/monitoring.md` | How failures get noticed: probe policy and inventory, CronJob deadlines, healthchecks.io checks, the uptime-kuma manual runbook, and what none of it catches |
+| `docs/operations/monitoring.md` | How failures get noticed: the triage table, probe policy and inventory, CronJob deadlines, the backup verification gates, healthchecks.io checks and ping bodies, and what none of it catches |
+| `docs/operations/uptime-kuma.md` | Layer 3/4 runbook: creating uptime-kuma monitors by hand, per-monitor HTTP settings, the Cloudflare Access trap, the self-monitor |
 
 Design documents and implementation plans are local-only under the gitignored
 `docs/superpowers/` tree (`specs/2026-04-11-talos-homelab-rebuild-design.md`,
@@ -157,10 +158,11 @@ Full mechanics, target-by-target reference and failure modes:
   jottacloud's ping comes from `backup.sh` inside a third-party image. Inventory and
   per-job semantics: `docs/operations/monitoring.md`.
 - **A ping body is a disclosure channel.** Every ping carries a short `key=value` summary
-  (`summary=` first, printable ASCII), and **never a command's output** — restic quotes the
-  repository URL, the exec'd influx scripts carry the operator token on argv, and a failing
-  `wget` quotes the ping URL, which is the check's write credential. Emit a count, an age, a
-  size, a path built from a literal glob, or a verdict from a fixed enum.
+  (`summary=` first, printable ASCII), and **never a command's output** — the exec'd influx
+  scripts carry the operator token on argv, and a failing `wget` quotes the ping URL, which is
+  the check's write credential. The rule is blanket because a script cannot sort the tiers
+  below apart at runtime. Emit a count, an age, a size, a path built from a literal glob, or a
+  verdict from a fixed enum.
   `make check-ping-bodies` enforces it and is the only thing that catches
   `M=$(cmd); emit "error=$M"`. The body also travels with the alert: upstream's email,
   webhook, Slack, Telegram, Matrix, GitHub and MS Teams transports all read it into the

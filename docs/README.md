@@ -10,7 +10,8 @@ and conventions only — everything cluster-specific or procedural lives here.
 | [operations/homelab.md](operations/homelab.md) | Homelab cluster: platform stack, namespaces/workloads, NFS and storage, node network, DNS, encryption at rest, operational gotchas |
 | [operations/homelab-health.md](operations/homelab-health.md) | The `health` namespace: ingest pipeline, image-pin rationale, InfluxDB bootstrap, backups/restore, Garmin re-auth, the 2026-08-18 Pomerium wedge and probe rationale |
 | [operations/vps.md](operations/vps.md) | VPS (Hetzner) cluster: shape, workloads, Cloudflare tunnel/Access, DB decisions, backups |
-| [operations/monitoring.md](operations/monitoring.md) | How failures get noticed: the four detection layers, probe policy and inventory, CronJob deadlines, the backup verification gate, healthchecks.io checks, the uptime-kuma manual runbook, and what none of it catches |
+| [operations/monitoring.md](operations/monitoring.md) | How failures get noticed: the triage table, the four detection layers, probe policy and inventory, CronJob deadlines, the backup verification gates, healthchecks.io checks and ping bodies, and what none of it catches |
+| [operations/uptime-kuma.md](operations/uptime-kuma.md) | Layer 3/4 runbook: creating uptime-kuma monitors by hand, per-monitor HTTP settings, the Cloudflare Access trap, the self-monitor |
 
 `docs/superpowers/` is gitignored — local-only specs and implementation plans, not part
 of this tree.
