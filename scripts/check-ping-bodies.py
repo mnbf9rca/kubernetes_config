@@ -88,8 +88,9 @@ SHELL_SINKS = ("emit", "say_err", "fatal")
 PY_SINKS = ("hc_emit", "hc_summary")
 
 # Variables that hold captured output, a credential, or something spec 9.1
-# forbids outright. Checked in both `${NAME}` and bare `$NAME` form. The
-# envsubst allowlists are added to this at run time.
+# forbids outright. Checked in every reference form VAR_REF knows - bare
+# `$NAME`, `${NAME}`, and each parameter expansion built on it. The envsubst
+# allowlists are added to this at run time.
 DENY_VARS = (
     # ping UUIDs - a write credential, and in scope in every one of these scripts
     "HC_UUID", "HC_APPLE", "HC_GARMIN",
@@ -151,12 +152,42 @@ SINK_CALL_TMPL = (r"(?:^|[;&|{(]|\|\||\b(?:do|then|else)\s)"
 SINK_DEF_TMPL = r"^\s*(?:%s)\s*\(\s*\)"
 
 
+# Every variable reference, so each name can be judged on its own rather than
+# matched against one giant precompiled alternation.
+#
+# The brace alternative deliberately stops at the NAME and does not require the
+# closing `}`. `${NAME}` is only the simplest of the parameter expansions, and
+# every other form puts an operator between the name and the brace:
+# `${NAME:-default}`, `${NAME:=x}`, `${NAME:?x}`, `${NAME:+x}`, `${NAME#p}`,
+# `${NAME%s}`, `${NAME/a/b}`, `${NAME^^}`, `${NAME,,}`, `${NAME:0:8}`,
+# `${NAME[0]}`. Requiring the brace - as this pattern did until PR #37 - meant
+# `emit "u=${HC_UUID:-}"` matched NEITHER alternative (`${` is not `$` followed
+# by a letter) and posted the ping URL to a third party through a guard that
+# reported OK. `[#!]?` covers the two forms that put a sigil BEFORE the name,
+# `${#NAME}` (length) and `${!NAME}` (indirect).
+#
+# Stopping at the name also makes nesting work by accident rather than by
+# design: the match for `${A:-${HC_UUID}}` ends after `${A`, so the scan resumes
+# inside the operand and finds `${HC_UUID` on the next iteration.
+VAR_REF = re.compile(
+    r"\$\{[#!]?([A-Za-z_][A-Za-z0-9_]*)"
+    r"|\$([A-Za-z_][A-Za-z0-9_]*)")
+
+
+def referenced_names(text):
+    """Every variable name `text` references, in order, without duplicates."""
+    seen, names = set(), []
+    for match in VAR_REF.finditer(text):
+        name = match.group(1) or match.group(2)
+        if name not in seen:
+            seen.add(name)
+            names.append(name)
+    return names
+
+
 def _names_any(text, names):
-    """True if `text` references any of `names` as $NAME or ${NAME}."""
-    for name in names:
-        if re.search(r"\$\{?%s(?![A-Za-z0-9_])" % re.escape(name), text):
-            return True
-    return False
+    """True if `text` references any of `names`."""
+    return any(name in names for name in referenced_names(text))
 
 
 class CheckUnrunnable(Exception):
@@ -211,10 +242,6 @@ def denied_names():
         names.update(entries)
     return sorted(names)
 
-
-# Every `$NAME` / `${NAME}` reference, so each name can be judged on its own
-# rather than matched against one giant precompiled alternation.
-VAR_REF = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)")
 
 # A redirection into the body file. `emit` is the only writer; anything else is
 # the one-line evasion this whole check exists to close, wearing a different hat.
@@ -303,8 +330,9 @@ def scan_text(path, lines, denied):
         if not match:
             continue
         arg = ARITH.sub("", match.group("arg"))
-        for name in sorted(tainted):
-            if re.search(r"\$\{?%s(?![A-Za-z0-9_])" % re.escape(name), arg):
+        names = referenced_names(arg)
+        for name in names:
+            if name in tainted:
                 yield number, ("$%s in a %s argument holds captured output "
                                "(assigned from a command substitution, a "
                                "backtick or `read` earlier in this file). "
@@ -316,12 +344,11 @@ def scan_text(path, lines, denied):
             yield number, "command substitution in a %s argument" % match.group(1)
         if "`" in arg:
             yield number, "backtick substitution in a %s argument" % match.group(1)
-        for hit in VAR_REF.finditer(arg):
-            name = hit.group(1) or hit.group(2)
+        for name in names:
             reason = denied_reason(name, denied)
             if reason:
-                yield number, ("%s in a %s argument - %s"
-                               % (hit.group(0), match.group(1), reason))
+                yield number, ("$%s in a %s argument - %s"
+                               % (name, match.group(1), reason))
 
 
 def _py_reason(node):

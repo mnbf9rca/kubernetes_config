@@ -431,7 +431,11 @@ ever called with a literal key and a value the script itself computed — a coun
 byte size, a path built from a literal glob, or a verdict from a fixed enum.
 `make check-ping-bodies` enforces it, including the one-intermediate-variable evasion
 (`M=$(cmd); emit "error=$M"`), and a taint is cleared only by an explicit
-`# check-ping-bodies: untaint <NAME> <reason>` line.
+`# check-ping-bodies: untaint <NAME> <reason>` line. A denied name is recognised in every
+parameter-expansion form, not just `$NAME` and `${NAME}`: `${HC_UUID:-}`, `${HC_UUID#p}`,
+`${HC_UUID/a/b}` and `${#HC_UUID}` are all refused. They were not until PR #37 — the
+reference pattern required the closing brace, so any expansion carrying an operator
+matched neither alternative and the guard reported OK on a body containing the ping URL.
 
 Also never emitted: any ping UUID, anything from a Secret, the restic repository URL or B2
 bucket name, any personal health *value*, and pod or node names.
