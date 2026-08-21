@@ -101,15 +101,32 @@ DENY_VARS = (
     "POD",
 )
 
+# An exact-name list derives from nothing and rots: `TOKEN` above does not match
+# `$INFLUX_TOKEN`, `$CF_API_TOKEN` or `$PGPASSWORD`, and the health namespace
+# already uses all three names in its Python job. So names are ALSO refused by
+# SHAPE, which is a rule rather than an enumeration of today's variables. A false
+# positive costs one `untaint` comment with a written reason - the same price
+# every other gated value in these scripts already pays.
+SUSPICIOUS_NAME = re.compile(
+    r"^[A-Za-z0-9_]*(?:TOKEN|PASSWORD|PASSWD|SECRET|APIKEY|CREDENTIALS?|UUID)$"
+    r"|^[A-Za-z0-9_]*_(?:KEY|PW)$", re.IGNORECASE)
+
 # Python: names a sink argument may reference. Adding one is a deliberate review
 # act - it asserts that the value is a count, a timestamp, an age, or a
 # classified verdict, and never a response body or an exception message.
+#
+# `warnings` USED TO BE ON THIS LIST AND MUST NOT GO BACK. Its elements are
+# formatted strings that splice in `zone_tag`, the value of the CF_ZONE_TAGS
+# Secret - the one value spec 9.1 names as "the one that nearly shipped". The
+# allowlist admits a NAME, not a subexpression, so `warnings[0]` and `warnings`
+# both passed while only `len(warnings)` was ever intended. The count is bound to
+# `truncated` at the call site instead, and an int cannot carry a zone ID.
 PY_VALUE_ALLOWLIST = frozenset({
     "chunks_done", "MAX_CHUNKS", "RETENTION_HOURS",
     "rows_total", "series_total",
     "watermark", "start", "now", "committed_through",
     "g_start", "g_end", "missing_hours", "gap_marker",
-    "warnings", "rc", "lag_minutes",
+    "truncated", "rc", "lag_minutes",
 })
 
 # Python: calls a sink argument may make. `iso` formats a datetime; `len`, `int`
@@ -195,14 +212,27 @@ def denied_names():
     return sorted(names)
 
 
-def build_var_pattern(names):
-    """`${NAME}` or a bare `$NAME` for any denied name, with a right boundary."""
-    alternation = "|".join(re.escape(n) for n in names)
-    return re.compile(r"\$\{(%s)\}|\$(%s)(?![A-Za-z0-9_])"
-                      % (alternation, alternation))
+# Every `$NAME` / `${NAME}` reference, so each name can be judged on its own
+# rather than matched against one giant precompiled alternation.
+VAR_REF = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)")
+
+# A redirection into the body file. `emit` is the only writer; anything else is
+# the one-line evasion this whole check exists to close, wearing a different hat.
+BODY_WRITE = re.compile(r'>>?\s*"?\$\{?HC_BODY')
+BODY_WRITER_DEF = re.compile(r"^\s*(?:emit|hc_reset)\s*\(\s*\)")
 
 
-def scan_text(path, lines, var_pattern):
+def denied_reason(name, names):
+    """Why this variable name may not appear in a sink argument, or None."""
+    if name in names:
+        return "holds captured output or a credential"
+    if SUSPICIOUS_NAME.search(name):
+        return ("its NAME says it holds a credential (matched the shape rule in "
+                "check-ping-bodies.py)")
+    return None
+
+
+def scan_text(path, lines, denied):
     """Yield (line_number, reason) for every unsafe shell/YAML sink call.
 
     Tracks TAINT within the file: a variable assigned from a command
@@ -212,14 +242,29 @@ def scan_text(path, lines, var_pattern):
 
         M=$(restic backup /data 2>&1); emit "error=$M"
 
-    LIMITATION, stated rather than hidden: positional parameters are not
-    tracked, so a tainted value passed into a function and emitted as `$1` is
-    not caught. In this estate those are resolved artifact paths, which spec
-    section 9.3 accepts.
-
     To clear a taint, write the marker comment on its own line, WITH A REASON:
 
         # check-ping-bodies: untaint _zs - gated to digits by the case above
+
+    LIMITATIONS, stated rather than hidden. This is a mechanism, not a proof;
+    human review still reads spec section 9.
+
+      * Positional parameters are not tracked, so a tainted value passed into a
+        function and emitted as `$1` is not caught:
+
+            M=$(restic snapshots); wrap() { say_err "restic: $1"; }; wrap "$M"
+
+        In this estate every such `$1` is a resolved artifact path or a label,
+        which spec section 9.3 accepts. Do not add a wrapper around a sink.
+      * An `untaint` marker clears the name FORWARD to the end of the file, not
+        just for the following line. That is load-bearing today - the `_zs` and
+        `_md` markers sit at a failure arm and clear a name emitted further down,
+        after a digits gate - but it means a LATER emit of the same name, from a
+        different capture, is silent. Reuse of a variable name after a marker is
+        the thing to look at in review.
+      * Files are chosen by extension, not by being a `configMapGenerator` input,
+        so a generator input with no extension is not scanned. REQUIRED_TARGETS
+        covers today's five; a sixth needs adding there.
     """
     call = re.compile(SINK_CALL_TMPL % "|".join(SHELL_SINKS))
     definition = re.compile(SINK_DEF_TMPL % "|".join(SHELL_SINKS))
@@ -228,10 +273,17 @@ def scan_text(path, lines, var_pattern):
         clean = ARITH.sub("", line)
         untaint = UNTAINT.search(clean)
         if untaint:
+            # Clear ONE name. Deliberately NOT `continue`: a marker used to skip
+            # the whole line, so `emit "g=$(cat /etc/passwd)"  # ... untaint ZZZ`
+            # disabled the command-substitution check and the credential check
+            # too, and the name it "cleared" did not have to exist. A marker
+            # exempts a variable, never a line.
             tainted.discard(untaint.group(1))
-            continue
         if COMMENT_ONLY.match(line):
             continue
+        if BODY_WRITE.search(line) and not BODY_WRITER_DEF.match(line):
+            yield number, ("writes to $HC_BODY directly - only `emit` may, so "
+                           "that one function decides what a third party sees")
         if not definition.match(line):
             for assign in ASSIGN.finditer(clean):
                 rhs = assign.group("rhs")
@@ -264,9 +316,12 @@ def scan_text(path, lines, var_pattern):
             yield number, "command substitution in a %s argument" % match.group(1)
         if "`" in arg:
             yield number, "backtick substitution in a %s argument" % match.group(1)
-        for hit in var_pattern.finditer(arg):
-            yield number, ("%s in a %s argument - it holds captured output or a "
-                           "credential" % (hit.group(0), match.group(1)))
+        for hit in VAR_REF.finditer(arg):
+            name = hit.group(1) or hit.group(2)
+            reason = denied_reason(name, denied)
+            if reason:
+                yield number, ("%s in a %s argument - %s"
+                               % (hit.group(0), match.group(1), reason))
 
 
 def _py_reason(node):
@@ -356,7 +411,7 @@ def main(argv):
     roots = argv[1:] or list(SCAN_ROOTS)
     try:
         assert_targets_present(roots)
-        var_pattern = build_var_pattern(denied_names())
+        denied = frozenset(denied_names())
         hits, scanned, calls = [], 0, 0
         call_re = re.compile(SINK_CALL_TMPL % "|".join(SHELL_SINKS))
         def_re = re.compile(SINK_DEF_TMPL % "|".join(SHELL_SINKS))
@@ -374,7 +429,7 @@ def main(argv):
                 calls += sum(source.count("%s(" % s) for s in PY_SINKS)
             else:
                 lines = source.splitlines()
-                for number, reason in scan_text(path, lines, var_pattern):
+                for number, reason in scan_text(path, lines, denied):
                     hits.append((rel, number, reason))
                 for line in lines:
                     if not COMMENT_ONLY.match(line) and not def_re.match(line) \

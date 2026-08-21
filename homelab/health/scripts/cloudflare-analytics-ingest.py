@@ -723,9 +723,15 @@ def main():
         hc_emit("cause=unknown - see pod log")
         return 1
     if warnings:
-        log("RUN INCOMPLETE: %d truncated window(s)" % len(warnings))
-        hc_summary("INCOMPLETE - %d truncated window(s)" % len(warnings))
-        hc_emit("truncated_windows=%d" % len(warnings))
+        # Bound to an int BEFORE it reaches a sink. `warnings` itself must never
+        # be on check-ping-bodies.py's value allowlist: each element splices in
+        # zone_tag, from the CF_ZONE_TAGS Secret, so allowlisting the name would
+        # pass `warnings[0]` as well as `len(warnings)`. An int cannot carry a
+        # zone ID.
+        truncated = len(warnings)
+        log("RUN INCOMPLETE: %d truncated window(s)" % truncated)
+        hc_summary("INCOMPLETE - %d truncated window(s)" % truncated)
+        hc_emit("truncated_windows=%d" % truncated)
         hc_emit("detail=see pod log")
         return 1
     if committed_through:
