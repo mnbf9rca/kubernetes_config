@@ -55,8 +55,13 @@ set -uo pipefail
 # never open with "summary=starting". That is a construction, not a
 # discipline at call sites.
 HC_BODY=/tmp/hc-body
-hc_reset() { true > "$HC_BODY" 2>/dev/null || true; }
-emit() { { printf '%s' "$*" | LC_ALL=C tr -cd '\040-\176'; printf '\n'; } >> "$HC_BODY" 2>/dev/null || true; }
+# The stderr redirection PRECEDES the body redirection in both. Redirections
+# are applied left to right, so `>> "$HC_BODY" 2>/dev/null` cannot suppress the
+# shell's own "cannot create" diagnostic - only this order can (verified in dash
+# and busybox 1.36.1). Property 4 above is what keeps the job alive on that day;
+# this is what keeps its log readable.
+hc_reset() { true 2>/dev/null > "$HC_BODY" || true; }
+emit() { { printf '%s' "$*" | LC_ALL=C tr -cd '\040-\176'; printf '\n'; } 2>/dev/null >> "$HC_BODY" || true; }
 
 HC="https://hc-ping.com/${HC_UUID}"
 # ping_hc [SUFFIX] - "" | start | <exit-status>.
@@ -90,8 +95,16 @@ ping_hc() {
 HC_ERR_LINES=""
 say_err() {
   echo "ERROR: $*"
+  # COLLAPSE NEWLINES AT CAPTURE. flush_errors splits this accumulator on
+  # newlines to make one body record per diagnostic, and it does that BEFORE
+  # `emit` sanitises - so a newline inside a value (a PVC directory name can
+  # carry one) splits into extra records and can synthesise a key nobody
+  # emitted: a second `prune=` after, and contradicting, the real one. Killing
+  # it here is what makes spec section 5's one-record-per-emit invariant true
+  # for this path too, and not only for direct `emit` calls.
+  _sm=$(printf '%s' "$*" | tr '\n\r' '  ')
   HC_ERR_LINES="$HC_ERR_LINES
-error=$*"
+error=$_sm"
 }
 flush_errors() {
   [ -n "$HC_ERR_LINES" ] || return 0
@@ -197,6 +210,9 @@ assert_fresh() {
   _am=$(stat -c %Y "$1" 2>&1) || {
     # check-ping-bodies: untaint _am - stat's own message, not emitted: say_err below names the label and path only
     say_err "$2: cannot stat $1"
+    # stat's own message belongs in the POD LOG and nowhere else: it is the
+    # difference between ENOENT, EACCES and a wedged mount. Not a sink.
+    echo "       stat said: $_am"
     return 1
   }
   _aage=$(( NOW - _am ))
@@ -371,7 +387,12 @@ sweep_advisory || gate_rc=1
 # Built AFTER the exit status is final, and never inside an && chain
 # or an rc-determining pipeline. Every value is a count this gate had
 # already computed; nothing is captured from a command. Spec 9.2.
-[ "$STEP" != finished ] || RESTIC_CHECK=ok
+# Three states. `not-reached` is the INITIAL value and must keep meaning "the chain
+# died before restic check ran"; a check that ran and failed is `failed`. Reporting
+# the second as the first contradicts failed_step=check in the same body.
+if   [ "$STEP" = finished ]; then RESTIC_CHECK=ok
+elif [ "$STEP" = check ];    then RESTIC_CHECK=failed
+fi
 if [ "$rc" -eq 0 ]; then
   emit "summary=ok - $EXP_OK/$EXP_TOT expected snapshots fresh, $FRS_OK/$FRS_TOT freshrss users, $ADV_STALE advisory"
 elif [ "$STEP" = finished ]; then
