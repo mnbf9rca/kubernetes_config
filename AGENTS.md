@@ -93,8 +93,11 @@ Full mechanics, target-by-target reference and failure modes:
   `ENVSUBST_VAR_NAMES`, the name in `REQUIRED_VARS`, and the `${VAR}` placeholder in the
   manifest. `make check-vars-consistency` hard-fails if a substituted var is missing from
   `REQUIRED_VARS` — but **nothing** catches a var missing from `ENVSUBST_VAR_NAMES`: that
-  ships the literal `${VAR}` into a Secret. Cheap confirmation after adding one:
-  `make build-<cluster> | grep -F '${'` finds any placeholder that survived the render.
+  ships the literal `${VAR}` into a Secret. To confirm no placeholder survived the
+  render after adding one, run
+  `make build-<cluster> | grep -F "$(sed -n 's/^\([A-Za-z_][A-Za-z0-9_]*\)=.*/${\1}/p' .env.tpl)"`
+  — it prints nothing on a clean tree. Do not use a bare `grep -F '${'`: shell
+  parameter expansions inside ConfigMap-mounted scripts (for example `${1:-}`) match it.
   Detail: `docs/operations/apply-workflow.md`.
 - **Multi-line secrets can't go through envsubst** (they break YAML after substitution).
   Use a dedicated `make <service>-secret` target with

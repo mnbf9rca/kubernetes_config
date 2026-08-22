@@ -62,6 +62,10 @@ missing header produces a 302, which fails the monitor — the correct, loud out
 bypass path is no substitute: the glob `/foo/*` does not match bare `/foo`, so a bypassed
 health path needs both destinations.
 
+`mcp.cynexia.com` (homelab) is also Access-protected but deliberately carries no
+service token — its monitor expects the edge's 401 itself (see the monitor
+list), and `maxredirects: 0` still applies.
+
 ## Monitor list
 
 Each path mirrors the service's in-pod probe target, so a monitor failing while the probe
@@ -78,18 +82,43 @@ VPS cluster, Access-protected — set both headers on each:
 | `vps-watch` | `https://watch.cynexia.com/` | `["200-299"]`; add `302` if you enable changedetection's password |
 | `vps-n8n` | `https://n8n.cynexia.com/healthz` | `["200-299"]` |
 
-Homelab health tunnel, no Access, so no headers:
+Homelab health tunnel:
 
 | Monitor | URL | Accepted status codes |
 |---|---|---|
-| `health-mcp` | `https://mcp.cynexia.com/` | `["200-299", "401"]` |
+| `health-mcp` | `https://mcp.cynexia.com/mcp` | exactly `["401"]` — see below |
 | `health-hae` | `https://hae.cynexia.com/` | `["200-299", "401"]` |
-| `health-authenticate` | `https://authenticate.cynexia.com/` | pin to the observed status |
 
-A fast 401 is a true end-to-end signal. It proves the tunnel, cloudflared and the origin pod
-all serve, which is exactly what was false during the Pomerium wedge. A timeout, a 5xx or a
-Cloudflare `1033` falls outside the set and marks the monitor DOWN. Both `mcp.cynexia.com` and
-`hae.cynexia.com` accept 401 and are verified working.
+`health-hae`'s fast 401 is a true end-to-end signal: the hostname has no Access
+app, so the 401 comes from the origin pod, proving the tunnel, cloudflared and
+the pod all serve — exactly what was false during the 2026-08-18 Pomerium wedge.
+
+**`health-mcp` is edge-only, by decision.** `mcp.cynexia.com` sits behind
+Cloudflare Access (Managed OAuth), which answers the unauthenticated probe at
+the edge, before the tunnel — so this monitor no longer proves the tunnel or the
+pod. The accepted set is pinned to exactly `["401"]` on purpose and must never
+be widened: an outage (timeout, 5xx, `1033`) falls outside it, and so does a
+2xx/404 from a naked origin — which is what a deleted or disabled Access app
+looks like, because that gate fails OPEN
+([homelab-health.md](homelab-health.md#mcp-behind-cloudflare-access)).
+
+**The monitor must send `{"Accept": "application/json"}` in its Headers field.**
+Access decides browser-vs-client on the `Accept` header: uptime-kuma's default
+is browser-like (`text/html,…`), so Access classifies the probe as a browser
+and answers `302` to the login page instead of the non-browser `401` —
+verified 2026-08-22 with two curls differing only in that header. Without the
+custom header the monitor sits down forever on a perfectly healthy edge. Do
+not "fix" that by accepting `302` — keep the pinned `["401"]` and fix the
+header instead, so the accepted set keeps meaning "Access challenged a
+non-browser client".
+
+Accepted
+residual: the mcp tunnel route and the influxdb-mcp HTTP handler have no
+external monitor; a wedged handler surfaces only when a client fails. An Access
+service token + Service Auth policy (the standing tech-debt item) is the path
+that would close that gap; it was declined for now because `health-hae` already
+proves tunnel+cloudflared end to end, the pod has in-cluster TCP probes, and a
+service token is a standing secret in uptime-kuma's config.
 
 Before you add a status code to any set, observe it once:
 

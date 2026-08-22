@@ -28,10 +28,8 @@ warnings — a hardening pass to `restricted` is a queued follow-up.
 
 ### Pins that carry a reason
 
-- **Pomerium `v0.33.0`**, not v0.32.1 as in the original draft: v0.33.0 carries the MCP
-  `WWW-Authenticate`/CORS fixes, and it needs
-  `mcp_allowed_client_id_domains: [claude.ai, claude.com, chatgpt.com]` or the
-  connector's OAuth dynamic client registration 401s.
+- **Pomerium `v0.33.0`** — HISTORICAL: removed 2026-08-22 (replaced by Cloudflare
+  Access Managed OAuth). The pin reasoning is preserved in git history.
 - **`garmin-grafana` is digest-pinned to a main-branch build**
   (`thisisarpanghosh/garmin-fetch-data@sha256:8b7955d3...`), not a tagged release.
   Release `v0.5.0` crashes with an `AttributeError` on `client.profile` when
@@ -60,8 +58,7 @@ Public `*.cynexia.com` hostnames on this tunnel:
 | Hostname | Purpose |
 |---|---|
 | `hae.cynexia.com` | Health Auto Export ingest → `apple-health-ingester` |
-| `mcp.cynexia.com` | Claude MCP connector, via Pomerium |
-| `authenticate.cynexia.com` | Pomerium's Google-OAuth callback |
+| `mcp.cynexia.com` | Claude/Hermes MCP connector, via Cloudflare Access (Managed OAuth) |
 
 Grafana is **not** on this tunnel — it is private, Traefik-fronted at
 `grafana-health.cynexia.net` like every other homelab service (LAN/Tailscale only).
@@ -70,20 +67,39 @@ After changing hostnames in `homelab/health/cloudflared.yaml`, run `make
 route-health-dns`. To recreate the credentials Secret, `make
 create-health-cloudflared-secret`.
 
-## MCP is a sidecar, not a standalone Deployment
+## MCP behind Cloudflare Access
 
-Deviation from the original design, and a deliberate one. The cluster's flannel CNI does
-not enforce NetworkPolicy, so a "pomerium-only" NetworkPolicy in front of a standalone
-MCP server would have been inert fencing — the MCP server is authless in HTTP mode.
-Instead it runs as a second container in the `pomerium` pod, reached over
-`localhost:3000`, using the kernel-enforced loopback netns as the real isolation
-boundary.
+Since 2026-08-22 the InfluxDB MCP server is a plain single-container Deployment +
+Service (`influxdb-mcp`, port 3000) and **auth lives entirely at the Cloudflare
+edge**: an Access app on `mcp.cynexia.com` (email policy, one-time-PIN IdP) with
+Managed OAuth — RFC 8414/9728 metadata served by Access, dynamic client
+registration enabled, 15m access tokens against a 336h (2-week) grant session.
+This replaced the Pomerium proxy (daily re-auth from its 14h session expiry;
+DCR disabled, locking out non-allowlisted MCP clients).
 
-Residual risk: upstream `ghcr.io/mnbf9rca/influxdb-mcp-server` (built multi-arch from
-source — there is no official image, and Mac-local `docker buildx` alone only produces
-arm64 while the node is amd64) binds `0.0.0.0` with no `--bind` flag, so pod-IP:3000 is
-still reachable in-cluster. Documented in `pomerium.yaml`. Queued: a bind-flag patch,
-and reinstating a NetworkPolicy if the CNI is ever swapped to Cilium.
+The origin is authless in HTTP mode and does not validate the
+`Cf-Access-Jwt-Assertion` header Access injects — accepted deliberately: Pomerium
+fronted the same authless origin, which ignored its injected identity too. The
+tunnel is the only path in from the internet, and Access gates the hostname.
+
+**RESIDUAL RISK — the gate fails OPEN.** The old gate was committed here and
+failed closed (no Pomerium → 502). The new gate is Access dashboard/API state
+tracked nowhere in this repo: delete or disable the app and cloudflared serves
+the authless origin raw to the internet, silently — and a rebuild from this repo
+(`make apply-homelab` + `make route-health-dns`) republishes the hostname with no
+guarantee the app still exists. After any rollback, rebuild or account-side
+change, `curl -s -o /dev/null -D - https://mcp.cynexia.com/mcp` must return 401
+before the hostname is trusted; the `health-mcp` uptime-kuma monitor is pinned to
+exactly `["401"]` so a naked origin alarms ([uptime-kuma.md](uptime-kuma.md)).
+
+In-cluster exposure is unchanged in kind from the 2026-08 sidecar era: flannel
+does not enforce NetworkPolicy, and upstream
+`ghcr.io/mnbf9rca/influxdb-mcp-server` (built multi-arch from source — there is
+no official image) binds `0.0.0.0` with no `--bind` flag, so pod-IP:3000 was
+reachable from any pod even as a sidecar; the restored Service only re-adds DNS
+discoverability. Any in-cluster pod can query InfluxDB read-only through it.
+Documented in `influxdb-mcp.yaml`. Queued: a bind-flag patch, and reinstating a
+NetworkPolicy if the CNI is ever swapped to Cilium.
 
 ## InfluxDB bootstrap
 
@@ -113,7 +129,7 @@ The ingest token needs read as well as write because the job's resume point is
 The read token has to be **replaced**, not amended: InfluxDB offers no way to add a bucket
 to an existing auth, so Grafana and the MCP connector cannot see `cloudflare` until a new
 token exists. Order matters — paste, `make apply-homelab`, restart `grafana` and
-`pomerium`, and only **then** `influx auth delete` the superseded auth. Delete it first and
+`influxdb-mcp`, and only **then** `influx auth delete` the superseded auth. Delete it first and
 you lock Grafana and the connector out until the new Secret has actually rolled.
 
 ## Backups and restore
@@ -311,6 +327,10 @@ uncommitted scale-down.
 
 ## Why probes exist here (2026-08-18 Pomerium wedge)
 
+> **Historical.** Pomerium was removed 2026-08-22 — this failure mode and its
+> custom probe target no longer exist. The section stays because it is why every
+> HTTP-serving workload in this namespace carries probes.
+
 Do not strip the liveness/readiness probes on the health workloads as cargo cult — they
 were added in response to a real, silent 18.5-hour outage.
 
@@ -403,9 +423,10 @@ nothing alerting. `influx-backup` sets `startingDeadlineSeconds: 3600` and
 `cloudflare-analytics` 1800; `ingest-freshness` deliberately does not, since it runs again
 in six hours anyway.
 
-This namespace's checks watch **data freshness**, not the auth proxy — which is why the
-Pomerium wedge above went unnoticed. External availability of `mcp.cynexia.com` and the
-other tunnel hostnames is layer 3, in [uptime-kuma.md](uptime-kuma.md#monitor-list).
+This namespace's checks watch **data freshness**, not the edge — which is why the
+2026-08-18 Pomerium wedge went unnoticed (that proxy has since been removed).
+External availability of `mcp.cynexia.com` and the other tunnel hostnames is
+layer 3, in [uptime-kuma.md](uptime-kuma.md#monitor-list).
 
 ## Secret rotation
 
@@ -433,6 +454,14 @@ root — see the honesty-box rule in `AGENTS.md`.
   exports. Hourly aggregates cover 2020–2025, raw data from 2026-01-01. Keep the same
   URL and tags on every export or you get duplicate series.
 
+**Verified working 2026-08-22:** the Access Managed OAuth path — unauthenticated
+`GET /mcp` 401s at the edge with a `resource_metadata` pointer, the advertised
+discovery chain serves Access metadata with a `registration_endpoint`. The
+claude.ai connector is reconnected through the one-time-PIN flow and verified
+2026-08-22: reads return data. Still open: Hermes fails dynamic client
+registration with a redirect URI that is not yet identified — a client-side
+issue, under investigation.
+
 **Tech debt / deferred:**
 
 - Garmin points can't carry a `person` tag (upstream limitation of the v1-compat write
@@ -440,6 +469,7 @@ root — see the honesty-box rule in `AGENTS.md`.
   multi-person model. The Phase 2 facade / person-registry design is expected to absorb
   this.
 - Cloudflare Access service-token in front of the tunnel hostnames (the bearer token plus
-  Pomerium's email allowlist suffice for now).
+  the Access app's email policy suffices for now; also the path to true end-to-end
+  `health-mcp` monitoring — see [uptime-kuma.md](uptime-kuma.md)).
 - Grafana alert rules (Phase 3, pending data accumulation).
 - PSA hardening from `baseline` to `restricted`.

@@ -159,9 +159,20 @@ What that check does and does not catch:
 | In `REQUIRED_VARS`, missing from `.env.tpl` | **Yes** — `require-vars` reports MISSING | — |
 | Missing from **`ENVSUBST_VAR_NAMES`** | **No. Nothing catches this** | envsubst never substitutes the token, so the literal string `${VAR}` is written into the Secret and applied. The manifest looks fine and the workload gets a credential that is the placeholder text |
 
-That third row is the reason to treat the allowlist edit as the one to double-check. After
-adding a var, `make build-<cluster> | grep -F '${'` is a cheap confirmation that no
-placeholder survived the render.
+That third row is the reason to treat the allowlist edit as the one to double-check. To
+confirm no placeholder survived the render after adding a var, run:
+
+```sh
+make build-<cluster> | grep -F "$(sed -n 's/^\([A-Za-z_][A-Za-z0-9_]*\)=.*/${\1}/p' .env.tpl)"
+```
+
+The `sed` turns every name in `.env.tpl` into a `${VAR}` pattern, so the grep matches
+only this repo's placeholders and prints nothing on a clean tree. Because the pattern
+comes from `.env.tpl`, not `ENVSUBST_VAR_NAMES`, it also catches the uncaught row above:
+a var added to `.env.tpl` but forgotten from the allowlist. Do not use a bare
+`grep -F '${'` — the rendered stream contains ConfigMap-mounted shell scripts whose
+parameter expansions (for example `${1:-}` and `${HC_UUID}`) match it about 20 times. A
+`make check-*` guard target running this in the apply preflight is a possible follow-up.
 
 `TAILSCALE_AUTH_KEY` is deliberately **not** in `ENVSUBST_VAR_NAMES`: auth keys are
 one-shot and only needed for initial node registration, so steady-state config must
