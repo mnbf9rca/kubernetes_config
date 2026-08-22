@@ -88,6 +88,16 @@ Homelab health tunnel:
 |---|---|---|
 | `health-mcp` | `https://mcp.cynexia.com/mcp` | exactly `["401"]` — see below |
 | `health-hae` | `https://hae.cynexia.com/` | `["200-299", "401"]` |
+| `health-hermes` | `https://hermes.cynexia.com/api/health` | `["200-299"]` — see below |
+
+`health-hermes` probes the Hermes dashboard on the hermes VM — the tunnel's one
+off-cluster origin. uptime-kuma probes from the VPS IP, which matches the Access
+app's bypass policy, so the probe reaches the origin and a 200 proves edge,
+tunnel, cloudflared and the dashboard process end to end. `/api/health` is on
+the dashboard's unauthenticated allowlist, so no service token or Access headers
+are needed. Do not widen the set: a 302/401 here means the bypass policy lost
+the VPS IP (or the probe egresses from somewhere new) and deserves a look, not
+an accept-code.
 
 `health-hae`'s fast 401 is a true end-to-end signal: the hostname has no Access
 app, so the 401 comes from the origin pod, proving the tunnel, cloudflared and
