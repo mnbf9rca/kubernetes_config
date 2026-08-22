@@ -143,3 +143,7 @@ shell — the token is the one thing direnv provides.
 | `omnictl config add` succeeded but commands still hit 127.0.0.1 | `add` does not switch contexts | `omnictl config context cynexia` |
 | `node not found, cannot resolve its management address` | talosctl addressed a node by IP | Address by node name (`kubectl get nodes -o name`) |
 | kubectl works, talosctl doesn't (or vice versa) | The two auth paths are independent — OIDC for kubectl, SideroV1 PGP for talosctl | Fix only the broken one; they share nothing but the omniconfig |
+
+Timestamp trap: a workstation in a non-UTC timezone renders `kubectl` AGE columns and
+`describe` timestamps in local time — compare against `date -u`, not the wall clock,
+before concluding something is stale or clock-skewed.
