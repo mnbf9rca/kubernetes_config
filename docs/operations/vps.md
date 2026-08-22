@@ -122,6 +122,31 @@ The callback path `/api/pshb.php` falls under the `freshrss api` Access bypass, 
 stays publicly reachable, and under the zone rate limiting rule of 50 requests per 10
 seconds per IP, far above hub delivery volume.
 
+### The claude.com/blog feed (HTML+XPath scrape)
+
+`claude.com/blog` has no RSS/Atom feed or JSON API (Webflow static site), so it is a
+native FreshRSS **HTML+XPath** feed (feed id 132, kind 10, user `ruined0346`). Config
+lives in the FreshRSS sqlite DB on the PVC (restic + sidecar backed up), not in git;
+it was imported via `cli/import-for-user.php` with `frss:`-namespace OPML attributes.
+
+- **Egress quirk:** Cloudflare's "Just a moment…" challenge fires on the workstation
+  IP/UA but **not** on the VPS egress, so FreshRSS's own fetch gets clean HTML. Verify
+  any "is it blocked?" question from inside the pod, not from a laptop. RSSHub was
+  therefore unnecessary (PikaPods fallback exists; key at `op://VPS/RSSHub/api_key`).
+- Selectors: item `//div[contains(concat(' ',@class,' '),' marquee_cms_blog_list_item ')]`,
+  title `descendant::h2`, uri `descendant::a[contains(@class,'clickable_link')]/@href`,
+  timestamp `descendant::div[contains(@class,'u-text-style-caption')]`. Full-article
+  content via `pathEntries` CSS `.blog_post_content_wrap`.
+- **The time format MUST be `!F j, Y` (leading `!`).** Without the `!`,
+  `DateTime::createFromFormat` fills omitted time fields with the *current* time, so
+  every poll restamps each post, the `sha1:link_published_title` dedup key churns, and
+  duplicates multiply (hit 560 once). Also keep `unicityCriteria: link` +
+  `unicityCriteriaForced: true` in the feed attributes. Verify any dedup change by
+  running `cli/actualize-user.php` twice — the second run must report 0 new. (BST dates
+  render 23:00 the prior day; cosmetic.)
+- Only the ~10 newest posts appear — older ones are JS-paginated and unreachable to a
+  non-browser scraper.
+
 ### Browser backend for changedetection
 
 Use `dgtlmoon/sockpuppetbrowser`. `browserless/chrome:latest` is the deprecated v1 line

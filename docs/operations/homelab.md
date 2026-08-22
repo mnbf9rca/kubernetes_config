@@ -132,8 +132,22 @@ Two independent layers, both live:
   `grafana-data` and `garmin-tokens` — which is why per-PVC encryption was recorded as
   superseded rather than skipped.
 
+pve3 specifics that follow from that design:
+
+- **Do not disable Secure Boot casually** — PCR 7 changes and both LUKS volumes refuse
+  TPM unlock (designed anti-theft behaviour, proven in a live negative test). Routine
+  BIOS updates survive because only PCR 7 is sealed against.
+- **A new VM is encrypted iff its disks land on the `vmdata` storage** (the VG lives
+  inside the LUKS mapper). Disks on `local` (the Proxmox root, ext4 on sda3) are NOT
+  encrypted; the Proxmox root itself is deliberately unencrypted.
+- Swap is `swap_crypt`, plain dm-crypt with a random `/dev/urandom` key per boot.
+- **The hermes VM (103) has no backup independent of `vmdata_crypt`** — the standing
+  intent is to rebuild it rather than restore it.
+
 The jottacloud staging copy on the HDD pool is separately encrypted via rclone crypt
-(`DEST_REMOTE` in the workload ConfigMap).
+(`DEST_REMOTE` in the workload ConfigMap). Its passphrase (`JOTTA_CRYPT_PASSWORD` in
+1Password) is frozen by design: rclone crypt cannot rekey in place, so rotation is the
+re-encrypt procedure documented in the `mnbf9rca/jottacloud-backup` image README.
 
 ### Recovery: VMs don't autostart after a pve3 boot
 
@@ -153,12 +167,8 @@ old microk8s cluster through each service's own UI and imported into the new ins
 the same way. No rsync-from-old-cluster data seeding was needed — simpler than the
 original plan.
 
-The old cluster's jottacloud-backup CronJob is suspended to avoid overlapping runs:
-
-```bash
-kubectl --context=microk8s -n jottacloud-backup patch cronjob jottacloud-backup-scheduled \
-  -p '{"spec":{"suspend":true}}'
-```
+The old microk8s cluster was **decommissioned 2026-07-26** — no overlap concerns
+remain, and any lingering `--context=microk8s` instructions are obsolete.
 
 ## Operational gotchas
 
