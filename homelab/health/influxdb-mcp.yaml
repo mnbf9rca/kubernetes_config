@@ -64,8 +64,9 @@ spec:
           args: [--http, "3000"]
           env:
             - { name: INFLUXDB_URL, value: "http://influxdb.health.svc.cluster.local:8086" }
-            - name: INFLUXDB_TOKEN            # READ-ONLY token: write-data/create-bucket/create-org
-              valueFrom:                      # tools exist but InfluxDB rejects them. Mandatory hardening.
+            - name: INFLUXDB_TOKEN            # READ-ONLY token (no write scope). The server's write-data/
+              valueFrom:                      # create-bucket/create-org TOOLS exist, but InfluxDB rejects
+                                              # their calls with this token. Mandatory hardening.
                 secretKeyRef: { name: health-influxdb, key: read-token }
             - { name: INFLUXDB_ORG, value: cynexia }
           ports: [{ containerPort: 3000, name: mcp-http }]

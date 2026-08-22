@@ -469,7 +469,7 @@ issue, under investigation.
   multi-person model. The Phase 2 facade / person-registry design is expected to absorb
   this.
 - Cloudflare Access service-token in front of the tunnel hostnames (the bearer token plus
-  the Access app's email policy suffice for now; also the path to true end-to-end
+  the Access app's email policy suffices for now; also the path to true end-to-end
   `health-mcp` monitoring — see [uptime-kuma.md](uptime-kuma.md)).
 - Grafana alert rules (Phase 3, pending data accumulation).
 - PSA hardening from `baseline` to `restricted`.
