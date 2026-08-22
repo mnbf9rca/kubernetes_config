@@ -73,6 +73,20 @@ hostname. Hermes Desktop's remote-attach cannot pass Access's browser login (no
 custom-header support upstream); it uses the tailnet path
 (`http://hermes.cynexia.net:9119` via the OPNsense subnet route) instead.
 
+VM-side state that makes the tunnel work (on `hermes.cynexia.net`, login
+`ssh hermes@…`; note `~/.local/bin` is not on the non-login PATH, so run
+`hermes` via an interactive shell or full path): `dashboard.public_url:
+https://hermes.cynexia.com` in `~/.hermes/config.yaml`, and
+`Environment=FORWARDED_ALLOW_IPS=*` in the `hermes-dashboard` systemd user
+unit — cloudflared runs off-host, so uvicorn must be told to trust
+`X-Forwarded-*` or cookies lose their `Secure` flag. The wildcard means any
+LAN client can spoof forwarded headers (they feed the login rate-limiter and
+audit log); accepted for now — tighten to the cluster egress IP if it matters.
+`.bak-hermes-tunnel` copies of both edited files sit beside the originals.
+Hermes registers MCP OAuth clients with callbacks at
+`https://hermes.cynexia.com/api/mcp/oauth/callback/<server>`, which is why
+that wildcard sits in the DCR allowlist below.
+
 Grafana is **not** on this tunnel — it is private, Traefik-fronted at
 `grafana-health.cynexia.net` like every other homelab service (LAN/Tailscale only).
 
@@ -101,7 +115,9 @@ MCP client host needs its callback added** via GET-then-full-PUT of the app —
 and like everything else about this app, the list is account-side state this
 repo cannot restore: re-creating the Access app means re-entering it.
 This replaced the Pomerium proxy (daily re-auth from its 14h session expiry;
-DCR disabled, locking out non-allowlisted MCP clients).
+DCR disabled, locking out non-allowlisted MCP clients). The retired Google
+OAuth client is soaking until ~2026-08-29; delete it after that if nothing
+has needed it.
 
 The origin is authless in HTTP mode and does not validate the
 `Cf-Access-Jwt-Assertion` header Access injects — accepted deliberately: Pomerium
