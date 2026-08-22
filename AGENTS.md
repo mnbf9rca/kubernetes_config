@@ -279,6 +279,12 @@ Full mechanics, target-by-target reference and failure modes:
 - Documentation belongs in `docs/`, **referenced** from this file rather than included in
   it. When you learn something operational, write it into the relevant `docs/` file and
   add a pointer here only if it changes how an agent should edit the repo.
+- **Documentation, not agent memories.** Do not record repo, cluster, or account state in
+  an agent's private memory system — that hides operational knowledge from the operator,
+  from other agents, and from review. Anything worth remembering goes in `docs/` (or this
+  file, per the rule above), where it is versioned, diffable and shared. This applies to
+  facts about adjacent infrastructure the repo touches (VMs, DNS, Cloudflare account
+  state), not just the manifests themselves.
 
 ## Legacy Reference
 
