@@ -87,6 +87,19 @@ Service (`influxdb-mcp`, port 3000) and **auth lives entirely at the Cloudflare
 edge**: an Access app on `mcp.cynexia.com` (email policy, one-time-PIN IdP) with
 Managed OAuth — RFC 8414/9728 metadata served by Access, dynamic client
 registration enabled, 15m access tokens against a 336h (2-week) grant session.
+
+Dynamic client registration is gated by a **redirect-URI allowlist**
+(`oauth_configuration.dynamic_client_registration.allowed_uris` on the Access
+app). A client whose callback is not listed gets
+`400 invalid_client_metadata: "redirect_uri is not allowed by the account
+configuration"` at registration — this is what blocked the Hermes agent until
+2026-08-22. The list currently holds Claude's two callbacks
+(`https://claude.ai/api/mcp/auth_callback`, `https://claude.com/api/mcp/auth_callback`)
+and `https://hermes.cynexia.com/api/mcp/oauth/callback/*` (a trailing `/*`
+wildcards sub-paths); localhost and loopback clients are allow-any. **Every new
+MCP client host needs its callback added** via GET-then-full-PUT of the app —
+and like everything else about this app, the list is account-side state this
+repo cannot restore: re-creating the Access app means re-entering it.
 This replaced the Pomerium proxy (daily re-auth from its 14h session expiry;
 DCR disabled, locking out non-allowlisted MCP clients).
 
