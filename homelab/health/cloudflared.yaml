@@ -21,6 +21,11 @@ data:
         service: http://apple-health-ingester.health.svc.cluster.local:8080
       - hostname: mcp.cynexia.com
         service: http://influxdb-mcp.health.svc.cluster.local:3000
+      # Off-cluster origin: the Hermes agent dashboard on the hermes VM
+      # (10.100.0.20). Access app "hermes" (karakeep's reusable policies)
+      # gates it at the edge; the dashboard's own login is the second gate.
+      - hostname: hermes.cynexia.com
+        service: http://hermes.cynexia.net:9119
       - service: http_status:404
 ---
 apiVersion: apps/v1

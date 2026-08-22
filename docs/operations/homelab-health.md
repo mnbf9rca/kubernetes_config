@@ -59,6 +59,19 @@ Public `*.cynexia.com` hostnames on this tunnel:
 |---|---|
 | `hae.cynexia.com` | Health Auto Export ingest → `apple-health-ingester` |
 | `mcp.cynexia.com` | Claude/Hermes MCP connector, via Cloudflare Access (Managed OAuth) |
+| `hermes.cynexia.com` | Hermes agent dashboard on the hermes VM (`hermes.cynexia.net:9119`, off-cluster), via Cloudflare Access (karakeep-style email policy) |
+
+`hermes.cynexia.com` is the one off-cluster origin on this tunnel: cloudflared
+proxies to the hermes VM on the LAN, not to a cluster Service. The Access app
+(`hermes`) attaches the same three reusable policies as karakeep — home/VPS IP +
+service-token bypass, service-token allow, and `email_domain: cynexia.com` allow.
+The dashboard runs its own mandatory login behind that (basic auth, forced by its
+non-loopback bind), so Access is defence in depth, not the only gate — but the
+Access gate still **fails open** like mcp's does, and the same post-rebuild rule
+applies: verify the edge challenges an unauthenticated client before trusting the
+hostname. Hermes Desktop's remote-attach cannot pass Access's browser login (no
+custom-header support upstream); it uses the tailnet path
+(`http://hermes.cynexia.net:9119` via the OPNsense subnet route) instead.
 
 Grafana is **not** on this tunnel — it is private, Traefik-fronted at
 `grafana-health.cynexia.net` like every other homelab service (LAN/Tailscale only).
