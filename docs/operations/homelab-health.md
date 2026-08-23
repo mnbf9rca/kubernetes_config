@@ -1,8 +1,8 @@
 # Health namespace
 
 Personal health-data pipeline in the homelab cluster: Apple Health + Garmin →
-InfluxDB → Grafana, plus a Claude MCP connector. Added in Phase 0/1 as its own `health`
-namespace. Manifests live in `homelab/health/`.
+InfluxDB → Grafana, plus a Claude MCP connector. It was added in Phase 0/1 as its own
+`health` namespace. Manifests live in `homelab/health/`.
 
 The namespace also hosts one workload that is **not** health data: the Cloudflare
 analytics ingest ([below](#cloudflare-analytics-ingest)). It shares this InfluxDB and
@@ -22,9 +22,9 @@ records store, multi-person registry) is scoped there, not here.
 Every image is version- or digest-pinned and Renovate proposes bumps instead. Renovate is
 scoped to `homelab/health/**` only, with `pinDigests` (see `renovate.json`).
 
-`namespaces.yaml` marks `health` as PSA `baseline` (nothing here needs
-hostPath/hostNetwork), but every current workload already trips `restricted`-level PSA
-warnings — a hardening pass to `restricted` is a queued follow-up.
+`namespaces.yaml` marks `health` as Pod Security Admission (PSA) `baseline` (nothing
+here needs hostPath/hostNetwork), but every workload already trips `restricted`-level
+PSA warnings — a hardening pass to `restricted` is a queued follow-up.
 
 ### Pins that carry a reason
 
@@ -63,8 +63,10 @@ Public `*.cynexia.com` hostnames on this tunnel:
 
 `hermes.cynexia.com` is the one off-cluster origin on this tunnel: cloudflared
 proxies to the hermes VM on the LAN, not to a cluster Service. The Access app
-(`hermes`) attaches the same three reusable policies as karakeep — home/VPS IP +
-service-token bypass, service-token allow, and `email_domain: cynexia.com` allow.
+(`hermes`) attaches the same reusable policies as karakeep — the two IP/service-token
+bypass policies (split on 2026-08-23; see
+[MCP behind Cloudflare Access](#mcp-behind-cloudflare-access)), a service-token
+allow, and an `email_domain: cynexia.com` allow.
 The dashboard runs its own mandatory login behind that (basic auth, forced by its
 non-loopback bind), so Access is defence in depth, not the only gate — but the
 Access gate still **fails open** like mcp's does, and the same post-rebuild rule
@@ -73,19 +75,38 @@ hostname. Hermes Desktop's remote-attach cannot pass Access's browser login (no
 custom-header support upstream); it uses the tailnet path
 (`http://hermes.cynexia.net:9119` via the OPNsense subnet route) instead.
 
-VM-side state that makes the tunnel work (on `hermes.cynexia.net`, login
-`ssh hermes@…`; note `~/.local/bin` is not on the non-login PATH, so run
-`hermes` via an interactive shell or full path): `dashboard.public_url:
-https://hermes.cynexia.com` in `~/.hermes/config.yaml`, and
-`Environment=FORWARDED_ALLOW_IPS=*` in the `hermes-dashboard` systemd user
-unit — cloudflared runs off-host, so uvicorn must be told to trust
-`X-Forwarded-*` or cookies lose their `Secure` flag. The wildcard means any
-LAN client can spoof forwarded headers (they feed the login rate-limiter and
-audit log); accepted for now — tighten to the cluster egress IP if it matters.
+Two pieces of VM-side state make the tunnel work (on `hermes.cynexia.net`, login
+`ssh hermes@…`; `~/.local/bin` is not on the non-login PATH, so run `hermes`
+through an interactive shell or by full path):
+
+- `dashboard.public_url: https://hermes.cynexia.com` in `~/.hermes/config.yaml`.
+- `Environment=FORWARDED_ALLOW_IPS=*` in the `hermes-dashboard` systemd user
+  unit. cloudflared runs off-host, so uvicorn must be told to trust
+  `X-Forwarded-*` headers or cookies lose their `Secure` flag. The wildcard
+  means any LAN client can spoof forwarded headers (they feed the login
+  rate-limiter and audit log); accepted for now — tighten to the cluster
+  egress IP if it matters.
+
 `.bak-hermes-tunnel` copies of both edited files sit beside the originals.
 Hermes registers MCP OAuth clients with callbacks at
 `https://hermes.cynexia.com/api/mcp/oauth/callback/<server>`, which is why
-that wildcard sits in the DCR allowlist below.
+that wildcard sits in the dynamic client registration (DCR) allowlist below.
+
+**Hermes profiles are fully isolated homes.** Each profile (for example
+`~/.hermes/profiles/emh/`) has its own `mcp-tokens/` directory, so MCP auth is
+per-profile: a new profile inherits nothing from the main profile's
+`~/.hermes/mcp-tokens/` and re-runs dynamic client registration from scratch.
+To re-authenticate a profile's MCP servers, use the **web dashboard**
+(`https://hermes.cynexia.com` with the profile selected) — never the Desktop
+app. The desktop/TUI gateway flow binds an ephemeral loopback callback
+listener **on the VM**, which a browser on a remote machine can never deliver
+a callback to; the dashboard flow uses the public callback
+`https://hermes.cynexia.com/api/mcp/oauth/callback/<Server>`, which the
+Managed OAuth DCR allowlist already covers. A failed or abandoned dashboard
+OAuth attempt blocks retries with HTTP 409 `MCP OAuth for '<name>' is already
+in progress`. That stale flow is in-memory only and self-expires after 15
+minutes (`_MCP_DASHBOARD_OAUTH_TTL`); `systemctl --user restart
+hermes-dashboard` on the VM clears it immediately.
 
 Grafana is **not** on this tunnel — it is private, Traefik-fronted at
 `grafana-health.cynexia.net` like every other homelab service (LAN/Tailscale only).
@@ -98,26 +119,56 @@ create-health-cloudflared-secret`.
 
 Since 2026-08-22 the InfluxDB MCP server is a plain single-container Deployment +
 Service (`influxdb-mcp`, port 3000) and **auth lives entirely at the Cloudflare
-edge**: an Access app on `mcp.cynexia.com` (email policy, one-time-PIN IdP) with
-Managed OAuth — RFC 8414/9728 metadata served by Access, dynamic client
-registration enabled, 15m access tokens against a 336h (2-week) grant session.
+edge**: an Access app on `mcp.cynexia.com` with Managed OAuth — RFC 8414/9728
+metadata served by Access, dynamic client registration enabled, 15m access tokens
+against a 336h (2-week) grant session. The app's only policy is
+`allow_cynexia_com`, which requires `email_domain: cynexia.com`. Identity
+providers (account state as of 2026-08-23): the app accepts all of the account's
+identity providers (`allowed_idps: []` means "all"); the account has exactly two —
+one-time PIN and Cloudflare — and the `allow_cynexia_com` policy lists both as
+login methods.
 
 Dynamic client registration is gated by a **redirect-URI allowlist**
 (`oauth_configuration.dynamic_client_registration.allowed_uris` on the Access
 app). A client whose callback is not listed gets
 `400 invalid_client_metadata: "redirect_uri is not allowed by the account
 configuration"` at registration — this is what blocked the Hermes agent until
-2026-08-22. The list currently holds Claude's two callbacks
+2026-08-22. As of 2026-08-23 the list holds Claude's two callbacks
 (`https://claude.ai/api/mcp/auth_callback`, `https://claude.com/api/mcp/auth_callback`)
 and `https://hermes.cynexia.com/api/mcp/oauth/callback/*` (a trailing `/*`
 wildcards sub-paths); localhost and loopback clients are allow-any. **Every new
-MCP client host needs its callback added** via GET-then-full-PUT of the app —
-and like everything else about this app, the list is account-side state this
+MCP client host needs its callback added**, by a GET-then-full-PUT of the app.
+Like everything else about this app, the list is account-side state this
 repo cannot restore: re-creating the Access app means re-entering it.
-This replaced the Pomerium proxy (daily re-auth from its 14h session expiry;
-DCR disabled, locking out non-allowlisted MCP clients). The retired Google
-OAuth client is soaking until ~2026-08-29; delete it after that if nothing
-has needed it.
+This setup replaced the Pomerium proxy (daily re-auth from its 14h session
+expiry; DCR disabled, locking out non-allowlisted MCP clients). The retired
+Google OAuth client is kept until 2026-08-29 as a fallback; delete it after
+that if nothing has needed it.
+
+**An IP-bypass Access policy on a Managed OAuth app silently breaks OAuth
+bootstrap** for every client egressing from that IP: the MCP SDK only starts an
+OAuth flow when it receives a 401 challenge, and a bypassed request reaches the
+origin with 200, so no flow ever starts. Clients that already hold tokens keep
+working — token refresh goes directly to `cynexia.cloudflareaccess.com`'s token
+endpoint, which the bypass never touches — so the failure appears only for
+**fresh** token stores. The observed symptom (Hermes, new profile, 2026-08-23):
+"The server responded, but no OAuth token was obtained — this provider may
+require a manually-registered OAuth client."
+
+The fix, applied 2026-08-23, was to split the shared reusable bypass policy
+("bypass from home or access token or hetzner", id `110997f7`). That policy was
+renamed "bypass from hetzner or service token", keeping the Hetzner VPS IP and
+the service token. A new reusable policy "bypass from home" (holding only the
+home egress IP; find both by name in the Access dashboard) was created and attached to
+the eight other Access apps that used the combined policy (hermes, n8n, n8n
+mcp, Umami analytics, freshrss, karakeep, changedetection, isthetube prod), so
+their effective behavior is unchanged.
+
+The `influxdb-mcp` app itself now carries **no bypass policy at all** — only
+`allow_cynexia_com`. This is deliberate, for two reasons: every vantage,
+including home and the VPS, gets the 401 that bootstraps MCP OAuth, and the
+`health-mcp` uptime-kuma monitor's pinned `["401"]` stays truthful when probing
+from the VPS's Hetzner IP. **Do not re-attach any bypass policy to this app.**
 
 The origin is authless in HTTP mode and does not validate the
 `Cf-Access-Jwt-Assertion` header Access injects — accepted deliberately: Pomerium
@@ -142,6 +193,17 @@ reachable from any pod even as a sidecar; the restored Service only re-adds DNS
 discoverability. Any in-cluster pod can query InfluxDB read-only through it.
 Documented in `influxdb-mcp.yaml`. Queued: a bind-flag patch, and reinstating a
 NetworkPolicy if the CNI is ever swapped to Cilium.
+
+**The MCP tools do not reveal the InfluxDB org.** `query-data` requires an
+`org` parameter, but nothing tool-visible names it, and bucket discovery is
+exposed only as MCP resources, which agent frameworks generally do not surface.
+Agents therefore need the org name (`cynexia`) supplied out-of-band — a Hermes
+skill provides it. With the org known, agents are self-sufficient through
+`query-data`: `buckets()` lists the readable buckets, and
+`import "influxdata/influxdb/schema"` with `schema.measurements(bucket: ...)`,
+`schema.measurementFieldKeys(...)` and `schema.measurementTagKeys(...)`
+discovers the schema. Server-side improvements (an org default, a list-buckets
+tool, MCP instructions) are tracked in this repo's issue #47.
 
 ## InfluxDB bootstrap
 
@@ -188,7 +250,8 @@ existing hostPath restic→B2 CronJob picks it up for free — no separate off-c
 wiring needed.
 
 **Adding a bucket means adding it to that list**, or it is silently never exported — the
-same class of bug as the VPS gate's expected-set assertion, and the reason the list is
+same class of bug as the VPS backup gate's expected-set assertion
+([monitoring.md](monitoring.md)), and the reason the list is
 explicit rather than a wildcard over `influx bucket list`. A named bucket that does not
 exist is now a **named fatal error**: the pipeline `influx bucket list | awk` exits with
 awk's status, so a failed lookup used to leave the bucket ID empty and sail straight past
@@ -198,8 +261,8 @@ or the next night's export fails.
 
 **Restore drill:** `influx restore --full` self-defeats — it clobbers its own auth
 mid-restore. Use scoped `influx restore --bucket <name>` instead. First drill passed
-2026-07-26. Quarterly drills should also exercise the still-untested DR path: `--full`
-onto a brand-new, never-`setup` instance.
+2026-07-26. Quarterly drills must also exercise the still-untested disaster-recovery
+path: `--full` onto a brand-new, never-`setup` instance.
 
 ## Cloudflare analytics ingest
 
@@ -305,8 +368,8 @@ host added there trades series cardinality for path detail.
 `sample_interval` is stored per point and **never applied**. Whether Cloudflare's `count`
 is already extrapolated is a property of the dataset, not something this job should
 silently assume, and a chart that quietly switches from real counts to estimates is exactly
-the kind of lie this repo has a rule about. Observed values are 1.03–1.14, i.e. effectively
-unsampled at current volume. **Confirm the relationship once against the Cloudflare
+the kind of lie this repo has a rule about. Observed values are 1.03–1.14 — that is,
+effectively unsampled at current volume. **Confirm the relationship once against the Cloudflare
 dashboard for a known hour before building any panel that multiplies by it.**
 
 ### Row-cap subdivision
@@ -357,7 +420,7 @@ silently.
 Tokens on the `garmin-tokens` PVC last roughly a year. When they expire:
 
 1. **Scale `garmin-grafana` to 0 first.** A crashlooping pod with an expired token fires
-   an MFA SMS at the operator on every restart.
+   a multi-factor-authentication SMS at the operator on every restart.
 2. Run the interactive login pod. It needs `enableServiceLinks: false` — the influxdb
    Service's injected `INFLUXDB_PORT=tcp://...` otherwise crashes the script's `int()`
    parse — plus the full InfluxDB v1 env block, because the script demo-writes to
@@ -404,7 +467,8 @@ it re-creates the blind spot:
 - `:28080` is a plain Go listener with **Envoy nowhere in its path**. Its `envoy.server`
   field is a ≤30s-stale cache of the Envoy admin thread reporting lifecycle state LIVE —
   which it was for all 18.5 hours. The documented probe would have stayed green throughout.
-- `:80/ping` traverses listener → worker → HCM → ext_authz → control-plane cluster: the
+- `:80/ping` traverses listener → worker → HTTP connection manager → ext_authz →
+  control-plane cluster: the
   exact path that returned zero bytes. It answered 200 in 6.7 ms unauthenticated when
   tested, on Envoy's catch-all vhost, so the probe needs no `host:` field (kubelet dials
   the pod IP).
@@ -478,7 +542,7 @@ at apply time, so nothing is cached in your shell to refresh (reload only matter
 `OP_SERVICE_ACCOUNT_TOKEN` itself changed). See
 [apply-workflow.md](apply-workflow.md#rotating-a-secret).
 
-InfluxDB tokens specifically: mint the replacement via the `health-influx-bootstrap`
+InfluxDB tokens specifically: mint the replacement with the `health-influx-bootstrap`
 pattern, update 1Password, apply, then delete the old auth server-side.
 
 If a real secret value is ever disclosed, log it in `secrets-to-rotate.md` at the repo
@@ -497,12 +561,16 @@ root — see the honesty-box rule in `AGENTS.md`.
   URL and tags on every export or you get duplicate series.
 
 **Verified working 2026-08-22:** the Access Managed OAuth path — unauthenticated
-`GET /mcp` 401s at the edge with a `resource_metadata` pointer, the advertised
+`GET /mcp` 401s at the edge with a `resource_metadata` pointer, and the advertised
 discovery chain serves Access metadata with a `registration_endpoint`. The
 claude.ai connector is reconnected through the one-time-PIN flow and verified
-2026-08-22: reads return data. Still open: Hermes fails dynamic client
-registration with a redirect URI that is not yet identified — a client-side
-issue, under investigation.
+2026-08-22: reads return data.
+
+**Resolved 2026-08-23:** the Hermes registration failure open on 2026-08-22 had
+two causes, fixed on successive days: the missing DCR allowlist entry for the
+Hermes callback (fixed 2026-08-22), then the IP-bypass Access policy suppressing
+the 401 that bootstraps the OAuth flow (fixed 2026-08-23 by the bypass-policy
+split — see [MCP behind Cloudflare Access](#mcp-behind-cloudflare-access)).
 
 **Tech debt / deferred:**
 

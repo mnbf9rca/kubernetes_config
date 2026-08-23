@@ -2,8 +2,8 @@
 
 uptime-kuma on the VPS cluster is layer 3 of the four detection layers in
 [monitoring.md](monitoring.md#the-four-layers): the external check that sees a tunnel or edge
-failure no in-pod probe can. This file is the procedure for maintaining it. The policy that
-says why it exists, and what it still does not catch, stays in
+failure that no in-pod probe can. This file is the procedure for maintaining it. The policy —
+why the layer exists, and what it still does not catch — stays in
 [monitoring.md](monitoring.md).
 
 **Create monitors by hand in the UI and record them here.** uptime-kuma v2 offers no
@@ -35,9 +35,9 @@ quiesce sidecar backs up `kuma.db` nightly, so a rebuild restores the monitors.
 | Accepted status codes | per monitor | — |
 | Certificate expiry, ignore TLS | defaults | TLS terminates at the Cloudflare edge |
 
-Skip keyword monitors. The keyword is evaluated only after the status check passes, so it adds
-nothing, and `saveErrorResponse` already captures Cloudflare's error body into the alert,
-which makes a `1033` diagnosable.
+Skip keyword monitors. uptime-kuma evaluates the keyword only after the status check passes,
+so a keyword adds nothing, and `saveErrorResponse` already captures Cloudflare's error body
+into the alert, which makes a `1033` diagnosable.
 
 ## The Cloudflare Access trap
 
@@ -45,8 +45,8 @@ An Access-protected hostname answers an unauthenticated request with a 302 to th
 login page. At the default `maxredirects: 10`, the monitor follows it, gets 200 from
 Cloudflare's login app, and reports UP while the tunnel, pod and node are all dead.
 
-Two mitigations, both applied: `maxredirects: 0` on every monitor, and Access service-token
-headers on the Access-protected ones so the request reaches the origin. The token covers
+Two mitigations are in place: `maxredirects: 0` on every monitor, and Access service-token
+headers on the Access-protected monitors so the request reaches the origin. The token covers
 `analytics`, `rss`, `keep`, `watch` and `n8n`. Paste the headers as JSON in the monitor's
 **Headers** box:
 
@@ -63,8 +63,8 @@ bypass path is no substitute: the glob `/foo/*` does not match bare `/foo`, so a
 health path needs both destinations.
 
 `mcp.cynexia.com` (homelab) is also Access-protected but deliberately carries no
-service token — its monitor expects the edge's 401 itself (see the monitor
-list), and `maxredirects: 0` still applies.
+service token and no bypass policy — its monitor expects the edge's 401 itself
+(see the monitor list), and `maxredirects: 0` still applies.
 
 ## Monitor list
 
@@ -91,13 +91,16 @@ Homelab health tunnel:
 | `health-hermes` | `https://hermes.cynexia.com/api/health` | `["200-299"]` — see below |
 
 `health-hermes` probes the Hermes dashboard on the hermes VM — the tunnel's one
-off-cluster origin. uptime-kuma probes from the VPS IP, which matches the Access
-app's bypass policy, so the probe reaches the origin and a 200 proves edge,
-tunnel, cloudflared and the dashboard process end to end. `/api/health` is on
-the dashboard's unauthenticated allowlist, so no service token or Access headers
-are needed. Do not widen the set: a 302/401 here means the bypass policy lost
-the VPS IP (or the probe egresses from somewhere new) and deserves a look, not
-an accept-code.
+off-cluster origin. uptime-kuma probes from the VPS's Hetzner IP, which matches
+the reusable Access bypass policy named **"bypass from hetzner or service
+token"** (split out of the former "bypass from home or access token or hetzner"
+policy on 2026-08-23; the home IP now lives in a separate "bypass from home"
+policy). The probe therefore reaches the origin, and a 200 proves edge, tunnel,
+cloudflared and the dashboard process end to end. `/api/health` is on the
+dashboard's unauthenticated allowlist, so the monitor needs no service token or
+Access headers. Do not widen the set: a 302/401 here means the bypass policy
+lost the VPS IP (or the probe egresses from somewhere new) and deserves a look,
+not an accept-code.
 
 `health-hae`'s fast 401 is a true end-to-end signal: the hostname has no Access
 app, so the 401 comes from the origin pod, proving the tunnel, cloudflared and
@@ -112,23 +115,34 @@ be widened: an outage (timeout, 5xx, `1033`) falls outside it, and so does a
 looks like, because that gate fails OPEN
 ([homelab-health.md](homelab-health.md#mcp-behind-cloudflare-access)).
 
+**The mcp.cynexia.com Access app carries no bypass policy — keep it that way.**
+Unlike the other monitored hostnames, the app holds only the `allow_cynexia_com`
+policy. The edge's 401 does two jobs at once: it is the status this monitor
+pins, and it is what starts every MCP client's OAuth flow — the MCP SDK begins
+OAuth only after a 401, so a bypassed client gets 200 from the origin and no
+flow ever starts. Attaching an IP bypass therefore breaks both: it broke Hermes
+profile OAuth until the bypass was removed on 2026-08-23, and it would let this
+monitor's probe (which egresses from the Hetzner IP) reach the origin, so the
+monitor could never return its pinned 401. Do not re-attach any bypass policy
+to this app.
+
 **The monitor must send `{"Accept": "application/json"}` in its Headers field.**
 Access decides browser-vs-client on the `Accept` header: uptime-kuma's default
 is browser-like (`text/html,…`), so Access classifies the probe as a browser
 and answers `302` to the login page instead of the non-browser `401` —
 verified 2026-08-22 with two curls differing only in that header. Without the
-custom header the monitor sits down forever on a perfectly healthy edge. Do
-not "fix" that by accepting `302` — keep the pinned `["401"]` and fix the
+custom header the monitor stays DOWN forever against a perfectly healthy edge.
+Do not "fix" that by accepting `302` — keep the pinned `["401"]` and fix the
 header instead, so the accepted set keeps meaning "Access challenged a
 non-browser client".
 
-Accepted
-residual: the mcp tunnel route and the influxdb-mcp HTTP handler have no
-external monitor; a wedged handler surfaces only when a client fails. An Access
-service token + Service Auth policy (the standing tech-debt item) is the path
-that would close that gap; it was declined for now because `health-hae` already
-proves tunnel+cloudflared end to end, the pod has in-cluster TCP probes, and a
-service token is a standing secret in uptime-kuma's config.
+Accepted residual: the mcp tunnel route and the influxdb-mcp HTTP handler have
+no external monitor, so a wedged handler surfaces only when a client fails. An
+Access service token plus a Service Auth policy (the standing tech-debt item)
+is the path that would close that gap. It was declined for now because
+`health-hae` already proves tunnel+cloudflared end to end, the pod has
+in-cluster TCP probes, and a service token is a standing secret in uptime-kuma's
+config.
 
 Before you add a status code to any set, observe it once:
 
