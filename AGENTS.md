@@ -155,7 +155,7 @@ Full mechanics, target-by-target reference and failure modes:
 - **Scheduled work gets a dead-man's-switch, not a probe.** Every CronJob sets
   `timeZone: "UTC"` and `activeDeadlineSeconds` (with `concurrencyPolicy: Forbid`, one
   hung run silently blocks every later run), plus `startingDeadlineSeconds` where a missed
-  window should be retried rather than dropped. New jobs must ping healthchecks.io on
+  window must be retried rather than dropped. New jobs must ping healthchecks.io on
   **start and exit code** — the two restic jobs, `cloudflare-analytics` and `influx-backup`
   do; the two ingest checks and `jottacloud backup` ping on success only, so a failure
   shows up as silence. For the ingest checks that is deliberate and must not change;
@@ -275,6 +275,13 @@ Full mechanics, target-by-target reference and failure modes:
 - **This repo is public.** Never write the Omni service URL, sign-in identity, or any
   other credential-adjacent value into a committed file — reference it as an `op://`
   path and read it at run time.
+- **Nothing ships in the operator's name without explicit approval.** Upstream pull
+  requests, issues on third-party trackers, pushes to public forks, and comments on
+  other people's repositories are all publicly attributed to the operator. Prepare
+  the work locally — branches, commits, drafted PR and issue text — and present it
+  for review; the operator says when each item is published, one item at a time.
+  Merging pull requests in this repo when asked is fine: the gate is third-party
+  visibility, not git mechanics.
 - Prefer `kubectl exec deployment/<name> -- sh -c '...'` plus `rollout restart` for
   in-container file tweaks rather than spinning up a helper pod.
 - Documentation belongs in `docs/`, **referenced** from this file rather than included in
