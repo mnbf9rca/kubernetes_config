@@ -169,12 +169,15 @@ esac
 # recall exercises. Extraction QUALITY is an accepted residual (R3) that no
 # automated check here judges.
 #
-# num_results is read by positive match into a bounded digit class from the
-# response's own trace field. That is the one extraction from a remote response
-# this estate permits, and it cannot be a slice of memory text.
-RESULTS=$(sed -n 's/.*"num_results"[[:space:]]*:[[:space:]]*\([0-9]\{1,9\}\).*/\1/p' "$RESP" | head -n 1)
+# The result count is derived structurally: count occurrences of the per-result
+# "scores" key (verified at rollout 2026-08-24 — the 0.9.1 response is
+# {"results":[{...,"scores":...},...],"entities":{...}} and carries no
+# num_results trace field; "scores" appears exactly once per result object and
+# nowhere else). A count is a number this estate permits in a ping body; no
+# slice of the response ever leaves this pipeline.
+RESULTS=$(grep -c '"scores"' "$RESP")
 case "$RESULTS" in ''|*[!0-9]*) RESULTS=0 ;; esac
-# check-ping-bodies: untaint RESULTS - positive-match [0-9]{1,9} extraction of the response's own num_results field, gated to digits by the case above; never a slice of the response
+# check-ping-bodies: untaint RESULTS - grep -c occurrence count of a fixed literal key, gated to digits by the case above; never a slice of the response
 if [ "$RESULTS" -lt 1 ]; then
   VERDICT=recall-miss
   echo "ERROR: recall succeeded but returned no results from bank $BANK" >&2
