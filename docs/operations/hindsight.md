@@ -171,7 +171,7 @@ The tenant key is one value with four consumers: the API validates against it, t
 control-plane container presents it to the API, the canary authenticates with it, and
 the Hermes profiles on VM 103 send it on every request. Rotating it means:
 
-1. Generate a new value and update `op://Homelab/hindsight/tenant-api-key`.
+1. Generate a new value and update **both** vault copies: `op://Homelab/hindsight/tenant-api-key` (read by the cluster apply) and `op://Homelab/hermes/tenant-api-key` (read by the Hermes profiles on VM 103). They hold the same value; updating only one splits the key and the profiles stop authenticating at their next restart.
 2. `make apply-homelab`, then `kubectl -n hindsight rollout restart deploy/hindsight` —
    a Secret change does not restart a Pod on its own.
 3. Update `HINDSIGHT_API_KEY` in **every** profile's `.env` on VM 103.
@@ -229,7 +229,7 @@ config file, which is the point — the file is per profile, but no value inside
 value in an `.env` file:
 
 ```sh
-hermes -p emh secrets onepassword set HINDSIGHT_API_KEY "op://Homelab/hindsight/tenant-api-key"
+hermes -p emh secrets onepassword set HINDSIGHT_API_KEY "op://Homelab/hermes/tenant-api-key"
 ```
 
 hermes records its own `op://` reference in the profile's `config.yaml` and resolves it at
@@ -343,7 +343,7 @@ server-side, from the key in the cluster Secret.
    contents are identical every time — `bank_id_template` resolves `hermes-<name>` at run
    time, and banks auto-create on first write.
 2. Set the profile-scoped secret:
-   `hermes -p <name> secrets onepassword set HINDSIGHT_API_KEY "op://Homelab/hindsight/tenant-api-key"`
+   `hermes -p <name> secrets onepassword set HINDSIGHT_API_KEY "op://Homelab/hermes/tenant-api-key"`
 3. Enable the provider for that profile, then confirm it with trap 2's call test.
 
 Before onboarding a profile, run the two-bank isolation test once — retain into `probe-a`,
