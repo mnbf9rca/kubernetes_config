@@ -73,6 +73,7 @@ PY_SUFFIXES = (".py",)
 # reasoning as the VPS backup gate applies to a `find` that errors.
 REQUIRED_TARGETS = (
     "homelab/backup/restic-cronjob.yaml",
+    "homelab/backup/scripts/hermes-pull.sh",
     "homelab/health/scripts/influx-backup.sh",
     "homelab/health/scripts/ingest-freshness.sh",
     "homelab/health/scripts/cloudflare-analytics-ingest.py",

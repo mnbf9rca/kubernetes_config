@@ -32,6 +32,11 @@ RESTIC_REPOSITORY=op://Homelab/b2-restic/repository
 # healthchecks.io dead-man's-switch for the nightly restic CronJob
 RESTIC_HC_UUID=op://Homelab/b2-restic/healthcheck-uuid
 
+# healthchecks.io dead-man's-switch for the nightly hermes-pull CronJob
+# (Hermes VM backup; the SSH key itself is multi-line and goes through
+# `make create-hermes-ssh-secret`, not through this pipeline)
+HERMES_HC_UUID=op://Homelab/hermes-backup/healthcheck-uuid
+
 # Route53 credentials for cert-manager DNS-01 (Task 2.5)
 ROUTE53_ACCESS_KEY_ID=op://Homelab/route53-cert-manager/access-key-id
 ROUTE53_SECRET_ACCESS_KEY=op://Homelab/route53-cert-manager/secret-access-key
