@@ -197,6 +197,31 @@ change. On the Proxmox host:
 3. `systemctl start pve-guests`
 4. Re-run `clevis luks bind` so the TPM can unlock unattended again.
 
+### Hermes VM configuration layout and secrets
+
+The rules that hold for **every** Hermes plugin and profile on VM 103, learned the
+hard way while wiring hindsight (2026-08-24) and binding on any future integration:
+
+- **Plugin config is per INSTANCE; profile config is per PROFILE.** A plugin's
+  settings live at `~/.hermes/<plugin>/config.json` and are shared by every profile —
+  there is no `~/.hermes/profiles/<name>/<plugin>/` config. Anything that must differ
+  per profile goes through the plugin's own templating (for example hindsight's
+  `bank_id_template` with `{profile}`) or per-profile secrets, never a copied config
+  file.
+- **Secrets are per profile and MUST go through hermes's 1Password integration** —
+  `hermes -p <profile> secrets onepassword set VAR "op://Vault/item/field"` — never a
+  plain value in `.env` or `config.yaml`. hermes stores its own `op://` reference in
+  the profile's `config.yaml` and resolves it at start ("1Password: applied N
+  secrets"), so no secret value rests on disk, and the nightly backup zip carries
+  references rather than values for these.
+- **Do not trust the dashboard GUI to persist settings.** At least one field (the
+  hindsight API server URL) reports saved and silently is not. After any GUI change,
+  read the config file back; to change a value reliably, edit the file and restart the
+  affected gateway (`systemctl --user restart hermes-gateway-<profile>`).
+
+Service-specific wiring lives in that service's runbook (for example
+`docs/operations/hindsight.md`); this section is the layout contract they share.
+
 ### Hermes VM backup and restore
 
 The `hermes-pull` CronJob (`homelab/backup/hermes-pull.yaml`) pulls a full
