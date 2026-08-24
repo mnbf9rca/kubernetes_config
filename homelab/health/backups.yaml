@@ -88,7 +88,14 @@ spec:
                 #
                 # Mounting a ReadWriteOnce PVC into a second pod is legal
                 # because RWO is a per-NODE constraint, and local-path pins both
-                # this pod and grafana to the node holding the volume.
+                # this pod and grafana to the node holding the volume. Their
+                # co-location is guaranteed by topology, not by a scheduling
+                # rule: this is a single-node cluster, so both PVs live on the
+                # same node. If a second node is ever added and the two PVs land
+                # apart, this pod's volume affinities have no intersection — it
+                # sits Pending, no dump is produced, and the restic gate's 30 h
+                # freshness check goes red. Loud, not silent; add explicit
+                # co-location only if that day comes.
                 - { name: grafana-data, mountPath: /grafana, readOnly: true }
           initContainers:
             - name: mkdirs
