@@ -256,7 +256,11 @@ spec:
           ports:
             - containerPort: 8888
           securityContext:
+            # The image's USER is the non-numeric name `hindsight`, which kubelet
+            # cannot verify against runAsNonRoot; 1000 is that user's UID (probed
+            # from the image on 2026-08-24: uid=1000(hindsight)).
             runAsNonRoot: true
+            runAsUser: 1000
             allowPrivilegeEscalation: false
             capabilities: { drop: [ALL] }
             seccompProfile: { type: RuntimeDefault }
@@ -315,8 +319,12 @@ spec:
               valueFrom: { secretKeyRef: { name: hindsight, key: cp-access-key } }
           ports:
             - containerPort: 9999
+          # The control-plane image sets no USER and runs as root (verified at
+          # rollout, 2026-08-24: kubelet refuses it under runAsNonRoot). The
+          # namespace enforces PSA baseline, which permits root; the container
+          # keeps every other restriction. Revisit if upstream ships a non-root
+          # image.
           securityContext:
-            runAsNonRoot: true
             allowPrivilegeEscalation: false
             capabilities: { drop: [ALL] }
             seccompProfile: { type: RuntimeDefault }
