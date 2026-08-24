@@ -118,11 +118,11 @@ OUT="/dumps/hindsight-$TS.sql.gz"
 
 # A FLOOR, NOT A TARGET. pg_dump exits 0 against an empty database, so the exit
 # code alone is a lie; this and the CREATE TABLE count are what make a published
-# artifact mean something. RAISE THIS after rollout step 5 measures the first real
-# dump, to an order of magnitude below the measurement — the same derivation the
-# restic gate's EXPECTED_ARTIFACTS entries document. 1024 is the opening value: a
-# freshly bootstrapped hindsight schema gzips to a few KB.
-MIN_BYTES=1024
+# artifact mean something. Measured at rollout step 5 (2026-08-24): the first
+# real dump was 48,829 B / 23 tables; 4096 sits an order of magnitude below it,
+# the same derivation the restic gate's EXPECTED_ARTIFACTS entries document.
+# The gate's hindsight-dump row carries the same floor - raise the two together.
+MIN_BYTES=4096
 KEEP=7
 
 # ---- body values ----------------------------------------------------------

@@ -420,9 +420,14 @@ spec:
           restartPolicy: Never
           containers:
             - name: pg-dump
-              # THE SAME PINNED IMAGE THE SERVER RUNS, so pg_dump's client version
-              # matches the server's for free. Bump the two together.
-              image: pgvector/pgvector:0.8.1-pg17
+              # postgres:17-alpine, NOT the server's pgvector image: the Debian
+              # pgvector image ships neither curl nor wget (verified at rollout
+              # 2026-08-24), so the healthchecks ping could never leave the pod
+              # and the check would go red by silence every night. Alpine's
+              # busybox wget closes that; pg_dump needs no vector extension
+              # client-side. Keep the MAJOR (17) matched to the server image
+              # above - bump the two together.
+              image: postgres:17.6-alpine
               command: ["sh", "/scripts/hindsight-pg-dump.sh"]
               env:
                 # `PGPASSWORD`, not the envsubst name. A generated script may never

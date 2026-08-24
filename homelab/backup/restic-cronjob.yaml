@@ -247,11 +247,11 @@ spec:
                   # homelab/health/scripts/grafana-sqlite-backup.py carries the same floor -
                   # raise the two together.
                   #
-                  # `hindsight-dump` is the ONE entry whose floor has not yet been derived from
-                  # a measurement: it opens at 1024 B because a freshly bootstrapped hindsight
-                  # schema gzips to a few KB. RAISE IT after rollout step 5 measures the first
-                  # real dump, to an order of magnitude below what that dump weighs, in the same
-                  # commit as the matching floor in homelab/hindsight/scripts/hindsight-pg-dump.sh.
+                  # `hindsight-dump` was measured at rollout step 5 (2026-08-24): the first
+                  # real dump was 48,829 B / 23 tables, so 4096 sits an order of magnitude
+                  # below it, same derivation as the rows above. MIN_BYTES in
+                  # homelab/hindsight/scripts/hindsight-pg-dump.sh carries the same floor -
+                  # raise the two together.
                   # It appears in BOTH lists deliberately: the dump is produced on a schedule, so
                   # a stale one is as bad as a missing one, and only FRESH_ARTIFACTS notices that.
                   EXPECTED_ARTIFACTS="
@@ -265,7 +265,7 @@ spec:
                   influxdb-bolt:/data/pvc-*_health_influxdb-data/influxd.bolt:32768
                   garmin-tokens:/data/pvc-*_health_garmin-tokens/garmin_tokens.json:256
                   hermes-zip:/data/pvc-*_backup_hermes-dumps/hermes-*.zip:16777216
-                  hindsight-dump:/data/pvc-*_hindsight_hindsight-dumps/hindsight-*.sql.gz:1024
+                  hindsight-dump:/data/pvc-*_hindsight_hindsight-dumps/hindsight-*.sql.gz:4096
                   "
 
                   # label:glob - existence AND freshness.
