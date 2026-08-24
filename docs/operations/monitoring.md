@@ -193,7 +193,7 @@ cluster's script is the source of truth for its thresholds; change them in the s
 | What exists to check | A `*.restic` snapshot per app, published by the quiesce sidecars | No sidecars, so no artifact. Every PVC is backed up as live application state |
 | Assertion shape | Snapshot files: present, fresh, readable | The **tree**: mounted, right scale, listed files present and non-trivial |
 | Authoritative checks | Expected set, plus a `find` that must not error | Mount identity, tree scale, expected set, dump freshness |
-| Freshness limit | 15h (`STALE_MINUTES=900`), a 3h margin over the sidecars' 12h period | 30h (`STALE_MINUTES=1800`), on the two influx dumps only |
+| Freshness limit | 15h (`STALE_MINUTES=900`), a 3h margin over the sidecars' 12h period | 30h (`STALE_MINUTES=1800`), on the two influx dumps and the hermes zip only |
 | Advisory, never fatal | Any `*.restic` past the threshold, so one orphaned PV directory cannot pin the gate red forever | An empty PVC directory, legitimate on a freshly provisioned PVC; and `du`'s exit status |
 | Runs | After `forget --prune` | **Before** `forget --prune`, which is skipped when the gate fails |
 | Verdicts in the body | `MISSING`, `STALE`, `UNREADABLE`, per app | `mount_ok`, `artifacts=n/m`, `dumps_fresh=n/m`, `pvc_dirs` |
@@ -233,11 +233,13 @@ unmounted" from "three of four present" — all three produce no stale files.
 | homelab | garmin-tokens | `/data/pvc-*_health_garmin-tokens/garmin_tokens.json` | ≥256 B |
 | homelab | influx-native-dump | `/data/pvc-*_health_health-dumps/native/*` | <30h |
 | homelab | influx-lp-export | `/data/pvc-*_health_health-dumps/lp/*.lp.gz` | <30h |
+| homelab | hermes-zip | `/data/pvc-*_backup_hermes-dumps/hermes-*.zip` | ≥16 MiB **and** <30h |
 
 Homelab byte floors sit an order of magnitude under observed sizes: they reject a zero-length or
 truncated file, not slow growth. `influx-backup` writes the dumps at 02:30Z, 30 minutes before this
 job, so 30h tolerates one missed run (`health-influx-backup` is the check for *that*) and fails on
-two consecutive misses. Nothing else is freshness-checked: a deadline on live application state
+two consecutive misses; `hermes-pull` writes its zip at 02:00Z on the same terms, with
+`homelab-hermes-pull` as its own first-line check. Nothing else is freshness-checked: a deadline on live application state
 manufactures reds on any file an app happens not to touch for a day.
 
 Entries are globs because local-path-provisioner names each PVC directory
@@ -293,11 +295,12 @@ newest match, because their glob is one PVC directory expected to match one path
 | `health-garmin-ingest` | `op://Homelab/health-healthchecks/garmin-uuid` | 1d / 12h | as above |
 | `health-influx-backup` | `op://Homelab/health-healthchecks/backup-uuid` | 1d / 6h | `influx-backup`, `/start` and exit code, from an EXIT trap |
 | `homelab-cloudflare-analytics` | `op://Homelab/health-healthchecks/cloudflare-uuid` | 1h / 2h | `cloudflare-analytics` CronJob, `/start` and exit code |
+| `homelab-hermes-pull` | `op://Homelab/hermes-backup/healthcheck-uuid` | 1d / 2h | `hermes-pull` CronJob, `/start` and exit code, from an EXIT trap |
 | `jottacloud-backup` | `op://Homelab/jottacloud-backup/HEALTHCHECK_UUID` | 6-hourly schedule | The third-party image's own `backup.sh`, success only |
 
-**Four of the five jobs this repo pings send `/start` and an exit code** — both restic jobs,
-`cloudflare-analytics` and `influx-backup`. Follow that pattern for new jobs. `influx-backup` also
-needs `set -eu -o pipefail` and its ping in an EXIT trap: under `set -e` alone `xargs` swallows
+**Five of the six jobs this repo pings send `/start` and an exit code** — both restic jobs,
+`cloudflare-analytics`, `influx-backup` and `hermes-pull`. Follow that pattern for new jobs.
+`influx-backup` and `hermes-pull` also need `set -eu -o pipefail` and their ping in an EXIT trap: under `set -e` alone `xargs` swallows
 the prune step's `ls` failure and the ping fires anyway, and with the ping on the last line a
 failing prune, a missing ConfigMap key or a dead influxdb pod produces *exactly nothing* until the
 6h grace expires ~30 hours later. The accepted cost — a transient failure now pages instead of
@@ -309,6 +312,18 @@ tolerance for a 6-hour one — on a signal that depends on the operator syncing 
 an inert `/log` ping instead, and `ingest-freshness` always exits 0: the signal is the absent
 ping, not a failed Job. `jottacloud-backup` is success-only for a different reason — its ping
 comes from `backup.sh` inside a third-party image this repo does not control.
+
+**`hermes-pull`** backs up the off-cluster hermes VM: it SSHes in with a forced-command key,
+runs `hermes backup`, and pulls the zip onto the `hermes-dumps` PVC
+([homelab.md](homelab.md#hermes-vm-backup-and-restore)). Its body reports the pulled zip's size
+in KiB, a fixed `sha256_match=yes|no` verdict, and the local-copy and prune counts — never the
+checksum values themselves, which are command output. The zip is verified four ways before
+publishing: a CRC test of every member on the VM, then a size floor, zip magic, and a
+remote-versus-local SHA-256 in the cluster. A red `homelab-hermes-pull` means no new zip landed
+that night; the restic gate's `hermes-zip` entries then turn `homelab-restic` red if the newest
+zip on the PVC goes stale past 30 hours or vanishes. A VM rebuild turns the check red by design:
+the pinned host key in the `hermes-known-hosts` ConfigMap no longer matches, and the fix is
+`ssh-keyscan` from a trusted network into that ConfigMap, never `StrictHostKeyChecking=no`.
 
 `homelab-cloudflare-analytics` goes red for one failure mode that is not a malfunction: **an
 unrecoverable gap**. Cloudflare keeps 8 days, so if the job has been down longer the missing hours
@@ -365,7 +380,7 @@ it did not construct, so command output is unclassifiable and stays out.
 count, an age, a byte size, a path built from a literal glob, or a verdict from a fixed enum.
 `make check-ping-bodies` enforces this, including the one-intermediate-variable evasion
 (`M=$(cmd); emit "error=$M"`), and refuses a denied name in every parameter-expansion form —
-`${HC_UUID:-}`, `${HC_UUID#p}`, `${HC_UUID/a/b}`, `${#HC_UUID}`. A taint clears only via an
+`${HC_UUID:-}`, `${HC_UUID#p}`, `${HC_UUID/a/b}`, `${#HC_UUID}`. A taint clears only through an
 explicit `# check-ping-bodies: untaint <NAME> <reason>` line.
 
 Bodies die with their ping-log entry, `Check.prune()` removing the objects then the ping rows —
@@ -373,7 +388,7 @@ Bodies die with their ping-log entry, `Check.prune()` removing the objects then 
 or 250. `ingest-freshness` uses `/log` for its stale and query-failure paths: a `log` ping sets no
 `last_ping`, `last_start` or `status` and cannot postpone, suppress or trigger an alert. Its one
 side effect is that `has_confirmation_link` is set from the body on every action, `log` included,
-driving a UI nag — no body here contains the substring `confirm`, and none should.
+driving a UI nag — no body here contains the substring `confirm`, and none ever may.
 
 #### Reading a restic failure body
 
