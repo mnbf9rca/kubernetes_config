@@ -78,6 +78,8 @@ REQUIRED_TARGETS = (
     "homelab/health/scripts/ingest-freshness.sh",
     "homelab/health/scripts/cloudflare-analytics-ingest.py",
     "homelab/ops/scripts/update-watch.py",
+    "homelab/hindsight/scripts/hindsight-pg-dump.sh",
+    "homelab/hindsight/scripts/hindsight-canary.sh",
     "vps/backup/scripts/restic-backup.sh",
 )
 
@@ -313,7 +315,7 @@ def scan_text(path, lines, denied):
         the thing to look at in review.
       * Files are chosen by extension, not by being a `configMapGenerator` input,
         so a generator input with no extension is not scanned. REQUIRED_TARGETS
-        covers today's five; a sixth needs adding there.
+        names every one that exists today; a new one needs adding there.
     """
     call = re.compile(SINK_CALL_TMPL % "|".join(SHELL_SINKS))
     definition = re.compile(SINK_DEF_TMPL % "|".join(SHELL_SINKS))

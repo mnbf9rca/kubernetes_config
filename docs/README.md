@@ -9,6 +9,8 @@ and conventions only — everything cluster-specific or procedural lives here.
 | [operations/apply-workflow.md](operations/apply-workflow.md) | The secret pipeline (1Password → `op run` → envsubst → kubectl), rotation, full Makefile target reference, Talos config patches, Tailscale bootstrap |
 | [operations/homelab.md](operations/homelab.md) | Homelab cluster: platform stack, namespaces/workloads, NFS and storage, node network, DNS, encryption at rest, operational gotchas |
 | [operations/homelab-health.md](operations/homelab-health.md) | The `health` namespace: ingest pipeline, image-pin rationale, InfluxDB bootstrap, backups/restore, Garmin re-auth, the 2026-08-18 Pomerium wedge and probe rationale |
+| [operations/hindsight.md](operations/hindsight.md) | The `hindsight` namespace: the memory backend for the Hermes profiles — topology, auth, upgrade and restore runbooks, the restore drill, key rotation, wiring a profile, the removal path |
+| [operations/agent-mail.md](operations/agent-mail.md) | Per-agent email for Hermes agents: Purelymail mailboxes, per-profile config, provisioning, credentials, and the deliberate monitoring gaps |
 | [operations/vps.md](operations/vps.md) | VPS (Hetzner) cluster: shape, workloads, Cloudflare tunnel/Access, DB decisions, backups |
 | [operations/monitoring.md](operations/monitoring.md) | How failures get noticed: the triage table, the four detection layers, probe policy and inventory, CronJob deadlines, the backup verification gates, healthchecks.io checks and ping bodies, and what none of it catches |
 | [operations/uptime-kuma.md](operations/uptime-kuma.md) | Layer 3/4 runbook: creating uptime-kuma monitors by hand, per-monitor HTTP settings, the Cloudflare Access trap, the self-monitor |

@@ -6,7 +6,8 @@
   "kubernetes": {
     "managerFilePatterns": [
       "/^homelab/health/.+\\.yaml$/",
-      "/^homelab/ops/.+\\.yaml$/"
+      "/^homelab/ops/.+\\.yaml$/",
+      "/^homelab/hindsight/.+\\.yaml$/"
     ]
   },
   "minimumReleaseAge": "3 days",
@@ -22,6 +23,17 @@
       "prPriority": 1,
       "pinDigests": true,
       "description": "The update watcher's own image — watched so the watcher is not the one unwatched pin in the estate." },
+    { "matchFileNames": ["homelab/hindsight/**"],
+      "groupName": "hindsight stack",
+      "automerge": false,
+      "prPriority": 5,
+      "pinDigests": true,
+      "description": "Pinned, no keel. Upgrades run the dump-first runbook: make hindsight-upgrade, then merge, diff, apply." },
+    { "matchFileNames": ["homelab/hindsight/**"],
+      "matchUpdateTypes": ["major"],
+      "matchPackageNames": ["pgvector/pgvector"],
+      "enabled": false,
+      "description": "PostgreSQL major bumps are a dump-and-restore, not a tag edit. Propose by hand when the runbook is ready; a grouped PR must never carry one." },
     { "matchPackageNames": ["thisisarpanghosh/garmin-fetch-data"],
       "enabled": false,
       "description": "digest-pinned to main build; v0.5.0 latest release is broken (client.profile crash); re-enable when a release newer than v0.5.0 exists" }

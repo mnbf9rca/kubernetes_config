@@ -60,6 +60,17 @@ metadata:
   # NO keel in this namespace: the image is version-pinned and Renovate watches
   # homelab/ops/** so bumps arrive as pull requests.
 ---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: hindsight
+  # PSA baseline (cluster default). Nothing in hindsight uses hostPath or
+  # hostNetwork, so no elevation and no labels.
+  # NO keel in this namespace either: every image is version-pinned. It is a
+  # stateful store that runs Alembic migrations on startup and holds an agent's
+  # memory, so an unattended auto-update is exactly the failure to design out.
+  # Renovate proposes the bumps; `make hindsight-upgrade` takes the dump first.
+---
 # NOTE: cert-manager and local-path-storage namespaces are created by their
 # respective upstream manifests, so they're omitted here (kustomize rejects
 # duplicate resources). keel's namespace IS declared above because

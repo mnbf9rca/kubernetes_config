@@ -19,6 +19,7 @@ procedures live under `docs/` and are referenced from here rather than duplicate
 | `docs/operations/vps.md` | VPS cluster: shape, workloads, Cloudflare tunnel/Access, DB decisions, backups |
 | `docs/operations/monitoring.md` | How failures get noticed: the triage table, probe policy and inventory, CronJob deadlines, the backup verification gates, healthchecks.io checks and ping bodies, and what none of it catches |
 | `docs/operations/uptime-kuma.md` | Layer 3/4 runbook: creating uptime-kuma monitors by hand, per-monitor HTTP settings, the Cloudflare Access trap, the self-monitor |
+| `docs/operations/hindsight.md` | The `hindsight` namespace: the self-hosted memory backend for the Hermes profiles — topology, auth, the canary, upgrade and restore runbooks, the restore drill, key rotation, and the removal path |
 | `docs/operations/agent-mail.md` | Per-agent email for Hermes agents: Purelymail mailboxes on cynexia.io, per-profile mcp-email-server config, provisioning runbook, credential scheme, limits, and the deliberate monitoring/backup gaps |
 
 Design documents and implementation plans are local-only under the gitignored
@@ -45,11 +46,11 @@ kubernetes_config/
 ├── .envrc                    # direnv entrypoint (loads 1Password-backed vars)
 ├── .env.tpl                  # op-template with VAR=op://... lines (committed; no real secret values)
 ├── Makefile                  # build/diff/apply per cluster + secret and bootstrap helpers
-├── renovate.json             # scoped to homelab/health/** and homelab/ops/** (pinDigests)
+├── renovate.json             # scoped to homelab/health/**, homelab/ops/** and homelab/hindsight/** (pinDigests)
 ├── secrets-to-rotate.md      # honesty box for disclosed secret values (identifiers only)
 ├── docs/                     # operational documentation (docs/superpowers/ is gitignored)
 ├── homelab/                  # Talos homelab cluster
-│   ├── kustomization.yaml    # top-level: bootstrap + secrets + workloads + backup + health
+│   ├── kustomization.yaml    # top-level: bootstrap + secrets + workloads + backup + health + hindsight
 │   ├── talos/                # Omni ConfigPatches resources (applied via `make apply-talos`)
 │   ├── bootstrap/            # platform: namespaces (with PSA labels), local-path, NFS CSI, cert-manager, traefik, keel
 │   ├── workloads/            # application workloads (one file per service, --- separated, no ns override)
@@ -58,6 +59,8 @@ kubernetes_config/
 │   │   └── scripts/          # job scripts as real files + their tests; mounted via configMapGenerator
 │   ├── ops/                  # cluster-wide operational jobs (the daily Renovate update watcher)
 │   │   └── scripts/          # same pattern: real files + tests, via configMapGenerator
+│   ├── hindsight/            # Hindsight memory backend for the Hermes profiles (no keel; pinned images)
+│   │   └── scripts/          # nightly pg_dump + the 15-minute canary; mounted via configMapGenerator
 │   └── backup/               # restic init Job + nightly CronJob (hostPath /var/mnt/ssd/local-path-provisioner)
 ├── vps/                      # Hetzner Talos cluster, same sub-layout (bootstrap/secrets/workloads/backup/talos)
 ├── scripts/                  # repo-level helpers (karakeep tags, FreshRSS WebSub status, the check-* guards)
@@ -148,9 +151,13 @@ Full mechanics, target-by-target reference and failure modes:
 
 - Keep the one-file-per-service pattern; keep all of a service's resources in that file.
 - Every new Deployment must include the full keel annotation set above — **except** in
-  the `health` and `ops` namespaces, which explicitly forbid keel: every image there is
-  version/digest-pinned and Renovate proposes bumps instead
-  (`docs/operations/homelab-health.md`, `docs/operations/homelab.md`).
+  the `health`, `ops` and `hindsight` namespaces, which explicitly forbid keel: every
+  image there is version/digest-pinned and Renovate proposes bumps instead
+  (`docs/operations/homelab-health.md`, `docs/operations/homelab.md`,
+  `docs/operations/hindsight.md`). `hindsight` is the sharpest case: it runs Alembic
+  migrations on startup against the store holding an agent's memory, and those
+  migrations are forward-only, so the pre-upgrade dump is the only rollback.
+  `make hindsight-upgrade` takes it.
 - **Probes: readiness on every long-running container that serves traffic; liveness only
   where that probe can actually detect the failure *and* a restart is a safe remedy**
   (everything here is single-replica, so an over-eager liveness probe manufactures

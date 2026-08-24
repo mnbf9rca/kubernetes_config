@@ -83,6 +83,29 @@ HEALTH_GARMIN_B64_PASSWORD=op://Homelab/health-garmin/b64-password
 # health namespace — Grafana admin password
 HEALTH_GRAFANA_ADMIN_PASSWORD=op://Homelab/health-grafana/admin-password
 
+# hindsight namespace — the self-hosted memory backend for the Hermes profiles.
+#
+# pg-password must be generated URL-SAFE (alphanumeric): it is interpolated into
+# the database DSN in homelab/secrets/hindsight.yaml, and a character needing
+# percent-encoding there is a debugging session nobody needs.
+#
+# The extraction-LLM key's 1Password field is named for the provider it currently
+# holds (`openai-api-key`), while the k8s Secret key it lands in stays the
+# provider-neutral `llm-api-key`. Switching provider is two env lines in
+# hindsight.yaml plus a new field here.
+#
+# tenant-api-key is shared by the API, the control plane and the canary, and the
+# SAME value goes into the Hermes profiles' .env on VM 103. Rotating it is not
+# finished until the VM-side smoke test has been re-run — see
+# docs/operations/hindsight.md.
+HINDSIGHT_PG_PASSWORD=op://Homelab/hindsight/pg-password
+HINDSIGHT_LLM_API_KEY=op://Homelab/hindsight/openai-api-key
+HINDSIGHT_TENANT_API_KEY=op://Homelab/hindsight/tenant-api-key
+HINDSIGHT_CP_ACCESS_KEY=op://Homelab/hindsight/cp-access-key
+# healthchecks.io dead-man's-switches: the nightly pg_dump and the 15-minute canary
+HINDSIGHT_HC_UUID=op://Homelab/hindsight/healthcheck-uuid
+HINDSIGHT_CANARY_HC_UUID=op://Homelab/hindsight/canary-healthcheck-uuid
+
 # --- VPS cluster secrets (Phase 2) ---
 
 # Restic / Backblaze B2 for VPS (separate bucket, separate repo, separate password)
