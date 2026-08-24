@@ -181,6 +181,34 @@ secrets in plaintext (`.env`, `auth.json`, MCP OAuth tokens), so its only permit
 resting places are that PVC and the restic repository. Delete any operator copy as soon
 as a procedure finishes with it.
 
+#### What `hermes backup` captures
+
+Facts verified on the VM and against the upstream docs
+(https://hermes-agent.nousresearch.com/docs/ — an `llms.txt` index and a full markdown
+mirror exist; fetch those rather than searching):
+
+- The zip covers the entire `~/.hermes` home: `config.yaml`, `.env`, `auth.json`,
+  `mcp-tokens/`, `state.db`, sessions, memories, skills, plugins, cron, both profiles,
+  and the bundled node runtime. It excludes the `hermes-agent/` checkout, `backups/`
+  itself (which is why the wrapper stages there — the staged copy can never recurse
+  into the next night's zip), `state-snapshots/`, checkpoints, and SQLite sidecar
+  files. Measured 2026-08-24: 203 MB compressed from 572 MB, about 23 seconds.
+- It is safe against live services: `state.db` is copied with SQLite's `backup()` API,
+  so the four systemd user units keep running. Only **restore** requires stopping them.
+- **Never pass `-q`/`--quick`**: it snapshots only `config.yaml`, `state.db`, `.env`,
+  auth and cron — it drops profiles, skills and `mcp-tokens/`, which are exactly the
+  irreplaceable set. The pull job's 100 MiB size floor exists to catch a quick-shaped
+  zip if this ever regresses.
+- `hermes profile export` is **not** a backup: it strips API keys by design, and
+  session history stays in `state.db` regardless.
+- Upstream provides no scheduling, retention, or encryption for these backups; the zip
+  holds the VM's secrets in plaintext, which is why its only permitted resting places
+  are the PVC and restic (both encrypted at rest).
+- Concurrent backups fail fast, never block: the wrapper's own flock exits 75, and a
+  second `hermes backup` against hermes's internal `.backup.lock` exits 2 with
+  "another Hermes backup is already running". A hung pull therefore always means the
+  network or the VM, not lock queueing.
+
 Two pieces of state live on the VM itself and are not managed by this repo. This
 section holds their canonical copies — if you change either on the VM, change it here
 in the same sitting.
