@@ -62,13 +62,13 @@ import sys
 # Matches the `.timeout 30000` the VPS quiesce sidecars use.
 BUSY_TIMEOUT_SECONDS = 30
 
-# PLACEHOLDER FLOOR - RAISE AFTER THE FIRST REAL RUN.
-# 64 KiB is deliberately far below anything a real Grafana database can be (the
-# live-file gate row for `grafana.db` already sits at 256 KiB). It exists to
-# reject a zero-length or truncated copy, not to track growth. Once the first
-# nightly dump has run, read its size from the job log and raise this to roughly
-# an order of magnitude below it, the same way the gate's floors were set.
-MIN_BYTES = 65536
+# Measured floor. The first real dump (2026-08-24, the seed run) published
+# 2,039,808 bytes / 273 schema objects; per the measure-then-floor convention
+# this sits roughly an order of magnitude below that. It exists to reject a
+# zero-length or truncated copy, not to track growth. The gate's grafana-dump
+# row in homelab/backup/restic-cronjob.yaml carries the same floor - raise the
+# two together.
+MIN_BYTES = 204800
 
 # A database with no schema objects is not a Grafana database, whatever its
 # size. `count(*) from sqlite_master` is a schema-only read.
