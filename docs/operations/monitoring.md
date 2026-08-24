@@ -11,7 +11,7 @@ catches. Manifests carry per-probe rationale in comments. Read
 | A restic check is red | `failed_step=` in the ping body names the phase, and `prune=` says whether retention ran — [Reading a restic failure body](#reading-a-restic-failure-body) |
 | `mount_ok=no` on homelab restic | The SSD did not mount, so the backup captured nothing — [the gates](#the-backup-verification-gates) |
 | An ingest check is red | Check whether the operator synced a watch before suspecting the pipeline — [healthchecks.io checks](#healthchecksio-checks) |
-| `homelab-update-watch` is red | `verdict=` names the cause when the body is fresh; a stale `run_epoch=` means the watcher itself went quiet — [The update watcher](#the-update-watcher) |
+| `homelab-update-watch` is red | In a fresh body, `verdict=` names the cause and `next=` names the command to run; a stale `run_epoch=` means the watcher itself went quiet — [The update watcher](#the-update-watcher) |
 | A sidecar shows `RESTARTS: 0` but its snapshot is missing | Expected; they log rather than exit. Read the sidecar's stderr — [Why the sidecars have no probes](#why-the-sidecars-have-no-probes) |
 | An uptime-kuma monitor is UP but the service is down | Suspect an Access redirect — [uptime-kuma.md](uptime-kuma.md#the-cloudflare-access-trap) |
 | Everything is green and the data is still wrong | Expected; several probes are shallow by design — [What this does not catch](#what-this-does-not-catch) |
@@ -183,8 +183,8 @@ once retention started pruning, so `restic check` walks 14 snapshots instead of 
 
 `restic` succeeds on an empty tree: it writes a valid snapshot, `restic check` passes, and
 healthchecks.io goes green. Both jobs mount their source as `hostPath` with `type: Directory`,
-which asserts only that the directory *exists*, so a volume that fails to mount while its
-mountpoint survives on the root filesystem produces a backup of nothing that reports success —
+which asserts only that the directory *exists*. So a volume that fails to mount, while its
+mountpoint survives on the root filesystem, produces a backup of nothing that reports success —
 and `forget --prune --keep-daily 7` then expires the seven genuine recovery points over the
 following week. Snapshot `551bd209` in the homelab repository is 12 B, retained as a "monthly".
 **The gate is the only thing in either job that asks whether the backup was of anything.** Each
@@ -213,10 +213,11 @@ repository that grows in B2 until somebody looks; the false negative costs every
 `restic check` runs either way. Neither cluster makes the gate a *precondition of the backup* —
 that would skip a whole night of everything else over one stale artifact.
 
-**Add every new sqlite-backed service (VPS) or local-path PVC holding something you would miss
-(homelab) to its expected set, or that application's backup goes unverified, silently.** An
-explicit list beats a wildcard, which cannot tell "no databases exist" from "the volume is
-unmounted" from "three of four present" — all three produce no stale files.
+**Add every new artifact to its cluster's expected set, or that application's backup goes
+unverified, silently.** On VPS that means every new sqlite-backed service; on homelab, every
+local-path PVC holding something you would miss. An explicit list beats a wildcard, which cannot
+tell "no databases exist" from "the volume is unmounted" from "three of four present" — all
+three produce no stale files.
 
 | Cluster | Artifact | Path | Assertion |
 |---|---|---|---|
@@ -270,12 +271,12 @@ failure, not a pass — without the reference, the mount cannot be told from its
 single-PVC tree cannot clear it.
 
 A forensic pass then prints one line per PVC directory, so the night a PVC empties the diff is in
-the log. `du`'s exit status is the one deliberate exception to the "could not look" rule: busybox
-`du` returns non-zero when a file vanishes mid-walk, routine with sqlite WAL files and rotating
-logs, so its status only warns while its *output* stays authoritative — an unparseable total
-fails, and a `du` that could not walk still emits a number the scale floors catch. Do not capture
-its stderr: `2>&1` puts the diagnostic ahead of the total, empties the numeric prefix, and
-promotes the advisory warning to the fatal branch.
+the log. `du`'s exit status is the one deliberate exception to the "could not look" rule. Busybox
+`du` returns non-zero when a file vanishes mid-walk, which is routine with sqlite WAL files and
+rotating logs, so its status only warns while its *output* stays authoritative: an unparseable
+total fails, and a `du` that could not walk still emits a number the scale floors catch. Do not
+capture its stderr — `2>&1` puts the diagnostic ahead of the total, empties the numeric prefix,
+and promotes the advisory warning to the fatal branch.
 
 ### "Newest of a glob" is a dangerous shape
 
@@ -304,11 +305,12 @@ newest match, because their glob is one PVC directory expected to match one path
 **Five of the jobs this repo pings send `/start` and an exit code** — both restic jobs,
 `cloudflare-analytics`, `influx-backup` and `hermes-pull`. Follow that pattern for new jobs
 unless the job has `update-watch`'s reason not to.
-`influx-backup` and `hermes-pull` also need `set -eu -o pipefail` and their ping in an EXIT trap: under `set -e` alone `xargs` swallows
-the prune step's `ls` failure and the ping fires anyway, and with the ping on the last line a
-failing prune, a missing ConfigMap key or a dead influxdb pod produces *exactly nothing* until the
-6h grace expires ~30 hours later. The accepted cost — a transient failure now pages instead of
-self-healing into silence — is the better trade.
+`influx-backup` and `hermes-pull` need two things beyond that: `set -eu -o pipefail`, and their
+ping in an EXIT trap. Under `set -e` alone, `xargs` swallows the prune step's `ls` failure and the
+ping fires anyway. With the ping on the last line instead of in a trap, a failing prune, a missing
+ConfigMap key or a dead influxdb pod produces *exactly nothing* until the 6h grace expires about
+30 hours later. The accepted cost — a transient failure now pages instead of self-healing into
+silence — is the better trade.
 
 **The two ingest checks stay success-only and must not be converted.** A `/fail` on a stale
 bucket would flip the check DOWN on the first 6-hourly run that found nothing, trading a 36-hour
@@ -358,19 +360,32 @@ Events log settles that. The read-only API key is
 images are pinned, Renovate proposes the bumps, and until this check existed nothing pointed at
 the waiting pull requests. Detection for `health` came free on day one.
 
-**Red means one of seven things.** Three arrive as a `/fail` ping and name themselves in the body's
-`verdict=` field: `updates-pending` (one or more open Renovate pull requests — the intended
-signal), `dashboard-missing` (Renovate's Dependency Dashboard is gone or closed, so Renovate is
-probably uninstalled), and `renovate-config-error` (Renovate opened a configuration-error issue
-and has stopped proposing pull requests). The other four turn the check red through **silence**
-past the 30-hour window: the job did not run, it ran and hung, its ping UUID is well-formed but
-wrong, or GitHub has been unreachable for a day.
+**Red means one of seven things.** Three arrive as a `/fail` ping and name themselves in the
+body's `verdict=` field:
+
+| `verdict=` | Means |
+|---|---|
+| `updates-pending` | One or more open Renovate pull requests. The intended signal |
+| `dashboard-missing` | Renovate's Dependency Dashboard is gone or closed, so Renovate is probably uninstalled |
+| `renovate-config-error` | Renovate opened a configuration-error issue and has stopped proposing pull requests |
+
+The other four turn the check red through **silence** past the 30-hour window: the job did not
+run, it ran and hung, its ping UUID is well-formed but wrong, or GitHub has been unreachable for
+a day.
 
 **A silence-triggered alert carries the previous run's body**, because upstream sends the last
-body it received whatever the ping kind. That is why every body ends with `run_epoch=`, an
+body it received whatever the ping kind. That is why every body carries `run_epoch=`, an
 integer Unix timestamp: a `run_epoch` a day old means "this body is not about this alert; the
 watcher has gone quiet". Telling the four silence causes apart means opening the check's Events
 log. The check has one bit; red means "go and look".
+
+**`next=` is the last line of every body and names what to do about that verdict** — the
+`gh pr list` command for `updates-pending`, the `gh issue list` command for
+`renovate-config-error`, the app-installations page for `dashboard-missing`, and the pod-log
+command for the indeterminate verdicts. Each string is a fixed literal in the script's
+`NEXT_ACTIONS` map, keyed by verdict, so the alert is self-contained and nothing derived at run
+time is formatted into it. Read `next=` together with `run_epoch=`: a stale body's advice is
+about the last run that completed, not about the silence that raised the alert.
 
 **It deliberately sends no `/start`, and that must not be "completed" later.** healthchecks.io
 marks a check down when a start signal is not followed by a success inside the grace time, and a
@@ -449,12 +464,20 @@ ping *is* the write credential. The rule is blanket rather than tiered because *
 sort the tiers apart at runtime**: it cannot tell a bucket name from an operator token in a string
 it did not construct, so command output is unclassifiable and stays out.
 
-`emit` is therefore only ever called with a literal key and a value the script computed itself: a
-count, an age, a byte size, a path built from a literal glob, or a verdict from a fixed enum.
-`make check-ping-bodies` enforces this, including the one-intermediate-variable evasion
+`emit` — and `hc_emit`/`hc_summary` in the Python jobs — is therefore only ever called with a
+literal key and a value the script computed itself: a count, an age, a byte size, a path built
+from a literal glob, or a verdict from a fixed enum. A verdict may also *select* a fixed literal
+rather than being emitted raw, which is how `update-watch` builds its `next=` line: the enum
+decides which sentence, and the sentences are written into the source. Nothing derived at run
+time may be formatted into one.
+
+`make check-ping-bodies` enforces all of this. It catches the one-intermediate-variable evasion
 (`M=$(cmd); emit "error=$M"`), and refuses a denied name in every parameter-expansion form —
 `${HC_UUID:-}`, `${HC_UUID#p}`, `${HC_UUID/a/b}`, `${#HC_UUID}`. A taint clears only through an
-explicit `# check-ping-bodies: untaint <NAME> <reason>` line.
+explicit `# check-ping-bodies: untaint <NAME> <reason>` line. In Python it works from the other
+end, refusing any name a sink argument references unless that name is on `PY_VALUE_ALLOWLIST` in
+`scripts/check-ping-bodies.py`. Adding a name there is a deliberate review act: it asserts the
+value is an int, a timestamp or a fixed literal, and the reason belongs in the comment beside it.
 
 Bodies die with their ping-log entry, `Check.prune()` removing the objects then the ping rows —
 100 entries per check on Hobbyist, 1000 on Business, so a 6-hourly check's bodies persist 25 days
@@ -469,7 +492,7 @@ driving a UI nag — no body here contains the substring `confirm`, and none may
 own failures, `gate` for the verification gate. On homelab it is captured where the chain aborts,
 *before* the gate and `restic check` run, because both run unconditionally afterwards and would
 overwrite it — so a restic failure is never reported as a gate failure, even when the gate also
-fails. `restic_check=` is `ok`, `failed`, or `not-reached` only when the run never got that far.
+fails. `restic_check=` is `ok` or `failed`, and `not-reached` when the run died before that step.
 `prune=` has three states and they are not interchangeable:
 
 | Value | Meaning | What to do |
@@ -494,10 +517,10 @@ command; a one-off needs nothing.
 
 ### Checks in the account that this repo does not ping
 
-The Management API returns 14 checks; the table above lists the 8 this repo owns. The other six —
-`adsb.cynexia.net`, `pve3.cynexia.net`, `fs.cynexia.net`, `tailscale unattended upgrades`, `Home
-Assistant`, `upsd.cynexia.net` — are pinged from Proxmox hosts, Home Assistant and host cron, and
-are deliberately outside this repo. They are recorded so that "not in the table" can be told from
+The Management API returns 16 checks and the table above lists the 10 this repo owns, counted
+2026-08-24. The other six — `adsb.cynexia.net`, `pve3.cynexia.net`, `fs.cynexia.net`,
+`tailscale unattended upgrades`, `Home Assistant`, `upsd.cynexia.net` — are pinged from Proxmox
+hosts, Home Assistant and host cron, and are deliberately outside this repo. They are recorded so that "not in the table" can be told from
 "does not exist". **`upsd.cynexia.net` has `n_pings=0`**: never pinged, so wire it up or delete it.
 
 ## Layers 3 and 4: uptime-kuma
@@ -526,8 +549,7 @@ Probes fix hung request paths, not silently stopped background work — often th
 | **agent mail (hermes VM)** | Nothing monitors it at all — no probe, no check, no canary. A Purelymail outage, expired credential, DNS drift or send-cap exhaustion surfaces only as tool errors inside agent sessions. Deliberate for now; the planned round-trip canary is in [agent-mail.md](agent-mail.md#monitoring-and-backup-none-deliberately-for-now) |
 | **the homelab gate** | It proves the SSD is mounted and the tree is the right *shape*: right number of PVC directories, right order of magnitude, the listed files present and non-trivial. It says nothing about *content*. Every homelab PVC is copied live, with no quiesce step: a sqlite database mid-write is captured torn, `sonarr.db` at 14 MiB of corruption passes the size floor exactly as 14 MiB of working database does, and a PVC that stopped being written to weeks ago looks identical to one written a minute ago. Only the two influx dumps are age-checked. A retained orphan directory from a recreated PVC can satisfy an expected-set entry the live PVC no longer can — the resolved paths are printed so it is visible, but nothing fails on it. The rest surfaces at restore time |
 | **cloudflare-analytics** | It proves the hours it fetched were fetched. It cannot prove Cloudflare's own numbers are right, and it does not alert on *content* — a hostname that stops receiving traffic entirely, or a spike, produces a perfectly green check. That is Phase 3 (Grafana alert rules), deliberately deferred until a baseline exists |
-
-| **update-watch (Renovate silence)** | Renovate is installed, has opened no error issue, and is simply not proposing anything. No pull requests and no error issue read as green, and the check cannot tell that from a genuinely up-to-date estate. This is the accepted price of counting pull requests instead of polling registries. The cover is the quarterly liveness drill above; `make check-renovate-scope` closes the commonest *partial* variant, a pinned namespace nobody added to `managerFilePatterns` |
+| **update-watch (Renovate silence)** | Renovate is installed, has opened no error issue, and is proposing nothing. No pull requests and no error issue read as green, and the check cannot tell that from a genuinely up-to-date estate. This is the accepted price of counting pull requests instead of polling registries. The cover is the quarterly liveness drill above; `make check-renovate-scope` closes the commonest *partial* variant, a pinned namespace nobody added to `managerFilePatterns` |
 | **update-watch (merged but not applied)** | It watches the **repository**, not the cluster. Merging a Renovate pull request closes it, so the next run reports zero and the check goes green while the cluster still runs the old image. Merge and apply are one runbook operation for that reason; the independent noticer is drift in `make diff-homelab` |
 
 Queued, not configured: a changedetection `overdue_watches` json-query monitor and a karakeep
