@@ -407,6 +407,18 @@ fails. `restic_check=` is `ok`, `failed`, or `not-reached` only when the run nev
 
 Reporting `failed` as `skipped` is what makes an operator not look, so the script keeps them apart.
 
+**`failed_step=backup` with rc=3 can be a transient, self-healing race on live SQLite files.**
+Restic exits 3 for "at least one source file could not be read"; the snapshot is still saved.
+Seen 2026-08-22 on VPS: a freshrss `db.sqlite-journal` file vanished between restic's directory
+enumeration and its xattr read, the first attempt pinged red, and the Job's `backoffLimit: 1`
+retry pinged green a minute later (the Job shows `Complete` with roughly double the usual
+duration — two attempts). Before treating an rc=3 as an incident: read the failed pod's log for
+the named file, and check whether it is a `-journal`/`-wal`/`-shm` sidecar of a database whose
+quiesced `.restic` snapshot the gate already verified fresh — those transient files are useless
+in a file-level restore, and the quiesced copy is the real artifact. Recurring rc=3 on such
+files can be silenced with `--exclude='*.sqlite-journal'` and WAL siblings in the backup
+command; a one-off needs nothing.
+
 ### Checks in the account that this repo does not ping
 
 The Management API returns 14 checks; the table above lists the 8 this repo owns. The other six —
