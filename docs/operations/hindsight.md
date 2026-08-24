@@ -189,29 +189,56 @@ The same applies to the control-plane access key, minus the VM: rotate
 
 ## Wiring a Hermes profile
 
-Established against the live install on 2026-08-24. Two things about the layout are
-easy to get wrong, and both cost time on first setup:
+Established against the live install on 2026-08-24, and corrected the same day when the
+first attempt proved wrong. The layout below, and the three traps after it, each cost
+time on first setup.
 
-- **Plugin config is per INSTANCE, not per profile.** It lives at
-  `~/.hermes/hindsight/config.json` — there is no
-  `~/.hermes/profiles/<name>/hindsight/config.json`. Every profile shares this file,
-  which is why per-profile banks work through `bank_id_template` rather than a static
-  `bank_id`: `{profile}` expands to the profile name at run time, so `emh` lands in
-  `hermes-emh` with no per-profile config at all.
-- **Secrets are per PROFILE, and go through hermes's 1Password integration**, never a
-  plain value in an `.env` file:
+### Where the plugin config lives
 
-  ```sh
-  hermes -p emh secrets onepassword set HINDSIGHT_API_KEY "op://Homelab/hindsight/tenant-api-key"
-  ```
+**Plugin config resolves per `HERMES_HOME`, which makes it per profile.** A profile is a
+separate Hermes home directory, and the profile wrapper sets `HERMES_HOME` before
+launching hermes. Profile `emh` therefore reads
+`~/.hermes/profiles/emh/hindsight/config.json`. The file at
+`~/.hermes/hindsight/config.json` is not shared with it — that path is the *default*
+profile's config, because the default profile's home is `~/.hermes` itself.
 
-  hermes records its own `op://` reference in the profile's `config.yaml` and resolves
-  it at start ("1Password: applied N secrets"), so the key value never sits on disk.
+The plugin loads the first of these three that exists:
 
-The instance config:
+| Order | Source | Notes |
+|---|---|---|
+| 1 | `$HERMES_HOME/hindsight/config.json` | The profile's own file. For `emh`, `~/.hermes/profiles/emh/hindsight/config.json` |
+| 2 | `~/.hindsight/config.json` | Legacy shared path. Note the leading dot: this is **not** `~/.hermes/hindsight/` |
+| 3 | Environment variables | Defaults only, reached when neither file exists |
+
+**The whole file wins, and nothing merges.** The first file that exists and parses
+supplies every setting, and the lower tiers are never read. Malformed JSON falls through
+to the next tier silently, so a syntax error presents as a config that reverted to
+defaults.
+
+Two keys additionally accept an environment variable as a **per-key fallback**:
+`api_key` from `HINDSIGHT_API_KEY`, and `api_url` from `HINDSIGHT_API_URL`. The fallback
+applies only when the key is absent from the file, because **the file value wins over the
+environment**. Upstream documentation claims the reverse; the code reads the file first.
+Trap 3 depends on this detail.
+
+`bank_id_template` is unchanged by any of the above: `{profile}` expands to the profile
+name at run time, so `emh` lands in `hermes-emh`. Every profile can carry a byte-identical
+config file, which is the point — the file is per profile, but no value inside it differs.
+
+**Secrets are per profile, and go through hermes's 1Password integration**, never a plain
+value in an `.env` file:
+
+```sh
+hermes -p emh secrets onepassword set HINDSIGHT_API_KEY "op://Homelab/hindsight/tenant-api-key"
+```
+
+hermes records its own `op://` reference in the profile's `config.yaml` and resolves it at
+start ("1Password: applied N secrets"), so the key value never sits on disk.
+
+The per-profile config:
 
 ```json
-// ~/.hermes/hindsight/config.json — shared by ALL profiles on the instance
+// ~/.hermes/profiles/emh/hindsight/config.json — one per profile, identical contents
 {
   "mode": "local_external",
   "api_url": "https://hindsight.cynexia.net",
@@ -221,15 +248,87 @@ The instance config:
 }
 ```
 
-**The dashboard GUI does not reliably persist the API server URL** — it reports saved
-and silently is not (observed 2026-08-24; other fields, including the bank template,
-save fine). Set `api_url` by editing the file, then restart the gateway
+Note the absent `api_key`: it belongs in the 1Password-backed environment variable, and
+trap 3 explains why leaving it out is mandatory rather than tidy.
+
+To activate the provider, run `hermes config set memory.provider hindsight`, then check
+with `hermes -p emh memory status` (expect `Provider: hindsight`, plugin installed, status
+available). Treat that status as weak evidence: upstream issue #80388 records
+`memory status` reporting available while the runtime path fails, because the two use
+different predicates. The canary and trap 2's call test are the real proof.
+
+### Trap 1: never run `hermes tools disable memory`
+
+The hindsight integration guide instructs you to run it. Do not. `memory` names both a
+built-in tool and a **toolset**, and that toolset gates every memory provider's tools
+alongside the built-in one. Running the command strips `hindsight_retain`,
+`hindsight_recall` and `hindsight_reflect` from the agent.
+
+Confirmed live on 2026-08-24: before `hermes -p emh tools enable memory --platform cli`
+the three tools were genuinely absent; after it, `hindsight_recall` executed and returned
+a memory retained in an earlier session. This is upstream hermes-agent issues #30979 and
+#46108, both unfixed — the candidate fix, PR #30991, is open and unmerged.
+
+To suppress the built-in memory tool without losing the provider's tools, leave the
+toolset enabled and set this in the profile's `config.yaml`:
+
+```yaml
+memory:
+  memory_enabled: false
+  user_profile_enabled: false
+```
+
+Then confirm the toolset is enabled on every platform you use:
+
+```sh
+hermes -p emh tools enable memory --platform cli
+hermes -p emh tools --summary
+```
+
+**Platforms are separate keys.** `--platform` defaults to `cli`, so enabling the toolset
+there changes nothing for a gateway serving Telegram or Discord. `tools --summary` lists
+all platforms at once.
+
+### Trap 2: `/tools` cannot prove the tools are missing
+
+`/tools` and `hermes tools list` render from the static tool registry, which knows nothing
+about memory providers. Provider tools are appended to the agent afterwards, at session
+start. They therefore **never** appear in either listing, whether or not they work. PR
+#30991 would add that visibility and is unmerged.
+
+Verify by use, not by listing:
+
+```sh
+hermes -p emh chat -q "Call the hindsight_recall tool with the query 'test' and show me the raw result."
+```
+
+A returned result proves registration. A reply that no such tool exists is the only
+meaningful negative.
+
+### Trap 3: the dashboard GUI writes secrets to disk in cleartext
+
+The dashboard is unreliable in both directions, so do not trust it as the writer of
+record.
+
+It **fails to save** the API server URL: it reports saved and silently is not (observed
+2026-08-24). Set `api_url` by editing the file, then restart the gateway
 (`systemctl --user restart hermes-gateway-<profile>`).
 
-Then `hermes config set memory.provider hindsight` and `hermes tools disable memory` —
-with both providers active the model may prefer the built-in one — and check with
-`hermes -p emh memory status` (expect `Provider: hindsight`, plugin installed,
-status available).
+It **saves too much** when given the API key: the literal value lands in the profile's
+`hindsight/config.json` as cleartext, which defeats the 1Password integration and puts a
+live credential into the nightly backup zip. Delete `api_key` from the file and let
+`HINDSIGHT_API_KEY` supply it. Deleting is required, not cosmetic — the file value wins
+over the environment, so a stored key shadows the 1Password-backed variable for as long as
+it remains.
+
+Re-check after any GUI session, on every profile:
+
+```sh
+grep -c api_key ~/.hermes/profiles/emh/hindsight/config.json   # expect 0
+```
+
+A non-zero count means a cleartext credential is on disk: remove it, restart the gateway,
+and rotate the key if the file has been backed up since.
 
 The 30-second timeout is deliberate, against the 120-second cloud default: the server is
 on the LAN, so a longer value would only delay noticing that it is gone.
@@ -238,13 +337,18 @@ on the LAN, so a longer value would only delay noticing that it is gone.
 plain HTTP calls and the `llm_*` client settings are dead; extraction happens
 server-side, from the key in the cluster Secret.
 
-**Adding a second profile** is one command — the profile-scoped secret:
-`hermes -p <name> secrets onepassword set HINDSIGHT_API_KEY "op://Homelab/hindsight/tenant-api-key"`
-— plus enabling the provider for that profile. The shared instance config already
-covers it: `bank_id_template` yields `hermes-<name>`, and banks auto-create on first
-write. Before onboarding one, run the two-bank isolation test once — retain into
-`probe-a`, recall from `probe-b`, expect nothing — then delete both probe banks from
-the control plane.
+**Adding a second profile** takes three steps, because the config file is per profile:
+
+1. Copy the config file to `~/.hermes/profiles/<name>/hindsight/config.json`. The
+   contents are identical every time — `bank_id_template` resolves `hermes-<name>` at run
+   time, and banks auto-create on first write.
+2. Set the profile-scoped secret:
+   `hermes -p <name> secrets onepassword set HINDSIGHT_API_KEY "op://Homelab/hindsight/tenant-api-key"`
+3. Enable the provider for that profile, then confirm it with trap 2's call test.
+
+Before onboarding a profile, run the two-bank isolation test once — retain into `probe-a`,
+recall from `probe-b`, expect nothing — then delete both probe banks from the control
+plane.
 
 ## Monitoring
 
@@ -279,8 +383,9 @@ memories start coming back subtly wrong, no automated check here will say so.
 
 Nothing else in the estate references hindsight, which was a design goal.
 
-1. Point Hermes back: `hermes config set memory.provider <previous>` and re-enable the
-   built-in memory tool, on every profile.
+1. Point Hermes back: `hermes config set memory.provider <previous>`, and restore the
+   built-in memory tool by removing the `memory.memory_enabled` and
+   `memory.user_profile_enabled` false flags from each profile's `config.yaml`.
 2. Optionally export the banks from the control plane, if the memories are worth keeping
    in a portable format.
 3. Take a final dump and let that night's restic run capture it.
