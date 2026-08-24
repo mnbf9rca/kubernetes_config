@@ -607,9 +607,12 @@ create-jotta-secret: check-context
 #      local process listings; --from-file=/dev/stdin keeps them off argv.
 # The jotta values tolerate a stripped newline; a future SSH key must use this
 # shape. Idempotent; re-run after rotating the key in 1Password.
+# `set -o pipefail` so a failed `op read` (revoked token, renamed item) fails
+# the target instead of applying a Secret with an empty key.
 .PHONY: create-hermes-ssh-secret
 create-hermes-ssh-secret: check-context
-	@op read 'op://Homelab/hermes-ssh-key/private key' \
+	@set -o pipefail; \
+	op read 'op://Homelab/hermes-ssh-key/private key' \
 	  | kubectl create secret generic hermes-ssh \
 	      --namespace backup \
 	      --from-file=id_ed25519=/dev/stdin \

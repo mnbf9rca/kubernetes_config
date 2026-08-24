@@ -28,6 +28,11 @@
 set -eu
 set -o pipefail
 
+# The image runs as uid 1999 with a one-line /etc/passwd mounted from a
+# ConfigMap; HOME must exist and be writable (it is this pod's emptyDir) or
+# ssh's config probing fails. Exported before anything else runs.
+export HOME=/tmp
+
 # ---- healthchecks.io plumbing -------------------------------------
 # Same contract as the two restic scripts and influx-backup.sh: /start plus
 # exit code, a key=value body, a ping never fails the job, a body never costs
@@ -90,6 +95,9 @@ PRUNED=unknown
 on_exit() {
   _xrc=$?
   trap - EXIT
+  # Defense in depth: the key copy dies with the trap, not with the pod (a
+  # completed Job's pod - and its emptyDir - is retained for ttl days).
+  rm -f /tmp/id_ed25519 2>/dev/null || true
   hc_reset
   if [ "$_xrc" -eq 0 ]; then
     emit "summary=ok - zip verified, $ZIP_KIB KiB, sha256 $SHA_MATCH, pruned $PRUNED"
@@ -115,10 +123,6 @@ hc_reset
 emit "summary=starting"
 ping_hc start
 
-# The image runs as uid 1999 with a one-line /etc/passwd mounted from a
-# ConfigMap; HOME must exist and be writable or ssh's config probing fails.
-export HOME=/tmp
-
 # One function, not a multi-word variable (SC2086-clean). The ServerAlive pair
 # makes a peer that dies mid-stream fail in ~2 minutes with a real exit code
 # and a proper exit ping, instead of hanging until activeDeadlineSeconds
@@ -128,6 +132,7 @@ export HOME=/tmp
 run_ssh() {
   ssh -i /tmp/id_ed25519 \
       -o UserKnownHostsFile=/known-hosts/known_hosts \
+      -o GlobalKnownHostsFile=/dev/null \
       -o StrictHostKeyChecking=yes \
       -o IdentitiesOnly=yes \
       -o BatchMode=yes \

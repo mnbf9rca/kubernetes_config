@@ -181,6 +181,11 @@ spec:
                 # key to /tmp at mode 0600 before use, since OpenSSH refuses a
                 # group-readable identity file.
                 defaultMode: 0440
+            # Memory-backed: /tmp holds only the 0600 key copy and the ping
+            # body, and tmpfs means the key never touches disk even while the
+            # completed pod (and its emptyDir) is retained for ttl days. The
+            # zip streams straight to the PVC, never through /tmp.
             - name: tmp
               emptyDir:
-                sizeLimit: 1Gi
+                medium: Memory
+                sizeLimit: 16Mi
