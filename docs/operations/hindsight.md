@@ -189,29 +189,47 @@ The same applies to the control-plane access key, minus the VM: rotate
 
 ## Wiring a Hermes profile
 
-Per profile, using the **native** provider — the standalone `hindsight-hermes` pip
-plugin is deprecated, so install nothing. For `emh`, with
-`HERMES_HOME=~/.hermes/profiles/emh`:
+Established against the live install on 2026-08-24. Two things about the layout are
+easy to get wrong, and both cost time on first setup:
+
+- **Plugin config is per INSTANCE, not per profile.** It lives at
+  `~/.hermes/hindsight/config.json` — there is no
+  `~/.hermes/profiles/<name>/hindsight/config.json`. Every profile shares this file,
+  which is why per-profile banks work through `bank_id_template` rather than a static
+  `bank_id`: `{profile}` expands to the profile name at run time, so `emh` lands in
+  `hermes-emh` with no per-profile config at all.
+- **Secrets are per PROFILE, and go through hermes's 1Password integration**, never a
+  plain value in an `.env` file:
+
+  ```sh
+  hermes -p emh secrets onepassword set HINDSIGHT_API_KEY "op://Homelab/hindsight/tenant-api-key"
+  ```
+
+  hermes records its own `op://` reference in the profile's `config.yaml` and resolves
+  it at start ("1Password: applied N secrets"), so the key value never sits on disk.
+
+The instance config:
 
 ```json
-// ~/.hermes/profiles/emh/hindsight/config.json
+// ~/.hermes/hindsight/config.json — shared by ALL profiles on the instance
 {
   "mode": "local_external",
   "api_url": "https://hindsight.cynexia.net",
-  "bank_id": "hermes-emh",
+  "bank_id_template": "hermes-{profile}",
   "recall_budget": "mid",
   "timeout": 30
 }
 ```
 
-```sh
-# ~/.hermes/profiles/emh/.env
-HINDSIGHT_API_KEY=<value of op://Homelab/hindsight/tenant-api-key>
-```
+**The dashboard GUI does not reliably persist the API server URL** — it reports saved
+and silently is not (observed 2026-08-24; other fields, including the bank template,
+save fine). Set `api_url` by editing the file, then restart the gateway
+(`systemctl --user restart hermes-gateway-<profile>`).
 
 Then `hermes config set memory.provider hindsight` and `hermes tools disable memory` —
 with both providers active the model may prefer the built-in one — and check with
-`hermes memory status`.
+`hermes -p emh memory status` (expect `Provider: hindsight`, plugin installed,
+status available).
 
 The 30-second timeout is deliberate, against the 120-second cloud default: the server is
 on the LAN, so a longer value would only delay noticing that it is gone.
@@ -220,12 +238,13 @@ on the LAN, so a longer value would only delay noticing that it is gone.
 plain HTTP calls and the `llm_*` client settings are dead; extraction happens
 server-side, from the key in the cluster Secret.
 
-**Adding a second profile** is those two files in `~/.hermes/profiles/<name>/` and
-nothing else — set `bank_id` to the profile's own literal name (`hermes-<name>`; the
-Hermes integration has no template mechanism, only the static `bank_id` key, env var
-`HINDSIGHT_BANK_ID`). Banks auto-create on first write; no server-side work is needed. Before onboarding one, run the two-bank
-isolation test once — retain into `probe-a`, recall from `probe-b`, expect nothing —
-then delete both probe banks from the control plane.
+**Adding a second profile** is one command — the profile-scoped secret:
+`hermes -p <name> secrets onepassword set HINDSIGHT_API_KEY "op://Homelab/hindsight/tenant-api-key"`
+— plus enabling the provider for that profile. The shared instance config already
+covers it: `bank_id_template` yields `hermes-<name>`, and banks auto-create on first
+write. Before onboarding one, run the two-bank isolation test once — retain into
+`probe-a`, recall from `probe-b`, expect nothing — then delete both probe banks from
+the control plane.
 
 ## Monitoring
 
