@@ -77,6 +77,7 @@ REQUIRED_TARGETS = (
     "homelab/health/scripts/influx-backup.sh",
     "homelab/health/scripts/ingest-freshness.sh",
     "homelab/health/scripts/cloudflare-analytics-ingest.py",
+    "homelab/ops/scripts/update-watch.py",
     "vps/backup/scripts/restic-backup.sh",
 )
 
@@ -129,6 +130,26 @@ PY_VALUE_ALLOWLIST = frozenset({
     "watermark", "start", "now", "committed_through",
     "g_start", "g_end", "missing_hours", "gap_marker",
     "truncated", "rc", "lag_minutes",
+    # homelab/ops/scripts/update-watch.py. Every name below is bound at the
+    # emit site to `int(...)` of a value the script derived, or to a member of
+    # that script's VERDICTS enum. Nothing GitHub sent can reach any of them —
+    # a pull-request title is unvalidated remote text and is deliberately never
+    # emitted (the pull-request NUMBER is, and int() guarantees it is a number).
+    "verdict",          # a member of VERDICTS, a fixed enum in the source
+    "prs_open",         # int(): count of open renovate[bot] pull requests
+    "oldest_pr",        # int(): a repo-local pull-request number
+    "oldest_pr_days",   # int(): whole days since the oldest PR was created
+    "dash_age_days",    # int(): whole days since the Dependency Dashboard moved
+    "config_issues",    # int(): count of renovate[bot] config-error issues
+    "http",             # int(): the HTTP status code of the one GitHub call
+    "run_epoch",        # int(): this run's own Unix timestamp
+    # Bound to `next_action_for(verdict)`, which returns a value from that
+    # script's NEXT_ACTIONS map: a fixed literal per verdict, chosen at edit
+    # time, with a literal fallback. A verdict is itself a member of a fixed
+    # enum, so the only thing run time decides is WHICH literal — the same
+    # "verdict from a fixed enum" shape this rule already permits. If that map
+    # ever gains a formatted string, this entry must come back off the list.
+    "next_action",
 })
 
 # Python: calls a sink argument may make. `iso` formats a datetime; `len`, `int`

@@ -37,6 +37,10 @@ RESTIC_HC_UUID=op://Homelab/b2-restic/healthcheck-uuid
 # `make create-hermes-ssh-secret`, not through this pipeline)
 HERMES_HC_UUID=op://Homelab/hermes-backup/healthcheck-uuid
 
+# healthchecks.io check for the daily Renovate update watcher (ops namespace).
+# Red while an update is waiting; see docs/operations/monitoring.md.
+OPS_HC_UPDATE_UUID=op://Homelab/update-watch/healthcheck-uuid
+
 # Route53 credentials for cert-manager DNS-01 (Task 2.5)
 ROUTE53_ACCESS_KEY_ID=op://Homelab/route53-cert-manager/access-key-id
 ROUTE53_SECRET_ACCESS_KEY=op://Homelab/route53-cert-manager/secret-access-key

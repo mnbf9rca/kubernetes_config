@@ -1,0 +1,122 @@
+---
+# Daily Renovate-update watcher.
+#
+# Counts the open `renovate[bot]` pull requests on this repo with ONE
+# unauthenticated GitHub REST call and drives the `homelab-update-watch`
+# healthchecks.io check: red while an update is waiting, red when Renovate
+# itself is visibly broken, red through silence when this job stops running.
+# Without it, a pinned namespace's updates sit in GitHub with nothing pointing
+# at them — which is exactly what happened to `health`.
+#
+# The script is homelab/ops/scripts/update-watch.py, mounted at /scripts by the
+# configMapGenerator in this directory's kustomization.yaml. It is a real file,
+# not an inline YAML string, so it can be imported, unit-tested and linted; see
+# its sibling test_update_watch.py. The generated ConfigMap name carries a
+# content hash, so editing the script rolls this CronJob.
+#
+# WHY THIS LIVES IN ITS OWN NAMESPACE. Its scope is the whole repo, so a
+# `health`-namespace object alerting about other namespaces would be a lie about
+# ownership; and `backup` runs at PSA privileged for restic's hostPaths, which a
+# pure outbound-HTTPS poller has no business inheriting. It needs no hostPath, no
+# hostNetwork, no ServiceAccount and no RBAC — only egress to api.github.com and
+# hc-ping.com. A separate tree also makes removal one `rm -r` plus one line.
+#
+# NO GITHUB TOKEN, deliberately. The repo is public, /repos/*/issues needs no
+# auth, and the unauthenticated budget is 60 requests per hour per egress IP
+# against the one request per day this makes. A PAT would buy a limit nobody
+# needs in exchange for a tier-1 secret with an expiry nothing here tracks, whose
+# own failure mode (401 forever) looks like a GitHub outage.
+#
+# NO KEEL in this namespace: the image is version-pinned and Renovate watches
+# homelab/ops/** (renovate.json), so this pin is proposed by pull request and
+# applied through the normal diff/apply flow — the watcher is not the estate's
+# one unwatched pin.
+#
+# NO PROBES. This is scheduled work, so the instrument is the healthchecks.io
+# dead-man's-switch plus activeDeadlineSeconds, not a probe. And note there is
+# deliberately NO `/start` ping: see docs/operations/monitoring.md and the
+# script's own rule 2.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: update-watch
+  namespace: ops
+spec:
+  # Daily. Renovate's hosted cycle is roughly four-hourly, so a daily watcher
+  # never races it (worst-case notice is about 28 hours). 06:45Z is after the
+  # whole backup window (hermes-pull 02:00, influx-backup 02:30, restic 03:00)
+  # and before the working day, so the alert is waiting rather than interrupting.
+  schedule: "45 6 * * *"
+  timeZone: "UTC"                 # without this the schedule is read in kube-controller-manager's local zone
+  concurrencyPolicy: Forbid
+  # A missed window MUST be retried: a silently skipped run is the exact failure
+  # this mechanism exists to prevent.
+  startingDeadlineSeconds: 3600
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      # One retry covers a DNS blip. A second immediate retry is likelier to hit
+      # the same rate limit than to fix anything; the script also retries
+      # in-process, and it always exits 0, so this fires only on a pod-level
+      # failure.
+      backoffLimit: 1
+      # With concurrencyPolicy: Forbid, a hung run blocks every later run. Two
+      # bounded HTTPS calls cannot legitimately take five minutes.
+      activeDeadlineSeconds: 300
+      # 3 days, so a Friday failure is still forensically available on Monday.
+      ttlSecondsAfterFinished: 259200
+      template:
+        spec:
+          restartPolicy: Never
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65534
+            runAsGroup: 65534
+            seccompProfile: { type: RuntimeDefault }
+          containers:
+            - name: watch
+              # Renovate watches homelab/ops/** (renovate.json); this pin is
+              # proposed by PR and applied with the normal diff/apply flow.
+              image: python:3.13-alpine3.22
+              command: ["python3", "/scripts/update-watch.py"]
+              env:
+                # PYTHONDONTWRITEBYTECODE keeps the read-only root filesystem
+                # from producing __pycache__ write errors on every import.
+                - { name: PYTHONDONTWRITEBYTECODE, value: "1" }
+                - { name: PYTHONUNBUFFERED, value: "1" }
+                # Tier-3 identifier: the public repo path this watches.
+                - { name: GH_REPO, value: "mnbf9rca/kubernetes_config" }
+                # healthchecks.io check `homelab-update-watch`
+                # (op://Homelab/update-watch/healthcheck-uuid). Substituted by
+                # envsubst at apply time; never committed.
+                #
+                # RENAMED ON PURPOSE. Only HC_UUID reaches the script, because a
+                # generated script rides the same envsubst stream as this
+                # manifest and envsubst rewrites the bare `$NAME` form too — a
+                # script naming OPS_HC_UPDATE_UUID would publish the ping UUID
+                # inside a ConfigMap. `make check-script-substitution` enforces
+                # it. The placeholder belongs HERE, in a manifest, where
+                # substitution is what is meant to happen.
+                - name: HC_UUID
+                  value: "${OPS_HC_UPDATE_UUID}"
+              volumeMounts:
+                - { name: scripts, mountPath: /scripts, readOnly: true }
+                - { name: tmp, mountPath: /tmp }
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                runAsNonRoot: true
+                runAsUser: 65534
+                runAsGroup: 65534
+                privileged: false
+                capabilities: { drop: ["ALL"] }
+                seccompProfile: { type: RuntimeDefault }
+              resources:
+                requests: { cpu: 50m, memory: 64Mi }
+                limits: { memory: 256Mi }
+          volumes:
+            - name: scripts
+              configMap: { name: ops-update-watch-scripts }
+            - name: tmp
+              emptyDir: { medium: Memory, sizeLimit: 16Mi }

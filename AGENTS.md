@@ -45,7 +45,7 @@ kubernetes_config/
 ├── .envrc                    # direnv entrypoint (loads 1Password-backed vars)
 ├── .env.tpl                  # op-template with VAR=op://... lines (committed; no real secret values)
 ├── Makefile                  # build/diff/apply per cluster + secret and bootstrap helpers
-├── renovate.json             # scoped to homelab/health/** only (pinDigests)
+├── renovate.json             # scoped to homelab/health/** and homelab/ops/** (pinDigests)
 ├── secrets-to-rotate.md      # honesty box for disclosed secret values (identifiers only)
 ├── docs/                     # operational documentation (docs/superpowers/ is gitignored)
 ├── homelab/                  # Talos homelab cluster
@@ -56,6 +56,8 @@ kubernetes_config/
 │   ├── secrets/              # Secret manifests with ${VAR} envsubst placeholders
 │   ├── health/               # health-data pipeline (no keel; pinned images)
 │   │   └── scripts/          # job scripts as real files + their tests; mounted via configMapGenerator
+│   ├── ops/                  # cluster-wide operational jobs (the daily Renovate update watcher)
+│   │   └── scripts/          # same pattern: real files + tests, via configMapGenerator
 │   └── backup/               # restic init Job + nightly CronJob (hostPath /var/mnt/ssd/local-path-provisioner)
 ├── vps/                      # Hetzner Talos cluster, same sub-layout (bootstrap/secrets/workloads/backup/talos)
 ├── scripts/                  # repo-level helpers (karakeep tags, FreshRSS WebSub status, the check-* guards)
@@ -93,8 +95,12 @@ Full mechanics, target-by-target reference and failure modes:
 - **Adding a secret means four edits:** the `op://` line in `.env.tpl`, the name in
   `ENVSUBST_VAR_NAMES`, the name in `REQUIRED_VARS`, and the `${VAR}` placeholder in the
   manifest. `make check-vars-consistency` hard-fails if a substituted var is missing from
-  `REQUIRED_VARS` — but **nothing** catches a var missing from `ENVSUBST_VAR_NAMES`: that
-  ships the literal `${VAR}` into a Secret. To confirm no placeholder survived the
+  `REQUIRED_VARS`. A var missing from `ENVSUBST_VAR_NAMES` is caught too, but **at apply
+  time only**: the Makefile's `PLACEHOLDER_SCAN` runs inside `apply-homelab` and
+  `apply-vps` after rendering and before kubectl, and hard-fails naming any surviving
+  `${VAR}` whose name is declared in `.env.tpl`, so nothing is applied and no literal
+  placeholder reaches a Secret. Note the asymmetry: `diff-*` does **not** run that scan, so
+  a diff can look clean while the apply refuses. To confirm no placeholder survived the
   render after adding one, run
   `make build-<cluster> | grep -F "$(sed -n 's/^\([A-Za-z_][A-Za-z0-9_]*\)=.*/${\1}/p' .env.tpl)"`
   — it prints nothing on a clean tree. Do not use a bare `grep -F '${'`: shell
@@ -138,9 +144,9 @@ Full mechanics, target-by-target reference and failure modes:
 
 - Keep the one-file-per-service pattern; keep all of a service's resources in that file.
 - Every new Deployment must include the full keel annotation set above — **except** in
-  the `health` namespace, which explicitly forbids keel: every image there is
+  the `health` and `ops` namespaces, which explicitly forbid keel: every image there is
   version/digest-pinned and Renovate proposes bumps instead
-  (`docs/operations/homelab-health.md`).
+  (`docs/operations/homelab-health.md`, `docs/operations/homelab.md`).
 - **Probes: readiness on every long-running container that serves traffic; liveness only
   where that probe can actually detect the failure *and* a restart is a safe remedy**
   (everything here is single-replica, so an over-eager liveness probe manufactures
@@ -159,7 +165,10 @@ Full mechanics, target-by-target reference and failure modes:
   **start and exit code** — the two restic jobs, `cloudflare-analytics` and `influx-backup`
   do; the two ingest checks and `jottacloud backup` ping on success only, so a failure
   shows up as silence. For the ingest checks that is deliberate and must not change;
-  jottacloud's ping comes from `backup.sh` inside a third-party image. Inventory and
+  jottacloud's ping comes from `backup.sh` inside a third-party image. `update-watch`
+  sends **no `/start` at all**, also deliberately: it pings `/log` when it could not read
+  GitHub, and a `/start` with no success inside the grace would turn every such run into
+  a false alarm. Do not "complete" its ping set. Inventory and
   per-job semantics: `docs/operations/monitoring.md`.
 - **A ping body is a disclosure channel.** Every ping carries a short `key=value` summary
   (`summary=` first, printable ASCII), and **never a command's output** — the exec'd influx
@@ -187,9 +196,9 @@ Full mechanics, target-by-target reference and failure modes:
   broke `diff-homelab` and `apply-homelab` for four months. Deleting the stale Job is the
   recovery; the TTL is the prevention. `make check-job-ttl` enforces it across both
   clusters, and `diff-*`/`apply-*` run the per-cluster variant as a preflight, so it
-  cannot be forgotten (`check-vars-consistency`, `check-job-ttl`,
-  `check-script-substitution` and `check-ping-bodies` are the four guards in that
-  preflight). Jobs *generated by a CronJob* are exempt and the check ignores
+  cannot be forgotten (the preflight is `check-vars-consistency`, `check-job-ttl`,
+  `check-script-substitution`, `check-ping-bodies`, `check-script-lint`, and — on the
+  homelab targets — `check-renovate-scope`). Jobs *generated by a CronJob* are exempt and the check ignores
   them: each run gets a unique name, so they never collide, and pile-up is bounded by
   `successfulJobsHistoryLimit`.
 - **Logic lives in a script file, never in an inline YAML string.** Anything with
@@ -232,6 +241,13 @@ Full mechanics, target-by-target reference and failure modes:
   `brew install shellcheck`. Findings from upstream bases are advisory and do not fail
   the check. Rationale and the extraction rules:
   `docs/operations/apply-workflow.md`.
+- **A new version-pinned, keel-free namespace means a `renovate.json` edit too.** Scope
+  is set by `kubernetes.managerFilePatterns`; a `packageRule` only decorates the pull
+  requests Renovate already decided to open, so widening the rule alone does nothing.
+  Unwatched pins get no bumps and no alert — `homelab-update-watch` counts open Renovate
+  pull requests, so it stays green over a namespace nobody is scanning.
+  `make check-renovate-scope` enforces it and runs in the homelab diff/apply preflight;
+  a deliberate exception goes on that guard's `EXEMPT` list with a written reason.
 - For new `hostPath`/`hostNetwork` workloads: elevate their namespace to PSA
   `privileged` in the cluster's `bootstrap/namespaces.yaml`. The cluster-wide enforce
   level is `baseline`.

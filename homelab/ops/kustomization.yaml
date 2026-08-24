@@ -1,0 +1,39 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# The `ops` tree: cluster-wide operational plumbing that belongs to no single
+# application namespace. Today that is one job — the daily Renovate-update
+# watcher (update-watch.yaml). See docs/operations/homelab.md.
+
+namespace: ops
+
+resources:
+  - update-watch.yaml
+
+# The watcher script lives as a real file under scripts/ and reaches the cluster
+# through a generator, never as an inline YAML string: a real file can be
+# imported, unit-tested, linted and diffed line by line.
+#
+# The generated name gets a content-hash suffix and kustomize rewrites every
+# reference to it, so editing the script rolls the CronJob instead of leaving a
+# stale copy mounted. Do NOT set disableNameSuffixHash here.
+#
+# The top-level `namespace: ops` above is what makes the name rewrite work:
+# kustomize only rewrites a name reference when referrer and referent agree on
+# namespace. If this file is ever rewritten without it, the generator entry MUST
+# carry `namespace: ops` explicitly — omit it and you get a silent double
+# failure, the ConfigMap created in `default` AND the CronJob still pointing at
+# the unsuffixed name, so the mount dangles and every run fails at container
+# start.
+#
+# GENERATED SCRIPTS ARE NOT INERT TEXT. They ride the same stream as every
+# manifest, so envsubst rewrites them too — and it substitutes the bare `$NAME`
+# form as well as `${NAME}`. update-watch.py must never mention a name in
+# ENVSUBST_VAR_NAMES; that is why the CronJob renames OPS_HC_UPDATE_UUID to
+# HC_UUID at the container boundary, and `make check-script-substitution`
+# enforces it.
+configMapGenerator:
+  - name: ops-update-watch-scripts
+    namespace: ops
+    files:
+      - update-watch.py=scripts/update-watch.py

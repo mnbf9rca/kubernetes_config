@@ -11,3 +11,4 @@ resources:
   - workloads
   - backup
   - health
+  - ops

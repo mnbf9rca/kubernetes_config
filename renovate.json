@@ -2,13 +2,26 @@
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": ["config:recommended"],
   "enabledManagers": ["kubernetes"],
-  "kubernetes": { "managerFilePatterns": ["/^homelab/health/.+\\.yaml$/"] },
+  "recreateWhen": "always",
+  "kubernetes": {
+    "managerFilePatterns": [
+      "/^homelab/health/.+\\.yaml$/",
+      "/^homelab/ops/.+\\.yaml$/"
+    ]
+  },
+  "minimumReleaseAge": "3 days",
   "packageRules": [
     { "matchFileNames": ["homelab/health/**"],
       "groupName": "health stack",
       "automerge": false,
       "prPriority": 5,
       "pinDigests": true },
+    { "matchFileNames": ["homelab/ops/**"],
+      "groupName": "ops tooling",
+      "automerge": false,
+      "prPriority": 1,
+      "pinDigests": true,
+      "description": "The update watcher's own image — watched so the watcher is not the one unwatched pin in the estate." },
     { "matchPackageNames": ["thisisarpanghosh/garmin-fetch-data"],
       "enabled": false,
       "description": "digest-pinned to main build; v0.5.0 latest release is broken (client.profile crash); re-enable when a release newer than v0.5.0 exists" }
