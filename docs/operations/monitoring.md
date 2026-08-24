@@ -164,16 +164,16 @@ write a `$VAR` into one.
 | `timeZone: "UTC"` | every job | Otherwise the schedule follows kube-controller-manager's local zone |
 | `startingDeadlineSeconds` | 3600, except 1800 for cloudflare-analytics, 600 for hindsight-canary, 300 for jottacloud, and unset for `ingest-freshness` | A missed window retries for that long, then drops. `update-watch` takes the 3600 default deliberately: a silently skipped run is the failure it exists to prevent |
 | `activeDeadlineSeconds` | restic 14400, influx-backup 3600, hindsight-pg-dump 3600, hermes-pull 1800, cloudflare-analytics 1200, ingest-freshness 300, update-watch 300, hindsight-canary 300, jottacloud 21600 | With `concurrencyPolicy: Forbid`, one hung run silently blocks every later run |
-| `ttlSecondsAfterFinished` | 259200 on both restic jobs, hermes-pull, cloudflare-analytics and update-watch; 172800 on influx-backup and hindsight-pg-dump; 3600 on hindsight-canary, which runs 96 times a day; 86400 on the rest | A Friday failure on the restic jobs survives until Monday |
+| `ttlSecondsAfterFinished` | 259200 on both restic jobs, hermes-pull, cloudflare-analytics and update-watch; 172800 on influx-backup and hindsight-pg-dump; 3600 on hindsight-canary, which runs hourly; 86400 on the rest | A Friday failure on the restic jobs survives until Monday |
 | `terminationGracePeriodSeconds` | not set on any job | busybox `ash` runs as PID 1 and never forwards SIGTERM to restic, so a grace period only slows teardown. `restic unlock` at the head of the next run recovers the lock |
 
 Two of those are the hindsight jobs. `hindsight-pg-dump` runs at 02:15Z — after `hermes-pull`
 at 02:00, before `influx-backup` at 02:30 and the 03:00 sweep — with `startingDeadlineSeconds: 3600`,
 `activeDeadlineSeconds: 3600` and `ttlSecondsAfterFinished: 172800`, matching `influx-backup`
-exactly. `hindsight-canary` runs every 15 minutes with `startingDeadlineSeconds: 600`,
-`activeDeadlineSeconds: 300` — deliberately shorter than its own schedule, so a hung run can never
-block the next one under `concurrencyPolicy: Forbid` — and `ttlSecondsAfterFinished: 3600`, since
-96 runs a day would otherwise bury the namespace in completed Jobs.
+exactly. `hindsight-canary` runs hourly with `startingDeadlineSeconds: 600`,
+`activeDeadlineSeconds: 300` — deliberately far shorter than its own schedule, so a hung run can
+never block the next one under `concurrencyPolicy: Forbid` — and `ttlSecondsAfterFinished: 3600`,
+so a completed run is reaped before the next one lands.
 
 **Neither hindsight CronJob carries a probe of any kind**, like every other scheduled job here.
 
@@ -337,7 +337,7 @@ newest match, because their glob is one PVC directory expected to match one path
 | `jottacloud-backup` | `op://Homelab/jottacloud-backup/HEALTHCHECK_UUID` | 6-hourly schedule | The third-party image's own `backup.sh`, success only |
 | `homelab-update-watch` | `op://Homelab/update-watch/healthcheck-uuid` | 1d / 6h | `update-watch` CronJob in `ops`, exit code or `/log` — **never `/start`** |
 | `hindsight-pg-dump` | `op://Homelab/hindsight/healthcheck-uuid` | 1d / 2h | `hindsight-pg-dump` CronJob, `/start` and exit code, from an EXIT trap |
-| `hindsight-canary` | `op://Homelab/hindsight/canary-healthcheck-uuid` | 15m / 10m | `hindsight-canary` CronJob, `/start` and exit code, from an EXIT trap |
+| `hindsight-canary` | `op://Homelab/hindsight/canary-healthcheck-uuid` | 1h / 30m | `hindsight-canary` CronJob, `/start` and exit code, from an EXIT trap |
 
 **Seven of the jobs this repo pings send `/start` and an exit code** — both restic jobs,
 `cloudflare-analytics`, `influx-backup`, `hermes-pull` and both hindsight jobs. Follow that
@@ -358,7 +358,7 @@ forgotten things — indistinguishable from an agent that was never told them. W
 checks database connectivity and not auth validity, so a rotated or mistyped tenant key leaves
 every server-side signal green while every write is discarded. The canary authenticates with the
 real tenant key and performs a real retain followed by a real recall against a dedicated `canary`
-bank, every 15 minutes, so both failures surface within roughly 25 minutes. An uptime-kuma monitor
+bank, hourly, so both failures surface within roughly 90 minutes. An uptime-kuma monitor
 could not have done this: kuma runs on the VPS, which has no route to any `*.cynexia.net` address
 (see [What this does not catch](#what-this-does-not-catch)), and an unauthenticated probe cannot
 see a broken write path in any case. **Rotating the tenant key is not finished until the VM-side

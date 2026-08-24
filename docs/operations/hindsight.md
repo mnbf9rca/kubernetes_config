@@ -17,7 +17,7 @@ Everything here assumes the `cynexia-homelab` kubectl context. The manifests are
 | Control plane (admin UI) | the same Pod, container `control-plane`, port 9999 | Optional by design. It talks to the API over `localhost`, so the hop never crosses the pod network |
 | PostgreSQL with pgvector | `deploy/hindsight-postgres`, port 5432 | Version-pinned. Its data directory is on a `local-path` PVC |
 | Nightly dump | `cronjob/hindsight-pg-dump`, 02:15 UTC | The recovery artifact |
-| Canary | `cronjob/hindsight-canary`, every 15 minutes | The only thing that notices a broken write path |
+| Canary | `cronjob/hindsight-canary`, hourly | The only thing that notices a broken write path |
 
 Two hostnames, both resolving to the LAN address `10.100.0.100` in Route53:
 `hindsight.cynexia.net` is the API — what Hermes talks to — and
@@ -181,7 +181,7 @@ the Hermes profiles on VM 103 send it on every request. Rotating it means:
 Step 4 is not optional and is the whole reason this section exists. Hermes fails open:
 with a stale key it keeps working, injects no memories, and drops every retain with a
 log warning nobody reads. The canary will catch a server that stopped accepting the new
-key within about 25 minutes — but the canary uses the key from the cluster Secret, so it
+key within about 90 minutes — but the canary uses the key from the cluster Secret, so it
 cannot see a VM that is still sending the old one. Only the smoke test can.
 
 The same applies to the control-plane access key, minus the VM: rotate
@@ -229,7 +229,7 @@ then delete both probe banks from the control plane.
 ## Monitoring
 
 Two healthchecks.io checks, both pinging on start and on exit code:
-`hindsight-pg-dump` (1 day / 2 hours) and `hindsight-canary` (15 minutes / 10 minutes).
+`hindsight-pg-dump` (1 day / 2 hours) and `hindsight-canary` (1 hour / 30 minutes).
 The full table, and the reasoning behind the canary, is in
 [monitoring.md](monitoring.md#healthchecksio-checks).
 

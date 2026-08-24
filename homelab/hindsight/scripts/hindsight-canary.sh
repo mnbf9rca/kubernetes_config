@@ -1,5 +1,5 @@
 #!/bin/sh
-# The hindsight canary. Runs every 15 minutes in the `hindsight-canary` CronJob
+# The hindsight canary. Runs hourly in the `hindsight-canary` CronJob
 # and is the ONLY thing that notices two of this design's failures:
 #
 #   F1  the API, the database or the whole cluster is down. Hermes is fail-open at
@@ -117,8 +117,12 @@ ping_hc start
 # the image pin) keeps this bank at one memory however many thousand times the
 # canary runs. `"async": false` makes retain synchronous, so the recall below
 # tests the same write this run performed rather than a previous one's.
+# The sentence deliberately does NOT name the schedule: changing its wording
+# changes the dedup key, so a cadence change would otherwise leave a second
+# stale memory in the bank for no reason. Editing it at all costs one extra
+# memory, once.
 cat > "$REQ" <<'JSON'
-{"items":[{"content":"The hindsight canary runs every fifteen minutes and writes this sentence to prove the write path is alive.","context":"hindsight canary"}],"async":false}
+{"items":[{"content":"The hindsight canary writes this sentence on every run to prove the write path is alive.","context":"hindsight canary"}],"async":false}
 JSON
 cat > "$QRY" <<'JSON'
 {"query":"What does the hindsight canary write?","budget":"mid"}

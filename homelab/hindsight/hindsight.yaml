@@ -465,7 +465,12 @@ metadata:
   name: hindsight-canary
   namespace: hindsight
 spec:
-  schedule: "*/15 * * * *"
+  # Hourly, not the every-15-minutes of the original design: a personal assistant's
+  # write path does not need 25-minute detection, and four runs an hour is four
+  # extraction-LLM calls an hour for a sentinel nobody reads. Detection latency
+  # becomes roughly 90 minutes (1 h period + 30 min grace on the healthchecks.io
+  # side, which is dashboard state - change the two together).
+  schedule: "0 * * * *"
   timeZone: "UTC"
   concurrencyPolicy: Forbid
   startingDeadlineSeconds: 600
