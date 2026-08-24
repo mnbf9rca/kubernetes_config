@@ -166,8 +166,11 @@ spec:
                   #   1. MOUNT IDENTITY (check_mount)  - AUTHORITATIVE. Direct, first-order.
                   #   2. TREE SCALE     (check_scale)  - AUTHORITATIVE. Empty/implausibly small.
                   #   3. EXPECTED SET   (check_expected) - AUTHORITATIVE. Per-application artifacts.
-                  #   4. DUMP FRESHNESS (check_fresh)  - AUTHORITATIVE. The influx dumps are the
-                  #                                      only artifacts here produced on a schedule.
+                  #   4. DUMP FRESHNESS (check_fresh)  - AUTHORITATIVE. The influx dumps, the
+                  #                                      Grafana SQLite dump and the hermes zip
+                  #                                      are the artifacts produced on a schedule,
+                  #                                      so age is meaningful for them and for
+                  #                                      nothing else here.
                   #   5. PER-PVC TABLE  (measure_tree) - the size table is forensic; an empty PVC
                   #                                      directory only WARNS (a freshly
                   #                                      provisioned PVC is legitimately empty),
@@ -216,6 +219,12 @@ spec:
                   # label:glob:min-bytes. Minimums are an order of magnitude below the observed
                   # sizes: they exist to reject a zero-length or truncated file, not to track
                   # growth.
+                  #
+                  # `grafana-dump` was measured on 2026-08-24 (seed run: 2,039,808 bytes,
+                  # 273 schema objects); 204800 sits roughly an order of magnitude below
+                  # that, per the same convention as the rows above. MIN_BYTES in
+                  # homelab/health/scripts/grafana-sqlite-backup.py carries the same floor -
+                  # raise the two together.
                   EXPECTED_ARTIFACTS="
                   emby-library:/data/pvc-*_downloads_emby-config/data/library.db:1048576
                   hydra2-config:/data/pvc-*_downloads_hydra2-config/nzbhydra.yml:4096
@@ -223,6 +232,7 @@ spec:
                   sabnzbd-ini:/data/pvc-*_downloads_sabnzbd-config/sabnzbd.ini:1024
                   sonarr-db:/data/pvc-*_downloads_sonarr-config/sonarr.db:1048576
                   grafana-db:/data/pvc-*_health_grafana-data/grafana.db:262144
+                  grafana-dump:/data/pvc-*_health_health-dumps/grafana/*-grafana.db:204800
                   influxdb-bolt:/data/pvc-*_health_influxdb-data/influxd.bolt:32768
                   garmin-tokens:/data/pvc-*_health_garmin-tokens/garmin_tokens.json:256
                   hermes-zip:/data/pvc-*_backup_hermes-dumps/hermes-*.zip:16777216
@@ -232,6 +242,7 @@ spec:
                   FRESH_ARTIFACTS="
                   influx-native-dump:/data/pvc-*_health_health-dumps/native/*
                   influx-lp-export:/data/pvc-*_health_health-dumps/lp/*.lp.gz
+                  grafana-dump:/data/pvc-*_health_health-dumps/grafana/*-grafana.db
                   hermes-zip:/data/pvc-*_backup_hermes-dumps/hermes-*.zip
                   "
 

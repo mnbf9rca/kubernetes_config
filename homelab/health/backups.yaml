@@ -23,6 +23,12 @@ subjects: [{ kind: ServiceAccount, name: health-backup, namespace: health }]
 apiVersion: batch/v1
 kind: CronJob
 metadata:
+  # STILL NAMED influx-backup, and it also takes the nightly Grafana SQLite
+  # dump. The name is kept because it is the identity of the CronJob, of its
+  # healthchecks.io check (`health-influx-backup`) and of every runbook that
+  # names it; renaming would orphan the check and the history behind it for a
+  # cosmetic gain. What the job actually does is one logical backup pass over
+  # the whole namespace — see influx-backup.sh.
   name: influx-backup
   namespace: health
 spec:
@@ -68,10 +74,33 @@ spec:
               volumeMounts:
                 - { name: dumps, mountPath: /dumps }
                 - { name: scripts, mountPath: /scripts, readOnly: true }
+                # Grafana's SQLite database, for the logical dump the driver
+                # takes with grafana-sqlite-backup.py.
+                #
+                # READ-ONLY, AT BOTH LEVELS. A backup must not be able to write
+                # the data it is backing up, and SQLite's online backup API only
+                # ever reads the source. This works because Grafana's default is
+                # `wal = false` (conf/defaults.ini): a rollback-journal database
+                # opens read-only without needing to create a `-shm`. Turning
+                # WAL on (`GF_DATABASE_WAL=true`) breaks the dump loudly at open
+                # time and this mount would have to become read-write — change
+                # the two together or the backup stops.
+                #
+                # Mounting a ReadWriteOnce PVC into a second pod is legal
+                # because RWO is a per-NODE constraint, and local-path pins both
+                # this pod and grafana to the node holding the volume. Their
+                # co-location is guaranteed by topology, not by a scheduling
+                # rule: this is a single-node cluster, so both PVs live on the
+                # same node. If a second node is ever added and the two PVs land
+                # apart, this pod's volume affinities have no intersection — it
+                # sits Pending, no dump is produced, and the restic gate's 30 h
+                # freshness check goes red. Loud, not silent; add explicit
+                # co-location only if that day comes.
+                - { name: grafana-data, mountPath: /grafana, readOnly: true }
           initContainers:
             - name: mkdirs
               image: busybox:1.37
-              command: [sh, -c, "mkdir -p /dumps/native /dumps/lp"]
+              command: [sh, -c, "mkdir -p /dumps/native /dumps/lp /dumps/grafana"]
               volumeMounts:
                 - { name: dumps, mountPath: /dumps }
           volumes:
@@ -79,3 +108,5 @@ spec:
               persistentVolumeClaim: { claimName: health-dumps }
             - name: scripts
               configMap: { name: health-backup-scripts }
+            - name: grafana-data
+              persistentVolumeClaim: { claimName: grafana-data, readOnly: true }
