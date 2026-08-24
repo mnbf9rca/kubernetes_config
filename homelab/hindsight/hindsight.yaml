@@ -199,6 +199,11 @@ spec:
       labels:
         app: hindsight
     spec:
+      # The Service is named hindsight-api, so Kubernetes's docker-style service
+      # links would inject HINDSIGHT_API_PORT=tcp://<ip>:8888 — the exact name
+      # of the app's own port config var, which crashes it at parse
+      # (ValueError, found at rollout 2026-08-24). Service DNS is unaffected.
+      enableServiceLinks: false
       containers:
         - name: api
           # THE **FULL** IMAGE, NOT `-slim`, AND THAT IS A DELIBERATE ~9 GB. The slim
@@ -484,7 +489,10 @@ spec:
                 - name: HC_UUID
                   value: "${HINDSIGHT_CANARY_HC_UUID}"
               securityContext:
+                # curlimages/curl's USER is the non-numeric curl_user (uid 100),
+                # which kubelet cannot verify against runAsNonRoot alone.
                 runAsNonRoot: true
+                runAsUser: 100
                 allowPrivilegeEscalation: false
                 capabilities: { drop: [ALL] }
                 seccompProfile: { type: RuntimeDefault }
