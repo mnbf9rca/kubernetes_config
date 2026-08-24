@@ -175,10 +175,10 @@ pve3 specifics that follow from that design:
   PVC; the 03:00 restic sweep carries it to B2. The zip covers `~/.hermes` only —
   config, credentials, `state.db`, sessions, profiles, skills, memories. Everything
   else on the VM (OS, systemd user units, tunnel config, `~/.local/bin` wrappers, the
-  hermes-agent checkout) stays rebuild territory: rebuild the VM, reinstall hermes,
-  then restore state with `hermes import`. The restore runbook, the wrapper script,
-  and the key-rotation procedure are in [Hermes VM backup and
-  restore](#hermes-vm-backup-and-restore); monitoring semantics are in
+  hermes-agent and hermes-webui checkouts, `~/workspace`) stays rebuild territory:
+  rebuild the VM, reinstall hermes, then restore state with `hermes import`. The
+  restore runbook, the wrapper script, and the key-rotation procedure are in [Hermes VM
+  backup and restore](#hermes-vm-backup-and-restore); monitoring semantics are in
   [monitoring.md](monitoring.md#healthchecksio-checks).
 
 The jottacloud staging copy on the HDD pool is separately encrypted with rclone crypt
@@ -280,9 +280,9 @@ mirror exist; fetch those rather than searching):
   "another Hermes backup is already running". A hung pull therefore always means the
   network or the VM, not lock queueing.
 
-Two pieces of state live on the VM itself and are not managed by this repo. This
-section holds their canonical copies — if you change either on the VM, change it here
-in the same sitting.
+Three pieces of state live on the VM itself and are not managed by this repo. This
+section holds their canonical copies — if you change any of them on the VM, change it
+here in the same sitting.
 
 The forced-command wrapper, `/home/hermes/bin/hermes-pull-wrapper.sh`, mode 0755:
 
@@ -340,6 +340,248 @@ The public key is `op://Homelab/hermes-ssh-key/public key` (fingerprint
 allocation, all forwarding, `~/.ssh/rc`, and every channel type OpenSSH adds in future
 releases — fail closed, nothing re-enabled.
 
+The third piece is the WebUI service unit,
+`/home/hermes/.config/systemd/user/hermes-webui.service`. Its rationale is in [Hermes
+WebUI on the VM](#hermes-webui-on-the-vm) below; the file itself:
+
+```ini
+[Unit]
+Description=Hermes WebUI - browser/mobile client for the Hermes agent
+Documentation=https://github.com/nesquena/hermes-webui
+After=network-online.target
+Wants=network-online.target
+
+# Deliberately NOT StartLimitIntervalSec=0 (which the hermes-gateway units set).
+# A gateway should retry through long upstream outages; this service's
+# dependencies are all local, so a start that keeps failing is a bug, not
+# weather. The window is widened from the 10s default because RestartSec=5
+# spaces retries 5s apart - with a 10s window only two starts ever land inside
+# it and the limiter would never trip, leaving the unit looping in 'activating'
+# forever where nothing can see it. 5 starts / 60s trips after ~25s and parks
+# the unit in 'failed', which 'systemctl --user is-failed' reports.
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+
+# Refuse to start on a blank password. server.py:597-603 only PRINTS a warning
+# when a non-loopback bind has no password, then serves every path with no auth
+# at all (api/auth.py:423 falls back to settings.json; api/auth.py:1078
+# short-circuits check_auth when auth is disabled). EnvironmentFile without a
+# leading '-' catches only a MISSING file; this catches the likelier failures -
+# an empty value, a whitespace value, or a misspelt key. '$$' stops systemd
+# expanding the value, so the password never reaches sh's argv.
+ExecStartPre=/bin/sh -c 'case "$${HERMES_WEBUI_PASSWORD}" in *[![:space:]]*) exit 0 ;; *) echo "hermes-webui: HERMES_WEBUI_PASSWORD is empty, blank or misspelt in /home/hermes/.hermes/webui.env - refusing to start unauthenticated" >&2 ; exit 1 ;; esac'
+
+ExecStart=/home/hermes/.hermes/hermes-agent/venv/bin/python /home/hermes/hermes-webui/server.py
+WorkingDirectory=/home/hermes/hermes-webui
+
+Environment="PATH=/home/hermes/.hermes/hermes-agent/venv/bin:/home/hermes/.hermes/hermes-agent/node_modules/.bin:/home/hermes/.hermes/node/bin:/home/hermes/.hermes/node:/home/hermes/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+Environment="VIRTUAL_ENV=/home/hermes/.hermes/hermes-agent/venv"
+Environment="HERMES_HOME=/home/hermes/.hermes"
+Environment="HERMES_WEBUI_AGENT_DIR=/home/hermes/.hermes/hermes-agent"
+Environment="HERMES_WEBUI_PYTHON=/home/hermes/.hermes/hermes-agent/venv/bin/python"
+Environment="HERMES_WEBUI_HOST=0.0.0.0"
+Environment="HERMES_WEBUI_PORT=8787"
+Environment="HERMES_WEBUI_SECURE=1"
+Environment="HERMES_WEBUI_ALLOWED_ORIGINS=https://hermes-app.cynexia.com"
+# Match the 24h Cloudflare Access session rather than the 30-day default.
+Environment="HERMES_WEBUI_SESSION_TTL=86400"
+# Pinned explicitly: the default would CREATE ~/workspace at first start. This
+# path is OUTSIDE ~/.hermes, so agent-authored files here are rebuild territory
+# and are NOT in the nightly backup zip. Deliberate - see docs/operations/homelab.md.
+Environment="HERMES_WEBUI_DEFAULT_WORKSPACE=/home/hermes/workspace"
+
+# No leading '-': the unit must refuse to start when the file is absent.
+EnvironmentFile=/home/hermes/.hermes/webui.env
+
+Restart=always
+RestartSec=5
+KillMode=mixed
+KillSignal=SIGTERM
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target
+```
+
+Its `EnvironmentFile`, `/home/hermes/.hermes/webui.env`, holds one key and is mode
+`0600`. Only the key name is recorded here:
+
+```
+HERMES_WEBUI_PASSWORD=<the WebUI password>
+```
+
+That file is inside `~/.hermes`, so unlike the unit it **is** in the nightly zip and
+survives a rebuild the same way `.env` and `auth.json` do.
+
+### Hermes WebUI on the VM
+
+`hermes-webui` ([github.com/nesquena/hermes-webui](https://github.com/nesquena/hermes-webui))
+runs on port 8787 as the `hermes-webui` systemd user unit, published at
+`https://hermes-app.cynexia.com` through the `cynexia-health` tunnel
+([homelab-health.md](homelab-health.md#ingress)).
+
+**One instance serves every profile.** It reads `~/.hermes/profiles/<name>` off disk and
+switches per client on a `hermes_profile` cookie, so `emh`, `hal` and the default profile
+share one process and clients get an in-app switcher. There is no second unit and no
+second port. It is a third, distinct service alongside the dashboard on 9119 and the
+gateways on 8642 — none of the three replaces another.
+
+**Who uses it.** The Hermex iOS app
+([github.com/uzairansaruzi/hermex](https://github.com/uzairansaruzi/hermex)). The app
+forces https, appends no port and no path, and probes `GET /health` then
+`GET /api/auth/status` before login, which is why the hostname has to serve the WebUI at
+the root on 443. It streams over SSE, never websockets.
+
+**It runs out of the agent venv.** `server.py` needs only `pyyaml` and `cryptography`, but
+everything it calls into (`openai`, `httpx`, the agent itself) lives in
+`/home/hermes/.hermes/hermes-agent/venv`, which system python does not have. The unit runs
+`server.py` directly under an explicit environment rather than `bootstrap.py` or
+`start.sh`: both of those load `REPO_ROOT/.env` and auto-discover paths, which would make
+what the service runs depend on files systemd cannot see.
+
+#### Update — tracks upstream, not pinned
+
+Run alongside the weekly hermes-agent update. This is a manual runbook; there is no timer
+(see [monitoring.md](monitoring.md#what-this-does-not-catch)).
+
+```sh
+git -C /home/hermes/hermes-webui pull --ff-only
+# Install under a constraint of what the venv already has. This venv is what
+# hermes-gateway, hermes-gateway-emh, hermes-gateway-hal and hermes-dashboard all
+# execute from; without -c, an upstream requirements.txt that raises a floor past one
+# of hermes-agent's pyproject pins would silently mutate their runtime and pip would
+# report success. With it, pip fails loudly and a human decides.
+V=/home/hermes/.hermes/hermes-agent/venv/bin
+"$V/pip" freeze --local | grep -E '^[A-Za-z0-9._-]+==' > /tmp/webui-constraints.txt
+"$V/pip" install -q -r /home/hermes/hermes-webui/requirements.txt -c /tmp/webui-constraints.txt
+rm -f /tmp/webui-constraints.txt
+systemctl --user restart hermes-webui
+sleep 5
+curl -fsS http://127.0.0.1:8787/health
+# The venv is shared: prove the agent still imports and its four units still run.
+"$V/python" -c 'import hermes_cli.main'
+systemctl --user is-active hermes-gateway hermes-gateway-emh hermes-gateway-hal hermes-dashboard
+# Only once all of the above passed: record this revision as the local known-good.
+git -C /home/hermes/hermes-webui rev-parse HEAD > /home/hermes/.hermes/webui.last-good
+```
+
+The `pip` line is not optional and the constraint file is not decoration. `pyyaml` and
+`cryptography` are already hermes-agent dependencies (`pyproject.toml` pins `pyyaml==6.0.3`
+and `cryptography==50.0.0`), so today the install is a no-op — the risk is not that the
+deps go missing, it is that an unpinned weekly install eventually moves one of them under
+four production services.
+
+#### Rollback when an update breaks the app
+
+Roll back to the revision that last worked **here**, which the update runbook records:
+
+```sh
+SHA=$(cat /home/hermes/.hermes/webui.last-good)
+git -C /home/hermes/hermes-webui checkout "$SHA"   # detached HEAD, expected
+systemctl --user restart hermes-webui
+```
+
+Second resort, if `webui.last-good` is missing or is itself the broken revision: the
+Hermex repo publishes the upstream commit the app was last validated against as
+`UPSTREAM_TESTED_SHA`. Note the branch is `master`, not `main`, and validate the value
+before it reaches `git` — a 404 returns an HTML error page, and `git checkout ""` on an
+empty variable fails with a confusing pathspec error:
+
+```sh
+SHA=$(curl -fsS https://raw.githubusercontent.com/uzairansaruzi/hermex/master/UPSTREAM_TESTED_SHA | tr -d '[:space:]')
+case "$SHA" in
+  [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]*) ;;
+  *) echo "refusing: UPSTREAM_TESTED_SHA did not look like a SHA" >&2; exit 1 ;;
+esac
+git -C /home/hermes/hermes-webui fetch origin
+git -C /home/hermes/hermes-webui checkout "$SHA"
+```
+
+Prefer `webui.last-good`. `UPSTREAM_TESTED_SHA` advances only when the app's own contract
+tests are re-run, so it drifts: on 2026-08-24 it pointed at a commit from 2026-05-17 while
+upstream `master` was three months further on. Rolling back that far means running May
+code against an August `~/.hermes/webui` state directory and an agent that has moved
+underneath it, and upstream documents no backwards state compatibility.
+
+Return to tracking with `git checkout master && git pull --ff-only`. A rollback is a
+signal to open a Hermex issue, not a new steady state.
+
+#### What is and is not backed up
+
+- **Backed up** (inside `~/.hermes`, so in the nightly zip): `~/.hermes/webui` — sessions,
+  `settings.json`, the session DB — and `~/.hermes/webui.env`, the password.
+- **Not backed up, deliberately**: the checkout at `/home/hermes/hermes-webui` and the
+  workspace at `/home/hermes/workspace`. The checkout is rebuild territory for the same
+  reason `hermes-agent` is; it would otherwise add about 70 MB to a zip that already
+  measures 203 MB compressed and is pulled over SSH nightly.
+  `HERMES_WEBUI_DEFAULT_WORKSPACE` is pinned in the unit precisely so this is a decision
+  rather than a default — left unset, the server **creates** `~/workspace` at first start
+  and quietly accumulates every file an app session writes, outside the backup and with
+  nothing bounding its size. **Treat `/home/hermes/workspace` as expendable**: anything
+  worth keeping goes into a git remote or into the profile.
+
+#### Rebuild step
+
+A VM rebuild does not restore this service. After `hermes import` (step 6 of the restore
+runbook), re-clone and re-create the unit:
+
+```sh
+git clone https://github.com/nesquena/hermes-webui.git /home/hermes/hermes-webui
+V=/home/hermes/.hermes/hermes-agent/venv/bin
+"$V/pip" freeze --local | grep -E '^[A-Za-z0-9._-]+==' > /tmp/webui-constraints.txt
+"$V/pip" install -q -r /home/hermes/hermes-webui/requirements.txt -c /tmp/webui-constraints.txt
+# unit file: copy from this document
+systemctl --user daemon-reload
+systemctl --user enable --now hermes-webui
+```
+
+`webui.env` comes back with the restored `~/.hermes`, so no password step is needed on a
+restore — only on a first install.
+
+#### Security posture — read before "fixing" any of it
+
+- **`HERMES_WEBUI_SECURE=1` is a cookie flag, not an access control.** It forces `Secure`
+  on the session cookie because cloudflared speaks plain HTTP to the origin and the cookie
+  would otherwise lose the flag. The alternative,
+  `HERMES_WEBUI_TRUST_FORWARDED_PROTO=1`, means trusting a header any LAN client can forge
+  against a `0.0.0.0` bind; forcing the flag needs no trust at all.
+  `HERMES_WEBUI_TRUST_FORWARDED_HOST` and `_FOR` stay off for the same reason. The visible
+  cost is that a browser cannot log in over plain `http://hermes.cynexia.net:8787` — use
+  the tunnel hostname. Do not "fix" this.
+- **The LAN is a trusted zone here, and the WebUI password is the only control on it.**
+  `Secure` is honoured by browsers only: any script can `POST` to
+  `http://hermes.cynexia.net:8787/api/auth/login` over plain HTTP, take the `Set-Cookie`
+  value, and replay it, entirely outside Cloudflare Access. The VM has no host firewall
+  (`ufw` is not installed) and the dashboard and gateways already bind `0.0.0.0`, so this
+  is the VM's established posture rather than something this service introduced — but it
+  is the reason the blank-password guard in the unit exists, and the reason no IP-bypass
+  policy was carried onto the Access app. Firewalling 8787, 9119 and 8642 down to the
+  cluster egress address is the obvious hardening, and is a change of its own.
+- **The WebUI password is readable by the agent it protects.** It arrives as a plaintext
+  environment variable, and the WebUI builds child processes with an unfiltered
+  `os.environ.copy()` (`api/routes.py:1308`, `api/gateway_restart.py:99`,
+  `api/workspace_git.py:113`) with no scrubbing. Any session — including one steered by
+  prompt injection through fetched content — can read `$HERMES_WEBUI_PASSWORD`. **Treat
+  the Cloudflare Access service token as the only gate an agent cannot forge.** The
+  hardening path is to set the password through the WebUI's own Settings page, which
+  writes a `password_hash` into `settings.json`, and then drop the env var; the env var is
+  what makes the *first* start safe on a `0.0.0.0` bind, so it cannot simply be omitted.
+- **Not every path is behind the password.** `/share`, `/share/*`, `/api/share/*`,
+  `/static/*`, the manifests and the auth endpoints are in the WebUI's public set, and
+  `GET /api/share/<token>` returns a full shared conversation on token possession alone.
+  Under a Cloudflare Access *bypass* policy those paths would have no gate whatsoever,
+  which is why the Access app authenticates every request instead.
+- **The Access service token is shared with `hermes.cynexia.com`.** The same token
+  (`468dc6d0-d0d6-4b98-8c07-4d002fda2df1`, value in 1Password) sits on the phone and opens
+  the agent dashboard as well as the WebUI. A lost or compromised device therefore yields
+  both hostnames, and the response — rotating the token — also breaks the uptime-kuma
+  monitors that carry it. Plan on rotating the token and updating those monitors in the
+  same sitting.
+
 #### Restore
 
 Restoring replaces `~/.hermes` application state on a working hermes install. Rebuild
@@ -369,7 +611,8 @@ the OS; restore the state.
 3. On the VM, stop the services first (the hermes docs require it for import):
 
    ```
-   systemctl --user stop hermes-dashboard hermes-gateway hermes-gateway-emh hermes-gateway-hal
+   systemctl --user stop hermes-dashboard hermes-gateway hermes-gateway-emh \
+     hermes-gateway-hal hermes-webui
    ```
 
 4. Import and verify (`~/.local/bin` is not on the non-login PATH):
@@ -379,9 +622,11 @@ the OS; restore the state.
    ~/.local/bin/hermes config check
    ```
 
-5. Restart the four services and confirm the dashboard at hermes.cynexia.com.
+5. Restart the five services and confirm the dashboard at hermes.cynexia.com.
 6. On a fresh VM rebuild: install hermes first, then run steps 2–5, then
-   `hermes setup`.
+   `hermes setup`. `hermes-webui` is a separate install that the zip does not carry —
+   re-clone it and re-create its unit from [Hermes WebUI on the
+   VM](#rebuild-step) before step 5 restarts it.
 7. Delete every operator-side copy: `./hermes-restore.zip`, the `./restore/` tree if
    step 1 used B2, and `~/hermes-restore.zip` on the VM.
 

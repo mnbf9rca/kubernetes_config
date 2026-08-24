@@ -60,14 +60,18 @@ Public `*.cynexia.com` hostnames on this tunnel:
 | `hae.cynexia.com` | Health Auto Export ingest → `apple-health-ingester` |
 | `mcp.cynexia.com` | Claude/Hermes MCP connector, via Cloudflare Access (Managed OAuth) |
 | `hermes.cynexia.com` | Hermes agent dashboard on the hermes VM (`hermes.cynexia.net:9119`, off-cluster), via Cloudflare Access (karakeep-style email policy) |
+| `hermes-app.cynexia.com` | `hermes-webui` on the same VM (`hermes.cynexia.net:8787`, off-cluster) — the server the Hermex iOS app talks to, via Cloudflare Access (Service Auth + the same email policy) |
 
-`hermes.cynexia.com` is the one off-cluster origin on this tunnel: cloudflared
-proxies to the hermes VM on the LAN, not to a cluster Service. The Access app
+`hermes.cynexia.com` and `hermes-app.cynexia.com` are the two off-cluster origins
+on this tunnel: cloudflared proxies both to the hermes VM on the LAN, not to a
+cluster Service. The Access app
 (`hermes`) attaches two reusable policies: `service-auth-monitoring`, the
 `non_identity` policy holding the `Uptime` service token that lets the
 uptime-kuma monitor through, and `allow_cynexia_com`, which requires
 `email_domain: cynexia.com`. It carried IP bypass policies until August 25,
 2026; see [MCP behind Cloudflare Access](#mcp-behind-cloudflare-access).
+The `hermes-app` Access app is separate: a Service Auth policy holding the Hermex
+token, plus the same `allow_cynexia_com` policy for browsers.
 The dashboard runs its own mandatory login behind that (basic auth, forced by its
 non-loopback bind), so Access is defence in depth, not the only gate — but the
 Access gate still **fails open** like mcp's does, and the same post-rebuild rule
@@ -76,7 +80,39 @@ hostname. Hermes Desktop's remote-attach cannot pass Access's browser login (no
 custom-header support upstream); it uses the tailnet path
 (`http://hermes.cynexia.net:9119` via the OPNsense subnet route) instead.
 
-Two pieces of VM-side state make the tunnel work (on `hermes.cynexia.net`, login
+`hermes-app.cynexia.com` fronts a **different service on the same VM** —
+`hermes-webui` on port 8787, which the Hermex iOS app talks to. Its own Access app,
+`hermes-app`, deliberately does **not** reuse the `hermes` app's policy set:
+
+- **Service Auth (`non_identity`), not `bypass`, for the token.** A bypass policy keyed
+  on a service token means "no authentication for anyone matching this rule" — Access
+  forwards the request without validating the token and without an identity in the audit
+  log. Service Auth verifies the `CF-Access-Client-Id`/`CF-Access-Client-Secret` pair,
+  mints a `CF_Authorization` JWT and logs the token as the actor. That buys revocation
+  that actually works, an attributable audit trail, and a clean 401 instead of an SSO
+  redirect a native client cannot complete. The cost is that the token headers must be on
+  **every** request including the first `GET /health`; Hermex is built for exactly that,
+  taking custom headers on the connect screen before the first probe.
+- **No IP bypass, neither the home address nor the VPS.** The VPS one is simply wrong —
+  nothing there calls the WebUI. The home one is the tempting mistake: Hermex sends the
+  token on every network, so a home bypass buys the app nothing, while creating a
+  silently divergent path where it works on home WiFi with a broken or revoked token and
+  fails the moment the phone steps onto cellular. That is the worst failure shape for a
+  mobile client — a misconfiguration that only appears away from where it can be
+  debugged.
+- `options_preflight_bypass` is on, because an unadorned CORS preflight carries no token
+  headers and Service Auth would reject it at the edge.
+
+That gate is load-bearing in a way the dashboard's is not: hermes-webui serves `/share`,
+`/share/*`, `/api/share/*` and `/static/*` with no authentication of its own, so "the
+WebUI's password is the second gate" holds for the app but not for every path. The VM-side
+half — the unit, the update and rollback runbooks, and the security posture — is in
+[homelab.md](homelab.md#hermes-webui-on-the-vm).
+
+Both hostnames' Access apps **fail open** if the app is deleted; after any Cloudflare
+rebuild, verify the edge challenges an unauthenticated client before trusting either.
+
+Two pieces of VM-side state make the dashboard work behind the tunnel (on `hermes.cynexia.net`, login
 `ssh hermes@…`; `~/.local/bin` is not on the non-login PATH, so run `hermes`
 through an interactive shell or by full path):
 
@@ -112,9 +148,19 @@ hermes-dashboard` on the VM clears it immediately.
 Grafana is **not** on this tunnel — it is private, Traefik-fronted at
 `grafana-health.cynexia.net` like every other homelab service (LAN/Tailscale only).
 
-After changing hostnames in `homelab/health/cloudflared.yaml`, run `make
-route-health-dns`. To recreate the credentials Secret, `make
-create-health-cloudflared-secret`.
+After changing hostnames in `homelab/health/cloudflared.yaml`, every hostname needs a
+proxied CNAME to `1a4245a3-5264-420c-9893-b45ff25a0214.cfargotunnel.com`. `make
+route-health-dns` mints them all, but it shells out to `cloudflared tunnel route dns`,
+which needs an **origin certificate** at `~/.cloudflared/cert.pem`. On a machine that has
+never run `cloudflared tunnel login` that file does not exist, the target aborts under
+`set -euo pipefail` on the *first* hostname, and a newly added one is never reached —
+`cloudflared` is not in `make check-tools`, so nothing warns first. Either run
+`cloudflared tunnel login` once, or create the single record through the Cloudflare API
+(zone `2bf4553c3f994e36202b5f574577d2e5`), which is also the only way to set the record
+comment this zone uses as its provenance note. `hermes-app.cynexia.com` was created that
+way.
+
+To recreate the credentials Secret, `make create-health-cloudflared-secret`.
 
 ## MCP behind Cloudflare Access
 
