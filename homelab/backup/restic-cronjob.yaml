@@ -225,12 +225,14 @@ spec:
                   grafana-db:/data/pvc-*_health_grafana-data/grafana.db:262144
                   influxdb-bolt:/data/pvc-*_health_influxdb-data/influxd.bolt:32768
                   garmin-tokens:/data/pvc-*_health_garmin-tokens/garmin_tokens.json:256
+                  hermes-zip:/data/pvc-*_backup_hermes-dumps/hermes-*.zip:16777216
                   "
 
                   # label:glob - existence AND freshness.
                   FRESH_ARTIFACTS="
                   influx-native-dump:/data/pvc-*_health_health-dumps/native/*
                   influx-lp-export:/data/pvc-*_health_health-dumps/lp/*.lp.gz
+                  hermes-zip:/data/pvc-*_backup_hermes-dumps/hermes-*.zip
                   "
 
                   # Populated by measure_tree; initialised here so `set -u` cannot bite if

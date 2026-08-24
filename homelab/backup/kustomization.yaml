@@ -7,6 +7,7 @@ namespace: backup
 resources:
   - restic-init-job.yaml
   - restic-cronjob.yaml
+  - hermes-pull.yaml
 
 # Job scripts as real files, mounted at /scripts. The content-hash suffix is
 # left ON, so editing a script rolls the workload that mounts it rather than
@@ -42,3 +43,10 @@ configMapGenerator:
   - name: backup-scripts
     files:
       - restic-init.sh=scripts/restic-init.sh
+  # Separate generator for the hermes-pull CronJob's script, per the Job/CronJob
+  # split explained above: a CronJob tolerates a hash move (the next scheduled
+  # Job just mounts the new name), and keeping it out of backup-scripts means a
+  # hermes-pull edit can never break the init Job's apply.
+  - name: hermes-pull-scripts
+    files:
+      - hermes-pull.sh=scripts/hermes-pull.sh

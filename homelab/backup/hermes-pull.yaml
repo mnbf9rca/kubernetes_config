@@ -1,0 +1,191 @@
+# Nightly pull of the Hermes VM's application-state backup onto a local-path
+# PVC, where the 03:00 restic sweep replicates it to B2. The VM side (a
+# forced-command wrapper plus a restricted authorized_keys entry) and the
+# restore runbook live in the "Hermes VM restore" section of
+# docs/operations/homelab.md; monitoring semantics in
+# docs/operations/monitoring.md.
+#
+# The pulled zip contains the VM's live secrets in plaintext. Its only resting
+# places are this PVC (LUKS-encrypted SSD) and restic/B2 (client-side
+# encrypted).
+#
+# The SSH private key arrives in the `hermes-ssh` Secret, created imperatively
+# by `make create-hermes-ssh-secret` (multi-line, so it cannot ride the
+# envsubst pipeline; the target's comment explains the /dev/stdin shape).
+---
+# Staging area the restic CronJob sweeps via its hostPath mount. local-path
+# does not enforce the request — it provisions a plain hostPath directory with
+# no quota — so 5Gi documents intent, and the real bound on disk use is the
+# pull script's partial-file cleanup plus its seven-copy prune (~1.4 GiB at
+# today's ~200 MB per zip).
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: hermes-dumps
+  namespace: backup
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 5Gi
+---
+# Pinned host key for hermes.cynexia.net (captured with ssh-keyscan
+# 2026-08-24; OpenSSH 10.0p2, Debian 13). A host public key is a tier-3
+# identifier and fine to commit. If the VM is rebuilt the pull fails closed on
+# the mismatch; re-keyscan from a trusted network and update this value —
+# never relax StrictHostKeyChecking.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: hermes-known-hosts
+  namespace: backup
+data:
+  known_hosts: |
+    hermes.cynexia.net ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDlp7jiP526/ph/leOaMUru+sYM9J3Xo2WWnVDjfraHg
+---
+# OpenSSH calls getpwuid() at startup and exits with "No user exists for uid
+# 1999" when /etc/passwd has no entry for the running uid — and no stock
+# Alpine-based image ships one for 1999 (verified against this image in the
+# rollout probe). Mounted over /etc/passwd via subPath; the script exports
+# HOME=/tmp to match.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: hermes-passwd
+  namespace: backup
+data:
+  passwd: "hermes:x:1999:1999::/tmp:/sbin/nologin"
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: hermes-pull
+  namespace: backup
+spec:
+  # 02:00 UTC: after the VM's quiet hours begin, before influx-backup (02:30)
+  # and the restic sweep (03:00) that carries the result to B2.
+  schedule: "0 2 * * *"
+  timeZone: "UTC"
+  # Forbid + startingDeadlineSeconds: one hung run must not silently block
+  # every later night, and a missed window (node reboot) is retried within
+  # the hour rather than dropped.
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 3600
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      # The pull itself takes well under a minute (203 MB in ~23 s measured
+      # end to end on 2026-08-24, LAN); 30 minutes bounds a hung ssh that the
+      # script's ServerAlive options somehow did not catch. A deadline kill
+      # skips the script's EXIT trap, so that failure mode shows on
+      # healthchecks.io as started-but-never-finished — intended. Revisit
+      # from recorded durations per docs/operations/monitoring.md.
+      activeDeadlineSeconds: 1800
+      backoffLimit: 1
+      # A completed Job that is never collected pins its immutable template
+      # and quietly breaks a later apply; three days keeps a Friday failure
+      # visible on Monday. Same value as the restic CronJob.
+      ttlSecondsAfterFinished: 259200
+      template:
+        spec:
+          restartPolicy: Never
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1999
+            runAsGroup: 1999
+            fsGroup: 1999
+            fsGroupChangePolicy: "OnRootMismatch"
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: hermes-pull
+              # kroniak/ssh-client (Alpine 3.23 + openssh-client), pinned by
+              # digest because it is an unofficial personal Docker Hub image
+              # handling an SSH private key and a zip full of live secrets —
+              # a mutable tag can be repointed, a digest cannot. Digest is
+              # tag 3.23's manifest list as served by Docker Hub 2026-08-24
+              # (pushed 2026-02-03). Probed in-cluster 2026-08-24 as uid
+              # 1999: ssh, sha256sum, wget, awk, du, od, head, stat all
+              # present; curl absent (the script uses wget); bare `ssh -V`
+              # failed with "No user exists for uid 1999", which is what the
+              # hermes-passwd mount fixes. alpine/k8s:1.36.0 (the
+              # influx-backup image) was probed first and ships no ssh.
+              # Renovate is scoped to homelab/health/** and will not touch
+              # this pin; bump it manually and re-run the probe from the
+              # design's rollout section.
+              image: kroniak/ssh-client@sha256:cfb58718a2cfbb248214a9c33655f16438e0f1014c054e0e524d3eb232ccdb2b
+              command: ["sh", "/scripts/hermes-pull.sh"]
+              env:
+                # Renamed on purpose: only HC_UUID reaches the script, so the
+                # generated ConfigMap cannot be rewritten by envsubst. The
+                # placeholder below is the allowlisted name.
+                - name: HC_UUID
+                  value: "${HERMES_HC_UUID}"
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                runAsNonRoot: true
+                runAsUser: 1999
+                runAsGroup: 1999
+                privileged: false
+                capabilities:
+                  drop: [ALL]
+                seccompProfile:
+                  type: RuntimeDefault
+              resources:
+                requests:
+                  memory: 64Mi
+                  cpu: 50m
+                limits:
+                  memory: 256Mi
+                  cpu: 500m
+              volumeMounts:
+                - name: dumps
+                  mountPath: /dumps
+                - name: scripts
+                  mountPath: /scripts
+                  readOnly: true
+                - name: known-hosts
+                  mountPath: /known-hosts
+                  readOnly: true
+                - name: passwd
+                  mountPath: /etc/passwd
+                  subPath: passwd
+                  readOnly: true
+                - name: ssh-key
+                  mountPath: /ssh-key
+                  readOnly: true
+                - name: tmp
+                  mountPath: /tmp
+          volumes:
+            - name: dumps
+              persistentVolumeClaim:
+                claimName: hermes-dumps
+            - name: scripts
+              configMap:
+                name: hermes-pull-scripts
+            - name: known-hosts
+              configMap:
+                name: hermes-known-hosts
+            - name: passwd
+              configMap:
+                name: hermes-passwd
+            - name: ssh-key
+              secret:
+                secretName: hermes-ssh
+                # YAML 1.1 octal (kubectl rejects the 0o440 spelling). Group
+                # read because fsGroup remaps the mount; the script copies the
+                # key to /tmp at mode 0600 before use, since OpenSSH refuses a
+                # group-readable identity file.
+                defaultMode: 0440
+            # Memory-backed: /tmp holds only the 0600 key copy and the ping
+            # body, and tmpfs means the key never touches disk even while the
+            # completed pod (and its emptyDir) is retained for ttl days. The
+            # zip streams straight to the PVC, never through /tmp.
+            - name: tmp
+              emptyDir:
+                medium: Memory
+                sizeLimit: 16Mi

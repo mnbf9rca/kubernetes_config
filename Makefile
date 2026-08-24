@@ -41,7 +41,7 @@ HOMELAB_CONTEXT ?= cynexia-homelab
 # Phase 0 Makefile targets (check-tools, build-homelab with empty kustomizations)
 # do not strictly require these — require-vars is called from apply/diff only.
 REQUIRED_VARS := B2_ACCOUNT_ID B2_ACCOUNT_KEY RESTIC_PASSWORD RESTIC_REPOSITORY \
-                 RESTIC_HC_UUID \
+                 RESTIC_HC_UUID HERMES_HC_UUID \
                  ROUTE53_ACCESS_KEY_ID ROUTE53_SECRET_ACCESS_KEY \
                  ACME_EMAIL HEALTHCHECK_UUID \
                  HEALTH_HC_APPLE_UUID HEALTH_HC_GARMIN_UUID HEALTH_HC_BACKUP_UUID \
@@ -67,7 +67,7 @@ REQUIRED_VARS := B2_ACCOUNT_ID B2_ACCOUNT_KEY RESTIC_PASSWORD RESTIC_REPOSITORY 
 # every ENVSUBST_VAR_NAMES entry is also in REQUIRED_VARS so we never
 # silently substitute an empty value into a manifest.
 ENVSUBST_VAR_NAMES := B2_ACCOUNT_ID B2_ACCOUNT_KEY RESTIC_PASSWORD RESTIC_REPOSITORY \
-                     RESTIC_HC_UUID \
+                     RESTIC_HC_UUID HERMES_HC_UUID \
                      ROUTE53_ACCESS_KEY_ID ROUTE53_SECRET_ACCESS_KEY \
                      ACME_EMAIL \
                      HEALTHCHECK_UUID \
@@ -594,6 +594,29 @@ create-jotta-secret: check-context
 	  --from-literal="RCLONE_CONFIG=$$(op read 'op://Homelab/jottacloud-backup/RCLONE_CONFIG')" \
 	  --from-literal="DEST_REMOTE_PASSWORD=$$(op read 'op://Homelab/jottacloud-backup/JOTTA_CRYPT_PASSWORD')" \
 	  --dry-run=client -o yaml | kubectl apply -f -
+
+# SSH private key for the hermes-pull CronJob (backup namespace). Multi-line,
+# so it cannot ride the envsubst pipeline. This target deliberately does NOT
+# copy create-jotta-secret's --from-literal shape, for two reasons specific to
+# an SSH key:
+#   1. `$$(op read ...)` command substitution strips the key's final newline,
+#      and OpenSSH rejects an OPENSSH PRIVATE KEY block without one ("invalid
+#      format") — the Secret would apply cleanly and the first pull would
+#      fail. The pipe preserves op read's output byte for byte.
+#   2. --from-literal puts the key bytes on kubectl's argv, briefly visible in
+#      local process listings; --from-file=/dev/stdin keeps them off argv.
+# The jotta values tolerate a stripped newline; a future SSH key must use this
+# shape. Idempotent; re-run after rotating the key in 1Password.
+# `set -o pipefail` so a failed `op read` (revoked token, renamed item) fails
+# the target instead of applying a Secret with an empty key.
+.PHONY: create-hermes-ssh-secret
+create-hermes-ssh-secret: check-context
+	@set -o pipefail; \
+	op read 'op://Homelab/hermes-ssh-key/private key' \
+	  | kubectl create secret generic hermes-ssh \
+	      --namespace backup \
+	      --from-file=id_ed25519=/dev/stdin \
+	      --dry-run=client -o yaml | kubectl apply -f -
 
 # Apply Talos machine config patches to Omni. Each file under
 # homelab/talos/machineconfig-patches/ is a full ConfigPatch resource YAML.

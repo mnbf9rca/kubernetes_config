@@ -2,7 +2,7 @@
 
 Single-node Talos Linux VM on Proxmox (`pve3`), managed by Omni, serving the media /
 downloads stack and the health-data pipeline. Not exposed to the public internet —
-remote access is via Tailscale. Kubectl context: `cynexia-homelab`.
+remote access is through Tailscale. Kubectl context: `cynexia-homelab`.
 
 ## Platform stack
 
@@ -66,11 +66,14 @@ for NFS-backed data. The homelab restic/B2 job backs up **only** that SSD
 manages and it does **not** cover the NFS zpool, which has its own backup story on the
 NAS side, outside this repo.
 
-Applications' own scheduled backups (sonarr, radarr, emby, sabnzbd) should write zips to
+Applications' own scheduled backups (sonarr, radarr, emby, sabnzbd) must write zips to
 `/config/Backups/` so restic catches them. The sqlite-quiesce sidecar pattern from
 earlier drafts of the plan is **not** used here — it's redundant when the app's own zip
-backup already handles DB consistency. (Consequently the homelab restic job has no
-backup verification gate; the VPS one does, because the VPS *does* run quiesce sidecars.)
+backup already handles DB consistency. (Both restic jobs carry a backup verification
+gate, but with different shapes: the VPS gate checks its quiesce sidecars' snapshots,
+while the homelab gate checks mount identity, tree scale, an expected-artifact list and
+the freshness of the influx dumps and the hermes zip — see
+[monitoring.md](monitoring.md#the-backup-verification-gates).)
 
 Until 2026-08 neither restic CronJob reported anywhere and neither had a runtime ceiling,
 so a hung run would have blocked every following night silently and been discovered at
@@ -83,7 +86,7 @@ restore time. Both now ping healthchecks.io and carry `activeDeadlineSeconds` �
 |---|---|---|
 | `ens18` (LAN) | `10.100.0.100` | All `*.cynexia.net` A records point here |
 | `ens19` (storage) | `10.10.10.10` | NFS traffic to `10.10.10.1`; Kubernetes misleadingly reports this as `InternalIP` |
-| `tailscale0` | `100.85.18.48` | Remote access via the Tailscale mesh |
+| `tailscale0` | `100.85.18.48` | Remote access through the Tailscale mesh |
 
 **Never use `10.10.10.10` as a DNS target** — the storage NIC is not reachable from the
 home LAN.
@@ -126,7 +129,7 @@ Two independent layers, both live:
   is absent from etcd and the `k8s:enc:secretbox:v1:` prefix is present.
 - **Disk (LUKS2 + TPM2)** — since 2026-07-26 both pve3 NVMe partitions backing the Talos
   VM are LUKS2: the `vmdata` LVM (OS disk, etcd) and the user volume. They are
-  auto-unlocked at host boot by the TPM via clevis (PCR 7, requires Secure Boot enabled).
+  auto-unlocked at host boot by the TPM through clevis (PCR 7, requires Secure Boot enabled).
   VM 100's disks point at `/dev/mapper/vmdata_crypt` LVs and `/dev/mapper/talos_ssd_crypt`.
   This covers etcd and every local-path PVC, including `health-dumps`, `influxdb-data`,
   `grafana-data` and `garmin-tokens` — which is why per-PVC encryption was recorded as
@@ -141,10 +144,19 @@ pve3 specifics that follow from that design:
   inside the LUKS mapper). Disks on `local` (the Proxmox root, ext4 on sda3) are NOT
   encrypted; the Proxmox root itself is deliberately unencrypted.
 - Swap is `swap_crypt`, plain dm-crypt with a random `/dev/urandom` key per boot.
-- **The hermes VM (103) has no backup independent of `vmdata_crypt`** — the standing
-  intent is to rebuild it rather than restore it.
+- **The hermes VM (103) has a nightly application-state backup.** The `hermes-pull`
+  CronJob in the `backup` namespace SSHes to the VM at 02:00 UTC with a restricted
+  forced-command key, runs `hermes backup`, and pulls the zip onto the `hermes-dumps`
+  PVC; the 03:00 restic sweep carries it to B2. The zip covers `~/.hermes` only —
+  config, credentials, `state.db`, sessions, profiles, skills, memories. Everything
+  else on the VM (OS, systemd user units, tunnel config, `~/.local/bin` wrappers, the
+  hermes-agent checkout) stays rebuild territory: rebuild the VM, reinstall hermes,
+  then restore state with `hermes import`. The restore runbook, the wrapper script,
+  and the key-rotation procedure are in [Hermes VM backup and
+  restore](#hermes-vm-backup-and-restore); monitoring semantics are in
+  [monitoring.md](monitoring.md#healthchecksio-checks).
 
-The jottacloud staging copy on the HDD pool is separately encrypted via rclone crypt
+The jottacloud staging copy on the HDD pool is separately encrypted with rclone crypt
 (`DEST_REMOTE` in the workload ConfigMap). Its passphrase (`JOTTA_CRYPT_PASSWORD` in
 1Password) is frozen by design: rclone crypt cannot rekey in place, so rotation is the
 re-encrypt procedure documented in the `mnbf9rca/jottacloud-backup` image README.
@@ -159,6 +171,139 @@ change. On the Proxmox host:
 2. `vgchange -ay`
 3. `systemctl start pve-guests`
 4. Re-run `clevis luks bind` so the TPM can unlock unattended again.
+
+### Hermes VM backup and restore
+
+The `hermes-pull` CronJob (`homelab/backup/hermes-pull.yaml`) pulls a full
+`hermes backup` zip from the hermes VM every night at 02:00 UTC onto the `hermes-dumps`
+PVC, where the 03:00 restic sweep replicates it to B2. The zip contains the VM's live
+secrets in plaintext (`.env`, `auth.json`, MCP OAuth tokens), so its only permitted
+resting places are that PVC and the restic repository. Delete any operator copy as soon
+as a procedure finishes with it.
+
+Two pieces of state live on the VM itself and are not managed by this repo. This
+section holds their canonical copies — if you change either on the VM, change it here
+in the same sitting.
+
+The forced-command wrapper, `/home/hermes/bin/hermes-pull-wrapper.sh`, mode 0755:
+
+```sh
+#!/bin/sh
+# Forced-command wrapper for the k8s hermes-pull backup key.
+# The key in authorized_keys can run ONLY this script. It supports two verbs,
+# selected by the client's requested command (SSH_ORIGINAL_COMMAND):
+#   backup  - run `hermes backup` into a staging file, then stream it on stdout
+#   sum     - print the SHA-256 of the last staged zip
+# Everything hermes prints (including the "1Password: applied 6 secrets"
+# banner) is forced onto stderr so stdout carries zip bytes and nothing else.
+set -eu
+
+STAGE_DIR=/home/hermes/.hermes/backups
+STAGE=$STAGE_DIR/k8s-pull.zip
+PART=$STAGE_DIR/k8s-pull.partial.zip
+LOCK=$STAGE_DIR/.k8s-pull.lock
+
+verb=${SSH_ORIGINAL_COMMAND:-backup}
+case "$verb" in
+  backup)
+    # One pull at a time. -n fails fast rather than queueing: the cluster
+    # side has concurrencyPolicy Forbid, so a second concurrent call is
+    # always a fault, never a schedule.
+    exec 9> "$LOCK"
+    flock -n 9 || { echo "hermes-pull: another pull is already running" >&2; exit 75; }
+    rm -f "$PART"
+    /home/hermes/.local/bin/hermes backup -o "$PART" 1>&2
+    # CRC-test every member before publishing: catches a zip that hermes
+    # itself produced corrupt. python3 is on the VM; unzip is not.
+    python3 -m zipfile -t "$PART" 1>&2
+    mv -f "$PART" "$STAGE"
+    cat "$STAGE"
+    ;;
+  sum)
+    sha256sum "$STAGE" | awk '{print $1}'
+    ;;
+  *)
+    echo "hermes-pull: unknown verb: refusing" >&2
+    exit 64
+    ;;
+esac
+```
+
+The restricted line in `/home/hermes/.ssh/authorized_keys` (the operator's own key line
+is separate and unaffected):
+
+```
+restrict,command="/home/hermes/bin/hermes-pull-wrapper.sh" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICrRo/NPnEnUk3mUY9SmdnENyzXqlo1LFoq3OHoSWZ79 k8s-hermes-pull
+```
+
+The public key is `op://Homelab/hermes-ssh-key/public key` (fingerprint
+`SHA256:YuIGosID1a0pwDM1IwBNuax5kHSSJRhwT3TQbp1xzEA`). `restrict` disables PTY
+allocation, all forwarding, `~/.ssh/rc`, and every channel type OpenSSH adds in future
+releases — fail closed, nothing re-enabled.
+
+#### Restore
+
+Restoring replaces `~/.hermes` application state on a working hermes install. Rebuild
+the OS; restore the state.
+
+1. Get the newest zip. Same-day, from the PVC (`kubectl cp` needs a running container,
+   so the helper pod sleeps):
+
+   ```
+   kubectl -n backup run hermes-restore --restart=Never --image=alpine/k8s:1.36.0 \
+     --overrides='{"spec":{"volumes":[{"name":"dumps","persistentVolumeClaim":{"claimName":"hermes-dumps"}}],"containers":[{"name":"hermes-restore","image":"alpine/k8s:1.36.0","command":["sleep","3600"],"volumeMounts":[{"name":"dumps","mountPath":"/dumps"}]}]}}'
+   kubectl -n backup exec hermes-restore -- sh -c 'ls -1t /dumps/hermes-*.zip | head -n1'
+   kubectl cp backup/hermes-restore:/dumps/<that file> ./hermes-restore.zip
+   kubectl -n backup delete pod hermes-restore
+   ```
+
+   Older, from B2 (any machine with restic; run under `op run --env-file=.env.tpl --`):
+
+   ```
+   restic snapshots --tag nightly
+   restic restore <snapshot-id> \
+     --include '/data/pvc-*_backup_hermes-dumps/hermes-*.zip' \
+     --target ./restore
+   ```
+
+2. Copy the zip to the VM: `scp ./hermes-restore.zip hermes@hermes.cynexia.net:`
+3. On the VM, stop the services first (the hermes docs require it for import):
+
+   ```
+   systemctl --user stop hermes-dashboard hermes-gateway hermes-gateway-emh hermes-gateway-hal
+   ```
+
+4. Import and verify (`~/.local/bin` is not on the non-login PATH):
+
+   ```
+   ~/.local/bin/hermes import ~/hermes-restore.zip
+   ~/.local/bin/hermes config check
+   ```
+
+5. Restart the four services and confirm the dashboard at hermes.cynexia.com.
+6. On a fresh VM rebuild: install hermes first, then run steps 2–5, then
+   `hermes setup`.
+7. Delete every operator-side copy: `./hermes-restore.zip`, the `./restore/` tree if
+   step 1 used B2, and `~/hermes-restore.zip` on the VM.
+
+**Cross-version caveat:** upstream does not document restore behavior across hermes
+versions. Restore onto the same or a newer version, never an older one. After any
+version gap, run `hermes config check` and, if it complains, `hermes migrate` before
+starting the services. If migration fails, install the version that took the backup
+(git install, so any tag is reachable), import there, then upgrade in place.
+
+#### Key rotation
+
+- **Client key**: generate a new ed25519 keypair into `op://Homelab/hermes-ssh-key`,
+  append the new public key as a second restricted `authorized_keys` line (same
+  options), run `make create-hermes-ssh-secret`, confirm the next nightly run goes
+  green, then delete the old line. Two lines during the overlap means rotation never
+  risks a missed night.
+- **Host key**: changes only when the VM's sshd is reinstalled or the VM is rebuilt.
+  The pull then fails closed on the mismatch — desired. From a trusted network, run
+  `ssh-keyscan -t ed25519 hermes.cynexia.net`, update the `hermes-known-hosts`
+  ConfigMap in `homelab/backup/hermes-pull.yaml`, and `make apply-homelab`. Host
+  public keys are tier-3 identifiers; committing them is fine.
 
 ## Migration notes (Phase 4)
 
@@ -183,7 +328,7 @@ kubectl patch pv <name> --type=json -p='[{"op":"remove","path":"/spec/claimRef"}
 ```
 
 **A pod is rejected with a PodSecurity violation.** The cluster enforces PSA `baseline`.
-hostPath / hostNetwork workloads need their namespace elevated to `privileged` via
+hostPath / hostNetwork workloads need their namespace elevated to `privileged` through
 labels in `homelab/bootstrap/namespaces.yaml` (as `traefik` and `backup` already are).
 
 **sabnzbd returns 403 "Access denied - Hostname verification failed".** Linuxserver's
@@ -207,7 +352,7 @@ dnsConfig:
 ```
 
 **An Ingress serves the wrong certificate, or none.** Traefik serves
-`wildcard-cynexia-net-tls` as its default cert via the file-provider ConfigMap in
+`wildcard-cynexia-net-tls` as its default cert through the file-provider ConfigMap in
 `homelab/bootstrap/traefik/traefik.yaml`. Ingresses therefore need **no** `tls:` block —
 just the `host:` rule. Adding a per-Ingress `tls:` block reintroduces the
 cross-namespace TLS secret replication problem this design avoids.
