@@ -388,7 +388,7 @@ Bodies die with their ping-log entry, `Check.prune()` removing the objects then 
 or 250. `ingest-freshness` uses `/log` for its stale and query-failure paths: a `log` ping sets no
 `last_ping`, `last_start` or `status` and cannot postpone, suppress or trigger an alert. Its one
 side effect is that `has_confirmation_link` is set from the body on every action, `log` included,
-driving a UI nag — no body here contains the substring `confirm`, and none ever may.
+driving a UI nag — no body here contains the substring `confirm`, and none may.
 
 #### Reading a restic failure body
 
@@ -438,6 +438,7 @@ Probes fix hung request paths, not silently stopped background work — often th
 | **influxdb-mcp** | Its probes are `tcpSocket`. A wedged HTTP handler with a live listener passes them. The MCP server exposes no health endpoint |
 | **homelab services** | The external layer runs on the VPS, which has no route to `*.cynexia.net`. Only the three health-tunnel hostnames get layer-3 coverage. sonarr, radarr, sabnzbd, emby, hydra2 and grafana have probes and nothing external |
 | **the VPS gate** | It proves each snapshot exists and is recent, and — through the sidecar's own refusal to publish a schema-less snapshot — that it holds at least one schema object. It does not prove the contents are complete or uncorrupted. A snapshot missing rows, or with a corrupt page below the `sqlite_master` read, passes everything here and surfaces at restore time |
+| **agent mail (hermes VM)** | Nothing monitors it at all — no probe, no check, no canary. A Purelymail outage, expired credential, DNS drift or send-cap exhaustion surfaces only as tool errors inside agent sessions. Deliberate for now; the planned round-trip canary is in [agent-mail.md](agent-mail.md#monitoring-and-backup-none-deliberately-for-now) |
 | **the homelab gate** | It proves the SSD is mounted and the tree is the right *shape*: right number of PVC directories, right order of magnitude, the listed files present and non-trivial. It says nothing about *content*. Every homelab PVC is copied live, with no quiesce step: a sqlite database mid-write is captured torn, `sonarr.db` at 14 MiB of corruption passes the size floor exactly as 14 MiB of working database does, and a PVC that stopped being written to weeks ago looks identical to one written a minute ago. Only the two influx dumps are age-checked. A retained orphan directory from a recreated PVC can satisfy an expected-set entry the live PVC no longer can — the resolved paths are printed so it is visible, but nothing fails on it. The rest surfaces at restore time |
 | **cloudflare-analytics** | It proves the hours it fetched were fetched. It cannot prove Cloudflare's own numbers are right, and it does not alert on *content* — a hostname that stops receiving traffic entirely, or a spike, produces a perfectly green check. That is Phase 3 (Grafana alert rules), deliberately deferred until a baseline exists |
 

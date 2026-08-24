@@ -19,6 +19,7 @@ procedures live under `docs/` and are referenced from here rather than duplicate
 | `docs/operations/vps.md` | VPS cluster: shape, workloads, Cloudflare tunnel/Access, DB decisions, backups |
 | `docs/operations/monitoring.md` | How failures get noticed: the triage table, probe policy and inventory, CronJob deadlines, the backup verification gates, healthchecks.io checks and ping bodies, and what none of it catches |
 | `docs/operations/uptime-kuma.md` | Layer 3/4 runbook: creating uptime-kuma monitors by hand, per-monitor HTTP settings, the Cloudflare Access trap, the self-monitor |
+| `docs/operations/agent-mail.md` | Per-agent email for Hermes agents: Purelymail mailboxes on cynexia.io, per-profile mcp-email-server config, provisioning runbook, credential scheme, limits, and the deliberate monitoring/backup gaps |
 
 Design documents and implementation plans are local-only under the gitignored
 `docs/superpowers/` tree (`specs/2026-04-11-talos-homelab-rebuild-design.md`,
@@ -31,7 +32,7 @@ Design documents and implementation plans are local-only under the gitignored
 | kubectl context | `cynexia-homelab` | `cynexia-vps` |
 | Omni cluster name | `homelab` | `vps` |
 | Domain | `*.cynexia.net` (Route53) | `*.cynexia.com` (Cloudflare) |
-| Exposure | Private — LAN/Tailscale only, except the `health` namespace's own `cynexia-health` tunnel | Public, via the `cynexia-vps` cloudflared tunnel + Cloudflare Access |
+| Exposure | Private — LAN/Tailscale only, except the `health` namespace's own `cynexia-health` tunnel | Public, through the `cynexia-vps` cloudflared tunnel + Cloudflare Access |
 | Ingress | Traefik hostNetwork DaemonSet + cert-manager wildcard | cloudflared only (no Traefik, no cert-manager) |
 | Apply | `make apply-homelab` | `make apply-vps` |
 
@@ -67,7 +68,7 @@ kubernetes_config/
 Full mechanics, target-by-target reference and failure modes:
 `docs/operations/apply-workflow.md`. The rules that must not be broken:
 
-- **Secrets reach manifests via `op run` + envsubst, resolved per command.** `.env.tpl`
+- **Secrets reach manifests through `op run` + envsubst, resolved per command.** `.env.tpl`
   holds only `VAR=op://Vault/item/field` lines. `.envrc` exports **only**
   `OP_SERVICE_ACCOUNT_TOKEN` — no secret value ever enters the ambient environment. The
   `Makefile` defines `OP_RUN := op run --env-file=.env.tpl --`, and every build/diff/apply
@@ -87,7 +88,7 @@ Full mechanics, target-by-target reference and failure modes:
   Detail: `docs/operations/apply-workflow.md`.
 - **`ENVSUBST_VARS` is an explicit allowlist, passed single-quoted.** Never call envsubst
   without one: with no allowlist it eats every `${VAR}` in the stream including shell
-  variables inside upstream manifests (e.g. `$VOL_DIR` in local-path-provisioner's helper
+  variables inside upstream manifests (for example `$VOL_DIR` in local-path-provisioner's helper
   pod); with double quotes the shell expands the tokens before envsubst sees them.
 - **Adding a secret means four edits:** the `op://` line in `.env.tpl`, the name in
   `ENVSUBST_VAR_NAMES`, the name in `REQUIRED_VARS`, and the `${VAR}` placeholder in the
@@ -117,7 +118,7 @@ Full mechanics, target-by-target reference and failure modes:
 - **Every resource declares its own `namespace:` explicitly.** Do NOT add a top-level
   `namespace:` to `homelab/workloads/kustomization.yaml` — it would rewrite the namespace
   on every resource and break services that live outside `downloads`
-  (e.g. jottacloud-backup).
+  (for example jottacloud-backup).
 - NFS PVs and their PVCs live in the same service file as the workload that uses them.
 - Services use `PUID=1999` / `PGID=1999` for file ownership on shared media.
 - Linuxserver (Alpine-based) Deployments set `dnsPolicy: None` with
@@ -148,13 +149,13 @@ Full mechanics, target-by-target reference and failure modes:
   plane, not a control-plane health endpoint**: the vendor-documented probe would have
   stayed green through the 2026-08-18 Pomerium wedge. **Never probe a backup/quiesce
   sidecar at all** — readiness drops the Pod from its EndpointSlice and liveness gets there
-  via CrashLoopBackOff, so a backup fault takes the application offline; detect those at
+  through CrashLoopBackOff, so a backup fault takes the application offline; detect those at
   the artifact instead. Reasoning, per-service targets and the failures probes *don't*
   catch: `docs/operations/monitoring.md`.
 - **Scheduled work gets a dead-man's-switch, not a probe.** Every CronJob sets
   `timeZone: "UTC"` and `activeDeadlineSeconds` (with `concurrencyPolicy: Forbid`, one
   hung run silently blocks every later run), plus `startingDeadlineSeconds` where a missed
-  window should be retried rather than dropped. New jobs should ping healthchecks.io on
+  window must be retried rather than dropped. New jobs must ping healthchecks.io on
   **start and exit code** — the two restic jobs, `cloudflare-analytics` and `influx-backup`
   do; the two ingest checks and `jottacloud backup` ping on success only, so a failure
   shows up as silence. For the ingest checks that is deliberate and must not change;
@@ -238,7 +239,7 @@ Full mechanics, target-by-target reference and failure modes:
   `ENVSUBST_VAR_NAMES` and `REQUIRED_VARS` in the `Makefile` (the `VPS_*` lists for VPS
   vars). No `direnv reload` is needed for a value — `op run` resolves references per
   command; reload only after changing `OP_SERVICE_ACCOUNT_TOKEN` itself.
-- When creating 1Password items via `op item create`, explicitly type the fields: a bare
+- When creating 1Password items with `op item create`, explicitly type the fields: a bare
   `field=value` defaults to **concealed**, so mark non-secret fields (emails, IDs, UUIDs,
   hostnames) as `field[text]=value` and keep only actual secrets concealed.
   Wrongly-concealed non-secrets make the vault harder to debug; visible secrets are worse.
@@ -274,11 +275,18 @@ Full mechanics, target-by-target reference and failure modes:
 - **This repo is public.** Never write the Omni service URL, sign-in identity, or any
   other credential-adjacent value into a committed file — reference it as an `op://`
   path and read it at run time.
+- **Nothing ships in the operator's name without explicit approval.** Upstream pull
+  requests, issues on third-party trackers, pushes to public forks, and comments on
+  other people's repositories are all publicly attributed to the operator. Prepare
+  the work locally — branches, commits, drafted PR and issue text — and present it
+  for review; the operator says when each item is published, one item at a time.
+  Merging pull requests in this repo when asked is fine: the gate is third-party
+  visibility, not git mechanics.
 - Prefer `kubectl exec deployment/<name> -- sh -c '...'` plus `rollout restart` for
   in-container file tweaks rather than spinning up a helper pod.
 - Documentation belongs in `docs/`, **referenced** from this file rather than included in
   it. When you learn something operational, write it into the relevant `docs/` file and
-  add a pointer here only if it changes how an agent should edit the repo.
+  add a pointer here only if it changes how an agent edits the repo.
 - **Documentation, not agent memories.** Do not record repo, cluster, or account state in
   an agent's private memory system — that hides operational knowledge from the operator,
   from other agents, and from review. Anything worth remembering goes in `docs/` (or this
