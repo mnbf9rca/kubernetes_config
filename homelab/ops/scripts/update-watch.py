@@ -111,6 +111,58 @@ DETERMINATE = frozenset({
     V_OK, V_UPDATES_PENDING, V_DASHBOARD_MISSING, V_CONFIG_ERROR, V_STALE,
 })
 
+# What to DO about each verdict, emitted as the body's `next=` line.
+#
+# EVERY STRING BELOW IS A FIXED LITERAL, chosen at edit time and keyed by a
+# member of VERDICTS. That is the one shape rule 4 allows for text in a body: a
+# verdict from a fixed enum selects one of a fixed set of sentences, so nothing
+# GitHub sent can steer what is written. Do not build one of these by formatting
+# in a count, a pull-request number or anything else derived at run time -- the
+# numbers already have their own `key=int` lines, and an interpolated `next=`
+# would be the first body line that is not literal-or-int.
+#
+# Keep them one line, printable ASCII, and short: the body travels verbatim into
+# every notification transport this account has configured, and an alert email
+# that needs scrolling is an alert nobody reads. The substring `confirm` is
+# banned estate-wide (it drives a healthchecks.io UI nag) -- say "check" instead.
+NEXT_ACTIONS = {
+    V_OK: "none",
+    V_UPDATES_PENDING:
+        "gh pr list -R mnbf9rca/kubernetes_config --author app/renovate"
+        " - then make apply-homelab and merge",
+    V_DASHBOARD_MISSING:
+        "check the Mend Renovate app is still installed on the repo:"
+        " github.com/settings/installations",
+    V_CONFIG_ERROR:
+        "gh issue list -R mnbf9rca/kubernetes_config --author app/renovate"
+        " - read it and fix renovate.json",
+    V_STALE:
+        "open the Dependency Dashboard issue and check renovate.json"
+        " managerFilePatterns still cover the pinned namespaces",
+    V_RATE_LIMITED:
+        "no action for one run - the unauthenticated quota is per IP;"
+        " look at the Events log if it repeats",
+    V_SECONDARY_LIMIT:
+        "no action for one run - GitHub secondary rate limit;"
+        " look at the Events log if it repeats",
+    V_REPO_UNREACHABLE:
+        "check GH_REPO in homelab/ops/update-watch.yaml and that the repo is"
+        " still public under that name",
+    V_API_ERROR:
+        "kubectl -n ops logs job/update-watch --tail 50 - the http= line above"
+        " names the status, if there was one",
+}
+
+# Only reachable if a verdict is added to VERDICTS and not to NEXT_ACTIONS. It
+# is a literal too, so the invariant "`next=` is always fixed text" holds even
+# then; the unit tests assert the map is complete so it stays unreachable.
+NEXT_FALLBACK = "kubectl -n ops logs job/update-watch --tail 50"
+
+
+def next_action_for(verdict):
+    """The fixed `next=` literal for a verdict. Never remote text (rule 4)."""
+    return NEXT_ACTIONS.get(verdict, NEXT_FALLBACK)
+
 
 def log(msg):
     print(msg, flush=True)
@@ -436,6 +488,10 @@ if __name__ == "__main__":
     # carries its own run timestamp: an old `run_epoch=` in an alert means "this
     # body is not about this alert; the watcher has gone quiet".
     hc_emit("run_epoch=%d" % run_epoch)
+    # Last, so it is the line the eye lands on: the command to run next. A fixed
+    # literal selected by the verdict -- see NEXT_ACTIONS.
+    next_action = next_action_for(verdict)
+    hc_emit("next=" + next_action)
 
     make_pinger(os.environ.get("HC_UUID", ""))(ping_suffix(verdict), hc_body())
     sys.exit(0)

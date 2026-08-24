@@ -212,6 +212,51 @@ class TestDecide(unittest.TestCase):
             self.assertIn(verdict, uw.VERDICTS)
 
 
+class TestNextActions(unittest.TestCase):
+    """The body's `next=` line: one FIXED LITERAL per verdict (rule 4).
+
+    The value of this field is that an alert says what to do without anyone
+    opening a runbook, so the failure to guard against is a verdict with no
+    entry -- which would silently fall back to the generic pod-log line.
+    """
+
+    def test_every_verdict_has_its_own_action(self):
+        self.assertEqual(set(uw.NEXT_ACTIONS), set(uw.VERDICTS))
+        for verdict in uw.VERDICTS:
+            self.assertEqual(uw.next_action_for(verdict),
+                             uw.NEXT_ACTIONS[verdict], verdict)
+
+    def test_actions_are_distinct_so_the_line_is_worth_reading(self):
+        actions = list(uw.NEXT_ACTIONS.values())
+        self.assertEqual(len(actions), len(set(actions)))
+
+    def test_every_action_is_one_line_of_short_printable_ascii(self):
+        for verdict, action in list(uw.NEXT_ACTIONS.items()) + [
+                ("fallback", uw.NEXT_FALLBACK)]:
+            with self.subTest(verdict=verdict):
+                self.assertEqual(uw._clean(action), action)
+                self.assertNotIn("\n", action)
+                # The body travels verbatim into every notification transport,
+                # so an alert nobody scrolls is an alert nobody reads.
+                self.assertLessEqual(len(action), 120)
+                # `confirm` in a body drives a healthchecks.io UI nag; the
+                # estate-wide rule is that no body may contain it.
+                self.assertNotIn("confirm", action.lower())
+
+    def test_the_three_red_verdicts_name_a_command_or_a_place_to_look(self):
+        # The intended signal and the two liveness failures are the ones an
+        # operator acts on, so each must point somewhere specific.
+        self.assertIn("gh pr list", uw.NEXT_ACTIONS[uw.V_UPDATES_PENDING])
+        self.assertIn("apply-homelab", uw.NEXT_ACTIONS[uw.V_UPDATES_PENDING])
+        self.assertIn("installations", uw.NEXT_ACTIONS[uw.V_DASHBOARD_MISSING])
+        self.assertIn("gh issue list", uw.NEXT_ACTIONS[uw.V_CONFIG_ERROR])
+
+    def test_an_unknown_verdict_still_gets_a_literal(self):
+        # Unreachable while the map is complete, but the invariant that `next=`
+        # is always fixed text must not depend on that.
+        self.assertEqual(uw.next_action_for("not-a-verdict"), uw.NEXT_FALLBACK)
+
+
 class TestFetch(unittest.TestCase):
 
     def test_server_errors_are_retried_then_reported(self):

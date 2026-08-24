@@ -143,6 +143,13 @@ PY_VALUE_ALLOWLIST = frozenset({
     "config_issues",    # int(): count of renovate[bot] config-error issues
     "http",             # int(): the HTTP status code of the one GitHub call
     "run_epoch",        # int(): this run's own Unix timestamp
+    # Bound to `next_action_for(verdict)`, which returns a value from that
+    # script's NEXT_ACTIONS map: a fixed literal per verdict, chosen at edit
+    # time, with a literal fallback. A verdict is itself a member of a fixed
+    # enum, so the only thing run time decides is WHICH literal — the same
+    # "verdict from a fixed enum" shape this rule already permits. If that map
+    # ever gains a formatted string, this entry must come back off the list.
+    "next_action",
 })
 
 # Python: calls a sink argument may make. `iso` formats a datetime; `len`, `int`
