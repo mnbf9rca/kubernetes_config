@@ -242,6 +242,15 @@ spec:
             # provider later is these two lines plus a new value in the same Secret
             # key — which is why that key is the provider-neutral `llm-api-key`.
             - { name: HINDSIGHT_API_LLM_PROVIDER, value: openai }
+            # Bank-template manifest applied to every NEWLY created bank
+            # (undocumented but real: _parse_default_bank_template in the API's
+            # config.py). Turns on memory defense — the bundled secret-pattern
+            # scanner, redacting on match — by default, so a future profile's
+            # auto-created bank is defended without anyone remembering to set
+            # it. Existing banks are untouched: their policy is per-bank config,
+            # set by hand 2026-08-24, and nothing rescans old memories.
+            - name: HINDSIGHT_API_DEFAULT_BANK_TEMPLATE
+              value: '{"version":"1","bank":{"memory_defense":{"enabled":true,"rules":[{"on":"sensitive_data","action":"redact"}]}}}'
             - { name: HINDSIGHT_API_LLM_MODEL, value: gpt-4o-mini }
             - name: HINDSIGHT_API_LLM_API_KEY
               valueFrom: { secretKeyRef: { name: hindsight, key: llm-api-key } }
