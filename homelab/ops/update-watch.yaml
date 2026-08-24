@@ -78,7 +78,7 @@ spec:
             - name: watch
               # Renovate watches homelab/ops/** (renovate.json); this pin is
               # proposed by PR and applied with the normal diff/apply flow.
-              image: python:3.13-alpine3.22
+              image: python:3.14-alpine3.22@sha256:6b91e66ab2a880ce9ca5a1b91c70f45963ff71ff68268df056336e1a657d5efd
               command: ["python3", "/scripts/update-watch.py"]
               env:
                 # PYTHONDONTWRITEBYTECODE keeps the read-only root filesystem
