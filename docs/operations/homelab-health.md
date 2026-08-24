@@ -238,16 +238,59 @@ you lock Grafana and the connector out until the new Secret has actually rolled.
 
 ## Backups and restore
 
-The `influx-backup` CronJob runs at 02:30 daily, ahead of the 03:00 restic sweep. It
-writes both:
+The `influx-backup` CronJob runs at 02:30 daily, ahead of the 03:00 restic sweep. Despite
+the name it is the whole namespace's logical backup pass, and it writes three things:
 
-- a native `influx backup` (14 generations), and
+- a native `influx backup` (14 generations),
 - a per-bucket, 8-day-windowed line-protocol export (60 generations, gzip), over an
-  **explicit** bucket list: `apple_metrics apple_workouts garmin cloudflare`
+  **explicit** bucket list: `apple_metrics apple_workouts garmin cloudflare`, and
+- a consistent point-in-time copy of Grafana's SQLite database, `grafana/<date>-grafana.db`
+  (14 generations)
 
 to the `health-dumps` PVC on `local-path`. Because that PVC lives on the node's SSD, the
 existing hostPath restic→B2 CronJob picks it up for free — no separate off-cluster
 wiring needed.
+
+### The Grafana dump
+
+`grafana.db` used to exist in backups only as part of the nightly restic sweep of the
+live PVC: a file read page by page while Grafana was writing it, so possibly torn, and
+gated on size alone. That is enough to survive losing the node and not enough to roll back
+a bad Grafana major, which migrates the schema in place on first start — reverting the
+image tag does not revert the database.
+
+`homelab/health/scripts/grafana-sqlite-backup.py` closes that. It runs in the
+`influx-backup` pod, not in the grafana pod, because grafana's image has neither `sqlite3`
+nor `python3`; `local-path` is node-local and ReadWriteOnce is a per-*node* constraint, so
+the backup pod mounts the `grafana-data` PVC **read-only** at `/grafana` alongside the
+running Grafana. The copy is taken with SQLite's online backup API — the same mechanism as
+the CLI's `.backup`, which takes a read lock, copies whole pages, and restarts itself if a
+writer commits mid-copy.
+
+Two consequences worth knowing before changing anything:
+
+- **It is Python, not the `sqlite3` CLI.** `alpine/k8s:1.36.0` ships no `sqlite3` binary.
+  A second image in the pod, or an `apk add sqlite` at 02:30, were both rejected — the
+  health namespace pins every image and a nightly backup should not depend on a package
+  CDN. `py3-pip` brings `python3`, Alpine builds `python3` against SQLite, and
+  `Connection.backup()` is the same C API.
+- **It depends on Grafana's `wal = false` default.** A rollback-journal database opens
+  read-only cleanly; a WAL one needs to create a `-shm` and would fail at open. Turning
+  WAL on (`GF_DATABASE_WAL=true`) means the mount in `homelab/health/backups.yaml` must
+  become read-write in the same change, or the dump stops.
+
+Nothing is published unverified. The copy is written to a `.tmp-` staging file, reopened,
+and must return exactly `ok` from `PRAGMA integrity_check`, contain schema objects and
+clear a byte floor before it is `os.replace`d into position — so a failed run leaves last
+night's artifact intact rather than truncating it. A `.backup` of an empty or truncated
+source succeeds and yields a structurally valid, current-mtime, *empty* database, which is
+precisely what a freshness-and-size gate cannot tell from a good one; the read-back is what
+catches it.
+
+The size floor is a **placeholder** (64 KiB, in `MIN_BYTES`), matched by the gate row in
+`homelab/backup/restic-cronjob.yaml`. The first nightly run reports the real size as
+`grafana_kib=` in the `health-influx-backup` ping body — raise both to roughly an order of
+magnitude below it then, as every other floor in the gate was set.
 
 **Adding a bucket means adding it to that list**, or it is silently never exported — the
 same class of bug as the VPS backup gate's expected-set assertion
@@ -259,10 +302,93 @@ awk's status, so a failed lookup used to leave the bucket ID empty and sail stra
 `make health-influx-cloudflare-bootstrap` **before** the apply that adds `cloudflare` here,
 or the next night's export fails.
 
-**Restore drill:** `influx restore --full` self-defeats — it clobbers its own auth
+**InfluxDB restore drill:** `influx restore --full` self-defeats — it clobbers its own auth
 mid-restore. Use scoped `influx restore --bucket <name>` instead. First drill passed
 2026-07-26. Quarterly drills must also exercise the still-untested disaster-recovery
 path: `--full` onto a brand-new, never-`setup` instance.
+
+### Restoring Grafana from a dump
+
+Restoring means replacing a file Grafana holds open, so **Grafana must be stopped first**.
+Copying over a live `grafana.db` produces a database that is neither the old one nor the
+new one.
+
+1. **Pick the dump.** The last 14 live on the PVC; anything older comes back from restic.
+
+   ```sh
+   kubectl -n health get pods -l app=grafana                # note the node, if you care
+   kubectl -n health run dumps --rm -it --restart=Never \
+     --image=busybox:1.37 --overrides='
+       {"spec":{"volumes":[{"name":"d","persistentVolumeClaim":{"claimName":"health-dumps"}}],
+        "containers":[{"name":"dumps","image":"busybox:1.37","stdin":true,"tty":true,
+        "command":["sh"],"volumeMounts":[{"name":"d","mountPath":"/dumps"}]}]}}' \
+     -- sh -c 'ls -l /dumps/grafana'
+   ```
+
+   For an older one, restore it out of B2 first — `restic restore <snapshot> --target /restore
+   --include '*_health_health-dumps/grafana/*'` from the backup namespace's job image, per
+   [homelab.md](homelab.md).
+
+2. **Stop Grafana.** `replicas: 0` rather than a delete: the Deployment stays, and nothing
+   reopens the database while the file is being swapped.
+
+   ```sh
+   kubectl -n health scale deployment/grafana --replicas=0
+   kubectl -n health wait --for=delete pod -l app=grafana --timeout=120s
+   ```
+
+3. **Replace `grafana.db`.** With Grafana stopped, its PVC can be mounted by a throwaway
+   pod that also mounts the dumps PVC. Keep the outgoing file — a restore that turns out to
+   be the wrong generation is recoverable only if you did.
+
+   ```sh
+   kubectl -n health run grafana-restore --rm -it --restart=Never \
+     --image=busybox:1.37 --overrides='
+       {"spec":{"volumes":[
+          {"name":"g","persistentVolumeClaim":{"claimName":"grafana-data"}},
+          {"name":"d","persistentVolumeClaim":{"claimName":"health-dumps"}}],
+        "containers":[{"name":"r","image":"busybox:1.37","stdin":true,"tty":true,
+        "command":["sh"],"securityContext":{"runAsUser":472,"runAsGroup":472},
+        "volumeMounts":[{"name":"g","mountPath":"/var/lib/grafana"},
+                        {"name":"d","mountPath":"/dumps","readOnly":true}]}]}}'
+   ```
+
+   Then, inside that pod — substituting the dump you chose:
+
+   ```sh
+   cd /var/lib/grafana
+   mv grafana.db grafana.db.pre-restore
+   rm -f grafana.db-wal grafana.db-shm grafana.db-journal   # stale sidecar files
+   cp /dumps/grafana/2026-08-24-grafana.db grafana.db
+   chown 472:472 grafana.db      # the image runs as uid/gid 472; fsGroup covers the mount, not a new file
+   exit
+   ```
+
+4. **Start Grafana and verify.**
+
+   ```sh
+   kubectl -n health scale deployment/grafana --replicas=1
+   kubectl -n health rollout status deployment/grafana --timeout=180s
+   kubectl -n health logs deploy/grafana | grep -i 'migrat\|error' | head
+   ```
+
+   Then check the things the file actually carries, in the UI at
+   `https://grafana-health.cynexia.net`: **log in** (users and the admin password hash live
+   in this database — the `GF_SECURITY_ADMIN_PASSWORD` env var only resets the admin user at
+   startup), open two or three **dashboards** and confirm panels render, and check
+   **Connections → Data sources**. Data sources are provisioned from the
+   `grafana-datasources` Secret, not from the database, so they should be present regardless
+   — if they are not, the problem is the provisioning mount, not the restore.
+
+5. **Clean up** `grafana.db.pre-restore` once the restored instance has been used for a day
+   or two, not before.
+
+**Before a Grafana major upgrade**, take a dump on demand rather than trusting last
+night's: the migration runs on first start of the new version and is not reversible.
+Trigger the nightly job by hand with
+`kubectl -n health create job --from=cronjob/influx-backup grafana-predump`, confirm the
+new file in `/dumps/grafana`, then change the pinned tag. (Issue #54's `make health-upgrade`
+target is the intended way to do this in one step; until it lands, do it by hand.)
 
 ## Cloudflare analytics ingest
 
@@ -500,17 +626,21 @@ Four healthchecks.io checks; UUIDs in 1Password item `health-healthchecks`:
 |---|---|---|
 | `health-apple-ingest` | 1d / 12h | silence |
 | `health-garmin-ingest` | 1d / 12h | silence |
-| `health-influx-backup` | 1d / 6h | silence |
+| `health-influx-backup` | 1d / 6h | **`/start` + exit code** |
 | `homelab-cloudflare-analytics` | 1h / 2h | **`/start` + exit code** |
 
-**The first three signal failure by silence.** Neither of those CronJobs sends a `/start`
-ping or a failure ping — unlike the two restic jobs and the Cloudflare job, which do both:
+**The two ingest checks signal failure by silence; the other two do not.**
 
-- `influx-backup` runs under `set -eu` with the ping as its **last** statement, so it
-  pings **only on success**. Any earlier failure aborts the script before the ping and the
-  check goes red on grace expiry. Nothing distinguishes "failed at step 2" from "never
-  scheduled"; the Job's own status is the only place that detail exists, which is why
-  `ttlSecondsAfterFinished` is 48h here.
+- `influx-backup` sends `/start` at the top and `hc-ping.com/<uuid>/<rc>` from an EXIT
+  trap, so a failure is red within a minute and is distinguishable from a never-scheduled
+  run. It did not always: the ping used to be the script's last statement under `set -eu`,
+  which meant a failing prune, a missing ConfigMap key or a dead influxdb pod produced
+  *exactly nothing* until grace expired some 30 hours later. The accepted cost of the
+  conversion is that a transient fault — an influxdb pod mid-restart when `kubectl exec`
+  lands — now pages instead of self-healing into silence. The body carries the dump sizes,
+  the export count, the Grafana dump size and the prune counts, so a green ping says what
+  it actually captured. `ttlSecondsAfterFinished` is 48h so the Job's own logs outlive a
+  weekend.
 - `ingest-freshness` (every 6h) pings the apple/garmin checks **only when that source's
   InfluxDB data is actually less than 24h old** — so a real ingest gap surfaces as a
   healthchecks.io alert instead of being masked by an unrelated cron firing on schedule.

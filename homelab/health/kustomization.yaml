@@ -57,3 +57,8 @@ configMapGenerator:
       - influx-native-backup.sh=scripts/influx-native-backup.sh
       - influx-export-lp.sh=scripts/influx-export-lp.sh
       - ingest-freshness.sh=scripts/ingest-freshness.sh
+      # Runs in the influx-backup CronJob pod itself, like influx-backup.sh:
+      # it reads the grafana-data PVC through that pod's read-only /grafana
+      # mount rather than crossing into the grafana pod, which has neither
+      # sqlite3 nor python3.
+      - grafana-sqlite-backup.py=scripts/grafana-sqlite-backup.py

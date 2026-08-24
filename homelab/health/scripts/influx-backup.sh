@@ -1,10 +1,20 @@
 #!/bin/sh
-# Nightly InfluxDB backup driver. Runs in the `influx-backup` CronJob pod
-# (alpine/k8s), NOT in the influxdb pod.
+# Nightly health-namespace logical backup driver. Runs in the `influx-backup`
+# CronJob pod (alpine/k8s), NOT in the influxdb pod.
 #
-# It takes two kinds of dump by exec-ing into the influxdb pod, prunes the
-# short tail, and pings healthchecks.io. restic sweeps the same PVC an hour
-# later and holds the long history in B2.
+# It takes two kinds of InfluxDB dump by exec-ing into the influxdb pod, takes a
+# consistent point-in-time copy of Grafana's SQLite database in this pod, prunes
+# the short tail of all three, and pings healthchecks.io. restic sweeps the same
+# PVC an hour later and holds the long history in B2.
+#
+# THE GRAFANA STEP RUNS HERE, NOT OVER `kubectl exec`, and not in a job of its
+# own. The grafana pod has no sqlite3 and no python3, so the copy has to be
+# taken from outside it; local-path is node-local and ReadWriteOnce permits a
+# second pod on the SAME node, so this pod mounts the `grafana-data` PVC
+# read-only at /grafana and reads the database directly. A sibling CronJob would
+# have bought a second healthchecks.io check, a second image pin and a second
+# set of deadlines for one `.backup` call. See grafana-sqlite-backup.py for why
+# it is Python rather than the sqlite3 CLI.
 #
 # TWO MOUNT PATHS, ONE VOLUME — read this before "fixing" a path.
 # The `health-dumps` PVC is mounted at /backups inside the influxdb pod and at
@@ -101,9 +111,11 @@ NATIVE_KIB=unknown
 LP_FILES=unknown
 LP_KIB=unknown
 NATIVE_MIB=unknown
+GRAFANA_KIB=unknown
 PRUNED=unknown
 PRUNED_NATIVE=unknown
 PRUNED_LP=unknown
+PRUNED_GRAFANA=unknown
 
 # THE TRAP'S FIRST ACTION IS CAPTURING $?. Anything before that - a `trap -`,
 # an echo, a reset - overwrites the status being reported. It is armed BEFORE
@@ -115,12 +127,14 @@ on_exit() {
   trap - EXIT
   hc_reset
   if [ "$_xrc" -eq 0 ]; then
-    emit "summary=ok - native dump $NATIVE_MIB MiB, $LP_FILES lp exports, pruned $PRUNED_NATIVE native / $PRUNED_LP lp"
+    emit "summary=ok - native dump $NATIVE_MIB MiB, $LP_FILES lp exports, grafana dump $GRAFANA_KIB KiB, pruned $PRUNED_NATIVE native / $PRUNED_LP lp / $PRUNED_GRAFANA grafana"
     emit "native_kib=$NATIVE_KIB"
     emit "lp_files=$LP_FILES"
     emit "lp_kib=$LP_KIB"
+    emit "grafana_kib=$GRAFANA_KIB"
     emit "pruned_native=$PRUNED_NATIVE"
     emit "pruned_lp=$PRUNED_LP"
+    emit "pruned_grafana=$PRUNED_GRAFANA"
   else
     emit "summary=FAILED rc=$_xrc - $STEP"
     emit "failed_step=$STEP"
@@ -186,6 +200,21 @@ step lp
 kubectl -n health exec "$POD" -- sh -c "$(cat /scripts/influx-export-lp.sh)" \
   influx-export-lp "$DATE"
 
+# Consistent point-in-time copy of Grafana's SQLite database, taken with
+# SQLite's online backup API against the read-only /grafana mount. The script
+# verifies the copy (integrity_check, schema objects, byte floor) and publishes
+# it atomically, so anything that lands in /dumps/grafana has already been
+# opened and read back.
+#
+# No `[ -s ]` guard like the two scripts above need: this one is EXECUTED, not
+# spliced into a `sh -c` argument, so a missing or empty file is a non-zero exit
+# from python3 rather than a silent no-op, and `set -e` stops the run here.
+#
+# python3, not sqlite3: alpine/k8s:1.36.0 has no sqlite3 binary. The reasoning
+# and the alternatives considered are in grafana-sqlite-backup.py's header.
+step grafana
+python3 /scripts/grafana-sqlite-backup.py /grafana/grafana.db /dumps/grafana "$DATE"
+
 # Prune: keep 14 native dumps and 60 line-protocol exports. restic retention
 # holds the long tail in B2.
 #
@@ -248,6 +277,14 @@ step prune-lp
 prune_to lp     60 /dumps/lp/*.lp.gz
 PRUNED_LP=$PRUNED
 
+# 14 generations, matching the native influx dumps: a fortnight is long enough
+# to notice a bad Grafana upgrade and roll back, and restic holds the longer
+# history in B2. The glob deliberately excludes the `.tmp-` staging file, which
+# a failed dump removes anyway.
+step prune-grafana
+prune_to grafana 14 /dumps/grafana/*-grafana.db
+PRUNED_GRAFANA=$PRUNED
+
 # ---- measurements for the ping body --------------------------------------
 # EVERY COMMAND HERE IS SUFFIXED `|| true` WITH A SENTINEL. A measurement must
 # never be able to fail a backup that succeeded, and `set -e` is in force.
@@ -273,6 +310,14 @@ done
 LP_KIB=$(du -ck /dumps/lp/"$DATE"-*.lp.gz 2>/dev/null | tail -n1 | cut -f1) || LP_KIB=unknown
 case "$LP_KIB" in ''|*[!0-9]*) LP_KIB=unknown ;; esac
 # check-ping-bodies: untaint LP_KIB - du's KiB total, gated to digits by the case above
+
+GRAFANA_KIB=$(du -sk "/dumps/grafana/$DATE-grafana.db" 2>/dev/null | cut -f1) || GRAFANA_KIB=unknown
+case "$GRAFANA_KIB" in ''|*[!0-9]*) GRAFANA_KIB=unknown ;; esac
+# check-ping-bodies: untaint GRAFANA_KIB - du's KiB total, gated to digits by the case above
+# THIS NUMBER IS HOW THE GATE FLOOR GETS SET. grafana-sqlite-backup.py ships a
+# deliberately conservative 64 KiB placeholder and homelab/backup/restic-cronjob.yaml
+# a matching one; after the first real run, read grafana_kib= off the ping and
+# raise both to roughly an order of magnitude below it.
 
 # The dead-man's switch fires from the EXIT trap above, on every path. There is
 # deliberately no ping on this line any more: a ping here would only be reached

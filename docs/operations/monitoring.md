@@ -229,6 +229,7 @@ unmounted" from "three of four present" — all three produce no stale files.
 | homelab | sabnzbd-ini | `/data/pvc-*_downloads_sabnzbd-config/sabnzbd.ini` | ≥1 KiB |
 | homelab | sonarr-db | `/data/pvc-*_downloads_sonarr-config/sonarr.db` | ≥1 MiB |
 | homelab | grafana-db | `/data/pvc-*_health_grafana-data/grafana.db` | ≥256 KiB |
+| homelab | grafana-dump | `/data/pvc-*_health_health-dumps/grafana/*-grafana.db` | ≥64 KiB (placeholder) **and** <30h |
 | homelab | influxdb-bolt | `/data/pvc-*_health_influxdb-data/influxd.bolt` | ≥32 KiB |
 | homelab | garmin-tokens | `/data/pvc-*_health_garmin-tokens/garmin_tokens.json` | ≥256 B |
 | homelab | influx-native-dump | `/data/pvc-*_health_health-dumps/native/*` | <30h |
@@ -236,7 +237,13 @@ unmounted" from "three of four present" — all three produce no stale files.
 | homelab | hermes-zip | `/data/pvc-*_backup_hermes-dumps/hermes-*.zip` | ≥16 MiB **and** <30h |
 
 Homelab byte floors sit an order of magnitude under observed sizes: they reject a zero-length or
-truncated file, not slow growth. `influx-backup` writes the dumps at 02:30Z, 30 minutes before this
+truncated file, not slow growth. `grafana-dump` is the one exception, and deliberately so: it is
+new and its real size has never been measured, so 64 KiB is a placeholder chosen below the
+live-file row above it. The first nightly run reports the true size as `grafana_kib=` in the
+`health-influx-backup` ping body; raise this floor and `MIN_BYTES` in
+`homelab/health/scripts/grafana-sqlite-backup.py` together once it has.
+
+`influx-backup` writes the influx dumps *and* the Grafana dump at 02:30Z, 30 minutes before this
 job, so 30h tolerates one missed run (`health-influx-backup` is the check for *that*) and fails on
 two consecutive misses; `hermes-pull` writes its zip at 02:00Z on the same terms, with
 `homelab-hermes-pull` as its own first-line check. Nothing else is freshness-checked: a deadline on live application state
@@ -293,7 +300,7 @@ newest match, because their glob is one PVC directory expected to match one path
 | `vps-uptime-kuma-alive` | `op://VPS/uptime-kuma/healthcheck-uuid` | 5m / 15m | An uptime-kuma monitor — [uptime-kuma.md](uptime-kuma.md#the-self-monitor-layer-4) |
 | `health-apple-ingest` | `op://Homelab/health-healthchecks/apple-uuid` | 1d / 12h | `ingest-freshness`, success only, and only when InfluxDB data is under 24h old |
 | `health-garmin-ingest` | `op://Homelab/health-healthchecks/garmin-uuid` | 1d / 12h | as above |
-| `health-influx-backup` | `op://Homelab/health-healthchecks/backup-uuid` | 1d / 6h | `influx-backup`, `/start` and exit code, from an EXIT trap |
+| `health-influx-backup` | `op://Homelab/health-healthchecks/backup-uuid` | 1d / 6h | `influx-backup` (which also takes the Grafana SQLite dump), `/start` and exit code, from an EXIT trap |
 | `homelab-cloudflare-analytics` | `op://Homelab/health-healthchecks/cloudflare-uuid` | 1h / 2h | `cloudflare-analytics` CronJob, `/start` and exit code |
 | `homelab-hermes-pull` | `op://Homelab/hermes-backup/healthcheck-uuid` | 1d / 2h | `hermes-pull` CronJob, `/start` and exit code, from an EXIT trap |
 | `jottacloud-backup` | `op://Homelab/jottacloud-backup/HEALTHCHECK_UUID` | 6-hourly schedule | The third-party image's own `backup.sh`, success only |
@@ -451,7 +458,7 @@ Probes fix hung request paths, not silently stopped background work — often th
 | **homelab services** | The external layer runs on the VPS, which has no route to `*.cynexia.net`. Only the three health-tunnel hostnames get layer-3 coverage. sonarr, radarr, sabnzbd, emby, hydra2 and grafana have probes and nothing external |
 | **the VPS gate** | It proves each snapshot exists and is recent, and — through the sidecar's own refusal to publish a schema-less snapshot — that it holds at least one schema object. It does not prove the contents are complete or uncorrupted. A snapshot missing rows, or with a corrupt page below the `sqlite_master` read, passes everything here and surfaces at restore time |
 | **agent mail (hermes VM)** | Nothing monitors it at all — no probe, no check, no canary. A Purelymail outage, expired credential, DNS drift or send-cap exhaustion surfaces only as tool errors inside agent sessions. Deliberate for now; the planned round-trip canary is in [agent-mail.md](agent-mail.md#monitoring-and-backup-none-deliberately-for-now) |
-| **the homelab gate** | It proves the SSD is mounted and the tree is the right *shape*: right number of PVC directories, right order of magnitude, the listed files present and non-trivial. It says nothing about *content*. Every homelab PVC is copied live, with no quiesce step: a sqlite database mid-write is captured torn, `sonarr.db` at 14 MiB of corruption passes the size floor exactly as 14 MiB of working database does, and a PVC that stopped being written to weeks ago looks identical to one written a minute ago. Only the two influx dumps are age-checked. A retained orphan directory from a recreated PVC can satisfy an expected-set entry the live PVC no longer can — the resolved paths are printed so it is visible, but nothing fails on it. The rest surfaces at restore time |
+| **the homelab gate** | It proves the SSD is mounted and the tree is the right *shape*: right number of PVC directories, right order of magnitude, the listed files present and non-trivial. It says nothing about *content*. Every homelab PVC is copied live, with no quiesce step: a sqlite database mid-write is captured torn, `sonarr.db` at 14 MiB of corruption passes the size floor exactly as 14 MiB of working database does, and a PVC that stopped being written to weeks ago looks identical to one written a minute ago. Grafana is the one exception, and only in its dump: `grafana-dump` is taken with SQLite's online backup API and read back before it is published, so that artifact is consistent and verified even though the live `grafana.db` beside it is not. Only the two influx dumps, that Grafana dump and the hermes zip are age-checked. A retained orphan directory from a recreated PVC can satisfy an expected-set entry the live PVC no longer can — the resolved paths are printed so it is visible, but nothing fails on it. The rest surfaces at restore time |
 | **cloudflare-analytics** | It proves the hours it fetched were fetched. It cannot prove Cloudflare's own numbers are right, and it does not alert on *content* — a hostname that stops receiving traffic entirely, or a spike, produces a perfectly green check. That is Phase 3 (Grafana alert rules), deliberately deferred until a baseline exists |
 
 Queued, not configured: a changedetection `overdue_watches` json-query monitor and a karakeep
