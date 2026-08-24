@@ -345,6 +345,17 @@ server-side, from the key in the cluster Secret.
 2. Set the profile-scoped secret:
    `hermes -p <name> secrets onepassword set HINDSIGHT_API_KEY "op://Homelab/hermes/tenant-api-key"`
 3. Enable the provider for that profile, then confirm it with trap 2's call test.
+4. **Configure the new bank's missions — do not skip this.** A fresh bank inherits
+   memory defense from the server's default bank template, but its three missions
+   (`retain_mission`, `reflect_mission`, `observations_mission`) and dispositions start
+   empty, and upstream's guidance calls misconfigured missions the single biggest cause
+   of low-quality memories. Set them in the control plane UI once the bank exists,
+   using `hermes-emh`'s as the pattern: name the fact types to extract AND what to
+   ignore; keep trend conclusions but never raw readings (measurements are queryable
+   live at the health-data MCP server); give reflect the agent's persona plus an
+   accuracy-over-inference rule; give observations the durable-versus-transient
+   distinction and contradiction flagging. Tailor the domain content to the new
+   agent's role — EMH's health focus does not transfer to an ops agent.
 
 Before onboarding a profile, run the two-bank isolation test once — retain into `probe-a`,
 recall from `probe-b`, expect nothing — then delete both probe banks from the control
