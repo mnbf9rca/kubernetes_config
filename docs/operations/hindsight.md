@@ -198,7 +198,7 @@ plugin is deprecated, so install nothing. For `emh`, with
 {
   "mode": "local_external",
   "api_url": "https://hindsight.cynexia.net",
-  "bank_id_template": "hermes-{profile}",
+  "bank_id": "hermes-emh",
   "recall_budget": "mid",
   "timeout": 30
 }
@@ -221,8 +221,9 @@ plain HTTP calls and the `llm_*` client settings are dead; extraction happens
 server-side, from the key in the cluster Secret.
 
 **Adding a second profile** is those two files in `~/.hermes/profiles/<name>/` and
-nothing else. `bank_id_template` yields `hermes-<name>`, banks auto-create on first
-write, and no server-side work is needed. Before onboarding one, run the two-bank
+nothing else — set `bank_id` to the profile's own literal name (`hermes-<name>`; the
+Hermes integration has no template mechanism, only the static `bank_id` key, env var
+`HINDSIGHT_BANK_ID`). Banks auto-create on first write; no server-side work is needed. Before onboarding one, run the two-bank
 isolation test once — retain into `probe-a`, recall from `probe-b`, expect nothing —
 then delete both probe banks from the control plane.
 
