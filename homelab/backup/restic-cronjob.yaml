@@ -216,15 +216,44 @@ spec:
                   MIN_PVC_DIRS=8
                   MIN_DATA_KIB=1048576
 
+                  # ---- disk-usage thresholds ------------------------------------------
+                  # local-path enforces NO QUOTA: a PVC's `storage:` figure is a request and
+                  # nothing more, so "a PVC filled up" always means "the shared node SSD filled
+                  # up", taking every workload on it with it. Until this landed, nothing in the
+                  # estate watched that - the claim that node-level monitoring covered it was
+                  # simply untrue.
+                  #
+                  # WARN, THEN FAIL. 80% prints a loud advisory and leaves the job green,
+                  # because a backup that runs is worth more than an alert about headroom; 90%
+                  # fails the gate, which also defers `forget --prune` - correct, since pruning
+                  # is the wrong thing to be doing while the node is about to wedge. The
+                  # `disk_pct=` field in the ping body carries the number every night either way,
+                  # so the trend is visible before either threshold is crossed.
+                  #
+                  # THE RESIDUAL, STATED: this samples once a night. A fill faster than a day
+                  # still lands between runs. Bounded in practice by what actually grows here -
+                  # the 7-dump prunes and postgres's small working set.
+                  DISK_WARN_PCT=80
+                  DISK_FAIL_PCT=90
+
                   # label:glob:min-bytes. Minimums are an order of magnitude below the observed
                   # sizes: they exist to reject a zero-length or truncated file, not to track
-                  # growth.
+                  # growth. NO COMMENTS INSIDE EITHER LIST BELOW - both are split on whitespace,
+                  # so a `#` line would be parsed as an entry.
                   #
                   # `grafana-dump` was measured on 2026-08-24 (seed run: 2,039,808 bytes,
                   # 273 schema objects); 204800 sits roughly an order of magnitude below
                   # that, per the same convention as the rows above. MIN_BYTES in
                   # homelab/health/scripts/grafana-sqlite-backup.py carries the same floor -
                   # raise the two together.
+                  #
+                  # `hindsight-dump` is the ONE entry whose floor has not yet been derived from
+                  # a measurement: it opens at 1024 B because a freshly bootstrapped hindsight
+                  # schema gzips to a few KB. RAISE IT after rollout step 5 measures the first
+                  # real dump, to an order of magnitude below what that dump weighs, in the same
+                  # commit as the matching floor in homelab/hindsight/scripts/hindsight-pg-dump.sh.
+                  # It appears in BOTH lists deliberately: the dump is produced on a schedule, so
+                  # a stale one is as bad as a missing one, and only FRESH_ARTIFACTS notices that.
                   EXPECTED_ARTIFACTS="
                   emby-library:/data/pvc-*_downloads_emby-config/data/library.db:1048576
                   hydra2-config:/data/pvc-*_downloads_hydra2-config/nzbhydra.yml:4096
@@ -236,6 +265,7 @@ spec:
                   influxdb-bolt:/data/pvc-*_health_influxdb-data/influxd.bolt:32768
                   garmin-tokens:/data/pvc-*_health_garmin-tokens/garmin_tokens.json:256
                   hermes-zip:/data/pvc-*_backup_hermes-dumps/hermes-*.zip:16777216
+                  hindsight-dump:/data/pvc-*_hindsight_hindsight-dumps/hindsight-*.sql.gz:1024
                   "
 
                   # label:glob - existence AND freshness.
@@ -244,6 +274,7 @@ spec:
                   influx-lp-export:/data/pvc-*_health_health-dumps/lp/*.lp.gz
                   grafana-dump:/data/pvc-*_health_health-dumps/grafana/*-grafana.db
                   hermes-zip:/data/pvc-*_backup_hermes-dumps/hermes-*.zip
+                  hindsight-dump:/data/pvc-*_hindsight_hindsight-dumps/hindsight-*.sql.gz
                   "
 
                   # Populated by measure_tree; initialised here so `set -u` cannot bite if
@@ -261,6 +292,7 @@ spec:
                   PRUNE=skipped
                   RESTIC_CHECK=not-reached
                   TREE_GIB=unknown
+                  DISK_PCT=unknown
 
                   # Resolve a glob to its most recently modified existing match.
                   # stdout: the path. 0 = found, 1 = nothing matched, 2 = a match existed but
@@ -457,6 +489,46 @@ spec:
                     return $_crc
                   }
 
+                  # ---- 2b. DISK USAGE --------------------------------------------------
+                  # `df -Pk /data` in POSIX mode, so the columns cannot be reflowed by a long
+                  # device name (the classic df parsing trap, and the reason -P exists). Field 5
+                  # of the last line is the use percentage, with a trailing `%` stripped here.
+                  #
+                  # Nothing captured reaches the ping body ungated: df's output is parsed to a
+                  # bare integer and refused if it is anything else. An UNPARSEABLE reading FAILS
+                  # rather than warns - "I could not look" must never be reported as "there is
+                  # plenty of room", the same rule the unreadable-PVC arm of measure_tree follows.
+                  check_disk() {
+                    _dd=$(df -Pk /data 2>&1) || {
+                      DISK_PCT=unknown
+                      say_err "disk check: cannot df /data"
+                      echo "       df said: $_dd"
+                      return 1
+                    }
+                    _dp=$(printf '%s\n' "$_dd" | awk 'END { sub(/%$/, "", $5); print $5 }')
+                    case "$_dp" in
+                      ''|*[!0-9]*)
+                        DISK_PCT=unknown
+                        say_err "disk check: unparseable use percentage for /data"
+                        echo "       df printed: $_dd"
+                        return 1 ;;
+                    esac
+                    DISK_PCT=$_dp
+                    # check-ping-bodies: untaint DISK_PCT - df's use percentage, gated to digits by the case above
+                    if [ "$DISK_PCT" -ge "$DISK_FAIL_PCT" ]; then
+                      say_err "/data is ${DISK_PCT}% full (fail threshold ${DISK_FAIL_PCT}%)"
+                      echo "       local-path enforces no quota, so this is the NODE SSD filling."
+                      echo "       Retention is deferred until it is under control."
+                      return 1
+                    fi
+                    if [ "$DISK_PCT" -ge "$DISK_WARN_PCT" ]; then
+                      echo "WARNING (advisory, does not fail the job) /data is ${DISK_PCT}% full (warn threshold ${DISK_WARN_PCT}%)"
+                      return 0
+                    fi
+                    echo "note: disk ok - /data is ${DISK_PCT}% full"
+                    return 0
+                  }
+
                   # ---- 3. EXPECTED SET -------------------------------------------------
                   check_expected() {
                     _rc=0
@@ -578,6 +650,7 @@ spec:
                   check_mount    || gate_rc=1
                   measure_tree   || gate_rc=1
                   check_scale    || gate_rc=1
+                  check_disk     || gate_rc=1
                   check_expected || gate_rc=1
                   check_fresh    || gate_rc=1
 
@@ -679,6 +752,10 @@ spec:
                   emit "mount_ok=$MOUNT_OK"
                   emit "pvc_dirs=$TREE_DIRS"
                   emit "tree_kib=$TREE_KIB"
+                  # local-path has no quota, so this is the field that says whether the node
+                  # SSD every PVC shares is about to fill. It is emitted on every run, green or
+                  # red, so the trend is readable before a threshold is crossed.
+                  emit "disk_pct=$DISK_PCT"
                   emit "artifacts=$ART_OK/$ART_TOT"
                   emit "dumps_fresh=$FRESH_OK/$FRESH_TOT"
                   # The highest-value single field in this body: this job defers
