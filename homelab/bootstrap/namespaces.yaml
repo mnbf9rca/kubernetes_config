@@ -45,6 +45,21 @@ metadata:
   # PSA baseline (cluster default). Nothing in health uses hostPath/hostNetwork.
   # NO keel in this namespace: images are digest/version-pinned (health data pipeline).
 ---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ops
+  # PSA baseline (cluster default). The one workload here is an outbound-HTTPS
+  # poller: no hostPath, no hostNetwork, no ServiceAccount, no RBAC.
+  #
+  # It is deliberately NOT in `health` — its scope is the whole repo, and a
+  # health-namespace object alerting about other namespaces would be a lie about
+  # ownership — and deliberately NOT in `backup`, which runs at PSA privileged
+  # for restic's hostPaths that this job has no business inheriting.
+  #
+  # NO keel in this namespace: the image is version-pinned and Renovate watches
+  # homelab/ops/** so bumps arrive as pull requests.
+---
 # NOTE: cert-manager and local-path-storage namespaces are created by their
 # respective upstream manifests, so they're omitted here (kustomize rejects
 # duplicate resources). keel's namespace IS declared above because

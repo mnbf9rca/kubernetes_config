@@ -39,6 +39,7 @@ Helm-only distribution and `homelab/bootstrap/keel/keel.yaml` is hand-written.
 | `keel` | Auto-updates | keel controller |
 | `backup` | Backup | restic init Job + nightly CronJob (PSA privileged — hostPath) |
 | `health` | Personal health data pipeline | influxdb, apple-health-ingester, garmin-grafana, grafana, influxdb-mcp (behind Cloudflare Access), cloudflared, backup + freshness CronJobs — see [homelab-health.md](homelab-health.md) |
+| `ops` | Cluster-wide operational jobs | `update-watch` CronJob — see below |
 
 Ingress hostnames are `*.cynexia.net` (Route53), Traefik-fronted, LAN/Tailscale only:
 `sonarr`, `radarr`, `sab`, `hydra`, `emby`, `grafana-health`.
@@ -47,6 +48,30 @@ Retired in the rebuild: immich, ollama, open-webui, komga, jellyfin, mylar3,
 lazylibrarian, caddy, postgresql, **tinyproxy**. cloudflared was retired from the
 downloads-era stack but is not retired homelab-wide — the `health` namespace runs its own
 dedicated `cynexia-health` tunnel, separate from the VPS cluster's `cynexia-vps` tunnel.
+
+### The `ops` namespace
+
+`homelab/ops/` holds work that belongs to the estate rather than to any one application. Today
+that is one CronJob, `update-watch`: at 06:45Z daily it makes a single unauthenticated GitHub
+call, counts the open Renovate pull requests on this repo, and drives the `homelab-update-watch`
+healthchecks.io check so a waiting update is visible instead of silent. Full behaviour, every
+cause of red, and the deliberate absence of a `/start` ping:
+[monitoring.md](monitoring.md#the-update-watcher).
+
+Three things about this namespace are deliberate and should survive a refactor:
+
+- **It is not `health` and not `backup`.** Its scope is the whole repo, so a health-namespace
+  object alerting about other namespaces would misstate ownership; and `backup` runs at PSA
+  privileged for restic's hostPaths, which an outbound-HTTPS poller has no business inheriting.
+  `ops` is PSA baseline, the cluster default, and needs no ServiceAccount and no RBAC.
+- **No keel here.** The image is version-pinned and Renovate watches `homelab/ops/**`, so the
+  watcher's own pin is not the estate's one unwatched image. `make check-renovate-scope` fails
+  the build if that scope is ever lost.
+- **Removal is one commit.** Drop `- ops` from `homelab/kustomization.yaml`, `rm -r homelab/ops/`,
+  remove the namespace block, remove `OPS_HC_UPDATE_UUID` from `.env.tpl` and both Makefile
+  lists, remove the `REQUIRED_TARGETS` entry and the eight `PY_VALUE_ALLOWLIST` names from
+  `scripts/check-ping-bodies.py`, then apply, `kubectl delete namespace ops`, retire the check
+  and delete the 1Password item.
 
 ## Storage and NFS
 

@@ -11,6 +11,7 @@ catches. Manifests carry per-probe rationale in comments. Read
 | A restic check is red | `failed_step=` in the ping body names the phase, and `prune=` says whether retention ran — [Reading a restic failure body](#reading-a-restic-failure-body) |
 | `mount_ok=no` on homelab restic | The SSD did not mount, so the backup captured nothing — [the gates](#the-backup-verification-gates) |
 | An ingest check is red | Check whether the operator synced a watch before suspecting the pipeline — [healthchecks.io checks](#healthchecksio-checks) |
+| `homelab-update-watch` is red | `verdict=` names the cause when the body is fresh; a stale `run_epoch=` means the watcher itself went quiet — [The update watcher](#the-update-watcher) |
 | A sidecar shows `RESTARTS: 0` but its snapshot is missing | Expected; they log rather than exit. Read the sidecar's stderr — [Why the sidecars have no probes](#why-the-sidecars-have-no-probes) |
 | An uptime-kuma monitor is UP but the service is down | Suspect an Access redirect — [uptime-kuma.md](uptime-kuma.md#the-cloudflare-access-trap) |
 | Everything is green and the data is still wrong | Expected; several probes are shallow by design — [What this does not catch](#what-this-does-not-catch) |
@@ -100,6 +101,7 @@ Defaults, unless a service's entry below says otherwise:
 | jottacloud-backup | none | Its old liveness probe could not fail. `activeDeadlineSeconds: 21600` bounds the run |
 | garmin-grafana | none | It serves nothing. The `health-garmin-ingest` switch is the correct instrument |
 | cloudflare-analytics | none | Scheduled work. `homelab-cloudflare-analytics` plus `activeDeadlineSeconds: 1200` is the instrument |
+| update-watch | none | Scheduled work. `homelab-update-watch` plus `activeDeadlineSeconds: 300` is the instrument |
 
 ## Why the sidecars have no probes
 
@@ -153,10 +155,10 @@ write a `$VAR` into one.
 
 | Field | Value | Why |
 |---|---|---|
-| `timeZone: "UTC"` | all six jobs | Otherwise the schedule follows kube-controller-manager's local zone |
-| `startingDeadlineSeconds` | 3600, except 1800 for cloudflare-analytics, 300 for jottacloud, and unset for `ingest-freshness` | A missed window retries for that long, then drops |
-| `activeDeadlineSeconds` | restic 14400, influx-backup 3600, cloudflare-analytics 1200, ingest-freshness 300, jottacloud 21600 | With `concurrencyPolicy: Forbid`, one hung run silently blocks every later run |
-| `ttlSecondsAfterFinished` | 259200 on both restic jobs and cloudflare-analytics; 172800 on influx-backup; 86400 on the rest | A Friday failure on the restic jobs survives until Monday |
+| `timeZone: "UTC"` | every job | Otherwise the schedule follows kube-controller-manager's local zone |
+| `startingDeadlineSeconds` | 3600, except 1800 for cloudflare-analytics, 300 for jottacloud, and unset for `ingest-freshness` | A missed window retries for that long, then drops. `update-watch` takes the 3600 default deliberately: a silently skipped run is the failure it exists to prevent |
+| `activeDeadlineSeconds` | restic 14400, influx-backup 3600, hermes-pull 1800, cloudflare-analytics 1200, ingest-freshness 300, update-watch 300, jottacloud 21600 | With `concurrencyPolicy: Forbid`, one hung run silently blocks every later run |
+| `ttlSecondsAfterFinished` | 259200 on both restic jobs, hermes-pull, cloudflare-analytics and update-watch; 172800 on influx-backup; 86400 on the rest | A Friday failure on the restic jobs survives until Monday |
 | `terminationGracePeriodSeconds` | not set on any job | busybox `ash` runs as PID 1 and never forwards SIGTERM to restic, so a grace period only slows teardown. `restic unlock` at the head of the next run recovers the lock |
 
 ### The restic ping wrapper
@@ -297,9 +299,11 @@ newest match, because their glob is one PVC directory expected to match one path
 | `homelab-cloudflare-analytics` | `op://Homelab/health-healthchecks/cloudflare-uuid` | 1h / 2h | `cloudflare-analytics` CronJob, `/start` and exit code |
 | `homelab-hermes-pull` | `op://Homelab/hermes-backup/healthcheck-uuid` | 1d / 2h | `hermes-pull` CronJob, `/start` and exit code, from an EXIT trap |
 | `jottacloud-backup` | `op://Homelab/jottacloud-backup/HEALTHCHECK_UUID` | 6-hourly schedule | The third-party image's own `backup.sh`, success only |
+| `homelab-update-watch` | `op://Homelab/update-watch/healthcheck-uuid` | 1d / 6h | `update-watch` CronJob in `ops`, exit code or `/log` — **never `/start`** |
 
-**Five of the six jobs this repo pings send `/start` and an exit code** — both restic jobs,
-`cloudflare-analytics`, `influx-backup` and `hermes-pull`. Follow that pattern for new jobs.
+**Five of the jobs this repo pings send `/start` and an exit code** — both restic jobs,
+`cloudflare-analytics`, `influx-backup` and `hermes-pull`. Follow that pattern for new jobs
+unless the job has `update-watch`'s reason not to.
 `influx-backup` and `hermes-pull` also need `set -eu -o pipefail` and their ping in an EXIT trap: under `set -e` alone `xargs` swallows
 the prune step's `ls` failure and the ping fires anyway, and with the ping on the last line a
 failing prune, a missing ConfigMap key or a dead influxdb pod produces *exactly nothing* until the
@@ -332,11 +336,80 @@ hole reads as a hole rather than a quiet week, ingests what survives, and exits 
 since the next run's watermark is current again. Read a red check here as "find out which hours
 were lost" ([homelab-health.md](homelab-health.md#gaps-are-permanent-so-they-are-loud)).
 
-Adding a check takes [four edits](apply-workflow.md#adding-a-secret-is-four-edits-not-three);
-nothing catches a missing `ENVSUBST_VAR_NAMES` entry, which ships the literal `${VAR}` as the
-ping UUID and silently disables the check. The read-only API key is
+**`homelab-update-watch`** is the only check here that watches the *repository* rather than the
+cluster. It is covered in full below: [The update watcher](#the-update-watcher).
+
+Adding a check takes [four edits](apply-workflow.md#adding-a-secret-is-four-edits-not-three).
+A missing `ENVSUBST_VAR_NAMES` entry — which would ship the literal `${VAR}` as the ping UUID —
+is caught by the Makefile's `PLACEHOLDER_SCAN` inside `make apply-homelab`, after the render and
+before kubectl, so nothing is applied and no dead check is created. Two things that scan does not
+do: it does not run in `diff-*`, so a clean diff is not proof the apply will proceed; and it
+cannot see a *well-formed but wrong* UUID, which pings a check that does not exist and is
+therefore dead from birth while looking configured. Only a forced run and a look at the check's
+Events log settles that. The read-only API key is
 `op://Homelab/healthchecks.io/read-only-api-key`; if that path 404s, the item is still spelled
 `healtchecks.io`.
+
+### The update watcher
+
+`update-watch` (namespace `ops`, 06:45Z daily) makes one unauthenticated GitHub call —
+`GET /repos/mnbf9rca/kubernetes_config/issues?state=open&per_page=100` — and drives
+`homelab-update-watch`. It exists because the `health` and `ops` namespaces forbid keel: their
+images are pinned, Renovate proposes the bumps, and until this check existed nothing pointed at
+the waiting pull requests. Detection for `health` came free on day one.
+
+**Red means one of seven things.** Three arrive as a `/fail` ping and name themselves in the body's
+`verdict=` field: `updates-pending` (one or more open Renovate pull requests — the intended
+signal), `dashboard-missing` (Renovate's Dependency Dashboard is gone or closed, so Renovate is
+probably uninstalled), and `renovate-config-error` (Renovate opened a configuration-error issue
+and has stopped proposing pull requests). The other four turn the check red through **silence**
+past the 30-hour window: the job did not run, it ran and hung, its ping UUID is well-formed but
+wrong, or GitHub has been unreachable for a day.
+
+**A silence-triggered alert carries the previous run's body**, because upstream sends the last
+body it received whatever the ping kind. That is why every body ends with `run_epoch=`, an
+integer Unix timestamp: a `run_epoch` a day old means "this body is not about this alert; the
+watcher has gone quiet". Telling the four silence causes apart means opening the check's Events
+log. The check has one bit; red means "go and look".
+
+**It deliberately sends no `/start`, and that must not be "completed" later.** healthchecks.io
+marks a check down when a start signal is not followed by a success inside the grace time, and a
+`/log` ping does not clear `last_start`. So a watcher that sent `/start` and then hit a single
+transient GitHub 503 would send `/start` then `/log` and go **down six hours later** — turning
+every unreadable run into a false alarm and destroying the property the `/log` branch exists for.
+`/start` would have bought only a duration graph for a job already bounded by
+`activeDeadlineSeconds: 300`, and period-plus-grace silence already covers "did not run".
+
+**Indeterminate runs ping `/log` and change nothing.** A rate limit, a 404, a 5xx, a timeout, a
+paginated response and an HTTP 200 carrying a JSON *object* are all "I could not look", never
+"zero pull requests". A `log` ping records an event and cannot postpone, suppress or trigger an
+alert; if the outage persists no success ping arrives either and the check goes red on its own at
+30 hours.
+
+**Why `/fail` here when `ingest-freshness` was refused it.** That refusal rested on tolerance: a
+stale bucket self-heals and was routinely, legitimately stale. Neither half transfers. An
+available update never self-heals — it waits until a human merges and applies — so there is no
+tolerance to trade away, and red on that condition is the whole requirement.
+
+**One alert, then silence.** Notifications come from status *flips*, so a repeated `/fail`
+against an already-down check sends nothing further: one email on the day an update appears, then
+quiet until it is merged and the next run flips the check green. The supported fix is an
+account-level nag (Profile → reports, Hourly or Daily); it is account-wide, so every down check
+nags. **Decision at rollout, recorded here:** _(pending — set to Daily or record the acceptance of
+one-alert-only)_. Manufacturing a re-flip by pinging up-then-down is rejected outright: it writes
+a false "everything is fine" event into the check's own history.
+
+**Quarterly Renovate liveness drill.** The watcher's blind spot is an installed, error-free but
+*idle* Renovate: no pull requests and no error issue reads as green. Once a quarter, confirm
+Renovate is alive — check the Mend Developer Portal job log, or bump a pin backwards and confirm
+a pull request appears within a cycle. If that drill ever fails, the first thing to build is a
+registry canary.
+
+**Closing a Renovate pull request is not a snooze** — `renovate.json` sets
+`recreateWhen: "always"`, so a closed pull request is recreated and the check goes red again.
+Until that has been verified live against a real pull request, treat closing one as forbidden:
+under Renovate's default, closing moves the update to the dashboard's Closed/Ignored list and it
+never comes back, which would turn the check green while the update is silently lost.
 
 ### Ping bodies
 
@@ -453,6 +526,9 @@ Probes fix hung request paths, not silently stopped background work — often th
 | **agent mail (hermes VM)** | Nothing monitors it at all — no probe, no check, no canary. A Purelymail outage, expired credential, DNS drift or send-cap exhaustion surfaces only as tool errors inside agent sessions. Deliberate for now; the planned round-trip canary is in [agent-mail.md](agent-mail.md#monitoring-and-backup-none-deliberately-for-now) |
 | **the homelab gate** | It proves the SSD is mounted and the tree is the right *shape*: right number of PVC directories, right order of magnitude, the listed files present and non-trivial. It says nothing about *content*. Every homelab PVC is copied live, with no quiesce step: a sqlite database mid-write is captured torn, `sonarr.db` at 14 MiB of corruption passes the size floor exactly as 14 MiB of working database does, and a PVC that stopped being written to weeks ago looks identical to one written a minute ago. Only the two influx dumps are age-checked. A retained orphan directory from a recreated PVC can satisfy an expected-set entry the live PVC no longer can — the resolved paths are printed so it is visible, but nothing fails on it. The rest surfaces at restore time |
 | **cloudflare-analytics** | It proves the hours it fetched were fetched. It cannot prove Cloudflare's own numbers are right, and it does not alert on *content* — a hostname that stops receiving traffic entirely, or a spike, produces a perfectly green check. That is Phase 3 (Grafana alert rules), deliberately deferred until a baseline exists |
+
+| **update-watch (Renovate silence)** | Renovate is installed, has opened no error issue, and is simply not proposing anything. No pull requests and no error issue read as green, and the check cannot tell that from a genuinely up-to-date estate. This is the accepted price of counting pull requests instead of polling registries. The cover is the quarterly liveness drill above; `make check-renovate-scope` closes the commonest *partial* variant, a pinned namespace nobody added to `managerFilePatterns` |
+| **update-watch (merged but not applied)** | It watches the **repository**, not the cluster. Merging a Renovate pull request closes it, so the next run reports zero and the check goes green while the cluster still runs the old image. Merge and apply are one runbook operation for that reason; the independent noticer is drift in `make diff-homelab` |
 
 Queued, not configured: a changedetection `overdue_watches` json-query monitor and a karakeep
 queue-depth alert; both need an API credential in the monitor.

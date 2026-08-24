@@ -41,7 +41,7 @@ HOMELAB_CONTEXT ?= cynexia-homelab
 # Phase 0 Makefile targets (check-tools, build-homelab with empty kustomizations)
 # do not strictly require these — require-vars is called from apply/diff only.
 REQUIRED_VARS := B2_ACCOUNT_ID B2_ACCOUNT_KEY RESTIC_PASSWORD RESTIC_REPOSITORY \
-                 RESTIC_HC_UUID HERMES_HC_UUID \
+                 RESTIC_HC_UUID HERMES_HC_UUID OPS_HC_UPDATE_UUID \
                  ROUTE53_ACCESS_KEY_ID ROUTE53_SECRET_ACCESS_KEY \
                  ACME_EMAIL HEALTHCHECK_UUID \
                  HEALTH_HC_APPLE_UUID HEALTH_HC_GARMIN_UUID HEALTH_HC_BACKUP_UUID \
@@ -67,7 +67,7 @@ REQUIRED_VARS := B2_ACCOUNT_ID B2_ACCOUNT_KEY RESTIC_PASSWORD RESTIC_REPOSITORY 
 # every ENVSUBST_VAR_NAMES entry is also in REQUIRED_VARS so we never
 # silently substitute an empty value into a manifest.
 ENVSUBST_VAR_NAMES := B2_ACCOUNT_ID B2_ACCOUNT_KEY RESTIC_PASSWORD RESTIC_REPOSITORY \
-                     RESTIC_HC_UUID HERMES_HC_UUID \
+                     RESTIC_HC_UUID HERMES_HC_UUID OPS_HC_UPDATE_UUID \
                      ROUTE53_ACCESS_KEY_ID ROUTE53_SECRET_ACCESS_KEY \
                      ACME_EMAIL \
                      HEALTHCHECK_UUID \
@@ -102,7 +102,8 @@ help:
 	@echo "  check-script-substitution - assert no configMapGenerator script names an envsubst var"
 	@echo "  check-ping-bodies - assert no healthchecks.io ping body is built from a command's output"
 	@echo "  check-script-lint - shellcheck (-s sh) every script in the RENDER + compile/test the Python"
-	@echo "                    (the four above also run per-cluster in the diff-*/apply-* preflight)"
+	@echo "  check-renovate-scope - assert every pinned, keel-free homelab manifest is watched by Renovate"
+	@echo "                    (the five above also run in the diff-*/apply-* preflight; the first four per-cluster)"
 	@echo ""
 	@echo "VPS cluster targets:"
 	@echo "  check-vps-context - assert kubectl current-context matches VPS_CONTEXT ($(VPS_CONTEXT))"
@@ -274,6 +275,21 @@ check-script-lint-homelab:
 check-script-lint-vps:
 	@scripts/check-script-lint.py vps
 # --------------------------- end check-script-lint -------------------------
+
+# Fifth guard, and the one that keeps the UPDATE path honest rather than the
+# secret path. `homelab-update-watch` counts open Renovate pull requests, so a
+# namespace Renovate does not scan produces no pull request, no count and a
+# permanently green check over an estate that has stopped receiving updates —
+# the watcher's own failure mode, wearing the watcher's colours.
+#
+# It reads renovate.json and the homelab tree: no cluster, no 1Password, no
+# kustomize. Homelab-only by nature (the VPS cluster is keel-managed throughout),
+# so there is no per-cluster split and it is wired into the homelab diff/apply
+# preflight only. Same build-* exclusion as the other four — build-*'s stdout IS
+# the manifest.
+.PHONY: check-renovate-scope
+check-renovate-scope:
+	@scripts/check-renovate-scope.py
 
 .PHONY: require-vars
 require-vars:
@@ -492,6 +508,14 @@ check-context:
 # mode is likewise recoverable: a lint finding is a bug you have not shipped
 # yet, not a secret you have to rotate.
 #
+# check-renovate-scope is on the PUBLIC half of the homelab targets only, and
+# has no per-cluster split: it reads renovate.json plus the homelab tree, and
+# the VPS cluster is keel-managed throughout, so there is nothing there for it
+# to say. Public half only because what it protects is the UPDATE path, not a
+# secret: nothing it catches can leak a value, and the guard exists to stop a
+# pinned namespace going quietly unwatched, which the next diff or apply catches
+# just as well.
+#
 # WHAT IS AND IS NOT PROTECTED IN THE PRINTED DIFF
 #
 # `kubectl diff` output is safe to look at because KUBECTL REDACTS SECRET
@@ -526,7 +550,7 @@ check-context:
 # THAT it changed, never WHAT it changed to. Use
 # `kubectl -n <ns> get secret <name> -o jsonpath=...` to confirm a value landed.
 .PHONY: diff-homelab
-diff-homelab: check-vars-consistency check-context check-script-substitution-homelab check-job-ttl-homelab check-ping-bodies-homelab check-script-lint-homelab
+diff-homelab: check-vars-consistency check-context check-script-substitution-homelab check-job-ttl-homelab check-ping-bodies-homelab check-script-lint-homelab check-renovate-scope
 	@$(OP_RUN) $(MAKE) --no-print-directory _diff-homelab-inner
 
 # The old `|| true` here swallowed EVERYTHING, including a kustomize failure.
@@ -547,7 +571,7 @@ _diff-homelab-inner: check-context check-script-substitution-homelab check-ping-
 	exit 0
 
 .PHONY: apply-homelab
-apply-homelab: check-vars-consistency check-context check-script-substitution-homelab check-job-ttl-homelab check-ping-bodies-homelab check-script-lint-homelab
+apply-homelab: check-vars-consistency check-context check-script-substitution-homelab check-job-ttl-homelab check-ping-bodies-homelab check-script-lint-homelab check-renovate-scope
 	@$(OP_RUN) $(MAKE) --no-print-directory _apply-homelab-inner
 
 # RENDER FULLY, VERIFY, THEN APPLY — never stream straight into kubectl.
