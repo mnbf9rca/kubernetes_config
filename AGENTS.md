@@ -107,6 +107,10 @@ Full mechanics, target-by-target reference and failure modes:
   `op document get`, not `op read`.
 - **Apply targets assert the kubectl context first** (`check-context` /
   `check-vps-context`). Never bypass them.
+- **Deploy, then merge.** A PR branch is applied to the cluster and verified healthy
+  **before** the PR merges: `master` records what has been successfully deployed, never
+  intent. Apply from the branch checkout (the preflight guards still run), confirm the
+  workload is healthy, then the operator merges. Never merge-then-apply.
 - `make apply-homelab` reporting `configured` rather than `unchanged` for Secrets, some
   PVs and cert-manager webhooks is expected and is **not** drift — see the apply-workflow
   doc before investigating.
