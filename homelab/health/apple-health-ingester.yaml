@@ -13,7 +13,7 @@ spec:
     spec:
       containers:
         - name: ingester
-          image: irvinlim/apple-health-ingester:v0.5.0
+          image: irvinlim/apple-health-ingester:v0.5.0@sha256:f0072cade435b7f47bc3dbb8425288ec961cc5cd91a5473d799aabc2bc319bce
           # Config is CLI-flags-only (no env support upstream). Secrets are injected
           # via $(VAR) expansion from env — k8s substitutes them into args.
           env:

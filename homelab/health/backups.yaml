@@ -60,7 +60,7 @@ spec:
               # shell at all. alpine/k8s:1.36.0 matches the cluster's server version
               # (v1.36.0) exactly and was verified in-cluster to have kubectl v1.36.0,
               # sh, wget, curl, awk, xargs, date — everything this script needs.
-              image: alpine/k8s:1.36.0
+              image: alpine/k8s:1.36.2@sha256:44ef4942e171939b9c665a4a84beb80e2dcdb9a24330d4651cfdfd2e9deecc47
               # The script is homelab/health/scripts/influx-backup.sh, mounted at
               # /scripts by the configMapGenerator in this directory's
               # kustomization.yaml. It exec-s two further scripts into the influxdb
@@ -111,7 +111,7 @@ spec:
                 - { name: grafana-data, mountPath: /grafana, readOnly: true }
           initContainers:
             - name: mkdirs
-              image: busybox:1.37
+              image: busybox:1.38@sha256:dc2d74b28e4cf8984fa52af1f39bc7c3d9c73760b41a74d629f5d11b1ab28616
               command: [sh, -c, "mkdir -p /dumps/native /dumps/lp /dumps/grafana"]
               volumeMounts:
                 - { name: dumps, mountPath: /dumps }

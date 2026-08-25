@@ -74,7 +74,7 @@ spec:
             seccompProfile: { type: RuntimeDefault }
           containers:
             - name: ingest
-              image: python:3.13-alpine3.22
+              image: python:3.14-alpine3.22@sha256:6b91e66ab2a880ce9ca5a1b91c70f45963ff71ff68268df056336e1a657d5efd
               command: ["python3", "/app/ingest.py"]
               securityContext:
                 allowPrivilegeEscalation: false
