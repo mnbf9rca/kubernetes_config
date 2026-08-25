@@ -386,8 +386,11 @@ Environment="HERMES_WEBUI_HOST=0.0.0.0"
 Environment="HERMES_WEBUI_PORT=8787"
 Environment="HERMES_WEBUI_SECURE=1"
 Environment="HERMES_WEBUI_ALLOWED_ORIGINS=https://hermes-app.cynexia.com"
-# Match the 24h Cloudflare Access session rather than the 30-day default.
-Environment="HERMES_WEBUI_SESSION_TTL=86400"
+# 30 days (upstream's default), by operator decision 2026-08-25: every request
+# to this hostname must carry the Access service token regardless, so the webui
+# session is the second wall, and a daily password re-prompt on a phone buys
+# nothing. If the service-token gate is ever weakened, shorten this again.
+Environment="HERMES_WEBUI_SESSION_TTL=2592000"
 # Pinned explicitly: the default would CREATE ~/workspace at first start. This
 # path is OUTSIDE ~/.hermes, so agent-authored files here are rebuild territory
 # and are NOT in the nightly backup zip. Deliberate - see docs/operations/homelab.md.
