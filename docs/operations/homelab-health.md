@@ -63,10 +63,11 @@ Public `*.cynexia.com` hostnames on this tunnel:
 
 `hermes.cynexia.com` is the one off-cluster origin on this tunnel: cloudflared
 proxies to the hermes VM on the LAN, not to a cluster Service. The Access app
-(`hermes`) attaches the same reusable policies as karakeep — the two IP/service-token
-bypass policies (split on 2026-08-23; see
-[MCP behind Cloudflare Access](#mcp-behind-cloudflare-access)), a service-token
-allow, and an `email_domain: cynexia.com` allow.
+(`hermes`) attaches two reusable policies: `service-auth-monitoring`, the
+`non_identity` policy holding the `Uptime` service token that lets the
+uptime-kuma monitor through, and `allow_cynexia_com`, which requires
+`email_domain: cynexia.com`. It carried IP bypass policies until August 25,
+2026; see [MCP behind Cloudflare Access](#mcp-behind-cloudflare-access).
 The dashboard runs its own mandatory login behind that (basic auth, forced by its
 non-loopback bind), so Access is defence in depth, not the only gate — but the
 Access gate still **fails open** like mcp's does, and the same post-rebuild rule
@@ -155,20 +156,25 @@ endpoint, which the bypass never touches — so the failure appears only for
 "The server responded, but no OAuth token was obtained — this provider may
 require a manually-registered OAuth client."
 
-The fix, applied 2026-08-23, was to split the shared reusable bypass policy
-("bypass from home or access token or hetzner", id `110997f7`). That policy was
-renamed "bypass from hetzner or service token", keeping the Hetzner VPS IP and
-the service token. A new reusable policy "bypass from home" (holding only the
-home egress IP; find both by name in the Access dashboard) was created and attached to
-the eight other Access apps that used the combined policy (hermes, n8n, n8n
-mcp, Umami analytics, freshrss, karakeep, changedetection, isthetube prod), so
-their effective behavior is unchanged.
+The first fix, applied 2026-08-23, split the shared reusable bypass policy
+("bypass from home or access token or hetzner", id `110997f7`) into a Hetzner
+half and a home half, leaving the other eight apps' behavior unchanged.
 
-The `influxdb-mcp` app itself now carries **no bypass policy at all** — only
-`allow_cynexia_com`. This is deliberate, for two reasons: every vantage,
-including home and the VPS, gets the 401 that bootstraps MCP OAuth, and the
-`health-mcp` uptime-kuma monitor's pinned `["401"]` stays truthful when probing
-from the VPS's Hetzner IP. **Do not re-attach any bypass policy to this app.**
+**Both halves are now gone.** On August 25, 2026 the Access estate was
+simplified: "bypass from home" and "bypass from hetzner or service token" were
+detached from all eight apps and deleted, along with four other reusable
+policies and two service tokens. No application is open to an IP any more.
+Interactive access is `allow_cynexia_com` everywhere; the four monitored VPS
+apps additionally carry `service-auth-monitoring`, a `non_identity` policy
+holding the `Uptime` service token. See
+[uptime-kuma.md](uptime-kuma.md#the-cloudflare-access-trap).
+
+The Access application for `mcp.cynexia.com` is named `health-data-mcp`, and it
+carries **no bypass policy at all** — only `allow_cynexia_com`. This is
+deliberate, for two reasons: every vantage, including home and the VPS, gets the
+401 that bootstraps MCP OAuth, and the `Data MCP` uptime-kuma monitor's pinned
+`["401"]` stays truthful when probing from the VPS's Hetzner IP. **Do not attach
+any bypass policy, or any service-token policy, to this app.**
 
 The origin is authless in HTTP mode and does not validate the
 `Cf-Access-Jwt-Assertion` header Access injects — accepted deliberately: Pomerium
@@ -182,7 +188,7 @@ the authless origin raw to the internet, silently — and a rebuild from this re
 (`make apply-homelab` + `make route-health-dns`) republishes the hostname with no
 guarantee the app still exists. After any rollback, rebuild or account-side
 change, `curl -s -o /dev/null -D - https://mcp.cynexia.com/mcp` must return 401
-before the hostname is trusted; the `health-mcp` uptime-kuma monitor is pinned to
+before the hostname is trusted; the `Data MCP` uptime-kuma monitor is pinned to
 exactly `["401"]` so a naked origin alarms ([uptime-kuma.md](uptime-kuma.md)).
 
 In-cluster exposure is unchanged in kind from the 2026-08 sidecar era: flannel
@@ -710,6 +716,6 @@ split — see [MCP behind Cloudflare Access](#mcp-behind-cloudflare-access)).
   this.
 - Cloudflare Access service-token in front of the tunnel hostnames (the bearer token plus
   the Access app's email policy suffices for now; also the path to true end-to-end
-  `health-mcp` monitoring — see [uptime-kuma.md](uptime-kuma.md)).
+  `Data MCP` monitoring — see [uptime-kuma.md](uptime-kuma.md)).
 - Grafana alert rules (Phase 3, pending data accumulation).
 - PSA hardening from `baseline` to `restricted`.

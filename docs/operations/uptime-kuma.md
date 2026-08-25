@@ -27,11 +27,11 @@ quiesce sidecar backs up `kuma.db` nightly, so a rebuild restores the monitors.
 | Field | Value | Why |
 |---|---|---|
 | Monitor type | HTTP(s) | — |
-| Heartbeat interval | 120s | — |
+| Heartbeat interval | 60s | `blog.cynexia.com` uses 15s; every other monitor uses 60s |
 | Retries | 3 | The default of 0 alerts on a single blip |
 | Heartbeat retry interval | 60s | — |
 | Request timeout | 20s | Separates "slow" from "wedged" |
-| Max redirects | **0** | Defeats the Access trap below |
+| Max redirects | **0** | Defeats the Access trap below. Required on every Access-protected monitor; the monitors on hosts with no Access app keep the default |
 | Accepted status codes | per monitor | — |
 | Certificate expiry, ignore TLS | defaults | TLS terminates at the Cloudflare edge |
 
@@ -45,22 +45,37 @@ An Access-protected hostname answers an unauthenticated request with a 302 to th
 login page. At the default `maxredirects: 10`, the monitor follows it, gets 200 from
 Cloudflare's login app, and reports UP while the tunnel, pod and node are all dead.
 
-Two mitigations are in place: `maxredirects: 0` on every monitor, and Access service-token
-headers on the Access-protected monitors so the request reaches the origin. The token covers
-`analytics`, `rss`, `keep`, `watch` and `n8n`. Paste the headers as JSON in the monitor's
-**Headers** box:
+Two mitigations are in place. Every Access-protected monitor sets `maxredirects: 0`. The four
+monitors whose Access app demands a credential also send service-token headers, so the request
+reaches the origin.
+
+The `Uptime` service token authenticates against the `service-auth-monitoring` Access policy,
+which is attached to exactly four apps: `Umami analytics`, `changedetection`, `hermes` and
+`n8n`. The token was created on August 25, 2026 and expires on **August 24, 2031**. On expiry
+all four monitors fail at once with a 302. Four simultaneous reds therefore mean expired or
+wrong headers, not an outage — check the headers first.
+
+Paste the headers as JSON in the monitor's **Headers** box:
 
 ```json
 {
-  "CF-Access-Client-Id": "<op://VPS/cloudflare/CF-Access-Client-Id>",
-  "CF-Access-Client-Secret": "<op://VPS/cloudflare/CF-Access-Client-Secret>"
+  "CF-Access-Client-Id": "<op://VPS/uptime-kuma/CF-Access-Client-Id>",
+  "CF-Access-Client-Secret": "<op://VPS/uptime-kuma/CF-Access-Client-Secret>"
 }
 ```
 
 Read the values with `op read` as you paste them; never write them into this repo. A wrong or
-missing header produces a 302, which fails the monitor — the correct, loud outcome. An Access
-bypass path is no substitute: the glob `/foo/*` does not match bare `/foo`, so a bypassed
-health path needs both destinations.
+missing header produces a 302, which fails the monitor — the correct, loud outcome.
+
+**The `rss.cynexia.com` and `Karakeep` monitors need no headers.** Path-scoped Access apps
+(`freshrss api`, `karakeep api`) serve those two URLs, and both apps carry the anonymous
+`bypass` policy, so each returns 200 with no credential. Verified August 25, 2026 by
+requesting both without headers. An earlier version of this file claimed one token covered
+`analytics`, `rss`, `keep`, `watch` and `n8n`. That was wrong: an IP bypass policy supplied the
+access, and that policy was deleted on August 25, 2026.
+
+On an app that does demand a credential, a bypass path is no substitute for the token: the
+glob `/foo/*` does not match bare `/foo`, so a bypassed health path needs both destinations.
 
 `mcp.cynexia.com` (homelab) is also Access-protected but deliberately carries no
 service token and no bypass policy — its monitor expects the edge's 401 itself
@@ -72,41 +87,63 @@ Each path mirrors the service's in-pod probe target, so a monitor failing while 
 passes isolates the fault to the tunnel or the edge. `uptime.cynexia.com` is absent on
 purpose: uptime-kuma checking its own hostname reports nothing it can deliver.
 
-VPS cluster, Access-protected — set both headers on each:
+Monitor names below match `kuma.db` as of August 25, 2026. The Access column names the
+application that answers the URL and the policies attached to it, so you can tell a
+credential fault from an outage without opening the dashboard.
 
-| Monitor | URL | Accepted status codes |
-|---|---|---|
-| `vps-analytics` | `https://analytics.cynexia.com/api/heartbeat` | `["200-299"]` |
-| `vps-rss` | `https://rss.cynexia.com/api/` | `["200-299"]` |
-| `vps-keep` | `https://keep.cynexia.com/api/health` | `["200-299"]` |
-| `vps-watch` | `https://watch.cynexia.com/` | `["200-299"]`; add `302` if you enable changedetection's password |
-| `vps-n8n` | `https://n8n.cynexia.com/healthz` | `["200-299"]` |
+VPS cluster, Access-protected:
+
+| Monitor | URL | Access app and policies | Accepted status codes |
+|---|---|---|---|
+| `analytics.cynexia.com` | `https://analytics.cynexia.com/api/heartbeat` | `Umami analytics`: `service-auth-monitoring`, `allow_cynexia_com` | `["200-299"]` |
+| `watch.cynexia.com` | `https://watch.cynexia.com/` | `changedetection`: `service-auth-monitoring`, `allow_cynexia_com` | `["200-299"]`; add `302` if you enable changedetection's password |
+| `n8n.cynexia.com` | `https://n8n.cynexia.com/healthz` | `n8n`: `service-auth-monitoring`, `allow_cynexia_com` | `["200-299"]` |
+| `rss.cynexia.com` | `https://rss.cynexia.com/api/` | `freshrss api`: `bypass` — send no headers | `["200-299"]` |
+| `Karakeep` | `https://keep.cynexia.com/api/health` | `karakeep api`: `bypass` — send no headers | `["200-299"]` |
+
+The first three carry the service-token headers. The last two must not: their apps admit
+anonymous requests, and adding headers there would imply a credential that nothing checks.
 
 Homelab health tunnel:
 
-| Monitor | URL | Accepted status codes |
+| Monitor | URL | Access app and policies | Accepted status codes |
+|---|---|---|---|
+| `Data MCP` | `https://mcp.cynexia.com/mcp` | `health-data-mcp`: `allow_cynexia_com` | exactly `["401"]` — see below |
+| `hae.cynexia.com` | `https://hae.cynexia.com/` | none | `["401"]` |
+| `hermes` | `https://hermes.cynexia.com/api/health` | `hermes`: `service-auth-monitoring`, `allow_cynexia_com` | `["200-299"]` — see below |
+
+Not Access-protected, and unrelated to either cluster's tunnels:
+
+| Monitor | URL | Note |
 |---|---|---|
-| `health-mcp` | `https://mcp.cynexia.com/mcp` | exactly `["401"]` — see below |
-| `health-hae` | `https://hae.cynexia.com/` | `["200-299", "401"]` |
-| `health-hermes` | `https://hermes.cynexia.com/api/health` | `["200-299"]` — see below |
+| `blog.cynexia.com` | `https://blog.cynexia.com` | 15s interval, the only monitor that departs from 60s |
+| `family-foqos.app` | `https://family-foqos.app` | — |
+| `recordwell.app website` | `https://recordwell.app/` | — |
+| `Auth API health` | `https://api.recordwell.app/health/ready` | — |
+| `auth API live` | `https://api.recordwell.app/health/live` | — |
+| `recordwell` | `https://` | **Broken.** The URL is a bare scheme with no host. Fix it or delete the monitor |
 
-`health-hermes` probes the Hermes dashboard on the hermes VM — the tunnel's one
-off-cluster origin. uptime-kuma probes from the VPS's Hetzner IP, which matches
-the reusable Access bypass policy named **"bypass from hetzner or service
-token"** (split out of the former "bypass from home or access token or hetzner"
-policy on 2026-08-23; the home IP now lives in a separate "bypass from home"
-policy). The probe therefore reaches the origin, and a 200 proves edge, tunnel,
-cloudflared and the dashboard process end to end. `/api/health` is on the
-dashboard's unauthenticated allowlist, so the monitor needs no service token or
-Access headers. Do not widen the set: a 302/401 here means the bypass policy
-lost the VPS IP (or the probe egresses from somewhere new) and deserves a look,
-not an accept-code.
+The `hermes` monitor probes the Hermes dashboard on the hermes VM — the tunnel's
+one off-cluster origin. A 200 proves edge, tunnel, cloudflared and the dashboard
+process end to end. `/api/health` is on the dashboard's unauthenticated
+allowlist, so the origin asks for nothing; the credential this monitor needs is
+the one Access asks for.
 
-`health-hae`'s fast 401 is a true end-to-end signal: the hostname has no Access
+**The triage here inverted on August 25, 2026.** The monitor used to reach the
+origin because it probes from the VPS's Hetzner IP, which an Access bypass
+policy admitted, and a 302 or 401 therefore meant that policy had lost the VPS
+IP. That bypass is deleted. The monitor now presents the `Uptime` service-token
+headers and matches the `service-auth-monitoring` policy, so a 302 or 401 means
+the headers are wrong, missing or expired. Check the headers first; the token
+expires on August 24, 2031, and its expiry fails this monitor together with
+`analytics.cynexia.com`, `watch.cynexia.com` and `n8n.cynexia.com`. Do not widen
+the accepted set to swallow the 302.
+
+`hae.cynexia.com`'s fast 401 is a true end-to-end signal: the hostname has no Access
 app, so the 401 comes from the origin pod, proving the tunnel, cloudflared and
 the pod all serve — exactly what was false during the 2026-08-18 Pomerium wedge.
 
-**`health-mcp` is edge-only, by decision.** `mcp.cynexia.com` sits behind
+**`Data MCP` is edge-only, by decision.** `mcp.cynexia.com` sits behind
 Cloudflare Access (Managed OAuth), which answers the unauthenticated probe at
 the edge, before the tunnel — so this monitor no longer proves the tunnel or the
 pod. The accepted set is pinned to exactly `["401"]` on purpose and must never
@@ -136,13 +173,25 @@ Do not "fix" that by accepting `302` — keep the pinned `["401"]` and fix the
 header instead, so the accepted set keeps meaning "Access challenged a
 non-browser client".
 
-Accepted residual: the mcp tunnel route and the influxdb-mcp HTTP handler have
-no external monitor, so a wedged handler surfaces only when a client fails. An
-Access service token plus a Service Auth policy (the standing tech-debt item)
-is the path that would close that gap. It was declined for now because
-`health-hae` already proves tunnel+cloudflared end to end, the pod has
-in-cluster TCP probes, and a service token is a standing secret in uptime-kuma's
-config.
+Accepted residual: the mcp tunnel route and the `influxdb-mcp` HTTP handler have
+no external monitor, so a wedged handler surfaces only when a client fails. A
+service token plus a Service Auth policy would close that gap.
+
+That option stays declined here, but one of its three original reasons no longer
+holds. `hae.cynexia.com` still proves tunnel and cloudflared end to end, and the
+pod still has in-cluster TCP probes. The third reason — that a service token
+means a standing secret in uptime-kuma's config — was overtaken on August 25,
+2026, when the `Uptime` token was introduced for four VPS apps. The estate now
+holds such a secret deliberately: the alternative it replaced granted nine apps
+to every VPS pod and logged nothing, whereas the token opens four apps and logs
+every use, and `uptime.cynexia.com` now sits behind `allow_cynexia_com` so the
+UI that renders the secret is no longer public. Adding the same arrangement to
+`mcp.cynexia.com` is a live option, not a closed one.
+
+**The `Data MCP` monitor still must not get a token**, whatever is decided about
+the tunnel-route gap. Its pinned `["401"]` depends on the edge challenging the
+probe, and a credential that reached the origin would make the pinned status
+unreachable.
 
 Before you add a status code to any set, observe it once:
 
@@ -152,6 +201,28 @@ curl -s -o /dev/null -w '%{http_code}\n' https://hae.cynexia.com/
 
 Widening a set to swallow whatever appears stops the monitor being a monitor.
 
+## Reviewing who used the token
+
+`service-auth-monitoring` is a `non_identity` policy, so unlike a bypass it writes an entry
+for every request it admits. That log is the only inventory of the four apps' machine callers,
+and the only channel that would show a second party presenting the `Uptime` token.
+
+Read it through the Cloudflare API, filtered to the four apps by their `aud` values:
+
+```
+GET /accounts/{account_id}/access/logs/access_requests?limit=1000&since=<ISO8601>
+```
+
+Review it about a week after any change to the token or the policy, and again when
+investigating an unexplained 302. Expect only the four monitors. Anything else is either a
+caller nobody documented or a leaked credential; treat an unfamiliar source as the latter until
+you can name it.
+
+To enable changedetection's password, see the note in the monitor list above. After
+August 25, 2026 the `Uptime` token is the only wall in front of `watch.cynexia.com` —
+changedetection has no origin login of its own, so anyone holding the token reaches the
+application in full. Umami, n8n and hermes each keep their own origin login behind Access.
+
 ## The self-monitor (layer 4)
 
 uptime-kuma shares the VPS tunnel, node and scheduler with most of what it watches, so it
@@ -160,7 +231,7 @@ cannot report its own death. Add one monitor that GETs a healthchecks.io ping UR
 | Field | Value |
 |---|---|
 | Monitor type | **HTTP(s)** |
-| Name | `self → healthchecks.io` |
+| Name | `vps-uptime-kuma-alive` |
 | URL | `https://hc-ping.com/<op://VPS/uptime-kuma/healthcheck-uuid>` |
 | Interval | 300s |
 | Accepted status codes | `["200-299"]` |
