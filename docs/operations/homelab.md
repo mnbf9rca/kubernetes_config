@@ -446,6 +446,20 @@ everything it calls into (`openai`, `httpx`, the agent itself) lives in
 `start.sh`: both of those load `REPO_ROOT/.env` and auto-discover paths, which would make
 what the service runs depend on files systemd cannot see.
 
+**Do not give it a venv of its own.** The cohabitation looks like an accident worth
+tidying up, and it is not. `api/agent_runtime.py` imports `run_agent.AIAgent` into the
+server process, and `api/streaming.py` instantiates that class for every chat turn, so the
+WebUI needs hermes-agent's whole dependency tree rather than the two packages its own
+`requirements.txt` names. Splitting the venvs fails, and it fails silently. Measured on
+2026-08-25: a `/home/hermes/hermes-webui/venv` built from system python 3.13 with
+`requirements.txt` installed returns `None` from `get_ai_agent_class()`, because
+`run_agent` imports `dotenv`, `httpx` and `openai` and that venv holds none of them. The
+unit still reaches `active`. `/health` still returns `status: ok` and `/api/auth/status`
+still reports `password_auth_enabled: true`. Every check in this document passes while the
+iOS app answers every message with `AIAgent not available`. Upstream reaches the same
+conclusion in `bootstrap.py`, where `ensure_python_has_webui_deps` prefers the agent venv
+and creates a local `.venv` only when no agent venv can run both.
+
 #### Update — tracks upstream, not pinned
 
 Run alongside the weekly hermes-agent update. This is a manual runbook; there is no timer
