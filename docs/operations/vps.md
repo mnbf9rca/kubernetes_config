@@ -49,13 +49,28 @@ tunnel UUID. Run it after adding a hostname, and after any full cluster rebuild.
 
 ### Cloudflare Access bypasses
 
-Public ingestion endpoints must be Access-bypassed or they break:
+Public endpoints serve callers that cannot authenticate: strangers' browsers running the
+umami beacon, third-party webhook senders, and WebSub hubs. They must be Access-bypassed or
+they break. Four path-scoped Access apps carry the shared `bypass` policy, covering eight
+globs in total:
 
-- umami `/script.js` and `/api/send/*`
-- n8n `/webhook/*`
+| Access app | Destinations |
+|---|---|
+| `umami scripts` | `analytics.cynexia.com/script.js`, `/api/send`, `/api/send/*` |
+| `n8n webhooks` | `n8n.cynexia.com/webhook/*`, `/webhook-test/*` |
+| `freshrss api` | `rss.cynexia.com/api/*`, `/p/api/*` |
+| `karakeep api` | `keep.cynexia.com/api/*` |
+
+`bypass` is the only Access action that admits an unauthenticated request; an `Allow` policy
+with `Everyone` still serves a login page. FreshRSS and karakeep enforce their own API
+credentials behind these globs. The umami send and n8n webhook endpoints are open by design.
 
 A bypass path glob of `/foo/*` does **not** match the bare path `/foo` — add both the
 exact and the wildcard destination.
+
+These four apps are also why the `rss.cynexia.com` and `Karakeep` uptime-kuma monitors need
+no service-token headers: their URLs resolve to the path-scoped app, not the root one
+([uptime-kuma.md](uptime-kuma.md#monitor-list)).
 
 ### FreshRSS WebSub push
 
