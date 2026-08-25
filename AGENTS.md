@@ -120,6 +120,16 @@ Full mechanics, target-by-target reference and failure modes:
   **before** the PR merges: `master` records what has been successfully deployed, never
   intent. Apply from the branch checkout (the preflight guards still run), confirm the
   workload is healthy, then the operator merges. Never merge-then-apply.
+- **Concurrent deployed-but-unmerged branches are last-apply-wins on shared files.** An
+  apply reconciles the whole rendered tree, so every file the applying branch does not
+  carry is reset to that branch's version — another branch's already-deployed change
+  included, silently, with every job still green. On 2026-08-24 an apply from a branch cut
+  from `master` reverted the deployed restic gate, and that night's backup verified
+  without it. So before **any** apply, the branch must already contain every other
+  deployed-but-unmerged change: rebase onto `origin/master`, **and** check the open pull
+  requests for another that is deployed and touches the same files. `make diff-<cluster>`
+  names every resource the apply would change — read that list first, and treat a resource
+  the branch never touched as a revert until proven otherwise.
 - `make apply-homelab` reporting `configured` rather than `unchanged` for Secrets, some
   PVs and cert-manager webhooks is expected and is **not** drift — see the apply-workflow
   doc before investigating.
