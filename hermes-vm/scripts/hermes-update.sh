@@ -581,10 +581,11 @@ assert_health() {
   # model to execute and turn the health assertion red over a working VM.
   #
   # Same caveat as the --backup comment in phase 1: every claim here is about
-  # hermes-agent, installed at $AGENT_DIR, which this repository cannot check.
-  # Read from the installed source and verified live on 2026-08-26 by this
-  # plan's Task 0 survey. Cited so a rename upstream breaks a citation rather
-  # than quietly turning this paragraph into fiction:
+  # github.com/NousResearch/hermes-agent, and the line numbers are from the
+  # checkout installed at $AGENT_DIR, which this repository cannot check. Read
+  # from that installed tree and verified live on 2026-08-26 by this plan's
+  # Task 0 survey. Cited so a rename upstream breaks a citation rather than
+  # quietly turning this paragraph into fiction:
   #
   #   - the handler passes the flag ............. gateway/platforms/api_server.py:5100-5102
   #   - the flag, and why it defaults off ....... gateway/platforms/api_server.py:1510-1521
@@ -1039,13 +1040,16 @@ main() {
   # (`make hindsight-upgrade`) and Grafana's grafana.db (`make health-upgrade`):
   # where migrations are forward-only, the pre-upgrade dump IS the rollback.
   #
-  # EVERY CLAIM IN THIS COMMENT IS ABOUT SOMEBODY ELSE'S CODEBASE - hermes-agent,
-  # installed at $AGENT_DIR - and this repository cannot check any of it. All of
-  # it was read from the installed source on VM 103 and verified live on
-  # 2026-08-26 by this plan's Task 0 survey, which holds the full transcripts.
-  # Cited so a reader can re-check rather than trust, and so that a rename
-  # upstream shows up as a citation that no longer resolves instead of quietly
-  # becoming fiction:
+  # EVERY CLAIM IN THIS COMMENT IS ABOUT SOMEBODY ELSE'S CODEBASE - the project
+  # is github.com/NousResearch/hermes-agent, and the copy the line numbers below
+  # were read from is the checkout installed at $AGENT_DIR. This repository
+  # cannot check any of it. All of it was read from that installed tree on VM
+  # 103 and verified live on 2026-08-26 by this plan's Task 0 survey, which
+  # holds the full transcripts. Both halves of the citation matter: the project
+  # says which codebase to look in, the installed path and the date say which
+  # copy the numbers came from. Cited so a reader can re-check rather than
+  # trust, and so that a rename upstream shows up as a citation that no longer
+  # resolves instead of quietly becoming fiction:
   #
   #   - the flag exists and takes no value ...... hermes_cli/subcommands/update.py:51-56
   #   - CLI beats config, --no-backup beats it .. hermes_cli/update_cmd.py:3487-3529
