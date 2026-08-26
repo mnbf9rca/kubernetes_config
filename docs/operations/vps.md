@@ -34,15 +34,37 @@ reachable from nowhere else.** The storage node is `ubuntu-16gb-fsn1-2`, which t
 also the only node. Every `local-path` PersistentVolume carries `nodeAffinity` pinning it
 to that hostname, and the StorageClass binds `WaitForFirstConsumer`, so a PVC has no node
 until a pod using it is scheduled and is welded to that node from then on. Verified
-2026-08-26: all eight PVs read `[ubuntu-16gb-fsn1-2]`.
+2026-08-26: every PV then in existence — eight of them — read `[ubuntu-16gb-fsn1-2]`.
 
 That is invisible while the cluster has one node and load-bearing the moment it does not.
-**A pod with a `local-path` PVC needs a `nodeSelector` naming that hostname.** Without one,
-the scheduler is free to place it elsewhere; the PVC is then either unprovisionable or
-already bound somewhere the pod cannot reach, and the pod sits `Pending` until whatever
-deadline it carries. The `keel-fresh` CronJob in the `ops` namespace is written that way
-already — see the comment beside its `nodeSelector`, which is where the reasoning lives in
-full.
+**A pod with a `local-path` PVC needs a `nodeSelector` naming that hostname.** Without one
+the scheduler is free to place it elsewhere, and the two outcomes are a loud one and a
+silent one:
+
+- The PVC is **already bound** to the storage node. The pod cannot reach the volume, so it
+  sits `Pending` until whatever deadline it carries. Loud, and easy to diagnose.
+- The PVC is **still unbound**. This is the bad one. `vps/bootstrap/local-path/kustomization.yaml`
+  patches in a `DEFAULT_PATH_FOR_NON_LISTED_NODES` catch-all, so local-path-provisioner does
+  not refuse an unlisted node — it creates a fresh empty directory there and binds happily.
+  The pod starts, reads and writes an empty volume that is not the Cloud Volume, and nothing
+  errors anywhere.
+
+**A `hostPath` mount of that same directory is subject to the identical rule.** The nightly
+restic CronJob in `vps/backup/restic-cronjob.yaml` mounts
+`/var/mnt/data/local-path-provisioner` by `hostPath` and carries **no `nodeSelector`**, so on
+a multi-node cluster nothing keeps it on the storage node. Two things limit the damage, and
+both are worth knowing before assuming this is the silent case the PVC bullet above
+describes. The mount declares `type: Directory`, so a node where the path does not exist
+fails the pod at mount time rather than serving an empty tree. And the job's expected-set
+verification gate names each snapshot by path, so a `/data` that mounted but was empty fails
+the gate by name. Neither has been tested on a second node — there has never been one — and
+the gate runs **after** `restic backup`, so a wrong-node run would still write a snapshot of
+nothing into the repository before failing, where it counts against the retention policy.
+Pinning that pod is outstanding work, carried with the multi-node expansion; it is named here
+because a storage contract that omitted the case would be worse than no contract.
+
+The `keel-fresh` CronJob in the `ops` namespace is already pinned — see the comment beside
+its `nodeSelector`, which is where the reasoning lives in full.
 
 ### Image updates and keel
 

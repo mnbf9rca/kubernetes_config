@@ -113,8 +113,10 @@ help:
 	@echo "  check-renovate-scope - assert every container is in exactly one update mode (both clusters)"
 	@echo "                    keel for floating tags, Renovate for pinned ones, never both; per container"
 	@echo "  check-renovate-scope-homelab / -vps - the per-cluster halves of that guard"
-	@echo "                    (check-job-ttl through check-renovate-scope — those five — also run in the"
-	@echo "                     diff-*/apply-* preflight, now all five per cluster)"
+	@echo "  check-keel-fresh-parity - assert the two ops/keel-fresh copies have not diverged"
+	@echo "                    (no per-cluster half: it compares the two trees against each other)"
+	@echo "                    (check-job-ttl through check-keel-fresh-parity — those six — also run in"
+	@echo "                     the diff-*/apply-* preflight; the first five per cluster, this one whole)"
 	@echo ""
 	@echo "VPS cluster targets:"
 	@echo "  check-vps-context - assert kubectl current-context matches VPS_CONTEXT ($(VPS_CONTEXT))"
@@ -248,6 +250,34 @@ check-ping-bodies-homelab:
 
 check-ping-bodies-vps:
 	@scripts/check-ping-bodies.py vps
+
+# ---------------------------------------------------------------------------
+# check-keel-fresh-parity — the two ops/keel-fresh copies must stay in step
+# ---------------------------------------------------------------------------
+#
+# homelab/ops and vps/ops hold a deliberate copy-paste pair: the same runner and
+# the same CronJob, twice, because kustomize will not read a generator source
+# outside its own root and because the alternative puts a VPS kubeconfig in a
+# homelab pod. The invariant that arrangement rests on is EDIT THEM TOGETHER,
+# and until this guard existed four source comments saying so were the whole of
+# the enforcement. A fix applied to one cluster and not the other is a
+# dead-man's-switch that has quietly stopped switching on the cluster nobody
+# looked at — the very failure keel-fresh was built to remove.
+#
+# THE ONE GUARD HERE WITH NO PER-CLUSTER HALF, and that is structural rather
+# than an omission: it compares the two trees AGAINST EACH OTHER, so "the VPS
+# half of a homelab-versus-VPS comparison" does not exist. It takes no cluster
+# argument and rejects one. The consequence, stated rather than discovered: a
+# divergence introduced in the VPS copy blocks apply-homelab too. Correct —
+# while the pair is out of step neither copy is trustworthy, and the fix is to
+# finish the edit rather than route around the gate.
+#
+# Reads four files and shells out to no renderer, so it is cheap and sits on
+# BOTH halves of diff-*/apply-*, like check-script-substitution and
+# check-ping-bodies and unlike the three render-based guards.
+.PHONY: check-keel-fresh-parity
+check-keel-fresh-parity:
+	@scripts/check-keel-fresh-parity.py
 
 # ---------------------------------------------------------------------------
 # check-script-lint — shellcheck + Python syntax/tests over the RENDERED stream
@@ -574,6 +604,14 @@ check-context:
 # guard into a preflight it cannot pass, which makes an apply impossible and
 # teaches the next person to route around the gate.
 #
+# check-keel-fresh-parity is on BOTH halves of all four chains, for
+# check-script-substitution's reason rather than check-job-ttl's: it reads four
+# files, runs no renderer, and must hold however the recipe is entered. It is
+# the only guard here with NO per-cluster half — it compares the two trees
+# against each other, so there is no half of it to take. It therefore appears
+# identically on the homelab and VPS chains, and a divergence introduced in
+# either copy blocks both clusters' applies. See the block above its target.
+#
 # WHAT IS AND IS NOT PROTECTED IN THE PRINTED DIFF
 #
 # `kubectl diff` output is safe to look at because KUBECTL REDACTS SECRET
@@ -608,7 +646,7 @@ check-context:
 # THAT it changed, never WHAT it changed to. Use
 # `kubectl -n <ns> get secret <name> -o jsonpath=...` to confirm a value landed.
 .PHONY: diff-homelab
-diff-homelab: check-vars-consistency check-context check-script-substitution-homelab check-job-ttl-homelab check-ping-bodies-homelab check-script-lint-homelab check-renovate-scope-homelab
+diff-homelab: check-vars-consistency check-context check-script-substitution-homelab check-job-ttl-homelab check-ping-bodies-homelab check-script-lint-homelab check-renovate-scope-homelab check-keel-fresh-parity
 	@$(OP_RUN) $(MAKE) --no-print-directory _diff-homelab-inner
 
 # The old `|| true` here swallowed EVERYTHING, including a kustomize failure.
@@ -620,7 +658,7 @@ diff-homelab: check-vars-consistency check-context check-script-substitution-hom
 # >1 = kubectl itself failed. Streaming is preserved — the rendered manifest is
 # never buffered into a shell variable.
 .PHONY: _diff-homelab-inner
-_diff-homelab-inner: check-context check-script-substitution-homelab check-ping-bodies-homelab _assert-vars
+_diff-homelab-inner: check-context check-script-substitution-homelab check-ping-bodies-homelab check-keel-fresh-parity _assert-vars
 	@kustomize build homelab/ | envsubst '$(ENVSUBST_VARS)' | kubectl diff -f -; \
 	st=($${PIPESTATUS[@]}); \
 	if [ $${st[0]} -ne 0 ]; then echo "ERROR: kustomize build failed (exit $${st[0]}) — diff above is incomplete" >&2; exit 1; fi; \
@@ -629,7 +667,7 @@ _diff-homelab-inner: check-context check-script-substitution-homelab check-ping-
 	exit 0
 
 .PHONY: apply-homelab
-apply-homelab: check-vars-consistency check-context check-script-substitution-homelab check-job-ttl-homelab check-ping-bodies-homelab check-script-lint-homelab check-renovate-scope-homelab
+apply-homelab: check-vars-consistency check-context check-script-substitution-homelab check-job-ttl-homelab check-ping-bodies-homelab check-script-lint-homelab check-renovate-scope-homelab check-keel-fresh-parity
 	@$(OP_RUN) $(MAKE) --no-print-directory _apply-homelab-inner
 
 # RENDER FULLY, VERIFY, THEN APPLY — never stream straight into kubectl.
@@ -648,7 +686,7 @@ apply-homelab: check-vars-consistency check-context check-script-substitution-ho
 # crash, a stray `set -x`, or the next person with read access to /tmp. The
 # variable is local to this recipe's shell, never exported.
 .PHONY: _apply-homelab-inner
-_apply-homelab-inner: check-context check-script-substitution-homelab check-ping-bodies-homelab _assert-vars
+_apply-homelab-inner: check-context check-script-substitution-homelab check-ping-bodies-homelab check-keel-fresh-parity _assert-vars
 	@set -o pipefail; \
 	cluster=homelab; allowlist=ENVSUBST_VAR_NAMES; \
 	rendered=$$(kustomize build homelab/ | envsubst '$(ENVSUBST_VARS)') || { \
@@ -1165,12 +1203,12 @@ _build-vps-inner:
 # closed on a wrong context no matter how it is entered. See the GUARD
 # PLACEMENT note above diff-homelab.
 .PHONY: diff-vps
-diff-vps: check-vps-context check-vps-vars-consistency check-script-substitution-vps check-job-ttl-vps check-ping-bodies-vps check-script-lint-vps check-renovate-scope-vps
+diff-vps: check-vps-context check-vps-vars-consistency check-script-substitution-vps check-job-ttl-vps check-ping-bodies-vps check-script-lint-vps check-renovate-scope-vps check-keel-fresh-parity
 	@$(OP_RUN) $(MAKE) --no-print-directory _diff-vps-inner
 
 # See _diff-homelab-inner for why this is a PIPESTATUS check and not `|| true`.
 .PHONY: _diff-vps-inner
-_diff-vps-inner: check-vps-context check-script-substitution-vps check-ping-bodies-vps _assert-vps-vars
+_diff-vps-inner: check-vps-context check-script-substitution-vps check-ping-bodies-vps check-keel-fresh-parity _assert-vps-vars
 	@kustomize build vps/ | envsubst '$(VPS_ENVSUBST_VARS)' | kubectl diff -f -; \
 	st=($${PIPESTATUS[@]}); \
 	if [ $${st[0]} -ne 0 ]; then echo "ERROR: kustomize build failed (exit $${st[0]}) — diff above is incomplete" >&2; exit 1; fi; \
@@ -1179,12 +1217,12 @@ _diff-vps-inner: check-vps-context check-script-substitution-vps check-ping-bodi
 	exit 0
 
 .PHONY: apply-vps
-apply-vps: check-vps-context check-vps-vars-consistency check-script-substitution-vps check-job-ttl-vps check-ping-bodies-vps check-script-lint-vps check-renovate-scope-vps
+apply-vps: check-vps-context check-vps-vars-consistency check-script-substitution-vps check-job-ttl-vps check-ping-bodies-vps check-script-lint-vps check-renovate-scope-vps check-keel-fresh-parity
 	@$(OP_RUN) $(MAKE) --no-print-directory _apply-vps-inner
 
 # Same render-fully-then-apply shape as _apply-homelab-inner; see the note there.
 .PHONY: _apply-vps-inner
-_apply-vps-inner: check-vps-context check-script-substitution-vps check-ping-bodies-vps _assert-vps-vars
+_apply-vps-inner: check-vps-context check-script-substitution-vps check-ping-bodies-vps check-keel-fresh-parity _assert-vps-vars
 	@set -o pipefail; \
 	cluster=vps; allowlist=VPS_ENVSUBST_VAR_NAMES; \
 	rendered=$$(kustomize build vps/ | envsubst '$(VPS_ENVSUBST_VARS)') || { \

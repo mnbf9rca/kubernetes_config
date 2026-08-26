@@ -92,13 +92,16 @@ spec:
           # docs/operations/vps.md.
           #
           # It is a no-op today - the cluster has exactly one node - and it is
-          # written now because the three-node expansion is what makes it matter.
-          # Without it, once there are other nodes `keel-fresh-state` is
-          # unprovisionable on any of them: a run scheduled elsewhere either sits
-          # Pending until activeDeadlineSeconds or fails outright, and
-          # `vps-keel-fresh` goes red for a scheduling accident - during exactly
-          # the rolling Talos and Kubernetes upgrades that expansion exists to
-          # make non-disruptive.
+          # written now because a future multi-node cluster is what makes it
+          # matter. Without it, a run scheduled on another node meets one of two
+          # outcomes, and the quiet one is the reason this is not left to chance.
+          # If `keel-fresh-state` is already bound to the storage node the pod
+          # cannot reach it and sits Pending until activeDeadlineSeconds, so
+          # `vps-keel-fresh` goes red for a scheduling accident. If it is still
+          # unbound, local-path's DEFAULT_PATH_FOR_NON_LISTED_NODES catch-all
+          # provisions a fresh empty directory on the wrong node instead of
+          # refusing, and the run reports `first-run` off a blank state file with
+          # nothing wrong anywhere - a comparison silently reset every day.
           #
           # If this node is ever rebuilt under a different name, the pod goes
           # Pending, the job hits its deadline, and no heartbeat is pushed - so

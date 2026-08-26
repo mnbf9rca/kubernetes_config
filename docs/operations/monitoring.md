@@ -795,9 +795,12 @@ failure rather than going quiet and waiting for the interval.
 the stored state, the resolved endpoint — is in the pod log.
 
 **The image floor is a literal and it does not track reality on its own.** It was set at rollout
-to the steady-state tracked-image count with a container of margin — 4 against the 5 homelab's
-own script records, 7 against the 9 measured on the VPS. Reconciling either number against a list of keel-annotated
-workloads is off by however many distinct sidecar images those workloads carry: the gauge counts
+to the steady-state tracked-image count with margin: 4 against the 5 homelab's own script
+records, one container clear, and 7 against the 9 measured on the VPS, two clear. The margins
+differ because the VPS floor was fixed before its count was measured and left alone once the
+measurement came in higher than expected — a floor with more headroom than the rule asks for is
+not worth moving. Reconciling either number against a list of keel-annotated workloads is off by
+however many distinct sidecar images those workloads carry: the gauge counts
 **images**, and keel tracks every container in an annotated workload, which is why the VPS reads
 9 over 8 Deployments. Adding a keel-managed workload does not raise either floor; removing
 several without taking that estate below its floor does not lower it. Revisit them whenever the
