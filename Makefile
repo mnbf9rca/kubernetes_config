@@ -916,9 +916,9 @@ hindsight-upgrade: check-context
 	  fi; \
 	  echo "###"; \
 	  echo "### The Job is left in place - its TTL collects it, and until then it is"; \
-	  echo "### inspectable. If it FAILED, its exit ping has already fired; if it is"; \
-	  echo "### STILL RUNNING, only the start ping has gone and the check goes red"; \
-	  echo "### on its own when the grace expires."; \
+	  echo "### inspectable. The check goes red either way: on the exit ping, or - if"; \
+	  echo "### the Job is still running, or was killed before it could ping - when"; \
+	  echo "### the grace expires."; \
 	  exit 1; \
 	fi
 
@@ -978,6 +978,10 @@ hindsight-upgrade: check-context
 # exists to catch. Names are a convention nothing enforces; the owner is set by
 # the API server. The residual is a Job someone hand-rolls with a copied pod spec
 # and no owner, which nothing here can see and no documented procedure produces.
+# One corner of that residual is worth naming because the old guard did cover it:
+# an OWNERLESS Job called exactly `influx-backup` leaves the owner field empty, so
+# awk reads the name into $$1 and prints nothing, and the guard passes. Accepted —
+# it needs someone to hand-roll a Job under the CronJob's own name.
 .PHONY: health-upgrade
 health-upgrade: check-context
 	@kubectl -n health get cronjob influx-backup >/dev/null 2>&1 || { \
@@ -1047,11 +1051,11 @@ health-upgrade: check-context
 	  echo ""; \
 	  if [ "$$failed" = "True" ]; then \
 	    echo "### DUMP FAILED - do not upgrade."; \
-	    echo "### WHERE THE REASON IS depends on the step. The prune and Grafana steps"; \
-	    echo "### end the log with a FATAL: line of their own; the two InfluxDB steps"; \
-	    echo "### are bare kubectl exec calls, so a failure there leaves kubectl's or"; \
-	    echo "### influx's own error and no FATAL: line at all. Either way the step"; \
-	    echo "### name rides the health-influx-backup ping body as failed_step=."; \
+	    echo "### The log ends with whatever failed: a FATAL: line from influx-backup.sh"; \
+	    echo "### or from one of the scripts it runs, or else the underlying tool's own"; \
+	    echo "### error. The health-influx-backup ping body names it as failed_step="; \
+	    echo "### whenever the script exited normally - every failure except a kill"; \
+	    echo "### (OOM, eviction, the active deadline), where no exit trap runs."; \
 	  else \
 	    echo "### DUMP STILL RUNNING after 600s - do not upgrade; do not delete the job."; \
 	    echo "### Watch it: kubectl -n health logs -f job/$$job"; \
@@ -1061,9 +1065,9 @@ health-upgrade: check-context
 	  fi; \
 	  echo "###"; \
 	  echo "### The Job is left in place - its TTL collects it, and until then it is"; \
-	  echo "### inspectable. If it FAILED, its exit ping has already fired and the"; \
-	  echo "### check is red; if it is STILL RUNNING, only the start ping has gone"; \
-	  echo "### and the check goes red on its own when the grace expires."; \
+	  echo "### inspectable. The check goes red either way: on the exit ping, or - if"; \
+	  echo "### the Job is still running, or was killed before it could ping - when"; \
+	  echo "### the grace expires."; \
 	  exit 1; \
 	fi
 

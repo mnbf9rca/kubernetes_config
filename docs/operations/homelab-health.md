@@ -469,10 +469,10 @@ Makefile would only create a place for the two to disagree, so the target's verd
 the Job's exit status.
 
 **Those are existence checks, so they say nothing about age.** A stale dump satisfies every
-one of them. Artifact freshness is checked an hour later by a different Job — the restic
-gate's 30-hour window, described in [monitoring.md](monitoring.md) — so a `health-upgrade`
-that passes proves the dump exists and is well-formed, not that anything upstream is still
-producing data.
+one of them. Artifact freshness is checked thirty minutes later by a different Job — this
+CronJob runs at 02:30 and the restic gate at 03:00, with its 30-hour window described in
+[monitoring.md](monitoring.md) — so a `health-upgrade` that passes proves the dump exists
+and is well-formed, not that anything upstream is still producing data.
 
 **Where the numbers actually are.** The script is silent on success: it records each step
 and emits the totals into the healthchecks.io ping body, not to stdout. So the log tail the
@@ -481,12 +481,12 @@ schema-object count — while the native-dump size (`native_kib=`), the line-pro
 and file count (`lp_kib=`, `lp_files=`, one export per bucket) and the three prune counts
 are read off the `health-influx-backup` ping body instead.
 
-**On failure, where the reason lands depends on the step.** The prune steps and the Grafana
-dump each end the log with a `FATAL:` line of their own, as does the guard on the shipped
-scripts. The two InfluxDB steps do not: they are bare `kubectl exec` calls, so a failure
-there leaves kubectl's or influx's own error output and no `FATAL:` line at all. What is
-always present is the ping body's `failed_step=`, which names the step whichever way it
-died.
+**On failure, the log ends with whatever failed.** That is a `FATAL:` line when
+`influx-backup.sh` or one of the scripts it runs recognises the fault and names it, and the
+underlying tool's own error — kubectl's, influx's — when it does not. Do not expect a
+particular shape: read the tail. The ping body carries `failed_step=` whenever the script
+exited normally, which is every failure except a kill — an out-of-memory kill, a node
+eviction or the active deadline leaves no exit trap to run and so no ping at all.
 
 **A Grafana major is not a tag revert.** Grafana migrates `grafana.db` in place on first
 start, so rolling back a failed major means restoring the dump this target took, not
