@@ -18,7 +18,7 @@ procedures live under `docs/` and are referenced from here rather than duplicate
 | `docs/operations/homelab-health.md` | The `health` namespace: ingest pipeline, image-pin rationale, InfluxDB bootstrap, backups/restore, Garmin re-auth, monitoring, probe rationale |
 | `docs/operations/vps.md` | VPS cluster: shape, workloads, Cloudflare tunnel/Access, DB decisions, backups |
 | `docs/operations/monitoring.md` | How failures get noticed: the triage table, probe policy and inventory, CronJob deadlines, the backup verification gates, healthchecks.io checks and ping bodies, and what none of it catches |
-| `docs/operations/uptime-kuma.md` | Layer 3/4 runbook: creating uptime-kuma monitors by hand, per-monitor HTTP settings, the Cloudflare Access trap, the self-monitor |
+| `docs/operations/uptime-kuma.md` | Layer 3/4 runbook: creating uptime-kuma monitors by hand, per-monitor HTTP settings, the Cloudflare Access trap, the push monitors driven from inside the clusters and the bypass they need, the self-monitor |
 | `docs/operations/hindsight.md` | The `hindsight` namespace: the self-hosted memory backend for the Hermes profiles — topology, auth, the canary, upgrade and restore runbooks, the restore drill, key rotation, and the removal path |
 | `docs/operations/agent-mail.md` | Per-agent email for Hermes agents: Purelymail mailboxes on cynexia.io, per-profile mcp-email-server config, provisioning runbook, credential scheme, limits, and the deliberate monitoring/backup gaps |
 

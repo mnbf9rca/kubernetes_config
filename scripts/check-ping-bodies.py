@@ -78,6 +78,7 @@ REQUIRED_TARGETS = (
     "homelab/health/scripts/ingest-freshness.sh",
     "homelab/health/scripts/cloudflare-analytics-ingest.py",
     "homelab/ops/scripts/update-watch.py",
+    "homelab/ops/scripts/keel-fresh.sh",
     "homelab/hindsight/scripts/hindsight-pg-dump.sh",
     "homelab/hindsight/scripts/hindsight-canary.sh",
     "vps/backup/scripts/restic-backup.sh",
@@ -96,8 +97,11 @@ PY_SINKS = ("hc_emit", "hc_summary")
 # `$NAME`, `${NAME}`, and each parameter expansion built on it. The envsubst
 # allowlists are added to this at run time.
 DENY_VARS = (
-    # ping UUIDs - a write credential, and in scope in every one of these scripts
-    "HC_UUID", "HC_APPLE", "HC_GARMIN",
+    # ping UUIDs and push URLs - a write credential, and in scope in every one
+    # of these scripts. PUSH_URL is the uptime-kuma form: the monitor's token is
+    # the last path segment, so emitting the URL emits the token. It is listed
+    # by name because the SUSPICIOUS_NAME shape rule does not match it.
+    "HC_UUID", "HC_APPLE", "HC_GARMIN", "PUSH_URL",
     # captured command output
     "OUT", "BODY", "RESP", "OUTPUT", "STDERR",
     # credentials read from a Secret into a differently-named variable

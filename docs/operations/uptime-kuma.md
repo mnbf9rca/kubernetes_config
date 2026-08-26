@@ -77,6 +77,31 @@ access, and that policy was deleted on August 25, 2026.
 On an app that does demand a credential, a bypass path is no substitute for the token: the
 glob `/foo/*` does not match bare `/foo`, so a bypassed health path needs both destinations.
 
+### The push path is bypassed at the edge
+
+Every push monitor in this estate is driven from inside a cluster, by a job that holds no
+Access credential, so `uptime.cynexia.com` needs a **bypass** policy scoped to the push path
+before the first such monitor can ever report UP. Two destinations, written together:
+`uptime.cynexia.com/api/push/*` and `uptime.cynexia.com/api/push`. The wildcard is the
+load-bearing one — a push URL always carries its token as a path segment, so every real
+request matches it — and the bare form is present only because `/foo/*` does not match bare
+`/foo`, so the pair is written together and neither is "tidied" away later. Nothing else on
+this host is bypassed: `/api/push/<token>` accepts a heartbeat and exposes no dashboard, no
+monitor list and no settings. The authoritative bypass inventory is the Access-bypass table in
+[vps.md](vps.md#cloudflare-access-bypasses); this section is the operational note.
+
+Prove it after any Access change, from a network with no Access session:
+
+```bash
+# A bogus token: the bypass must let the request REACH kuma, which then rejects it.
+curl -s -o /dev/null -w '%{http_code}\n' 'https://uptime.cynexia.com/api/push/notarealtoken'
+curl -s -o /dev/null -w '%{http_code}\n' 'https://uptime.cynexia.com/dashboard'
+```
+
+The first must print a kuma status — anything that is not `302`. The second must print `302`,
+proving the rest of the host is still gated. A `302` on the first means the bypass is missing,
+scoped to the wrong destination, or written as the bare path only.
+
 `mcp.cynexia.com` (homelab) is also Access-protected but deliberately carries no
 service token and no bypass policy — its monitor expects the edge's 401 itself
 (see the monitor list), and `maxredirects: 0` still applies.
@@ -206,6 +231,32 @@ curl -s -o /dev/null -w '%{http_code}\n' https://hae.cynexia.com/
 ```
 
 Widening a set to swallow whatever appears stops the monitor being a monitor.
+
+## Push monitors
+
+A push monitor receives a heartbeat instead of sending a request, which is what lets a job
+inside a cluster drive it without exposing anything. Each token lives in 1Password and reaches
+its manifest through the `op run` + envsubst pipeline; the token is typed `[text]`, because it
+is a tier-2 spam-target identifier and not a secret. Holding one lets a stranger push a
+heartbeat and mask a real failure, and grants nothing else — so it stays out of the public
+repository, needs no rotation, and earns no honesty-box row if it turns up in a transcript or
+a pod log.
+
+There is **no `/start` equivalent** on this API and there must not be a synthetic one: a push
+is a heartbeat carrying a status. The hang bound is the job's own `activeDeadlineSeconds`; the
+silence bound is the interval plus retries below.
+
+Creating one is a hand job in the kuma UI — see the note on monitor creation above; kuma v2
+exposes monitor CRUD over Socket.IO only. Set the type to **Push**, take the token from the
+generated push URL — the last path segment, and nothing else — and store it in 1Password.
+
+The last column records **per-job semantics**, not a uniform contract: each job decides for
+itself what it pushes and when, and they genuinely differ. Read it per row rather than
+assuming up-on-success everywhere.
+
+| Monitor | Token | Interval / retries | Pushed by, and on what |
+|---|---|---|---|
+| `homelab-keel-fresh` | `op://Homelab/keel-fresh/kuma-push-token` | 86400s, 1 retry at 21600s | `keel-fresh` CronJob in `ops`, from an EXIT trap: `up` on exit 0, `down` on any failure. Never silent on a failure it can observe |
 
 ## Reviewing who used the token
 

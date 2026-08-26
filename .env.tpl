@@ -41,6 +41,11 @@ HERMES_HC_UUID=op://Homelab/hermes-backup/healthcheck-uuid
 # Red while an update is waiting; see docs/operations/monitoring.md.
 OPS_HC_UPDATE_UUID=op://Homelab/update-watch/healthcheck-uuid
 
+# uptime-kuma push token for the daily keel dead-man's-switch (ops namespace).
+# The monitor goes DOWN when keel's registry poll counter stops moving; see
+# docs/operations/uptime-kuma.md.
+OPS_KUMA_KEEL_TOKEN=op://Homelab/keel-fresh/kuma-push-token
+
 # Route53 credentials for cert-manager DNS-01 (Task 2.5)
 ROUTE53_ACCESS_KEY_ID=op://Homelab/route53-cert-manager/access-key-id
 ROUTE53_SECRET_ACCESS_KEY=op://Homelab/route53-cert-manager/secret-access-key

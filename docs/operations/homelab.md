@@ -60,7 +60,7 @@ as the caller.
 | `keel` | Auto-updates | keel controller |
 | `backup` | Backup | restic init Job + nightly CronJob (PSA privileged — hostPath) |
 | `health` | Personal health data pipeline | influxdb, apple-health-ingester, garmin-grafana, grafana, influxdb-mcp (behind Cloudflare Access), cloudflared, backup + freshness CronJobs — see [homelab-health.md](homelab-health.md) |
-| `ops` | Cluster-wide operational jobs | `update-watch` CronJob — see below |
+| `ops` | Cluster-wide operational jobs | `update-watch` and `keel-fresh` CronJobs — see below |
 
 Ingress hostnames are `*.cynexia.net` (Route53), Traefik-fronted, LAN/Tailscale only:
 `sonarr`, `radarr`, `sab`, `hydra`, `emby`, `grafana-health`.
@@ -73,11 +73,24 @@ dedicated `cynexia-health` tunnel, separate from the VPS cluster's `cynexia-vps`
 ### The `ops` namespace
 
 `homelab/ops/` holds work that belongs to the estate rather than to any one application. Today
-that is one CronJob, `update-watch`: at 06:45Z daily it makes a single unauthenticated GitHub
-call, counts the open Renovate pull requests on this repo, and drives the `homelab-update-watch`
-healthchecks.io check so a waiting update is visible instead of silent. Full behaviour, every
-cause of red, and the deliberate absence of a `/start` ping:
-[monitoring.md](monitoring.md#the-update-watcher).
+that is two CronJobs, both dead-man's-switches over the update path itself:
+
+- **`update-watch`**, at 06:45Z daily, makes a single unauthenticated GitHub call, counts the
+  open Renovate pull requests on this repo, and drives the `homelab-update-watch`
+  healthchecks.io check so a waiting update is visible instead of silent. Full behaviour, every
+  cause of red, and the deliberate absence of a `/start` ping:
+  [monitoring.md](monitoring.md#the-update-watcher).
+- **`keel-fresh`**, at 07:15Z daily, reads keel's own `/metrics` across the cluster and pushes
+  the `homelab-keel-fresh` uptime-kuma monitor. It is the only thing that would notice keel's
+  registry poll loop had wedged — keel's own probes hit `/healthz`, which stays green while the
+  poll goroutine is dead. Verdict enum, the image floor and why there is no `/start`:
+  [monitoring.md](monitoring.md#the-keel-dead-mans-switch).
+
+The half-hour gap is deliberate: the two update-path checks should not alert in the same minute.
+`keel-fresh` keeps two integers of state on a 32Mi `local-path` PVC, `keel-fresh-state` — the
+previous run's process start time and poll counter — which is the only way to assert a counter
+is *increasing*. It still needs no ServiceAccount and no RBAC; its only peers are a ClusterIP in
+the `keel` namespace and `uptime.cynexia.com`.
 
 Three things about this namespace are deliberate and should survive a refactor:
 
@@ -85,14 +98,23 @@ Three things about this namespace are deliberate and should survive a refactor:
   object alerting about other namespaces would misstate ownership; and `backup` runs at PSA
   privileged for restic's hostPaths, which an outbound-HTTPS poller has no business inheriting.
   `ops` is PSA baseline, the cluster default, and needs no ServiceAccount and no RBAC.
-- **No keel here.** The image is version-pinned and Renovate watches `homelab/ops/**`, so the
-  watcher's own pin is not the estate's one unwatched image. `make check-renovate-scope` fails
-  the build if that scope is ever lost.
-- **Removal is one commit.** Drop `- ops` from `homelab/kustomization.yaml`, `rm -r homelab/ops/`,
-  remove the namespace block, remove `OPS_HC_UPDATE_UUID` from `.env.tpl` and both Makefile
-  lists, remove the `REQUIRED_TARGETS` entry and the eight `PY_VALUE_ALLOWLIST` names from
-  `scripts/check-ping-bodies.py`, then apply, `kubectl delete namespace ops`, retire the check
-  and delete the 1Password item.
+- **No keel here.** Every image is version-pinned and Renovate watches this tree, so neither
+  job's own pin is the estate's one unwatched image. `make check-renovate-scope` fails the
+  build if that scope is ever lost.
+- **Removal is one commit,** but it is a longer list than it was with one job. Drop `- ops` from
+  `homelab/kustomization.yaml`, `rm -r homelab/ops/`, remove the namespace block, remove **both**
+  `OPS_HC_UPDATE_UUID` and `OPS_KUMA_KEEL_TOKEN` from `.env.tpl` and from both Makefile lists,
+  and from `scripts/check-ping-bodies.py` remove **both** `REQUIRED_TARGETS` entries
+  (`update-watch.py` and `keel-fresh.sh`), the eight `PY_VALUE_ALLOWLIST` names, and `PUSH_URL`
+  from `DENY_VARS`. Then apply, `kubectl delete namespace ops` — which takes the
+  `keel-fresh-state` PVC with it — and delete the `keel` **Service** in the `keel` namespace,
+  which exists only to serve `keel-fresh` and is not removed by deleting the `ops` namespace.
+  Finally retire both instruments: the `homelab-update-watch` healthchecks.io check *and* the
+  `homelab-keel-fresh` uptime-kuma push monitor, then delete both 1Password items.
+
+  Removing only `keel-fresh` and keeping `update-watch` is the same list minus the
+  `OPS_HC_UPDATE_UUID`, `update-watch.py` and `PY_VALUE_ALLOWLIST` items, and without deleting
+  the namespace.
 
 ## Storage and NFS
 

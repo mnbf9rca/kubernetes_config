@@ -42,6 +42,7 @@ HOMELAB_CONTEXT ?= cynexia-homelab
 # do not strictly require these — require-vars is called from apply/diff only.
 REQUIRED_VARS := B2_ACCOUNT_ID B2_ACCOUNT_KEY RESTIC_PASSWORD RESTIC_REPOSITORY \
                  RESTIC_HC_UUID HERMES_HC_UUID OPS_HC_UPDATE_UUID \
+                 OPS_KUMA_KEEL_TOKEN \
                  ROUTE53_ACCESS_KEY_ID ROUTE53_SECRET_ACCESS_KEY \
                  ACME_EMAIL HEALTHCHECK_UUID \
                  HEALTH_HC_APPLE_UUID HEALTH_HC_GARMIN_UUID HEALTH_HC_BACKUP_UUID \
@@ -71,6 +72,7 @@ REQUIRED_VARS := B2_ACCOUNT_ID B2_ACCOUNT_KEY RESTIC_PASSWORD RESTIC_REPOSITORY 
 # silently substitute an empty value into a manifest.
 ENVSUBST_VAR_NAMES := B2_ACCOUNT_ID B2_ACCOUNT_KEY RESTIC_PASSWORD RESTIC_REPOSITORY \
                      RESTIC_HC_UUID HERMES_HC_UUID OPS_HC_UPDATE_UUID \
+                     OPS_KUMA_KEEL_TOKEN \
                      ROUTE53_ACCESS_KEY_ID ROUTE53_SECRET_ACCESS_KEY \
                      ACME_EMAIL \
                      HEALTHCHECK_UUID \

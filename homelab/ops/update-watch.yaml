@@ -28,9 +28,11 @@
 # own failure mode (401 forever) looks like a GitHub outage.
 #
 # NO KEEL in this namespace: the image is version-pinned and Renovate watches
-# homelab/ops/** (renovate.json), so this pin is proposed by pull request and
+# this tree (renovate.json), so this pin is proposed by pull request and
 # applied through the normal diff/apply flow — the watcher is not the estate's
-# one unwatched pin.
+# one unwatched pin. Renovate's scope is currently the three pinned namespaces
+# (health, ops, hindsight); later work in this plan widens it to the whole of
+# homelab, which does not change anything stated here.
 #
 # NO PROBES. This is scheduled work, so the instrument is the healthchecks.io
 # dead-man's-switch plus activeDeadlineSeconds, not a probe. And note there is
@@ -76,7 +78,7 @@ spec:
             seccompProfile: { type: RuntimeDefault }
           containers:
             - name: watch
-              # Renovate watches homelab/ops/** (renovate.json); this pin is
+              # Renovate watches this tree (renovate.json); this pin is
               # proposed by PR and applied with the normal diff/apply flow.
               image: python:3.14-alpine3.22@sha256:6b91e66ab2a880ce9ca5a1b91c70f45963ff71ff68268df056336e1a657d5efd
               command: ["python3", "/scripts/update-watch.py"]

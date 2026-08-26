@@ -104,6 +104,7 @@ Defaults, unless a service's entry below says otherwise:
 | garmin-grafana | none | It serves nothing. The `health-garmin-ingest` switch is the correct instrument |
 | cloudflare-analytics | none | Scheduled work. `homelab-cloudflare-analytics` plus `activeDeadlineSeconds: 1200` is the instrument |
 | update-watch | none | Scheduled work. `homelab-update-watch` plus `activeDeadlineSeconds: 300` is the instrument |
+| keel-fresh | none | Scheduled work. The `homelab-keel-fresh` kuma push monitor plus `activeDeadlineSeconds: 300` is the instrument |
 | hindsight api | liveness `/health/live`, readiness and startup `/health` (:8888) | Split on purpose, the same way n8n's is. `/health` is database-gated, so a broken postgres drains traffic; `/health/live` is in-process and never touches the database, so a slow or recovering postgres cannot crashloop the single replica. `/health/live` needs image ≥ 0.9.1 — keep the pin at or above it |
 | hindsight control-plane | readiness `/` (:9999) | No liveness: a wedged admin UI is an inconvenience, not an outage, and restarting a single-replica pod over it buys risk for nothing |
 | postgres (hindsight) | readiness plain `pg_isready`; liveness and startup as `sh -c 'pg_isready -q …; test $? -lt 2'` | Copied verbatim from umami-postgres above, and for the same reasons |
@@ -162,9 +163,9 @@ write a `$VAR` into one.
 | Field | Value | Why |
 |---|---|---|
 | `timeZone: "UTC"` | every job | Otherwise the schedule follows kube-controller-manager's local zone |
-| `startingDeadlineSeconds` | 3600, except 1800 for cloudflare-analytics, 600 for hindsight-canary, 300 for jottacloud, and unset for `ingest-freshness` | A missed window retries for that long, then drops. `update-watch` takes the 3600 default deliberately: a silently skipped run is the failure it exists to prevent |
-| `activeDeadlineSeconds` | restic 14400, influx-backup 3600, hindsight-pg-dump 3600, hermes-pull 1800, cloudflare-analytics 1200, ingest-freshness 300, update-watch 300, hindsight-canary 300, jottacloud 21600 | With `concurrencyPolicy: Forbid`, one hung run silently blocks every later run |
-| `ttlSecondsAfterFinished` | 259200 on both restic jobs, hermes-pull, cloudflare-analytics and update-watch; 172800 on influx-backup and hindsight-pg-dump; 3600 on hindsight-canary, which runs hourly; 86400 on the rest | A Friday failure on the restic jobs survives until Monday |
+| `startingDeadlineSeconds` | 3600 (update-watch and keel-fresh included), except 1800 for cloudflare-analytics, 600 for hindsight-canary, 300 for jottacloud, and unset for `ingest-freshness` | A missed window retries for that long, then drops. `update-watch` takes the 3600 default deliberately: a silently skipped run is the failure it exists to prevent |
+| `activeDeadlineSeconds` | restic 14400, influx-backup 3600, hindsight-pg-dump 3600, hermes-pull 1800, cloudflare-analytics 1200, ingest-freshness 300, update-watch 300, keel-fresh 300, hindsight-canary 300, jottacloud 21600 | With `concurrencyPolicy: Forbid`, one hung run silently blocks every later run |
+| `ttlSecondsAfterFinished` | 259200 on both restic jobs, hermes-pull, cloudflare-analytics, update-watch and keel-fresh; 172800 on influx-backup and hindsight-pg-dump; 3600 on hindsight-canary, which runs hourly; 86400 on the rest | A Friday failure on the restic jobs survives until Monday |
 | `terminationGracePeriodSeconds` | not set on any job | busybox `ash` runs as PID 1 and never forwards SIGTERM to restic, so a grace period only slows teardown. `restic unlock` at the head of the next run recovers the lock |
 
 Two of those are the hindsight jobs. `hindsight-pg-dump` runs at 02:15Z — after `hermes-pull`
@@ -583,6 +584,70 @@ that pings healthchecks.io, so uptime-kuma's own death is visible. Both are UI p
 live in **[uptime-kuma.md](uptime-kuma.md)** — monitor list, per-monitor HTTP settings, the
 Cloudflare Access trap and the self-monitor. One consequence bites from this side: a monitor that
 follows redirects reports UP off the Cloudflare login page while the origin is dead.
+
+Layer 3 is no longer only outbound HTTP checks. It now also holds **push monitors**, driven from
+inside the clusters by scheduled jobs that send a heartbeat rather than answering a request —
+the dead-man's-switch shape that used to mean a healthchecks.io check. The healthchecks.io
+account is capped at 20 checks, so only the checks that genuinely need it stay there and new
+scheduled work takes a push monitor instead. Both the roster and the Cloudflare Access bypass
+that lets an in-cluster job reach the push endpoint are in
+**[uptime-kuma.md](uptime-kuma.md#push-monitors)**.
+
+What that costs, stated plainly: a push carries one short `msg` line rather than a multi-line
+body, and there is no `/start`. The verdict and one or two counters travel with the alert; the
+full diagnostic stays in the pod log until `ttlSecondsAfterFinished` reaps it. So read the pod
+log first and the kuma heartbeat history second.
+
+### The keel dead-man's-switch
+
+keel's own probes hit `/healthz`, which answers from its HTTP server while the registry poll
+goroutine is dead. A wedged poll loop therefore leaves keel Running, Ready and green while every
+floating-tag workload in the estate silently stops receiving updates. The `keel-fresh` CronJob
+reads two numbers from keel's own `/metrics` once a day — never from log text — and pushes the
+`homelab-keel-fresh` uptime-kuma monitor DOWN on either
+([uptime-kuma.md](uptime-kuma.md#push-monitors)).
+
+Both numbers come from one endpoint, and that is worth knowing before debugging it. The job was
+designed to read the image count from keel's `/v1/tracked` REST listing; that endpoint does not
+exist here. keel registers its entire `/v1/*` admin API only when authentication is configured,
+and neither cluster's keel configures any, so every admin path answers 404 — verified against
+0.22.1 on August 26, 2026. The replacement, `poll_trigger_tracked_images`, is a gauge keel sets
+to the tracked-image count on every reconcile, so it is the same number with no credential and
+no second failure mode.
+
+| `verdict=` | Means |
+|---|---|
+| `ok` | The registry poll counter moved since yesterday and keel tracks at least the floor number of images |
+| `polls-stalled` | The counter has not moved in a day, or has never moved at all. The poll loop is dead; restart keel and read its log |
+| `too-few-images` | keel is polling but tracks fewer images than the floor. Its Deployment watch has fallen over, or a workload lost its annotations |
+| `metric-missing` | `/metrics` answered but did not carry all three expected metrics. An upstream rename; re-verify the names and update `keel-fresh.sh` |
+| `metrics-unreachable` | keel did not answer on 9300. It is down, or the `keel` Service lost its selector |
+| `first-run` | No stored state, so nothing to compare. Green, because reaching this verdict already proves all three metrics are present, the counter is non-zero and the image floor is met |
+| `restarted` | keel restarted, so the counter legitimately reset. Green for the same reason |
+
+There is no `tracked-unreachable`: with one endpoint there is no second request that could fail
+on its own, so `metrics-unreachable` covers it.
+
+**There is no `/start` here, and the reason is the API rather than a judgement.** The kuma push
+endpoint takes a status, not a lifecycle; a heartbeat is the whole of it. So the hang bound is
+`activeDeadlineSeconds: 300` on the CronJob and the silence bound is the monitor's interval plus
+its one retry. Every branch in the script is determinate — its only peer is a ClusterIP, so an
+unanswered request *is* the failure it exists to catch — which is why it can push `down` on
+failure rather than going quiet and waiting for the interval.
+
+**The message is short, deliberately.** kuma stores one line per heartbeat, so the alert carries
+`verdict=`, `polls_delta=` and `images=n/floor` and nothing else. The rest — the metric names,
+the stored state, the resolved endpoint — is in the pod log.
+
+**The image floor is a literal and it does not track reality on its own.** It was set at rollout
+to the steady-state tracked-image count minus one. Adding a keel-managed workload does not raise
+it; removing several without lowering the estate below the floor does not lower it. Revisit it
+whenever the keel-managed set changes materially — a floor that has drifted below reality is a
+check that has stopped checking.
+
+**A day-apart comparison needs a day.** Two runs minutes apart legitimately produce
+`polls-stalled`, because keel polls every six hours and the counter genuinely has not moved.
+That is the check working. When forcing runs by hand, expect it.
 
 ## What this does not catch
 
