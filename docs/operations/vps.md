@@ -15,7 +15,7 @@ Kubectl context: `cynexia-vps`. Manifests live in `vps/`.
 | Domain | `*.cynexia.com` (Cloudflare-hosted zone). Homelab's `cynexia.net` is separate and unrelated |
 | Namespaces | `vps` for all workloads (PSA `baseline`), plus `backup` (PSA `privileged`, hostPath) and `keel` |
 | Secrets | 1Password `VPS` vault, referenced via `VPS_*` / workload-specific vars in `.env.tpl` |
-| Image updates | keel runs here (`vps/bootstrap/keel/`) and workloads carry the standard keel annotation set |
+| Image updates | keel runs here (`vps/bootstrap/keel/`) and workloads carry the standard keel annotation set, except keel itself, which is digest-pinned and Renovate-bumped (see below) |
 | Apply | `make apply-vps`, gated by `check-vps-context` |
 
 The Talos user-volume patch (`vps/talos/machineconfig-patches/400-vps-user-volume-data.yaml`)
@@ -26,6 +26,18 @@ alone. Note there is no `make` target for VPS Talos patches — apply them with
 
 Fresh Hetzner Cloud Volumes ship pre-formatted and Talos refuses to provision over them;
 wipe first with `talosctl wipe disk <dev> --method FAST`.
+
+### Image updates and keel
+
+keel is digest-pinned and carries no keel annotations of its own. A self-updating
+controller holding cluster-wide read on Deployments is the one component where an
+unattended upstream tag change is a security event rather than a convenience, so its
+bump arrives as a Renovate pull request and goes in through the update session.
+Its RBAC was trimmed on August 26, 2026 (PR #68): no `secrets` rule, no
+`pods/portforward`. Verify keel's permissions with a SelfSubjectAccessReview issued
+with keel's own ServiceAccount token from inside the cluster — `kubectl auth can-i
+--as=` is meaningless through the Omni proxy, which ignores impersonation and answers
+as the caller.
 
 ## Workloads
 

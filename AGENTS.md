@@ -160,9 +160,15 @@ Full mechanics, target-by-target reference and failure modes:
 ## When Editing
 
 - Keep the one-file-per-service pattern; keep all of a service's resources in that file.
-- Every new Deployment must include the full keel annotation set above — **except** in
-  the `health`, `ops` and `hindsight` namespaces, which explicitly forbid keel: every
-  image there is version/digest-pinned and Renovate proposes bumps instead
+- Every new Deployment must include the full keel annotation set above — **except**
+  in the `health`, `ops`, `hindsight` and `backup` namespaces, which explicitly forbid
+  keel, and **except keel itself**, which is digest-pinned on both clusters so the
+  update engine cannot update itself (`homelab/bootstrap/keel/keel.yaml`,
+  `vps/bootstrap/keel/keel.yaml`). The rule that decides which mode a workload is in:
+  **floating tag means keel; pinned tag means Renovate; never both.**
+  `match-tag: "true"` on a pinned tag only refreshes the digest, so a semver pin
+  carrying keel annotations is frozen while looking covered. Every image in those
+  namespaces is version/digest-pinned and Renovate proposes bumps instead
   (`docs/operations/homelab-health.md`, `docs/operations/homelab.md`,
   `docs/operations/hindsight.md`). `hindsight` is the sharpest case: it runs Alembic
   migrations on startup against the store holding an agent's memory, and those

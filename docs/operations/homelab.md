@@ -28,6 +28,18 @@ manifests, so they are deliberately absent from `namespaces.yaml` (kustomize rej
 duplicates). `keel`'s namespace **is** declared there, because upstream keel moved to
 Helm-only distribution and `homelab/bootstrap/keel/keel.yaml` is hand-written.
 
+### keel
+
+keel is digest-pinned and carries no keel annotations of its own. A self-updating
+controller holding cluster-wide read on Deployments is the one component where an
+unattended upstream tag change is a security event rather than a convenience, so its
+bump arrives as a Renovate pull request and goes in through the update session.
+Its RBAC was trimmed on August 26, 2026 (PR #68): no `secrets` rule, no
+`pods/portforward`. Verify keel's permissions with a SelfSubjectAccessReview issued
+with keel's own ServiceAccount token from inside the cluster — `kubectl auth can-i
+--as=` is meaningless through the Omni proxy, which ignores impersonation and answers
+as the caller.
+
 ## Namespaces and workloads
 
 | Namespace | Purpose | Services |
