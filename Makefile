@@ -309,11 +309,15 @@ check-script-lint-vps:
 # same images, so a repo-wide one would let a watched homelab file vouch for an
 # unwatched VPS container.
 #
-# Per-cluster variants like the other render-based guards, so a VPS-only render
-# fault cannot block an unrelated `apply-homelab`. Both sit on the PUBLIC half
-# of their cluster's diff and apply chains: the guard shells out to a full
-# `kustomize build`, and what it protects is the update path, not a secret —
-# nothing it catches can leak a value.
+# Per-cluster variants like the other two RENDER-BASED guards — check-job-ttl
+# and check-script-lint — so a VPS-only render fault cannot block an unrelated
+# `apply-homelab`. Those three are the whole render-based set; the preflight's
+# other two, check-script-substitution and check-ping-bodies, scan source files
+# and shell out to nothing. Both variants sit on the PUBLIC half of their
+# cluster's diff and apply chains, for the reason this block gives above: the
+# guard shells out to a full `kustomize build`, so duplicating it onto the
+# inner half would double every apply's render cost — and what it protects is
+# the update path, not a secret, so nothing it catches can leak a value.
 #
 # ARMED 2026-08-26, in the commit that widened Renovate to homelab/** and vps/**
 # and de-keeled the two frozen semver pins. Order mattered and still does: the

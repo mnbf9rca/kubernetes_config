@@ -18,7 +18,7 @@
   },
   "description": [
     "SETTING ignorePaths REPLACES THE config:recommended DEFAULTS. config:recommended pulls in :ignoreModulesAndTests, whose ignorePaths cover node_modules, bower_components, vendor, and assorted test/fixture directories. Declaring this key overrides that list wholesale rather than adding to it. No practical effect here - this repo manages no YAML under any of those paths - but a future manager (npm, gomod) added to enabledManagers would scan vendored trees this list no longer excludes. Re-add the defaults if that happens.",
-    "legacy-microk8s/** and no_longer_used/** currently match NOTHING. Both managerFilePatterns are anchored to ^homelab/ and ^vps/, so neither frozen tree is scanned in the first place. They are listed as defence in depth against a future pattern that is not anchored, not as active exclusions. **/secrets/** is the same shape: those files hold only ${VAR} placeholders and name no image."
+    "legacy-microk8s/** and no_longer_used/** currently match NOTHING. Both managerFilePatterns are anchored to ^homelab/ and ^vps/, so neither frozen tree is scanned in the first place. They are listed as defence in depth against a future pattern that is not anchored, not as active exclusions. **/secrets/** is the opposite and is the one genuinely active entry of the three: the homelab pattern does match homelab/secrets/*.yaml, and this excludes it. Harmless either way, since those files hold only ${VAR} placeholders and name no image, but the exclusion is real rather than defensive."
   ],
   "ignorePaths": [
     "**/secrets/**",
@@ -56,6 +56,9 @@
       "matchPackageNames": ["postgres", "pgvector/pgvector"],
       "enabled": false,
       "description": "PostgreSQL major bumps are a dump-and-restore, not a tag edit. BOTH names are listed: `pgvector/pgvector` is hindsight's database and `postgres` is umami's database and hindsight's dump client, and naming only the first is how PR #66 slipped through. Order against the all-majors rule above is NOT load-bearing: Renovate merges matching rules later-wins PER FIELD, and `enabled` and `dependencyDashboardApproval` are different fields, so `enabled: false` applies from either position. Do not reorder these two believing it changes the outcome." },
+    { "matchPackageNames": ["kroniak/ssh-client"],
+      "dependencyDashboardApproval": true,
+      "description": "HOLD ON THE DASHBOARD, DO NOT AUTO-PROPOSE. homelab/backup/hermes-pull.yaml pins this by DIGEST WITH NO TAG, so Renovate resolves it against `latest` and every repoint of that tag becomes a digest-update proposal. A digest update is not a major, so the all-majors dashboard rule above does not catch it, and the 2026-08-26 scope widening to homelab/** is what started these arriving at all. This container handles an SSH private key and a zip full of live secrets, and the image is an unofficial personal Docker Hub repository - the exact case where an unattended bump is a security event rather than a convenience. When approving one, treat it as a NEW IMAGE: re-run the in-cluster probe from the design rollout section (ssh, sha256sum, wget, awk, du, od, head, stat present; the hermes-passwd mount is what makes `ssh -V` work as uid 1999) before applying. The same warning is in the manifest, twenty lines above the image line where a pull request diff will not show it; this rule is how it reaches the reviewer." },
     { "matchPackageNames": ["thisisarpanghosh/garmin-fetch-data"],
       "dependencyDashboardApproval": true,
       "description": "Digest-pinned to a main build; the v0.5.0 release is broken (client.profile crash). Dashboard-only rather than disabled, so an upstream fix surfaces without auto-PRing a regression." }

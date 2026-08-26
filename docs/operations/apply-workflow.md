@@ -203,7 +203,7 @@ Note that 1Password **document** items (e.g. `health-cloudflared`) need
 | `check-script-substitution` | Asserts no `configMapGenerator` script names an envsubst-allowlisted variable, across both cluster trees. `check-script-substitution-homelab` scopes the *scan* to one tree — both allowlists still apply — and runs in the `diff-homelab`/`apply-homelab` preflight |
 | `check-ping-bodies` | Asserts no healthchecks.io ping body is built from a command's output, across both cluster trees. `check-ping-bodies-homelab` scopes the scan to one tree and runs in the `diff-homelab`/`apply-homelab` preflight |
 | `check-script-lint` | Lints every script the clusters run, from the **rendered** stream rather than the source tree, plus the repo's Python. `check-script-lint-homelab` scopes the render to one cluster and runs in the `diff-homelab`/`apply-homelab` preflight. See below |
-| `check-renovate-scope` | Asserts every container is in exactly one update mode — floating means keel, pinned means Renovate, never both — from the `kustomize build` render, one container at a time, across both clusters. `check-renovate-scope-homelab` scopes it to one cluster and runs in the `diff-homelab`/`apply-homelab` preflight, joining it as the fifth render-based guard. See below |
+| `check-renovate-scope` | Asserts every container is in exactly one update mode — floating means keel, pinned means Renovate, never both — from the `kustomize build` render, one container at a time, across both clusters. `check-renovate-scope-homelab` scopes it to one cluster and runs in the `diff-homelab`/`apply-homelab` preflight, joining it as the fifth per-cluster guard and the third render-based one. See below |
 | `require-vars` | Re-enters under `op run` and asserts every `REQUIRED_VARS` entry is set and not still an `op://` reference |
 | `build-homelab` | `kustomize build homelab/ \| envsubst` to stdout under `op run`. **PREVIEW ONLY — secret values are masked.** No cluster contact. Never redirect this to a file and apply it |
 | `diff-homelab` | Same pipeline into `kubectl diff`, inside the `op run` child (real values, printed diff masked) |
@@ -390,9 +390,17 @@ plus the bare `check-renovate-scope` which sweeps both. **Both per-cluster
 targets run in their cluster's `diff-*` and `apply-*` preflight**, on the public
 half, as of the 2026-08-26 commit that widened Renovate to `homelab/**` and
 `vps/**`. Each chain now reads the same way: a context assertion, a
-vars-consistency check, and **five render-based guards** — `check-script-substitution`,
+vars-consistency check, and **five per-cluster guards** — `check-script-substitution`,
 `check-job-ttl`, `check-ping-bodies`, `check-script-lint` and `check-renovate-scope`,
 each running as its own cluster's half.
+
+Three of those five are **render-based**: `check-job-ttl`, `check-script-lint` and
+`check-renovate-scope` each shell out to a full `kustomize build`.
+`check-script-substitution` and `check-ping-bodies` do not — they scan source files under
+the cluster trees. That subset decides wiring, not just vocabulary: the render-based
+three are on the public half of the split only, because duplicating a full build onto the
+inner half would double every apply's render cost. See the `GUARD PLACEMENT` block in the
+`Makefile` before moving any of them.
 
 Arming it needed that widening first, and the order is worth keeping in mind if
 the scope ever narrows again. The guard cannot pass against a `renovate.json`
