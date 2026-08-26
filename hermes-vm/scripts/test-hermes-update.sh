@@ -203,6 +203,37 @@ assert_eq "failed-agent-reset" "$ROLLBACK_STATE" \
 ROLLBACK_STATE=complete
 assert_eq "complete" "$ROLLBACK_STATE" "a rollback with no failed step stays complete"
 
+# ---- the last-good record must read back ------------------------------------
+# `lg_get` returns 1 on an EMPTY value, and rollback reads all three keys in one
+# `&&` chain — so one empty `client_version=` discards the agent and webui SHAs
+# with it and silently drops the rollback to `pre-run` for everything. These two
+# pin the invariant that made write_last_good refuse to produce such a record:
+# an unreadable client version is written as the literal `none`, which reads
+# back cleanly and which rollback understands as "pin nothing".
+LAST_GOOD=$WORK/last-good-empty-client
+cat > "$LAST_GOOD" <<'EOF'
+agent_sha=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+webui_sha=3b9c632a1fa339abcfd457973dcf10810640e760
+client_version=
+stamp=1000000000
+EOF
+set +e
+lg_get client_version >/dev/null 2>&1
+rc=$?
+set -e
+assert_rc 1 "$rc" "lg_get fails on an empty value - why an empty record is never written"
+
+LAST_GOOD=$WORK/last-good-none-client
+cat > "$LAST_GOOD" <<'EOF'
+agent_sha=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+webui_sha=3b9c632a1fa339abcfd457973dcf10810640e760
+client_version=none
+stamp=1000000000
+EOF
+assert_eq "none" "$(lg_get client_version)" "lg_get reads client_version=none back"
+assert_eq "3b9c632a1fa339abcfd457973dcf10810640e760" "$(lg_get webui_sha)" \
+  "a none client version leaves the other keys readable"
+
 if [ "$FAILED" -ne 0 ]; then
   printf '\nFAILED\n'; exit 1
 fi

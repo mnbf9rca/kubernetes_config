@@ -163,21 +163,45 @@ CHAT_URL=http://127.0.0.1:8642/v1/chat/completions
 # mechanism this shell has to keep that promise, so an unbounded network call
 # added later silently removes it.
 #
-# WORST-CASE WALL CLOCK, summing the longest path (update succeeds, health
-# fails, the full rollback runs, health is re-asserted): 7725 seconds, a little
-# over 2 hours 8 minutes. Task 3's service unit must allow more than that -
-# TimeoutStartSec=9000 leaves headroom for the local git operations, which are
-# not bounded because they cannot block on a network. A typical run is minutes;
-# these ceilings exist to make a hang finite, not to describe normal work.
+# WORST-CASE WALL CLOCK, summing the longest path (the update succeeds, health
+# fails, the full rollback runs, health is re-asserted): 9040 seconds, just over
+# 2 hours 30 minutes. Every figure below is LIMIT + grace, because `timeout -k`
+# sends TERM at the limit and KILL that much later again. Task 3's service unit
+# must allow more than the total - TimeoutStartSec=10800 leaves headroom for the
+# local git operations, which are not bounded because they cannot block on a
+# network. A typical run is minutes; these ceilings exist to make a hang finite,
+# not to describe normal work.
 TO_KILL_GRACE=30
+# `hermes update` gets its OWN, far longer grace, and this is the one number
+# here chosen for what the child is DOING rather than how long it should take.
+# Every other bounded child is idempotent: kill a `pip install` or a `git fetch`
+# and the next run repeats it with nothing lost. `hermes update` is not - it
+# rewrites ~/.hermes/config.yaml in place and applies forward-only schema
+# migrations to a 54 MB state.db, so SIGKILL between two migration steps is the
+# single worst interruption point in this system. 300 seconds is a real chance
+# for SIGTERM to unwind or finish a migration before SIGKILL follows, and it is
+# still finite. The overall limit is generous for the same reason.
+#
+# Bounding it at all is deliberate and must stay. Unbounded, a hang would run
+# into the unit's TimeoutStartSec, and systemd kills the whole CGROUP - this
+# script included - so NOTHING would be reported. `timeout` gives a tighter
+# bound and returns 124 to a script that survives to say so.
+TO_HERMES_GRACE=300
+# For read-only children that cannot leave anything half-done: a `systemctl
+# is-active` or a metadata lookup that ignores SIGTERM for five seconds is
+# already pathological, and these run inside a polling loop where a long grace
+# multiplies.
+TO_QUICK_GRACE=5
 TO_CURL=15
 TO_CHAT=120
 TO_GIT_FETCH=300
-TO_HERMES_UPDATE=1200
+TO_HERMES_UPDATE=1800
 TO_PIP=900
 TO_PIP_FREEZE=120
 TO_PY_IMPORT=60
+TO_PY_META=30
 TO_SYSTEMCTL=120
+TO_SYSTEMCTL_CHECK=10
 
 # Readiness is POLLED, not slept through. Five Python services restarting on a
 # loaded VM can take longer than any single number anyone would write here, and
@@ -287,14 +311,36 @@ ping_hc() {
 # the first is how a rollback that died half way through used to report
 # `rollback_source=last-good` and look like it had worked. POST_ROLLBACK is the
 # fourth: whether the restored machine passed the health assertion afterwards.
-VERDICT=update-failed
+#
+# VERDICT starts at `preflight-failed`, not `update-failed`: the traps now go up
+# before the tool check, the run directory and the lock, so there is a real
+# window in which the honest answer is "this run never got as far as updating
+# anything". Phase 1 sets `update-failed` at the point that becomes true.
+VERDICT=preflight-failed
 AGENT_CHANGED=no
 WEBUI_CHANGED=no
 CLIENT_CHANGED=no
 ROLLBACK_SOURCE=none
 ROLLBACK_STATE=none
 POST_ROLLBACK=not-attempted
-UNITS_ACTIVE=0
+# `not-counted`, NOT 0. Every exit before the first assertion used to report
+# `units_active=0`, which reads as "all five units are down" - a false alarm
+# built into the triage surface, on exactly the runs (a preflight or phase-0
+# failure) where nothing is wrong with the units at all. count_active_units
+# overwrites this with a real integer the moment anything counts them.
+UNITS_ACTIVE=not-counted
+# Whether `hermes update` was reached with --backup, so the body names the one
+# thing that makes an interrupted forward-only migration recoverable. Two
+# members: `not-attempted` (the run never got that far, or this was --seed) and
+# `requested`. `requested` and not `taken` on purpose - upstream's backup path
+# warns and continues on its own failures rather than raising, so the strongest
+# claim this script can make without parsing another program's output is that it
+# asked. The pod log - `next=` below - is where a warning would be.
+BACKUP=not-attempted
+# `hermes update`'s own exit status. 124 is this script's `timeout` killing it,
+# which is the case worth spotting: a run killed mid-migration is the one where
+# the operator goes and restores the --backup snapshot by hand.
+UPDATE_RC=0
 CHAT_HTTP=000
 CHAT_MODE=not-attempted
 WEBUI_SHA=unknown
@@ -304,13 +350,21 @@ RUN_EPOCH=0
 
 # ---- phases ----------------------------------------------------------------
 
-# Run $2... under a hard time limit of $1 seconds, SIGKILLing it if it ignores
-# the TERM. See "the time budget" above for why nothing that touches a network
-# may be run any other way.
+# Run $3... under a hard limit of $2 seconds, SIGKILLing it $1 seconds after the
+# SIGTERM if it has not gone. See "the time budget" above for why nothing that
+# touches a network may be run any other way, and why one child gets a much
+# longer grace than the rest.
+run_bounded_grace() {
+  _grace=$1
+  _lim=$2
+  shift 2
+  timeout -k "$_grace" "$_lim" "$@"
+}
+
+# The ordinary case: the standard grace, for a child that can be killed and
+# retried with nothing lost.
 run_bounded() {
-  _lim=$1
-  shift
-  timeout -k "$TO_KILL_GRACE" "$_lim" "$@"
+  run_bounded_grace "$TO_KILL_GRACE" "$@"
 }
 
 # Set UNITS_ACTIVE to the number of the five units that are active. Assigns the
@@ -319,7 +373,8 @@ run_bounded() {
 count_active_units() {
   UNITS_ACTIVE=0
   for _u in $UNITS; do
-    if systemctl --user is-active --quiet "$_u"; then
+    if run_bounded_grace "$TO_QUICK_GRACE" "$TO_SYSTEMCTL_CHECK" \
+      systemctl --user is-active --quiet "$_u"; then
       UNITS_ACTIVE=$(( UNITS_ACTIVE + 1 ))
     fi
   done
@@ -426,8 +481,13 @@ deployed_hindsight_version() {
     | python3 -c 'import json,sys; print(json.load(sys.stdin).get("version",""))'
 }
 
+# Bounded like everything else: this one runs on the ROLLBACK path, and leaving
+# an unbounded child on the path that exists to recover from a hang defeats the
+# point of bounding anything.
 installed_client_version() {
-  "$VENV/python" -c 'import importlib.metadata as m; print(m.version("hindsight-client"))' 2>/dev/null || printf '\n'
+  run_bounded_grace "$TO_QUICK_GRACE" "$TO_PY_META" \
+    "$VENV/python" -c 'import importlib.metadata as m; print(m.version("hindsight-client"))' 2>/dev/null \
+    || printf '\n'
 }
 
 # The value of KEY in the agent's own .env, with surrounding quotes stripped.
@@ -508,9 +568,9 @@ assert_health() {
   esac
 
   # The `model` field below is IGNORED by this server today, so the name is a
-  # label rather than a routing decision: _handle_chat_completions passes
+  # label rather than a routing decision: the handler passes
   # allow_bare_model=self._direct_model_requests, that flag defaults off, and
-  # _request_agent_overrides then drops the value. `kairos` is the value of
+  # the override builder then drops the value. `kairos` is the value of
   # API_SERVER_MODEL_NAME in the agent's own environment file — the virtual
   # model this server ADVERTISES — and NOT the operator's configured inference
   # model, so changing which model the agent thinks with does not move it. It is
@@ -519,6 +579,22 @@ assert_health() {
   # its own virtual model and honours one that differs: this request stays inert
   # under that change, where any other string would suddenly be taken as a real
   # model to execute and turn the health assertion red over a working VM.
+  #
+  # Same caveat as the --backup comment in phase 1: every claim here is about
+  # hermes-agent, installed at $AGENT_DIR, which this repository cannot check.
+  # Read from the installed source and verified live on 2026-08-26 by this
+  # plan's Task 0 survey. Cited so a rename upstream breaks a citation rather
+  # than quietly turning this paragraph into fiction:
+  #
+  #   - the handler passes the flag ............. gateway/platforms/api_server.py:5100-5102
+  #   - the flag, and why it defaults off ....... gateway/platforms/api_server.py:1510-1521
+  #   - where a bare model is dropped ........... gateway/platforms/api_server.py:496-498
+  #     (`if model and model != virtual_model and (provider or allow_bare_model)`)
+  #     — which is also where "equal to the virtual model is nulled, different is
+  #     honoured" comes from
+  #   - API_SERVER_MODEL_NAME feeds that name ... gateway/platforms/api_server.py:1491-1493,
+  #     resolved at :1761-1783 (explicit override, then profile name, then the
+  #     literal "hermes-agent")
   cat > "$CHAT_REQ" <<'JSON'
 {"model":"kairos","messages":[{"role":"user","content":"Reply with the single word: pong"}],"max_tokens":16,"stream":false}
 JSON
@@ -574,10 +650,26 @@ PY
 # leak into the rest of the process. `>` also does not change the mode of a file
 # that already exists, so a last-good left at 0644 by an earlier version stayed
 # 0644 forever - a rename replaces the inode and with it the mode.
+# A record this script cannot read back is worse than no record: `lg_get` returns
+# 1 on an EMPTY value, and rollback reads all three keys in one `&&` chain, so a
+# single empty `client_version=` silently discards the agent and webui SHAs too
+# and drops the rollback to `pre-run` for everything. That is a defect at the
+# point of WRITING, so it is fixed here: the two SHAs are shape-gated and refuse
+# to write if they are not object names, and an unreadable client version is
+# written as the literal `none`, which reads back cleanly and which rollback
+# understands as "pin nothing".
 write_last_good() {
   _a=$(git -C "$AGENT_DIR" rev-parse HEAD) || return 1
   _w=$(git -C "$WEBUI_DIR" rev-parse HEAD) || return 1
+  if ! valid_sha40 "$_a" || ! valid_sha40 "$_w"; then
+    echo "ERROR: refusing to record a last-good whose SHAs are not object names" >&2
+    return 1
+  fi
   _cv=$(installed_client_version)
+  if ! valid_semver "$_cv"; then
+    echo "NOTE: no readable hindsight-client version - recording client_version=none" >&2
+    _cv=none
+  fi
   _st=$(date -u +%s)
   ( umask 077
     printf 'agent_sha=%s\nwebui_sha=%s\nclient_version=%s\nstamp=%s\n' \
@@ -685,11 +777,15 @@ rollback() {
   if ! install_webui_requirements; then
     rb_fail failed-webui-requirements
   fi
-  if [ -n "$RB_CLIENT" ]; then
-    if ! run_bounded "$TO_PIP" "$VENV/pip" install -q "hindsight-client==$RB_CLIENT"; then
-      rb_fail failed-client-pin
-    fi
-  fi
+  # `none` is what write_last_good records when the installed version could not
+  # be read; it means "pin nothing", not "pin a package called none".
+  case "$RB_CLIENT" in
+    ''|none) : ;;
+    *)
+      if ! run_bounded "$TO_PIP" "$VENV/pip" install -q "hindsight-client==$RB_CLIENT"; then
+        rb_fail failed-client-pin
+      fi ;;
+  esac
   if ! restart_units; then
     rb_fail failed-restart
   fi
@@ -740,6 +836,8 @@ on_exit() {
   emit "rc=$_xrc"
   emit "verdict=$VERDICT"
   emit "agent_changed=$AGENT_CHANGED"
+  emit "update_rc=$UPDATE_RC"
+  emit "backup=$BACKUP"
   emit "webui_changed=$WEBUI_CHANGED"
   emit "client_changed=$CLIENT_CHANGED"
   emit "webui_sha=$WEBUI_SHA"
@@ -772,6 +870,19 @@ require_tools() {
   done
 }
 
+# Create the run directory. A separate function because it is now called from
+# INSIDE the reported window: it, and require_tools above it, used to sit above
+# the traps, so either one failing was total silence on the one channel watching
+# this job - the same defect the previous round fixed for the previous-state
+# capture, in the code that round introduced.
+prepare_rundir() {
+  if ! (umask 077; mkdir -p "$RUNDIR"); then
+    echo "ERROR: could not create $RUNDIR" >&2
+    return 1
+  fi
+  chmod 0700 "$RUNDIR"
+}
+
 # ---- the single-instance guard ---------------------------------------------
 # `flock` on a file descriptor, NOT a lock directory and NOT a PID file: the
 # kernel releases it when the process dies, however it dies, so there is no
@@ -792,15 +903,29 @@ require_tools() {
 # working. The operator who typed the second command sees the message and the
 # distinct exit code (75, EX_TEMPFAIL); healthchecks.io hears only from the run
 # that is doing the work.
+# The writability test is SEPARATE from the `exec`, and it is not decoration.
+# In dash - which is /bin/sh on the VM - a redirection failure on `exec` is
+# FATAL: the shell aborts immediately with rc=2 and an `|| { ... }` handler
+# hung off it never runs. The friendly message and the exit code were dead code
+# on the only shell that matters. `true` is a REGULAR builtin, so a redirection
+# failure there is survivable and the handler is reachable; `:` would NOT do,
+# because it is a SPECIAL builtin and dash exits on those too. (`hc_reset`
+# above uses the same idiom for the same reason.)
 take_lock() {
-  exec 9>"$LOCK_FILE" || {
-    echo "ERROR: could not open $LOCK_FILE for the single-instance guard" >&2
+  if ! true 2>/dev/null > "$LOCK_FILE"; then
+    echo "ERROR: could not create $LOCK_FILE for the single-instance guard" >&2
     exit 73
-  }
+  fi
+  exec 9>"$LOCK_FILE"
   if flock -n 9; then
     return 0
   fi
   VERDICT=already-running
+  # The EXIT trap is up by this point, so it is REMOVED here rather than never
+  # registered. The silence is the same deliberate silence as before - see the
+  # comment above - but everything else between the traps and here is now
+  # reported, which is what it is being removed for.
+  trap - EXIT
   echo "ERROR: another hermes-update run holds the lock - doing nothing (verdict: already-running)" >&2
   exit 75
 }
@@ -808,14 +933,12 @@ take_lock() {
 # ---- main ------------------------------------------------------------------
 main() {
   MODE=$(parse_mode "${1:-}")
-  require_tools
-
-  (umask 077; mkdir -p "$RUNDIR")
-  chmod 0700 "$RUNDIR"
-  take_lock
 
   if [ "$MODE" = "seed" ]; then
     trap on_exit_seed EXIT
+    require_tools
+    prepare_rundir
+    take_lock
     echo "==> seed: asserting health without updating anything"
     assert_health
     write_last_good
@@ -824,7 +947,9 @@ main() {
     return 0
   fi
 
-  # Asserted before the traps because without it there is nothing to ping.
+  # Asserted before the traps because without it there is literally nothing to
+  # ping: this is the only failure in the run path that CANNOT be reported, and
+  # it is a configuration error visible the first time anyone runs the unit.
   : "${HERMES_UPDATE_HC_UUID:?set HERMES_UPDATE_HC_UUID (see /home/hermes/.hermes/hermes-update.env)}"
 
   RUN_EPOCH=$(date -u +%s)
@@ -855,6 +980,19 @@ main() {
   trap 'exit 130' INT
   trap 'exit 129' HUP
   trap on_exit EXIT
+
+  # Inside the reported window from here. require_tools and prepare_rundir sit
+  # BELOW the traps deliberately: a missing `flock` or an unwritable run
+  # directory is a real failure an operator has to hear about, and it used to be
+  # silence. The lock is the one thing that still exits quietly, and it removes
+  # the trap itself to do it.
+  #
+  # hc_reset and emit tolerate a missing $RUNDIR - both end in `|| true` - so
+  # even a run that dies in prepare_rundir still pings, with an empty body.
+  require_tools
+  prepare_rundir
+  take_lock
+
   hc_reset
   emit "summary=starting"
   emit "run_epoch=$RUN_EPOCH"
@@ -883,17 +1021,15 @@ main() {
   # check-ping-bodies: untaint CLIENT_VERSION - the hindsight server's own version, gated to X.Y.Z by valid_semver above; a version string is a tier-3 identifier
 
   # ---- 1. the agent ---------------------------------------------------------
+  VERDICT=update-failed
   # --backup, and the reason matters more than the flag. `hermes update`
-  # rewrites ~/.hermes/config.yaml IN PLACE, advances a schema version, and
-  # applies in-place schema changes to the 54 MB state.db - column additions and
-  # table renames among them. Those migrations are FORWARD-ONLY: the migration
-  # module defines no downgrade, rollback or revert function anywhere, and some
-  # steps RESET or REMOVE settings outright. So this script's rollback -
-  # `git reset --hard` plus `pip install -e` - restores the agent's CODE and
-  # CANNOT restore its STATE. Without a snapshot, an update that migrates the
-  # configuration and then fails the assertion leaves older code running against
-  # migrated configuration and a migrated database, while the ping reports a
-  # successful rollback.
+  # rewrites ~/.hermes/config.yaml IN PLACE and applies in-place schema changes
+  # to the 54 MB state.db. Those migrations are FORWARD-ONLY. So this script's
+  # rollback - `git reset --hard` plus `pip install -e` - restores the agent's
+  # CODE and CANNOT restore its STATE. Without a snapshot, an update that
+  # migrates the configuration and then fails the assertion leaves older code
+  # running against migrated configuration and a migrated database, while the
+  # ping reports a successful rollback.
   #
   # The flag therefore guarantees a restorable snapshot exists; it does NOT make
   # the automated rollback complete. Read that literally: recovery of the
@@ -903,17 +1039,74 @@ main() {
   # (`make hindsight-upgrade`) and Grafana's grafana.db (`make health-upgrade`):
   # where migrations are forward-only, the pre-upgrade dump IS the rollback.
   #
-  # The flag is resolved before configuration is read, so it wins over
-  # updates.pre_update_backup for THIS run without modifying it: an operator's
-  # own `hermes update` keeps behaving exactly as they configured it. It cannot
-  # hang or fail the run either - nothing in the backup path prompts, and every
-  # failure branch there warns and continues. Cost is bounded: about 200 MiB a
-  # run, pruned to the five most recent. It also runs the state.db integrity
-  # check that the operator's current setting otherwise skips on every update.
+  # EVERY CLAIM IN THIS COMMENT IS ABOUT SOMEBODY ELSE'S CODEBASE - hermes-agent,
+  # installed at $AGENT_DIR - and this repository cannot check any of it. All of
+  # it was read from the installed source on VM 103 and verified live on
+  # 2026-08-26 by this plan's Task 0 survey, which holds the full transcripts.
+  # Cited so a reader can re-check rather than trust, and so that a rename
+  # upstream shows up as a citation that no longer resolves instead of quietly
+  # becoming fiction:
+  #
+  #   - the flag exists and takes no value ...... hermes_cli/subcommands/update.py:51-56
+  #   - CLI beats config, --no-backup beats it .. hermes_cli/update_cmd.py:3487-3529
+  #     (_resolve_pre_update_backup_mode), so it wins over the operator's own
+  #     `updates.pre_update_backup: false` for THIS run and leaves their manual
+  #     `hermes update` behaving exactly as they configured it
+  #   - it cannot fail or hang the update ....... hermes_cli/update_cmd.py:3546-3547
+  #     ("Never raises - a backup failure should not block the update itself"),
+  #     failure branches warn and continue at :3662-3664; no prompt exists on the
+  #     creation path (the single click.confirm in hermes_cli/backup.py:1086 is
+  #     in the RESTORE path)
+  #   - retention keep=5, pruned after each write  hermes_cli/update_cmd.py:3681-3685
+  #     and hermes_cli/backup.py:2130, floored at 1 at backup.py:2067-2073, so it
+  #     can never delete the snapshot it was just asked to make; ~200 MiB a run,
+  #     measured from the two full backups already on the VM
+  #   - no downgrade path exists ................ hermes_cli/config_migrations.py
+  #     defines zero functions matching def (downgrade|rollback|revert)
+  #
+  # It also runs the state.db integrity check that this VM's current setting
+  # otherwise skips on every update.
   echo "==> hermes update"
-  run_bounded "$TO_HERMES_UPDATE" "$HERMES_BIN" update --backup < /dev/null
-  if [ "$(git -C "$AGENT_DIR" rev-parse HEAD)" != "$PREV_AGENT" ]; then
+  BACKUP=requested
+  UPDATE_RC=0
+  run_bounded_grace "$TO_HERMES_GRACE" "$TO_HERMES_UPDATE" \
+    "$HERMES_BIN" update --backup < /dev/null || UPDATE_RC=$?
+  case "$UPDATE_RC" in ''|*[!0-9]*) UPDATE_RC=1 ;; esac
+  # check-ping-bodies: untaint UPDATE_RC - hermes update's own exit status, gated to digits by the case above; 124 is this script's timeout killing it
+
+  # WHETHER THE TREE MOVED IS MEASURED, NOT ASSUMED, and it is measured before
+  # the status is acted on. `rollback_source=none` means "the failure happened
+  # before anything moved" in the runbook table, so guessing either way puts a
+  # lie in the body: guessing `no` reports a pristine machine that has been
+  # updated, and guessing `yes` sends a rollback at a tree that never moved.
+  _post_agent=$(git -C "$AGENT_DIR" rev-parse HEAD 2>/dev/null) || _post_agent=""
+  if [ -z "$_post_agent" ]; then
+    # An agent checkout that will not answer `rev-parse` after an update is
+    # itself a post-mutation fault. `unknown` routes into the rollback, where
+    # `git reset --hard` either fixes it or fails loudly as failed-agent-reset.
+    AGENT_CHANGED=unknown
+  elif [ "$_post_agent" != "$PREV_AGENT" ]; then
     AGENT_CHANGED=yes
+  fi
+
+  if [ "$UPDATE_RC" -ne 0 ]; then
+    echo "ERROR: hermes update exited $UPDATE_RC" >&2
+    case "$AGENT_CHANGED" in
+      yes|unknown)
+        # Post-mutation, so it routes into the rollback like every other
+        # post-mutation failure. Note what the rollback can and cannot undo: the
+        # code goes back, the migrated config.yaml and state.db do not. If
+        # update_rc is 124 this script killed it mid-flight, and the --backup
+        # snapshot named above is the only route back for that state.
+        echo "==> hermes update failed after the agent tree moved" >&2
+        rollback
+        if ! post_rollback_assert; then
+          echo "==> rolled back, but the result is still unhealthy" >&2
+        fi ;;
+      *)
+        echo "==> hermes update failed before the agent tree moved - nothing to roll back" >&2 ;;
+    esac
+    exit 1
   fi
 
   # ---- 2. passenger one: the webui checkout ---------------------------------
