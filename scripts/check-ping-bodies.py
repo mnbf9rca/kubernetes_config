@@ -82,6 +82,7 @@ REQUIRED_TARGETS = (
     "homelab/hindsight/scripts/hindsight-pg-dump.sh",
     "homelab/hindsight/scripts/hindsight-canary.sh",
     "vps/backup/scripts/restic-backup.sh",
+    "vps/ops/scripts/keel-fresh.sh",
 )
 
 # Shell/YAML sinks. `say_err` and `fatal` are checked too because they FEED

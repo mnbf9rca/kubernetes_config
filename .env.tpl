@@ -133,5 +133,10 @@ KARAKEEP_MEILI_MASTER_KEY=op://VPS/karakeep/meili-master-key
 KARAKEEP_NEXTAUTH_SECRET=op://VPS/karakeep/nextauth-secret
 KARAKEEP_OPENAI_API_KEY=op://VPS/karakeep/openai_secret_key
 
+# uptime-kuma push token for the daily keel dead-man's-switch on the VPS
+# cluster. Its own token and its own vault item: a homelab job must not hold a
+# VPS credential, and a shared monitor could not tell the two clusters apart.
+VPS_OPS_KUMA_KEEL_TOKEN=op://VPS/keel-fresh/kuma-push-token
+
 # karakeep admin API key for scripts/karakeep-tag-*.py (NOT used in any manifest — shell env only)
 KARAKEEP_CLEANUP_API_KEY=op://VPS/karakeep/cleanup_api_key

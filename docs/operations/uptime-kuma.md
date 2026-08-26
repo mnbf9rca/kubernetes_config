@@ -267,6 +267,7 @@ assuming up-on-success everywhere.
 | Monitor | Token | Interval / retries | Pushed by, and on what |
 |---|---|---|---|
 | `homelab-keel-fresh` | `op://Homelab/keel-fresh/kuma-push-token` | 86400s, 1 retry at 21600s | `keel-fresh` CronJob in `ops`, from an EXIT trap: `up` on exit 0, `down` on any failure. Never silent on a failure it can observe |
+| `vps-keel-fresh` | `op://VPS/keel-fresh/kuma-push-token` | 86400s, 1 retry at 21600s | `keel-fresh` CronJob in the VPS `ops` namespace, from an EXIT trap: `up` on exit 0, `down` on any failure. The same contract as the row above, from the cluster this uptime-kuma runs on |
 
 ## Reviewing who used the token
 

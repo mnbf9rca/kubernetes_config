@@ -1,0 +1,169 @@
+---
+# 32Mi of state for the keel-fresh CronJob: two integers, the previous run's
+# process start time and registry-poll counter. Small deliberately - anything
+# that grows here is a bug. local-path, like every other PVC in this estate.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: keel-fresh-state
+  namespace: ops
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 32Mi
+---
+# Daily keel dead-man's-switch.
+#
+# A DELIBERATE COPY of homelab/ops/keel-fresh.yaml. See the note in this
+# directory's scripts/keel-fresh.sh: edit the two together.
+#
+# Reads keel's own /metrics once a day and drives the `vps-keel-fresh`
+# uptime-kuma PUSH monitor: DOWN when the registry poll counter has not moved,
+# DOWN when keel tracks fewer images than the floor, DOWN through silence when
+# this job stops running. keel's own probes cannot see any of that - they hit
+# /healthz, which answers from the HTTP server while the poll goroutine is dead.
+#
+# ONE ENDPOINT, NOT TWO. Both signals come from /metrics: the
+# `registries_scanned_total` counter and the `poll_trigger_tracked_images`
+# gauge. This job was planned to read the image count from keel's `/v1/tracked`
+# REST listing, but that endpoint does not exist here - keel registers its whole
+# `/v1/*` admin API only when authentication is configured, and this deployment
+# configures none, so every admin path answers 404 (verified 2026-08-26 against
+# the running 0.22.1). The gauge is the same number from an endpoint that needs
+# no credential, which is why this job carries none. See the script's header.
+#
+# The script is vps/ops/scripts/keel-fresh.sh, mounted at /scripts by the
+# configMapGenerator in this directory's kustomization.yaml. It is a real file,
+# not an inline YAML string, so it can be linted and diffed line by line. The
+# generated ConfigMap name carries a content hash, so editing the script rolls
+# this CronJob.
+#
+# NO GITHUB, NO KUBERNETES API, NO ServiceAccount. Its only network peers are a
+# ClusterIP in the `keel` namespace and uptime.cynexia.com. Its only state is the
+# PVC above.
+#
+# NO PROBES: this is scheduled work, so the instrument is the dead-man's-switch
+# plus activeDeadlineSeconds.
+#
+# NO /start PING, and not for update-watch's reason. The uptime-kuma push API
+# simply has no such concept: a push is a heartbeat carrying a status. So
+# activeDeadlineSeconds below is the WHOLE of the hang bound, and the monitor's
+# heartbeat interval plus retries is the silence bound. Every branch in the
+# script is determinate - its only peer is an in-cluster Service, so an
+# unanswered request IS the failure it exists to catch - which is why it can push
+# `down` on failure rather than staying silent.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: keel-fresh
+  namespace: ops
+spec:
+  # 07:45Z, half an hour after the homelab copy at 07:15Z, so the two clusters'
+  # keel monitors do not alert in the same minute and their messages are
+  # distinguishable in an inbox. After this cluster's 04:00Z restic window,
+  # before the working day.
+  schedule: "45 7 * * *"
+  timeZone: "UTC"                 # without this the schedule is read in kube-controller-manager's local zone
+  concurrencyPolicy: Forbid
+  # A missed window must be retried: a silently skipped run of a dead-man's
+  # switch is indistinguishable from the failure it watches for.
+  startingDeadlineSeconds: 3600
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      # One retry covers a DNS blip or a keel rollout landing on this minute.
+      backoffLimit: 1
+      # With concurrencyPolicy: Forbid, a hung run blocks every later run. Two
+      # bounded HTTP calls cannot legitimately take five minutes.
+      activeDeadlineSeconds: 300
+      # 3 days, so a Friday failure is still forensically available on Monday.
+      ttlSecondsAfterFinished: 259200
+      template:
+        spec:
+          restartPolicy: Never
+          # PINNED TO THE STORAGE NODE. This cluster's `local-path` storage lives
+          # on ONE machine: every local-path PV here carries nodeAffinity to
+          # ubuntu-16gb-fsn1-2 and the StorageClass is WaitForFirstConsumer, so a
+          # PVC binds to whichever node first schedules a pod for it and is
+          # thereafter reachable from nowhere else. The contract is written up in
+          # docs/operations/vps.md.
+          #
+          # It is a no-op today - the cluster has exactly one node - and it is
+          # written now because the three-node expansion is what makes it matter.
+          # Without it, once there are other nodes `keel-fresh-state` is
+          # unprovisionable on any of them: a run scheduled elsewhere either sits
+          # Pending until activeDeadlineSeconds or fails outright, and
+          # `vps-keel-fresh` goes red for a scheduling accident - during exactly
+          # the rolling Talos and Kubernetes upgrades that expansion exists to
+          # make non-disruptive.
+          #
+          # If this node is ever rebuilt under a different name, the pod goes
+          # Pending, the job hits its deadline, and no heartbeat is pushed - so
+          # the monitor goes DOWN at its interval plus retry. Loud, by design,
+          # though one interval later than a start ping would have been: there is
+          # no start ping on the kuma push API.
+          nodeSelector:
+            kubernetes.io/hostname: ubuntu-16gb-fsn1-2
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65534
+            runAsGroup: 65534
+            # NOT what makes the state PVC writable. A local-path volume is
+            # hostPath-backed, and the kubelet does not apply fsGroup ownership
+            # to hostPath volumes. What actually makes it writable is
+            # local-path-provisioner's own setup script, which creates the
+            # directory `mkdir -m 0777 -p` (verified in both renders). This
+            # field is kept because it is correct for any volume type that IS
+            # fsGroup-managed, and costs nothing here.
+            fsGroup: 65534
+            seccompProfile: { type: RuntimeDefault }
+          containers:
+            - name: keel-fresh
+              # Already proven in this estate: homelab/health/ingest-freshness.yaml
+              # runs a `sh` script with curl, awk, sed and tr on this exact pin.
+              # Renovate watches this tree (renovate.json), so the bump arrives
+              # as a pull request rather than as an unattended tag move.
+              image: curlimages/curl:8.14.1
+              command: ["sh", "/scripts/keel-fresh.sh"]
+              env:
+                # uptime-kuma push monitor `vps-keel-fresh`
+                # (token at op://VPS/keel-fresh/kuma-push-token). Substituted
+                # by envsubst at apply time; never committed.
+                #
+                # RENAMED ON PURPOSE. Only PUSH_URL reaches the script, because a
+                # generated script rides the same envsubst stream as this
+                # manifest and envsubst rewrites the bare `$NAME` form too. The
+                # placeholder belongs HERE, in a manifest, where substitution is
+                # what is meant to happen.
+                #
+                # The whole URL is assembled here rather than in the script, so
+                # the script never names the token variable at all and never has
+                # to build a URL from a value it was handed.
+                - name: PUSH_URL
+                  value: "https://uptime.cynexia.com/api/push/${VPS_OPS_KUMA_KEEL_TOKEN}"
+              volumeMounts:
+                - { name: scripts, mountPath: /scripts, readOnly: true }
+                - { name: state, mountPath: /state }
+                - { name: tmp, mountPath: /tmp }
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                runAsNonRoot: true
+                runAsUser: 65534
+                runAsGroup: 65534
+                privileged: false
+                capabilities: { drop: ["ALL"] }
+                seccompProfile: { type: RuntimeDefault }
+              resources:
+                requests: { cpu: 50m, memory: 32Mi }
+                limits: { memory: 128Mi }
+          volumes:
+            - name: scripts
+              configMap: { name: ops-keel-fresh-scripts }
+            - name: state
+              persistentVolumeClaim: { claimName: keel-fresh-state }
+            - name: tmp
+              emptyDir: { medium: Memory, sizeLimit: 16Mi }

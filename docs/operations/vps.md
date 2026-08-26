@@ -13,7 +13,7 @@ Kubectl context: `cynexia-vps`. Manifests live in `vps/`.
 | Ingress | `cloudflared` tunnel only (named tunnel `cynexia-vps`). No Traefik, no cert-manager, no MetalLB, no NFS CSI |
 | TLS / auth | Terminated at the Cloudflare edge. Cloudflare Access with email-OTP in front of every hostname |
 | Domain | `*.cynexia.com` (Cloudflare-hosted zone). Homelab's `cynexia.net` is separate and unrelated |
-| Namespaces | `vps` for all workloads (PSA `baseline`), plus `backup` (PSA `privileged`, hostPath) and `keel` |
+| Namespaces | `vps` for all workloads (PSA `baseline`), plus `backup` (PSA `privileged`, hostPath), `keel`, and `ops` (PSA `baseline`, one CronJob — see below) |
 | Secrets | 1Password `VPS` vault, referenced via `VPS_*` / workload-specific vars in `.env.tpl` |
 | Image updates | keel runs here (`vps/bootstrap/keel/`) and workloads carry the standard keel annotation set, except keel itself, which is digest-pinned and Renovate-bumped (see below) |
 | Apply | `make apply-vps`, gated by `check-vps-context` |
@@ -26,6 +26,23 @@ alone. Note there is no `make` target for VPS Talos patches — apply them with
 
 Fresh Hetzner Cloud Volumes ship pre-formatted and Talos refuses to provision over them;
 wipe first with `talosctl wipe disk <dev> --method FAST`.
+
+### The local-path storage contract
+
+**This cluster's `local-path` storage lives on one machine, and a PVC bound there is
+reachable from nowhere else.** The storage node is `ubuntu-16gb-fsn1-2`, which today is
+also the only node. Every `local-path` PersistentVolume carries `nodeAffinity` pinning it
+to that hostname, and the StorageClass binds `WaitForFirstConsumer`, so a PVC has no node
+until a pod using it is scheduled and is welded to that node from then on. Verified
+2026-08-26: all eight PVs read `[ubuntu-16gb-fsn1-2]`.
+
+That is invisible while the cluster has one node and load-bearing the moment it does not.
+**A pod with a `local-path` PVC needs a `nodeSelector` naming that hostname.** Without one,
+the scheduler is free to place it elsewhere; the PVC is then either unprovisionable or
+already bound somewhere the pod cannot reach, and the pod sits `Pending` until whatever
+deadline it carries. The `keel-fresh` CronJob in the `ops` namespace is written that way
+already — see the comment beside its `nodeSelector`, which is where the reasoning lives in
+full.
 
 ### Image updates and keel
 
@@ -68,6 +85,28 @@ are deliberately shallow — are in [monitoring.md](monitoring.md#vps-cluster).
 `vps/bootstrap/cloudflared/cloudflared.yaml` (that ConfigMap is the single source of
 truth for hostname → Service routing) and upserts a CNAME per hostname onto the current
 tunnel UUID. Run it after adding a hostname, and after any full cluster rebuild.
+
+### The `ops` namespace
+
+`vps/ops/` is the mirror of `homelab/ops/`, and holds one CronJob: **`keel-fresh`**, at
+07:45Z daily. It makes one request to keel's own `/metrics` — a single ClusterIP endpoint,
+`keel.keel.svc.cluster.local:9300`, reached across the namespace boundary from `ops` — and
+pushes the `vps-keel-fresh` uptime-kuma monitor. It is the only thing that would notice
+this cluster's keel had stopped polling registries; keel's own probes hit `/healthz`, which
+stays green while the poll goroutine is dead. Verdict enum, the image floor and why there is
+no `/start`: [monitoring.md](monitoring.md#the-keel-dead-mans-switch).
+
+It has no hostname and no database, which is why it is not a row in the table above. It
+holds no ServiceAccount and no RBAC; its only peers are that ClusterIP and
+`uptime.cynexia.com`. Its two integers of state live on a 32Mi `local-path` PVC,
+`keel-fresh-state`, so its pod carries a `nodeSelector` for `ubuntu-16gb-fsn1-2` under the
+storage contract above.
+
+It is a deliberate **copy** of the homelab tree rather than a shared one, script file
+included: a homelab pod holding a VPS kubeconfig would be a credential crossing a cluster
+boundary to save one file, and kustomize will not read a generator source outside its own
+root in any case. The two image floors differ because the two estates do. **Edit them
+together.**
 
 ### Cloudflare Access bypasses
 

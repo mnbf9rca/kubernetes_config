@@ -62,7 +62,7 @@ kubernetes_config/
 │   ├── hindsight/            # Hindsight memory backend for the Hermes profiles (no keel; pinned images)
 │   │   └── scripts/          # nightly pg_dump + the 15-minute canary; mounted via configMapGenerator
 │   └── backup/               # restic init Job + nightly CronJob (hostPath /var/mnt/ssd/local-path-provisioner)
-├── vps/                      # Hetzner Talos cluster, same sub-layout (bootstrap/secrets/workloads/backup/talos)
+├── vps/                      # Hetzner Talos cluster, same sub-layout (bootstrap/secrets/workloads/backup/ops/talos)
 ├── scripts/                  # repo-level helpers (karakeep tags, FreshRSS WebSub status, the check-* guards)
 ├── legacy-microk8s/          # frozen reference copies of the old microk8s manifests
 └── no_longer_used/           # retired manifests kept for reference

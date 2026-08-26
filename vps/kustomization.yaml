@@ -13,3 +13,4 @@ resources:
   - secrets
   - backup
   - workloads
+  - ops

@@ -86,6 +86,7 @@ Defaults, unless a service's entry below says otherwise:
 | umami | `/api/heartbeat` (:3000) | Shallow — see [What this does not catch](#what-this-does-not-catch) |
 | uptime-kuma | `/api/entry-page` (:3001) | Unauthenticated JSON that reads sqlite through a 60s cache. Also sets `enableServiceLinks: false` |
 | postgres (umami) | readiness plain `pg_isready`; liveness and startup as `sh -c 'pg_isready -q …; test $? -lt 2'` | Exit 1 means "rejecting connections during recovery". Liveness and startup count that as alive so recovery can finish; readiness does not, so traffic waits. A plain `pg_isready` liveness kills the postmaster mid-recovery and never converges |
+| keel-fresh | none | Scheduled work. The `vps-keel-fresh` kuma push monitor plus `activeDeadlineSeconds: 300` is the instrument |
 | the 5 quiesce sidecars | none | Deliberate — see below |
 
 ### Homelab cluster
@@ -163,9 +164,9 @@ write a `$VAR` into one.
 | Field | Value | Why |
 |---|---|---|
 | `timeZone: "UTC"` | every job | Otherwise the schedule follows kube-controller-manager's local zone |
-| `startingDeadlineSeconds` | 3600 (update-watch and keel-fresh included), except 1800 for cloudflare-analytics, 600 for hindsight-canary, 300 for jottacloud, and unset for `ingest-freshness` | A missed window retries for that long, then drops. `update-watch` takes the 3600 default deliberately: a silently skipped run is the failure it exists to prevent |
-| `activeDeadlineSeconds` | restic 14400, influx-backup 3600, hindsight-pg-dump 3600, hermes-pull 1800, cloudflare-analytics 1200, ingest-freshness 300, update-watch 300, keel-fresh 300, hindsight-canary 300, jottacloud 21600 | With `concurrencyPolicy: Forbid`, one hung run silently blocks every later run |
-| `ttlSecondsAfterFinished` | 259200 on both restic jobs, hermes-pull, cloudflare-analytics, update-watch and keel-fresh; 172800 on influx-backup and hindsight-pg-dump; 3600 on hindsight-canary, which runs hourly; 86400 on the rest | A Friday failure on the restic jobs survives until Monday |
+| `startingDeadlineSeconds` | 3600 (update-watch and both clusters' keel-fresh included), except 1800 for cloudflare-analytics, 600 for hindsight-canary, 300 for jottacloud, and unset for `ingest-freshness` | A missed window retries for that long, then drops. `update-watch` takes the 3600 default deliberately: a silently skipped run is the failure it exists to prevent |
+| `activeDeadlineSeconds` | restic 14400, influx-backup 3600, hindsight-pg-dump 3600, hermes-pull 1800, cloudflare-analytics 1200, ingest-freshness 300, update-watch 300, keel-fresh 300 on both clusters, hindsight-canary 300, jottacloud 21600 | With `concurrencyPolicy: Forbid`, one hung run silently blocks every later run |
+| `ttlSecondsAfterFinished` | 259200 on both restic jobs, hermes-pull, cloudflare-analytics, update-watch and both clusters' keel-fresh; 172800 on influx-backup and hindsight-pg-dump; 3600 on hindsight-canary, which runs hourly; 86400 on the rest | A Friday failure on the restic jobs survives until Monday |
 | `terminationGracePeriodSeconds` | not set on any job | busybox `ash` runs as PID 1 and never forwards SIGTERM to restic, so a grace period only slows teardown. `restic unlock` at the head of the next run recovers the lock |
 
 Two of those are the hindsight jobs. `hindsight-pg-dump` runs at 02:15Z — after `hermes-pull`
@@ -567,9 +568,11 @@ specified a healthchecks.io check for that job, before the check-budget ruling m
 to an uptime-kuma push monitor instead. Nothing in this repository could ever have pinged it: the
 CronJob is handed a kuma push URL and its runner contains no `hc-ping` reference at all, so it sat
 `new` forever, costing a slot and alarming on nothing. 12 plus 6 plus that orphan is 19, and
-`estate-update` made 20. The orphan has been deleted and there is no `vps-keel-fresh` equivalent,
-so the account stands at 19 of 20. New scheduled work takes a push monitor, per the policy in
-[Layers 3 and 4](#layers-3-and-4-uptime-kuma) — that is what keeps this from happening again.
+`estate-update` made 20. The orphan has been deleted and no `vps-keel-fresh` healthchecks.io
+check was ever created — the VPS copy of that job drives a kuma push monitor of the same name,
+which costs no slot here — so the account stands at 19 of 20. New scheduled work takes a push
+monitor, per the policy in [Layers 3 and 4](#layers-3-and-4-uptime-kuma) — that is what keeps
+this from happening again.
 
 **The quarterly liveness drill, narrowed.** `renovate-stale` now covers the *idle-Renovate* case
 this drill was invented for, so what is left of it is the residual: a Renovate that keeps
@@ -711,9 +714,11 @@ A seventh non-repo check existed until 2026-08-26 and is worth remembering as a 
 check before the check-budget ruling moved it to an uptime-kuma push monitor. Nothing here could
 ever ping it — the CronJob receives a kuma push URL and its runner holds no `hc-ping`
 reference — so it sat `new` forever and cost a slot. It has been deleted, and no
-`vps-keel-fresh` equivalent was ever created. **A superseded design can leave a check behind
-that no repository grep will find**, which is what this census is for: reconcile the account
-against the table above whenever a job changes which instrument it drives.
+`vps-keel-fresh` healthchecks.io check was ever created; the monitor of that name is a kuma push
+monitor and belongs to [uptime-kuma.md](uptime-kuma.md#push-monitors), not to this table.
+**A superseded design can leave a check behind that no repository grep will find**, which is what
+this census is for: reconcile the account against the table above whenever a job changes which
+instrument it drives.
 
 ## Layers 3 and 4: uptime-kuma
 
@@ -725,8 +730,8 @@ follows redirects reports UP off the Cloudflare login page while the origin is d
 
 Layer 3 is no longer only outbound HTTP checks. It also holds **push monitors**, driven from
 inside the clusters by jobs that send a heartbeat rather than answering a request — the
-dead-man's-switch shape that used to mean a healthchecks.io check. The first is
-`homelab-keel-fresh`, created August 26, 2026. The healthchecks.io
+dead-man's-switch shape that used to mean a healthchecks.io check. There are two, both
+created August 26, 2026: `homelab-keel-fresh` and `vps-keel-fresh`. The healthchecks.io
 account is capped at 20 checks, so only the checks that genuinely need it stay there and new
 scheduled work takes a push monitor instead. Both the roster and the Cloudflare Access bypass
 that lets an in-cluster job reach the push endpoint are in
@@ -754,6 +759,17 @@ and neither cluster's keel configures any, so every admin path answers 404 — v
 to the tracked-image count on every reconcile, so it is the same number with no credential and
 no second failure mode.
 
+The VPS cluster runs its own copy in its own `ops` namespace, at 07:45Z, with its own script
+file, its own image floor and its own `vps-keel-fresh` push monitor. It is a deliberate copy
+rather than a shared file: a homelab pod holding a VPS kubeconfig would be a credential crossing
+a cluster boundary to save one file, and kustomize will not read a generator source outside its
+own root anyway. **Edit the two together** — a fix applied to one cluster and not the other is a
+check that has quietly stopped checking on the cluster nobody looked at.
+
+`vps-keel-fresh` is pushed from the same cluster uptime-kuma runs on, so a VPS-wide outage takes
+the job and its watcher together. That is layer 4's job, not this monitor's:
+`vps-uptime-kuma-alive` is at healthchecks.io precisely so something outside the VPS notices.
+
 | `verdict=` | Means |
 |---|---|
 | `ok` | The registry poll counter moved since yesterday and keel tracks at least the floor number of images |
@@ -779,10 +795,14 @@ failure rather than going quiet and waiting for the interval.
 the stored state, the resolved endpoint — is in the pod log.
 
 **The image floor is a literal and it does not track reality on its own.** It was set at rollout
-to the steady-state tracked-image count minus one. Adding a keel-managed workload does not raise
-it; removing several without lowering the estate below the floor does not lower it. Revisit it
-whenever the keel-managed set changes materially — a floor that has drifted below reality is a
-check that has stopped checking.
+to the steady-state tracked-image count with a container of margin — 4 against the 5 homelab's
+own script records, 7 against the 9 measured on the VPS. Reconciling either number against a list of keel-annotated
+workloads is off by however many distinct sidecar images those workloads carry: the gauge counts
+**images**, and keel tracks every container in an annotated workload, which is why the VPS reads
+9 over 8 Deployments. Adding a keel-managed workload does not raise either floor; removing
+several without taking that estate below its floor does not lower it. Revisit them whenever the
+keel-managed set changes materially — a floor that has drifted below reality is a check that has
+stopped checking.
 
 **A day-apart comparison needs a day.** Two runs minutes apart legitimately produce
 `polls-stalled`, because keel polls every six hours and the counter genuinely has not moved.

@@ -1,0 +1,37 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# The VPS `ops` tree: the mirror of homelab/ops, holding this cluster's keel
+# dead-man's-switch. See docs/operations/vps.md.
+
+namespace: ops
+
+resources:
+  - keel-fresh.yaml
+
+# The runner lives as a real file under scripts/ and reaches the cluster through
+# a generator, never as an inline YAML string: a real file can be linted and
+# diffed line by line.
+#
+# The generated name gets a content-hash suffix and kustomize rewrites every
+# reference to it, so editing the script rolls the CronJob instead of leaving a
+# stale copy mounted. Do NOT set disableNameSuffixHash here.
+#
+# `namespace: ops` above is what makes the name rewrite work: kustomize only
+# rewrites a name reference when referrer and referent agree on namespace. The
+# generator entry carries it explicitly as well, so the rewrite survives a future
+# edit that drops the top-level setting — omit both and you get a silent double
+# failure, the ConfigMap created in `default` AND the CronJob still pointing at
+# the unsuffixed name.
+#
+# GENERATED SCRIPTS ARE NOT INERT TEXT. They ride the same stream as every
+# manifest, so envsubst rewrites them too — and it substitutes the bare `$NAME`
+# form as well as `${NAME}`. keel-fresh.sh must never mention a name in
+# VPS_ENVSUBST_VAR_NAMES; that is why keel-fresh.yaml assembles the push URL
+# from VPS_OPS_KUMA_KEEL_TOKEN and hands the script only PUSH_URL, and
+# `make check-script-substitution` enforces it.
+configMapGenerator:
+  - name: ops-keel-fresh-scripts
+    namespace: ops
+    files:
+      - keel-fresh.sh=scripts/keel-fresh.sh
