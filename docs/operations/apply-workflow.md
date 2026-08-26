@@ -202,6 +202,7 @@ Note that 1Password **document** items (e.g. `health-cloudflared`) need
 | `check-job-ttl` | Asserts every standalone `kind: Job` sets `ttlSecondsAfterFinished`, across both clusters. `check-job-ttl-homelab` scopes it to one cluster and runs in the `diff-homelab`/`apply-homelab` preflight |
 | `check-script-substitution` | Asserts no `configMapGenerator` script names an envsubst-allowlisted variable, across both cluster trees. `check-script-substitution-homelab` scopes the *scan* to one tree — both allowlists still apply — and runs in the `diff-homelab`/`apply-homelab` preflight |
 | `check-script-lint` | Lints every script the clusters run, from the **rendered** stream rather than the source tree, plus the repo's Python. `check-script-lint-homelab` scopes the render to one cluster and runs in the `diff-homelab`/`apply-homelab` preflight. See below |
+| `check-renovate-scope` | Asserts every container is in exactly one update mode — floating means keel, pinned means Renovate, never both — from the `kustomize build` render, one container at a time, across both clusters. `check-renovate-scope-homelab` scopes it to one cluster. **Not yet on any preflight chain: the Renovate scope-widening commit arms it.** See below |
 | `require-vars` | Re-enters under `op run` and asserts every `REQUIRED_VARS` entry is set and not still an `op://` reference |
 | `build-homelab` | `kustomize build homelab/ \| envsubst` to stdout under `op run`. **PREVIEW ONLY — secret values are masked.** No cluster contact. Never redirect this to a file and apply it |
 | `diff-homelab` | Same pipeline into `kubectl diff`, inside the `op run` child (real values, printed diff masked) |
@@ -218,6 +219,7 @@ Note that 1Password **document** items (e.g. `health-cloudflared`) need
 | `check-vps-context` | Asserts `kubectl current-context == cynexia-vps` (override with `VPS_CONTEXT=`) |
 | `check-vps-vars-consistency` / `require-vps-vars` | VPS equivalents of the homelab preflights |
 | `check-job-ttl-vps` / `check-script-substitution-vps` / `check-script-lint-vps` | The per-cluster halves of the repo-wide checks, run in the `diff-vps`/`apply-vps` preflight. Scoping them per cluster is the point: a VPS-only fault must not block `apply-homelab`, and vice versa |
+| `check-renovate-scope-vps` | The VPS half of the update-mode guard, scoped to the `vps/` render. It has its own row rather than sharing the one above because it is not wired the way those three are. **Not yet on any preflight chain: the Renovate scope-widening commit arms it.** See below |
 | `build-vps` / `diff-vps` / `apply-vps` | Same pipeline and the same masking split over `vps/` with `VPS_ENVSUBST_VARS` |
 | `route-vps-dns` | `cloudflared tunnel route dns cynexia-vps <host>` for every hostname in `vps/bootstrap/cloudflared/cloudflared.yaml` |
 | `create-cloudflared-secret` | Imperative Secret creation for the VPS tunnel creds from `op://VPS/cloudflared/credentials-json` |
@@ -296,6 +298,77 @@ workstation, so Python is syntax-checked and tested but **not** linted.
 The Python phase is repo-wide whichever cluster is named: it needs no render
 and no cluster, so scoping it per-cluster would only leave the repo's own
 tooling scripts unguarded.
+
+### `check-renovate-scope`: one container, one update mode
+
+Two mechanisms update this estate and each is silent when it stops. keel bumps
+floating tags on a timer; Renovate proposes bumps for pinned ones. The rule is
+**floating tag means keel, pinned tag means Renovate, never both** — and every
+way of getting a container's mode wrong fails quietly. A pinned tag carrying
+keel annotations is frozen while looking covered, because `keel.sh/match-tag`
+on a pin only refreshes the digest. An incomplete keel annotation set is worse
+than none, because without `match-tag` keel silently downgrades a semver tag to
+`:latest`. A pinned tag with no keel annotations and outside Renovate's scope
+receives nothing at all, while `homelab-update-watch` counts zero open pull
+requests and stays green over it.
+
+The version this replaced could see none of that. It asked whether a *file*
+mentioned `keel.sh/policy` anywhere and whether a *file* pinned any image, so a
+file holding one keel-managed Deployment and one pinned CronJob passed on the
+Deployment's annotations and the CronJob was never examined. Namespaces are a
+render property too: `kustomization.yaml` can set one, and a directory name is
+not a namespace.
+
+So the guard renders each cluster with `kustomize build` — the same render
+`check-script-lint` already produces — and judges **one container at a time**.
+
+Three decisions in it are load-bearing.
+
+**keel annotations are a workload property, not a container property.** keel
+reads the workload's annotations and applies them to the images it can track,
+which are the floating ones. A Deployment whose app image floats and whose
+quiesce sidecar is `alpine:3.20` is correct and intended: keel bumps the app,
+Renovate bumps the sidecar. Smearing the workload's annotations across every
+container would read four such sidecars on the VPS cluster as frozen. The frozen
+verdict therefore needs the whole workload — keel annotations present *and*
+nothing floating anywhere in it, so the annotations can only be about a pin.
+
+**A bare major version stream is floating, not a pin.** `louislam/uptime-kuma:2`
+moves on every 2.x release and `v2` is the same thing spelled differently, as is
+a `-latest` suffix such as `ghcr.io/umami-software/umami:postgresql-latest`. A
+*dotted* tag — `alpine:3.20`, `traefik:v3.3`, `postgres:16-alpine`,
+`pgvector/pgvector:0.8.1-pg17` — is a pin that Renovate bumps, and calling any
+of those floating would hand a reviewed bump to keel.
+
+**Remote-base images are advisory.** An image named by no file in this repo came
+from a remote base — cert-manager, the CSI drivers, local-path-provisioner — and
+can only be changed by forking. Failing an apply on somebody else's manifest
+produces a gate people route around, so those are printed as advisories and do
+not fail the check, exactly as `check-script-lint` treats upstream findings.
+
+Scope is still a file question, because `managerFilePatterns` matches paths: for
+each pinned, keel-free image the guard locates the repo file(s) naming it and
+requires one of them to be matched by a `kubernetes.managerFilePatterns` entry
+and not excluded by `ignorePaths`. Both manager blocks are validated for
+patterns that match nothing, `kubernetes` and `kustomize`, because a typo in
+either is the same silent-scope failure. Exit 1 means a finding; exit 2 means
+the check could not run.
+
+Floating tags are forbidden in `health`, `hindsight`, `ops` and `backup`.
+`jottacloud-backup` is the single written exemption on the guard's
+`FLOATING_EXEMPT` list: it is a CronJob whose pods pull `:latest` on every
+scheduled run, so the schedule already delivers what keel would, which is why it
+carries no keel annotations and needs none.
+
+The targets are `check-renovate-scope-homelab` and `check-renovate-scope-vps`,
+plus the bare `check-renovate-scope` which sweeps both. **Not yet on any preflight chain: the Renovate scope-widening commit arms it.** It cannot
+pass against a `renovate.json` that watches only `homelab/health`, `homelab/ops`
+and `homelab/hindsight`: every pinned, keel-free container outside those three
+genuinely receives nothing, which is the estate's true state rather than a bug
+in the guard. Wiring a guard into a preflight it does not pass makes an apply
+impossible and teaches the next person to route around the gate, so the two
+targets are defined and left unarmed until the widening lands. Run them by hand
+in the meantime.
 
 ## Talos machine config patches
 

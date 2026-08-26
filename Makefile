@@ -288,19 +288,44 @@ check-script-lint-vps:
 # --------------------------- end check-script-lint -------------------------
 
 # Fifth guard, and the one that keeps the UPDATE path honest rather than the
-# secret path. `homelab-update-watch` counts open Renovate pull requests, so a
-# namespace Renovate does not scan produces no pull request, no count and a
-# permanently green check over an estate that has stopped receiving updates —
-# the watcher's own failure mode, wearing the watcher's colours.
+# secret path. Two mechanisms update this estate and each is silent when it
+# stops: keel for floating tags, Renovate for pinned ones. Every way of getting
+# a container's mode wrong fails quietly — a pinned tag carrying keel
+# annotations is frozen while looking covered, an incomplete keel set silently
+# downgrades a semver tag to `:latest`, and a pinned tag outside Renovate's
+# scope receives nothing at all while `homelab-update-watch` stays green.
 #
-# It reads renovate.json and the homelab tree: no cluster, no 1Password, no
-# kustomize. Homelab-only by nature (the VPS cluster is keel-managed throughout),
-# so there is no per-cluster split and it is wired into the homelab diff/apply
-# preflight only. Same build-* exclusion as the other four — build-*'s stdout IS
-# the manifest.
-.PHONY: check-renovate-scope
+# It renders the cluster with `kustomize build` and evaluates ONE CONTAINER AT A
+# TIME, so a file holding both a keel-managed Deployment and a pinned CronJob is
+# judged twice rather than once. keel annotations are a WORKLOAD property, so a
+# pinned sidecar beside a floating app image is Renovate's and not frozen; only
+# a workload with nothing floating in it can be frozen. It reads renovate.json
+# for scope; images that appear in no repo file come from a remote base and are
+# advisory, like check-script-lint's upstream findings.
+#
+# Per-cluster variants like the other render-based guards, so a VPS-only render
+# fault cannot block an unrelated `apply-homelab`. It belongs on the PUBLIC half
+# of both diff/apply chains: it shells out to a full `kustomize build`, and what
+# it protects is the update path, not a secret — nothing it catches can leak a
+# value.
+#
+# NOT ON ANY PREFLIGHT YET, DELIBERATELY, AND ONLY UNTIL THE NEXT COMMIT. This
+# rewritten guard cannot pass against a renovate.json that still watches three
+# namespaces: every pinned, keel-free container outside them genuinely receives
+# nothing, which is the true state of the estate and exactly what the scope
+# widening fixes. Wiring a guard into a preflight it does not pass makes an
+# apply impossible and teaches the next person to route around the gate. The
+# widening commit proves a clean run against both renders and re-arms the two
+# per-cluster targets on all four chains in the same breath.
+.PHONY: check-renovate-scope check-renovate-scope-homelab check-renovate-scope-vps
 check-renovate-scope:
 	@scripts/check-renovate-scope.py
+
+check-renovate-scope-homelab:
+	@scripts/check-renovate-scope.py homelab
+
+check-renovate-scope-vps:
+	@scripts/check-renovate-scope.py vps
 
 .PHONY: require-vars
 require-vars:
@@ -519,13 +544,20 @@ check-context:
 # mode is likewise recoverable: a lint finding is a bug you have not shipped
 # yet, not a secret you have to rotate.
 #
-# check-renovate-scope is on the PUBLIC half of the homelab targets only, and
-# has no per-cluster split: it reads renovate.json plus the homelab tree, and
-# the VPS cluster is keel-managed throughout, so there is nothing there for it
-# to say. Public half only because what it protects is the UPDATE path, not a
-# secret: nothing it catches can leak a value, and the guard exists to stop a
-# pinned namespace going quietly unwatched, which the next diff or apply catches
-# just as well.
+# check-renovate-scope-<cluster> is, as of this commit, on NO preflight chain at
+# all — and that gap is deliberate, not an oversight. The guard was just
+# rewritten to render each cluster and judge one container at a time, which
+# means it now has something to say about BOTH clusters and exists as a
+# per-cluster pair rather than a single homelab-only target. It cannot pass yet:
+# renovate.json still watches three namespaces, so every pinned, keel-free
+# container outside them genuinely receives nothing, and a guard wired into a
+# preflight it does not pass makes an apply impossible and teaches the next
+# person to route around the gate. The scope-widening commit proves a clean run
+# against both renders and arms both targets on all four chains in the same
+# breath. When it does, they belong on the PUBLIC half for the same reason as
+# check-job-ttl and check-script-lint: they shell out to a full
+# `kustomize build`, and what they protect is the UPDATE path, not a secret —
+# nothing they catch can leak a value.
 #
 # WHAT IS AND IS NOT PROTECTED IN THE PRINTED DIFF
 #
@@ -561,7 +593,7 @@ check-context:
 # THAT it changed, never WHAT it changed to. Use
 # `kubectl -n <ns> get secret <name> -o jsonpath=...` to confirm a value landed.
 .PHONY: diff-homelab
-diff-homelab: check-vars-consistency check-context check-script-substitution-homelab check-job-ttl-homelab check-ping-bodies-homelab check-script-lint-homelab check-renovate-scope
+diff-homelab: check-vars-consistency check-context check-script-substitution-homelab check-job-ttl-homelab check-ping-bodies-homelab check-script-lint-homelab
 	@$(OP_RUN) $(MAKE) --no-print-directory _diff-homelab-inner
 
 # The old `|| true` here swallowed EVERYTHING, including a kustomize failure.
@@ -582,7 +614,7 @@ _diff-homelab-inner: check-context check-script-substitution-homelab check-ping-
 	exit 0
 
 .PHONY: apply-homelab
-apply-homelab: check-vars-consistency check-context check-script-substitution-homelab check-job-ttl-homelab check-ping-bodies-homelab check-script-lint-homelab check-renovate-scope
+apply-homelab: check-vars-consistency check-context check-script-substitution-homelab check-job-ttl-homelab check-ping-bodies-homelab check-script-lint-homelab
 	@$(OP_RUN) $(MAKE) --no-print-directory _apply-homelab-inner
 
 # RENDER FULLY, VERIFY, THEN APPLY — never stream straight into kubectl.
