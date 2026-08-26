@@ -173,9 +173,10 @@ def hc_summary(text):
     """Set the run's verdict. The argument MUST be a member of VERDICTS.
 
     Enforced here rather than trusted, because the enum was otherwise dead in
-    this module -- only the test suite read it, and nothing bound the four call
-    sites to membership, so one could have drifted off the enum and every test
-    would still have passed. A drifted verdict is coerced to `failed` and
+    this module -- only the test suite read it, and nothing bound the seven call
+    sites (covering four distinct verdicts, `failed` from four of them) to
+    membership, so one could have drifted off the enum and every test would
+    still have passed. A drifted verdict is coerced to `failed` and
     logged: it must not raise, because a message may never cost a push, and
     `failed` is the safe direction for a value nobody can classify.
     """

@@ -530,12 +530,14 @@ def main(argv):
               "9.2 and the header of\nscripts/check-ping-bodies.py.")
         return 1
 
-    # READ THE CALL COUNT PER FILE, NOT IN AGGREGATE. It fell from 153 to 124
-    # over the homelab tree on 2026-08-26, when nine multi-line bodies collapsed
-    # into one-line heartbeat messages -- that drop is the migration, not a
-    # regression. What must never happen is a FILE losing its last sink call, or
-    # dropping out of the scan entirely; REQUIRED_TARGETS above catches the
-    # second half of that, and review catches the first.
+    # READ THE CALL COUNT PER FILE, NOT IN AGGREGATE. Over the homelab tree it
+    # went 153 -> 124 on 2026-08-26, when nine multi-line bodies collapsed into
+    # one-line heartbeat messages, and 124 -> 129 as later fixes added sink calls
+    # back. Those are history, not targets: the number moves whenever a runner
+    # gains or loses a line, so re-run this rather than comparing against a
+    # figure written down anywhere. What must never happen is a FILE losing its
+    # last sink call, or dropping out of the scan entirely; REQUIRED_TARGETS
+    # above catches the second half of that, and review catches the first.
     print("OK: %d file(s) under %s, %d ping-body sink call(s), none unsafe"
           % (scanned, ", ".join(roots), calls))
     return 0

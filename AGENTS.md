@@ -254,9 +254,11 @@ Full mechanics, target-by-target reference and failure modes:
   that catches `M=$(cmd); emit "error=$M"`. What differs between the two destinations is
   only size and storage: a healthchecks.io body is multi-line and held by a third party; a
   kuma `msg` is **one line, cut at 200 characters**, held on the operator's own VPS. So a
-  migrated runner emits the verdict first, the values an operator acts on next, and any
-  variable-length token last where the cut will take it — and prints the full detail to the
-  pod log, which is now where triage starts. Either one travels with the alert to every
+  migrated runner emits the verdict first and the values an operator acts on next, then
+  sacrifices to the cut whichever token carries least — `error=` last in `influx-backup` and
+  `hermes-pull`, but the two fixed-width threshold literals in `update-watch`, whose
+  variable-length token is the `next=` action and is protected in third place. Every runner
+  prints the full detail to the pod log, which is now where triage starts. Either one travels with the alert to every
   notification transport its destination has configured, a list nobody has enumerated on
   either side. Policy, the accepted residuals and that open item:
   `docs/operations/monitoring.md`.

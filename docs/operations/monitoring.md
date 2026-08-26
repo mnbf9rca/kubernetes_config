@@ -513,16 +513,17 @@ monitor's last heartbeat alongside the DOWN event. That is why every message car
 this alert; the watcher has gone quiet". Telling the four silence causes apart means reading the
 pod log. The monitor has one bit; DOWN means "go and look".
 
-**`next=` is the second token of every message and names what to do about that verdict** — the
+**`next=` is the third token of every message and names what to do about that verdict** — the
 `gh pr list` command for `updates-pending`, the Mend job log and a `managerFilePatterns` check
 for `renovate-stale`, the `gh issue list` command for `renovate-config-error`, the
 app-installations page for `dashboard-missing`, the pod-log command for the indeterminate
 verdicts, and `none` for both green verdicts (`updates-waiting`'s line says so explicitly, so a
 green message is not mistaken for one whose `next=` went missing). Each string is a fixed literal
 in the script's `NEXT_ACTIONS` map, keyed by verdict, so the alert is self-contained and nothing
-derived at run time is formatted into it. It sits second rather than last because kuma stores one
-line and cuts it at 200 characters: under the old multi-line body last was where the eye landed,
-but under a one-line message last is the first thing lost. Read `next=` together with
+derived at run time is formatted into it. It sits third — behind only `verdict=` and
+`run_epoch=` — rather than last, because kuma stores one line and cuts it at 200 characters:
+under the old multi-line body last was where the eye landed, but under a one-line message last is
+the first thing lost. Read `next=` together with
 `run_epoch=`: a stale message's advice is about the last run that completed, not about the silence
 that raised the alert. The counters that follow it — and everything the cut drops — are printed to
 the pod log in full on every run.
@@ -579,7 +580,11 @@ an unreadable field is never evidence that Renovate is alive.
 `pr_age_red_days=` and `renovate_alive_max_days=` are emitted last because they are literals in
 `update-watch.py` and identical between runs, so an alert that loses them costs the reader one
 look at the source. What must never be cut is `run_epoch=`, which is emitted first for that
-reason; `test_run_epoch_and_next_survive_the_cut_for_every_verdict` holds both ends of that.
+reason. Both halves are asserted, not merely intended:
+`test_run_epoch_and_next_survive_the_cut_for_every_verdict` holds the protected end, and
+`test_the_thresholds_are_the_tokens_the_cut_takes_first` holds the sacrificed one — it proves the
+thresholds really are emitted last and that what survives is a whole-token *prefix*, so nothing is
+ever dropped from the middle.
 
 **The liveness threshold is the unarmed floor, 14 days, and it is due a re-arming.** The rule is
 twice the maximum `dash_age_days` this job has emitted across its last 30 heartbeats, floored at
@@ -750,9 +755,20 @@ decides which sentence, and the sentences are written into the source. Nothing d
 time may be formatted into one.
 
 **What the 200-character cut changes, and what it does not.** It does not relax any rule above; a
-truncated secret is still a disclosed secret. What it changes is *ordering*: the migrated runners
-emit the verdict first, then the one or two values an operator acts on, and put the only
-variable-length token (`error=`, `next=`) where the cut will take it rather than the counters.
+truncated secret is still a disclosed secret. What it changes is *ordering*, and the rule is
+**sacrifice the token that carries least, which is not the same token in every runner**. All of
+them emit the verdict first, then the values an operator acts on. After that they split three ways:
+
+- **`influx-backup` and `hermes-pull`** each have one variable-length token, `error=`, holding a
+  `fatal` message. It goes last, so a long one costs the counters nothing.
+- **`update-watch`** has one too, `next=`, at 89 to 111 characters — but it is the *action*, so it
+  is deliberately protected in third place and the two fixed-width threshold literals are what the
+  cut takes instead. They are constants in the source and identical between runs, so losing them
+  costs one look at `update-watch.py`; losing the action would cost the alert its point.
+- **`ingest-freshness`, both hindsight jobs, `cloudflare-analytics` and both `keel-fresh` jobs**
+  emit nothing of variable length at all, so the question does not arise for them.
+
+Read that as one rule with three outcomes rather than three rules.
 Everything that used to be a body line is now printed to the pod log as well — the shell runners
 as a `detail:` line from the exit trap, the Python jobs as a `heartbeat message (full):` block — so
 nothing was lost, it moved. **Read the pod log first from now on**; the heartbeat history is the
@@ -771,8 +787,10 @@ end, refusing any name a sink argument references unless that name is on `PY_VAL
 `scripts/check-ping-bodies.py`. Adding a name there is a deliberate review act: it asserts the
 value is an int, a timestamp or a fixed literal, and the reason belongs in the comment beside it.
 Its `OK:` line reports a file count and a **sink-call count**, and the right way to read that count
-is per file: after the migration the aggregate fell from 153 to 124 across the homelab tree,
-because multi-line bodies collapsed into short messages. What must never happen is a *file* losing
+is per file. The aggregate moves on its own: it was 153 across the homelab tree before the
+2026-08-26 migration and 124 immediately after, because multi-line bodies collapsed into short
+messages, and it has since risen to 129 as fixes added sink calls back. Do not treat any of those
+as a target — re-run the guard for today's figure. What must never happen is a *file* losing
 its last sink call, or dropping out of the scan — that is "I could not look" reported as "I looked
 and everything is fine", and `REQUIRED_TARGETS` in the guard exists to catch the second half of it.
 

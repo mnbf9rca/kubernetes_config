@@ -720,6 +720,31 @@ class TestMessageBudget(unittest.TestCase):
                 self.assertTrue(
                     self._assemble(verdict).startswith("verdict=%s " % verdict))
 
+    def test_the_thresholds_are_the_tokens_the_cut_takes_first(self):
+        # The other end of the budget claim, and the reason monitoring.md can
+        # say the two threshold literals are what a cut message loses. They are
+        # emitted LAST, and the trim keeps a whole-token prefix, so whatever is
+        # dropped is dropped from the tail -- asserted here rather than left as
+        # a property of the emit order that nothing checks.
+        for verdict in sorted(uw.VERDICTS):
+            with self.subTest(verdict=verdict):
+                msg = self._assemble(verdict)
+                full = " ".join(uw.SUMMARY + uw.BODY_LINES)
+                # The two thresholds really are the last two emitted.
+                self.assertTrue(full.endswith(
+                    "pr_age_red_days=%d renovate_alive_max_days=%d"
+                    % (uw.PR_AGE_RED_DAYS, uw.RENOVATE_ALIVE_MAX_DAYS)))
+                # What survives is a whole-token PREFIX of what was emitted, so
+                # nothing is ever dropped from the middle and the tail goes
+                # first. This is the assertion that makes "the thresholds are
+                # cut first" true rather than merely intended.
+                self.assertEqual(full.split(" ")[:len(msg.split(" "))],
+                                 msg.split(" "))
+                if len(full) > uw.MSG_LIMIT:
+                    # A truncated message has lost the LAST token, which by the
+                    # assertion above is a threshold, never a counter.
+                    self.assertNotIn("renovate_alive_max_days=", msg)
+
     def test_no_next_action_can_grow_past_the_budget(self):
         # The guard on the guard: a longer NEXT_ACTIONS entry would silently
         # start pushing run_epoch= out again. 120 is the existing per-entry cap.
