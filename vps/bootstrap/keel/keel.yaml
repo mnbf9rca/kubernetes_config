@@ -5,19 +5,24 @@ metadata:
   name: keel
   namespace: keel
 ---
+# Deliberately narrower than upstream's reference manifest: `secrets` (rule 1) and
+# `pods/portforward` (rule 3) were removed on 2026-08-26. keel only reads Secrets to
+# find imagePullSecrets, and this repo uses none, so the grant bought nothing while
+# giving a :latest-tagged, self-updating controller cluster-wide read of every Secret.
+# Do not restore them from upstream without a registry credential that actually needs it.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
   name: keel
 rules:
   - apiGroups: [""]
-    resources: [namespaces, secrets]
+    resources: [namespaces]
     verbs: [get, watch, list]
   - apiGroups: ["", extensions, apps, batch]
     resources: [pods, replicasets, replicationcontrollers, statefulsets, deployments, daemonsets, jobs, cronjobs]
     verbs: [get, delete, watch, list, update]
   - apiGroups: [""]
-    resources: [configmaps, pods/portforward]
+    resources: [configmaps]
     verbs: [get, create, update]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
