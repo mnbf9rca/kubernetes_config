@@ -174,10 +174,16 @@ Full mechanics, target-by-target reference and failure modes:
   `ops`, `hindsight`, `backup`, keel itself, traefik and the VPS workloads alike —
   gets its bump as a pull request
   (`docs/operations/homelab-health.md`, `docs/operations/homelab.md`,
-  `docs/operations/hindsight.md`). Two things sit outside that and always will: images
-  from remote bases, which no file here names and only a fork could change, and images
-  embedded inside another resource. `make check-renovate-scope` reports both as
-  advisory and hard-fails everything else, so a new pinned image that nothing watches
+  `docs/operations/hindsight.md`). Two kinds of image sit outside that, and the guard
+  treats them differently. An image from a **remote base** is named by no file here, so
+  nothing can edit the reference — it moves only when the base's own ref moves.
+  `check-renovate-scope` prints those as advisories. That is not the same as
+  unreachable: `vps/bootstrap/local-path/kustomization.yaml` pins its base as
+  `?ref=v0.0.31`, which the `kustomize` manager parses, so Renovate proposes that bump
+  even though the image itself is still reported advisory. An image **embedded inside
+  another resource** — local-path-provisioner ships its helper Pod as a block scalar in
+  a ConfigMap — the guard cannot see at all, so it says nothing about it: silence, not
+  an advisory. Everything else hard-fails, so a new pinned image that nothing watches
   cannot reach a cluster. `hindsight` is the sharpest case: it runs Alembic
   migrations on startup against the store holding an agent's memory, and those
   migrations are forward-only, so the pre-upgrade dump is the only rollback.
@@ -193,6 +199,11 @@ Full mechanics, target-by-target reference and failure modes:
   `homelab/workloads/**`, `vps/workloads/**`, `vps/bootstrap/cloudflared/**` and both
   keel trees. **Adding a keel-annotated workload outside those paths means extending
   that rule in the same commit.**
+  The rule matches whole **file paths**, not containers, so it also suppresses digest
+  pinning for the pinned, keel-free containers that happen to share those files — the
+  four `alpine:3.20` quiesce sidecars and both `postgres:16-alpine` containers. They
+  still get version bumps, so nothing is broken; they simply arrive without a digest.
+  That is the accepted cost of a path-scoped rule, not an oversight.
 - **Probes: readiness on every long-running container that serves traffic; liveness only
   where that probe can actually detect the failure *and* a restart is a safe remedy**
   (everything here is single-replica, so an over-eager liveness probe manufactures

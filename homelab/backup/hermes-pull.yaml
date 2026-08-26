@@ -113,9 +113,18 @@ spec:
               # failed with "No user exists for uid 1999", which is what the
               # hermes-passwd mount fixes. alpine/k8s:1.36.0 (the
               # influx-backup image) was probed first and ships no ssh.
-              # Renovate is scoped to homelab/health/** and will not touch
-              # this pin; bump it manually and re-run the probe from the
-              # design's rollout section.
+              # Renovate has watched this file since the 2026-08-26 scope
+              # widening to homelab/**, and the shape of what it proposes here
+              # is worth knowing before the first one lands. The reference
+              # carries a digest and NO TAG, so Renovate resolves it against
+              # `latest` and opens DIGEST-UPDATE pull requests whenever that
+              # tag is repointed. A digest update is not a major, so the
+              # dependencyDashboardApproval rule does not hold it back, and
+              # nothing here automerges — they arrive as ordinary reviewable
+              # pull requests. Treat one as a new image, not a rubber stamp:
+              # this container handles an SSH private key and a zip full of
+              # live secrets. Re-run the probe from the design's rollout
+              # section before applying, exactly as for a manual bump.
               image: kroniak/ssh-client@sha256:cfb58718a2cfbb248214a9c33655f16438e0f1014c054e0e524d3eb232ccdb2b
               command: ["sh", "/scripts/hermes-pull.sh"]
               env:

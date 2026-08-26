@@ -201,8 +201,9 @@ Note that 1Password **document** items (e.g. `health-cloudflared`) need
 | `check-vars-consistency` | Asserts `ENVSUBST_VAR_NAMES` ⊆ `REQUIRED_VARS`. Runs in the parent shell, before the `op run` child exists. Cannot detect a var *missing* from `ENVSUBST_VAR_NAMES` |
 | `check-job-ttl` | Asserts every standalone `kind: Job` sets `ttlSecondsAfterFinished`, across both clusters. `check-job-ttl-homelab` scopes it to one cluster and runs in the `diff-homelab`/`apply-homelab` preflight |
 | `check-script-substitution` | Asserts no `configMapGenerator` script names an envsubst-allowlisted variable, across both cluster trees. `check-script-substitution-homelab` scopes the *scan* to one tree — both allowlists still apply — and runs in the `diff-homelab`/`apply-homelab` preflight |
+| `check-ping-bodies` | Asserts no healthchecks.io ping body is built from a command's output, across both cluster trees. `check-ping-bodies-homelab` scopes the scan to one tree and runs in the `diff-homelab`/`apply-homelab` preflight |
 | `check-script-lint` | Lints every script the clusters run, from the **rendered** stream rather than the source tree, plus the repo's Python. `check-script-lint-homelab` scopes the render to one cluster and runs in the `diff-homelab`/`apply-homelab` preflight. See below |
-| `check-renovate-scope` | Asserts every container is in exactly one update mode — floating means keel, pinned means Renovate, never both — from the `kustomize build` render, one container at a time, across both clusters. `check-renovate-scope-homelab` scopes it to one cluster and runs in the `diff-homelab`/`apply-homelab` preflight, which is six guards rather than five. See below |
+| `check-renovate-scope` | Asserts every container is in exactly one update mode — floating means keel, pinned means Renovate, never both — from the `kustomize build` render, one container at a time, across both clusters. `check-renovate-scope-homelab` scopes it to one cluster and runs in the `diff-homelab`/`apply-homelab` preflight, joining it as the fifth render-based guard. See below |
 | `require-vars` | Re-enters under `op run` and asserts every `REQUIRED_VARS` entry is set and not still an `op://` reference |
 | `build-homelab` | `kustomize build homelab/ \| envsubst` to stdout under `op run`. **PREVIEW ONLY — secret values are masked.** No cluster contact. Never redirect this to a file and apply it |
 | `diff-homelab` | Same pipeline into `kubectl diff`, inside the `op run` child (real values, printed diff masked) |
@@ -343,7 +344,11 @@ of those floating would hand a reviewed bump to keel.
 
 **Remote-base images are advisory, in every mode.** An image named by no file in
 the cluster's own tree came from a remote base — cert-manager, the CSI drivers,
-local-path-provisioner — and can only be changed by forking. Failing an apply on
+local-path-provisioner — so nothing here can edit the reference; it moves only
+when the base's own ref moves. That is not the same as unreachable: the VPS
+local-path base is pinned as `?ref=v0.0.31`, which the kustomize manager parses,
+so Renovate proposes that bump even though the guard still calls the image
+advisory. Failing an apply on
 somebody else's manifest produces a gate people route around, so those are
 printed as advisories and do not fail the check, exactly as `check-script-lint`
 treats upstream findings. Ownership is therefore established *before* any
@@ -384,8 +389,10 @@ The targets are `check-renovate-scope-homelab` and `check-renovate-scope-vps`,
 plus the bare `check-renovate-scope` which sweeps both. **Both per-cluster
 targets run in their cluster's `diff-*` and `apply-*` preflight**, on the public
 half, as of the 2026-08-26 commit that widened Renovate to `homelab/**` and
-`vps/**`. That makes the homelab preflight six guards rather than five, and the
-VPS preflight five per-cluster guards behind its context and vars checks.
+`vps/**`. Each chain now reads the same way: a context assertion, a
+vars-consistency check, and **five render-based guards** — `check-script-substitution`,
+`check-job-ttl`, `check-ping-bodies`, `check-script-lint` and `check-renovate-scope`,
+each running as its own cluster's half.
 
 Arming it needed that widening first, and the order is worth keeping in mind if
 the scope ever narrows again. The guard cannot pass against a `renovate.json`

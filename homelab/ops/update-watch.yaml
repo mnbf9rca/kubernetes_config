@@ -30,9 +30,10 @@
 # NO KEEL in this namespace: the image is version-pinned and Renovate watches
 # this tree (renovate.json), so this pin is proposed by pull request and
 # applied through the normal diff/apply flow — the watcher is not the estate's
-# one unwatched pin. Renovate's scope is currently the three pinned namespaces
-# (health, ops, hindsight); later work in this plan widens it to the whole of
-# homelab, which does not change anything stated here.
+# one unwatched pin. Renovate's scope has been homelab/** and vps/** since
+# 2026-08-26, when it was widened from the three pinned namespaces (health, ops,
+# hindsight) to both cluster trees. That widening did not change anything stated
+# here: this tree was inside the old scope and is inside the new one.
 #
 # NO PROBES. This is scheduled work, so the instrument is the healthchecks.io
 # dead-man's-switch plus activeDeadlineSeconds, not a probe. And note there is

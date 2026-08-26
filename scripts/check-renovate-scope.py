@@ -344,8 +344,9 @@ def load_renovate():
     compiled = _compile_patterns(kubernetes.get("managerFilePatterns"),
                                  "kubernetes.managerFilePatterns")
 
-    # Optional, and validated only if present: the config has no `kustomize`
-    # block until the scope widening lands.
+    # Optional, and validated only if present. The config HAS carried a
+    # `kustomize` block since the 2026-08-26 scope widening; it stays optional
+    # so this check keeps working against a config that drops it.
     kustomize = config.get("kustomize")
     kustomize_compiled = []
     if isinstance(kustomize, dict) and "managerFilePatterns" in kustomize:
@@ -652,8 +653,9 @@ def analyse_render(cluster, text, patterns, ignore_paths, source_files):
                 else:
                     advisories.append(
                         "%s: %s - but it is named by no file in this cluster's "
-                        "tree, so it comes from a remote base and can only be "
-                        "changed by forking. Advisory." % (where, why))
+                        "tree, so it comes from a remote base: nothing here can "
+                        "edit this reference, and it moves only when the base's "
+                        "own ref moves. Advisory." % (where, why))
                 continue
 
             if mode in (MODE_KEEL, MODE_FLOATING_UNMANAGED):
@@ -683,8 +685,11 @@ def analyse_render(cluster, text, patterns, ignore_paths, source_files):
             if not owners:
                 advisories.append(
                     "%s: pinned, keel-free, and named by no file in this "
-                    "cluster's tree - it comes from a remote base, so it can "
-                    "only be changed by forking. Advisory." % where)
+                    "cluster's tree - it comes from a remote base. Nothing here "
+                    "can edit this reference; it moves only when the base's own "
+                    "ref does, which Renovate proposes where the kustomize "
+                    "manager can parse that ref and not otherwise. Advisory."
+                    % where)
                 continue
             covered = [rel for rel in owners
                        if not path_ignored(rel, ignore_paths)

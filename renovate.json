@@ -16,6 +16,10 @@
       "/(^|/)kustomization\\.ya?ml$/"
     ]
   },
+  "description": [
+    "SETTING ignorePaths REPLACES THE config:recommended DEFAULTS. config:recommended pulls in :ignoreModulesAndTests, whose ignorePaths cover node_modules, bower_components, vendor, and assorted test/fixture directories. Declaring this key overrides that list wholesale rather than adding to it. No practical effect here - this repo manages no YAML under any of those paths - but a future manager (npm, gomod) added to enabledManagers would scan vendored trees this list no longer excludes. Re-add the defaults if that happens.",
+    "legacy-microk8s/** and no_longer_used/** currently match NOTHING. Both managerFilePatterns are anchored to ^homelab/ and ^vps/, so neither frozen tree is scanned in the first place. They are listed as defence in depth against a future pattern that is not anchored, not as active exclusions. **/secrets/** is the same shape: those files hold only ${VAR} placeholders and name no image."
+  ],
   "ignorePaths": [
     "**/secrets/**",
     "legacy-microk8s/**",

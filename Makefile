@@ -113,7 +113,8 @@ help:
 	@echo "  check-renovate-scope - assert every container is in exactly one update mode (both clusters)"
 	@echo "                    keel for floating tags, Renovate for pinned ones, never both; per container"
 	@echo "  check-renovate-scope-homelab / -vps - the per-cluster halves of that guard"
-	@echo "                    (the five above also run in the diff-*/apply-* preflight, now all five per cluster)"
+	@echo "                    (check-job-ttl through check-renovate-scope — those five — also run in the"
+	@echo "                     diff-*/apply-* preflight, now all five per cluster)"
 	@echo ""
 	@echo "VPS cluster targets:"
 	@echo "  check-vps-context - assert kubectl current-context matches VPS_CONTEXT ($(VPS_CONTEXT))"
@@ -549,20 +550,24 @@ check-context:
 # mode is likewise recoverable: a lint finding is a bug you have not shipped
 # yet, not a secret you have to rotate.
 #
-# check-renovate-scope-<cluster> is, as of this commit, on NO preflight chain at
-# all — and that gap is deliberate, not an oversight. The guard was just
-# rewritten to render each cluster and judge one container at a time, which
-# means it now has something to say about BOTH clusters and exists as a
-# per-cluster pair rather than a single homelab-only target. It cannot pass yet:
-# renovate.json still watches three namespaces, so every pinned, keel-free
-# container outside them genuinely receives nothing, and a guard wired into a
-# preflight it does not pass makes an apply impossible and teaches the next
-# person to route around the gate. The scope-widening commit proves a clean run
-# against both renders and arms both targets on all four chains in the same
-# breath. When it does, they belong on the PUBLIC half for the same reason as
-# check-job-ttl and check-script-lint: they shell out to a full
-# `kustomize build`, and what they protect is the UPDATE path, not a secret —
-# nothing they catch can leak a value.
+# check-renovate-scope-<cluster> is on the PUBLIC half of all four chains, and
+# has been since 2026-08-26. It belongs there for the same reason as
+# check-job-ttl and check-script-lint: it shells out to a full
+# `kustomize build`, and what it protects is the UPDATE path, not a secret —
+# nothing it catches can leak a value.
+#
+# It arrived later than the other four because arming it needed a scope
+# widening first, and that ORDER is the part worth keeping. The guard renders
+# each cluster and judges one container at a time, so it has something to say
+# about both clusters and exists as a per-cluster pair. Against the
+# renovate.json that watched three namespaces it could not pass: every pinned,
+# keel-free container outside them genuinely received nothing, which was the
+# estate's true state rather than a bug in the guard. So the commit that
+# widened Renovate to homelab/** and vps/** proved a clean run against both
+# renders and armed both targets on all four chains in the same breath. If the
+# scope is ever narrowed again, widen-prove-arm is the order — never wire a
+# guard into a preflight it cannot pass, which makes an apply impossible and
+# teaches the next person to route around the gate.
 #
 # WHAT IS AND IS NOT PROTECTED IN THE PRINTED DIFF
 #
