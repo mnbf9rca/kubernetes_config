@@ -110,8 +110,12 @@ help:
 	@echo "  check-script-substitution - assert no configMapGenerator script names an envsubst var"
 	@echo "  check-ping-bodies - assert no healthchecks.io ping body is built from a command's output"
 	@echo "  check-script-lint - shellcheck (-s sh) every script in the RENDER + compile/test the Python"
-	@echo "  check-renovate-scope - assert every pinned, keel-free homelab manifest is watched by Renovate"
-	@echo "                    (the five above also run in the diff-*/apply-* preflight; the first four per-cluster)"
+	@echo "  check-renovate-scope - assert every container is in exactly one update mode (both clusters)"
+	@echo "                    keel for floating tags, Renovate for pinned ones, never both; per container"
+	@echo "  check-renovate-scope-homelab / -vps - the per-cluster halves of that guard"
+	@echo "                    (the FOUR above check-renovate-scope also run in the diff-*/apply-* preflight,"
+	@echo "                     all four per-cluster; check-renovate-scope is run by hand until the Renovate"
+	@echo "                     scope-widening commit arms it)"
 	@echo ""
 	@echo "VPS cluster targets:"
 	@echo "  check-vps-context - assert kubectl current-context matches VPS_CONTEXT ($(VPS_CONTEXT))"
@@ -304,10 +308,11 @@ check-script-lint-vps:
 # advisory, like check-script-lint's upstream findings.
 #
 # Per-cluster variants like the other render-based guards, so a VPS-only render
-# fault cannot block an unrelated `apply-homelab`. It belongs on the PUBLIC half
-# of both diff/apply chains: it shells out to a full `kustomize build`, and what
-# it protects is the update path, not a secret — nothing it catches can leak a
-# value.
+# fault cannot block an unrelated `apply-homelab`. When it is armed it WILL
+# belong on the PUBLIC half of both diff/apply chains: it shells out to a full
+# `kustomize build`, and what it protects is the update path, not a secret —
+# nothing it catches can leak a value. It is on neither half today; the next
+# paragraph says why.
 #
 # NOT ON ANY PREFLIGHT YET, DELIBERATELY, AND ONLY UNTIL THE NEXT COMMIT. This
 # rewritten guard cannot pass against a renovate.json that still watches three

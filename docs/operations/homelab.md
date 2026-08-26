@@ -38,10 +38,12 @@ component where an unattended upstream tag change is a security event rather tha
 convenience, so its bump belongs in a reviewed pull request rather than a six-hour poll.
 
 Renovate does not watch `homelab/bootstrap/**` yet: `renovate.json` is scoped to
-`homelab/health/**`, `homelab/ops/**` and `homelab/hindsight/**`, and
-`scripts/check-renovate-scope.py` exempts `homelab/bootstrap` by name. So the pin is
+`homelab/health/**`, `homelab/ops/**` and `homelab/hindsight/**`. So the pin is
 unwatched today and is bumped **by hand**; widening that scope is what makes the pull
-request arrive on its own.
+request arrive on its own. `scripts/check-renovate-scope.py` no longer exempts this
+directory — since the guard was rewritten per container it reports
+`homelab/bootstrap/keel/keel.yaml` as out of scope, correctly, which is one of the
+findings the widening clears.
 
 Its RBAC was trimmed on August 26, 2026 (PR #68): no `secrets` rule, no
 `pods/portforward`. Verify keel's permissions with a SelfSubjectAccessReview issued
@@ -101,8 +103,9 @@ Three things about this namespace are deliberate and should survive a refactor:
   privileged for restic's hostPaths, which an outbound-HTTPS poller has no business inheriting.
   `ops` is PSA baseline, the cluster default, and needs no ServiceAccount and no RBAC.
 - **No keel here.** Every image is version-pinned and Renovate watches this tree, so neither
-  job's own pin is the estate's one unwatched image. `make check-renovate-scope` fails the
-  build if that scope is ever lost.
+  job's own pin is the estate's one unwatched image. `make check-renovate-scope` catches it if
+  that scope is ever lost — but it gates nothing today: the rewritten guard is run **by hand**
+  until the Renovate scope-widening commit arms it on the diff/apply preflight.
 - **Removal is one commit,** but it is a longer list than it was with one job. Drop `- ops` from
   `homelab/kustomization.yaml`, `rm -r homelab/ops/`, remove the namespace block, remove **both**
   `OPS_HC_UPDATE_UUID` and `OPS_KUMA_KEEL_TOKEN` from `.env.tpl` and from both Makefile lists,

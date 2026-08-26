@@ -319,8 +319,9 @@ Deployment's annotations and the CronJob was never examined. Namespaces are a
 render property too: `kustomization.yaml` can set one, and a directory name is
 not a namespace.
 
-So the guard renders each cluster with `kustomize build` — the same render
-`check-script-lint` already produces — and judges **one container at a time**.
+So the guard renders each cluster with its own `kustomize build` — an identical
+render to the one `check-script-lint` produces, not a shared one — and judges
+**one container at a time**.
 
 Three decisions in it are load-bearing.
 
@@ -340,19 +341,38 @@ a `-latest` suffix such as `ghcr.io/umami-software/umami:postgresql-latest`. A
 `pgvector/pgvector:0.8.1-pg17` — is a pin that Renovate bumps, and calling any
 of those floating would hand a reviewed bump to keel.
 
-**Remote-base images are advisory.** An image named by no file in this repo came
-from a remote base — cert-manager, the CSI drivers, local-path-provisioner — and
-can only be changed by forking. Failing an apply on somebody else's manifest
-produces a gate people route around, so those are printed as advisories and do
-not fail the check, exactly as `check-script-lint` treats upstream findings.
+**Remote-base images are advisory, in every mode.** An image named by no file in
+the cluster's own tree came from a remote base — cert-manager, the CSI drivers,
+local-path-provisioner — and can only be changed by forking. Failing an apply on
+somebody else's manifest produces a gate people route around, so those are
+printed as advisories and do not fail the check, exactly as `check-script-lint`
+treats upstream findings. Ownership is therefore established *before* any
+verdict, not only before the scope one: a remote base that ever shipped keel
+annotations on a pinned tag would otherwise hard-fail an apply over a manifest
+this repo cannot edit.
+
+**The ownership lookup is confined to the cluster being analysed**, and that
+confinement is load-bearing. Both trees name `restic/restic:0.17.3` and the same
+keel digest, so a repo-wide lookup lets a watched homelab file vouch for a VPS
+container nothing watches. Simulated with scope widened to `homelab/**` alone, a
+repo-wide lookup dropped the VPS render from nine findings to six — `restic-backup`,
+`restic-init` and `keel` all fell silent while `vps/backup/*.yaml` and
+`vps/bootstrap/keel/keel.yaml` were still genuinely unwatched. The lookup also
+compares extracted image values rather than searching raw file text, because a
+substring search matches prose (`restic/restic:0.17.3` appears in three comment
+sentences in `homelab/backup/restic-cronjob.yaml`) and has no right boundary
+(`alpine:3.2` would be "owned" by any file naming `alpine:3.20`).
 
 Scope is still a file question, because `managerFilePatterns` matches paths: for
 each pinned, keel-free image the guard locates the repo file(s) naming it and
 requires one of them to be matched by a `kubernetes.managerFilePatterns` entry
 and not excluded by `ignorePaths`. Both manager blocks are validated for
 patterns that match nothing, `kubernetes` and `kustomize`, because a typo in
-either is the same silent-scope failure. Exit 1 means a finding; exit 2 means
-the check could not run.
+either is the same silent-scope failure. `enabledManagers` is validated too: it
+is a whitelist, so a `kustomize` block added without adding `kustomize` to that
+list is inert configuration that reads like coverage, and dropping `kubernetes`
+from it makes every scope verdict vacuous. Both are exit 2. Exit 1 means a
+finding; exit 2 means the check could not run.
 
 Floating tags are forbidden in `health`, `hindsight`, `ops` and `backup`.
 `jottacloud-backup` is the single written exemption on the guard's
