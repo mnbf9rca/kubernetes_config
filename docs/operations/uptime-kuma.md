@@ -334,8 +334,10 @@ this job rested on somebody else's script:
 - On failure it appends `/fail`, and on every run it makes a second POST to `/log`. kuma routes
   neither, so both answer `404 Cannot POST`. **That is the contract this repo wants**: a failed
   backup pushes nothing and the monitor goes DOWN by silence at its interval plus retry.
-- The cost is two `WARNING: Failed to send…` lines in the pod log on every run, from the image's
-  `--fail-with-body` curl seeing the `/log` 404. Cosmetic, and not a fault.
+- The cost is one `WARNING: Failed to send…` line per unrouted request, from the image's
+  `--fail-with-body` curl treating a 404 as an error: **one** on a successful run, from the
+  `/log` POST alone, and **two** on a failed one, where the `/fail` POST 404s as well. Cosmetic,
+  and not a fault. A successful run on August 26, 2026 logged exactly one.
 
 If a future image version changes any of that — a suffix on the success path, or a switch to a
 method kuma does not route — this job stops reporting silently, and the monitor goes DOWN. Re-check

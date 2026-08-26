@@ -24,12 +24,25 @@
 # ConfigMap. The container maps the secret to a differently named variable and this
 # script only ever sees that name. `make check-script-substitution` enforces it.
 #
-# NO `set -o pipefail`, because nothing here needs it: pg_dump writes a plain
-# file with --file rather than piping into gzip, and the content assertion reads
-# that file directly, so no verdict is ever taken from the last stage of a
-# pipeline. The one pipeline in the file - the message transliteration in
-# push_kuma - cannot fail the job by design, and yields an empty message if it
-# somehow does.
+# NO `set -o pipefail`. The verdict never comes from a pipeline: pg_dump writes a
+# plain file with --file rather than piping into gzip, and both content
+# assertions read that file directly. There are three pipelines here and it is
+# worth naming what each would do if a stage failed, rather than claiming there
+# are none:
+#
+#   emit()      printf | tr    - cannot fail the job; `|| true` swallows it and
+#                                the worst case is an empty heartbeat message.
+#   push_kuma() cut | tr | tr  - same; a failed stage yields an empty message.
+#   prune()     printf | sort  - THIS one takes a value from a pipeline, into the
+#                                positional parameters. Without pipefail a failed
+#                                `printf` would be masked by `sort` succeeding,
+#                                leaving `set --` empty and the prune a silent
+#                                no-op. Bounded rather than ignored: `printf` is
+#                                a builtin over a glob and essentially cannot
+#                                fail, and KEPT is counted afterwards by an
+#                                independent glob loop, so a prune that did
+#                                nothing shows up as a KEPT above the retention
+#                                limit rather than as a wrong number.
 set -eu
 
 # ---- uptime-kuma push with a short message --------------------------------

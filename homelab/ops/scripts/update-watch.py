@@ -128,8 +128,8 @@ PR_AGE_RED_DAYS = 45
 # unnoticed.
 RENOVATE_ALIVE_MAX_DAYS = 14
 
-# Every verdict this check can emit. A ping body may carry a member of this set
-# and nothing else that is not an int.
+# Every verdict this watcher can emit. A heartbeat message may carry a member of
+# this set and nothing else that is not an int.
 V_OK = "ok"
 V_UPDATES_WAITING = "updates-waiting"
 V_UPDATES_PENDING = "updates-pending"
@@ -268,9 +268,24 @@ def hc_body():
     return "\n".join(SUMMARY + BODY_LINES) + "\n"
 
 
+# What kuma stores in a heartbeat's `msg` column. The cut is applied here rather
+# than at the push, so the same bound is visible to the tests.
+MSG_LIMIT = 200
+
+
 def kuma_msg():
-    """The same lines as ONE line, cut to what kuma stores."""
-    return " ".join(SUMMARY + BODY_LINES)[:200]
+    """The same lines as ONE line, cut to what kuma stores.
+
+    THE CUT LANDS ON A TOKEN BOUNDARY, NEVER MID-TOKEN. A plain `[:200]` left
+    fragments like `oldes` and `ht` at the end of the message -- a key with no
+    value, or half a key, which reads as data rather than as truncation. Trimming
+    back to the last whole token drops the partial pair instead, so every
+    `key=value` an operator sees is one this run actually emitted.
+    """
+    joined = " ".join(SUMMARY + BODY_LINES)
+    if len(joined) <= MSG_LIMIT:
+        return joined
+    return joined[:MSG_LIMIT].rsplit(" ", 1)[0]
 
 
 # --- the single request -----------------------------------------------------
@@ -582,11 +597,86 @@ def main():
     return verdict, facts, len(items)
 
 
+def build_message(verdict, facts, run_epoch):
+    """Assemble this run's heartbeat message, in order, and return it.
+
+    A FUNCTION RATHER THAN A BLOCK INSIDE `__main__`, so the ORDER below is
+    reachable from the test suite. While it lived in `__main__` the budget test
+    had to re-implement the order to exercise it, which meant it asserted on its
+    own copy and would have stayed green through a reordering of the real thing.
+
+    `-1` is the "not observed on this run" sentinel. An indeterminate run omits
+    the count fields entirely rather than emitting a placeholder string like
+    `unknown`, which would break the integer-or-enum-literal rule the ping-body
+    guard enforces.
+
+    THE ORDER IS A BUDGET, NOT A PREFERENCE, and it is asserted by
+    test_run_epoch_and_next_survive_the_cut_for_every_verdict.
+
+    A kuma msg is cut at MSG_LIMIT, and `next=` alone is 89 to 111 characters --
+    over half of it. So not everything fits, and what survives has to be decided
+    here rather than discovered later. Measured across all ten verdicts on
+    2026-08-26, the assembled message ran 130 to 289 characters.
+    """
+    # Every value below is the result of `int()` on something this script
+    # derived, or a member of VERDICTS. Nothing from GitHub reaches here (rule 4).
+    prs_open = int(facts.get("prs_open", -1))
+    oldest_pr = int(facts.get("oldest_pr", -1))
+    oldest_pr_days = int(facts.get("oldest_pr_days", -1))
+    dash_age_days = int(facts.get("dash_age_days", -1))
+    config_issues = int(facts.get("config_issues", -1))
+    http = int(facts.get("http", -1))
+
+    hc_summary(verdict)
+    # `run_epoch=` goes FIRST, ahead even of `next=`, and that is the fix for a
+    # real defect rather than a style choice. It sat last, on the reasoning that
+    # kuma timestamps every heartbeat anyway -- but a silence-triggered alert
+    # carries the PREVIOUS run's message, and `run_epoch=` is how the reader
+    # tells "this message is about this alert" from "the watcher went quiet a
+    # day ago". Placed last it was cut from every verdict except `ok`: all four
+    # reds and `updates-waiting` ran 259 to 289 characters and lost it, so the
+    # field was absent from exactly the cases it exists for, while
+    # docs/operations/monitoring.md told the operator to read it. It is 21
+    # characters of fixed width, and you must know a message is current before
+    # you trust its advice -- so it precedes the advice.
+    hc_emit("run_epoch=%d" % run_epoch)
+    # SECOND: the command to run next, a fixed literal selected by the verdict
+    # (see NEXT_ACTIONS). It sat last under a multi-line body, where the eye
+    # landed on it; in a one-line message the tail is what the cut takes.
+    #
+    # BOUND TO A NAME FIRST, NEVER INLINED. `next_action` is on
+    # check-ping-bodies.py's PY_VALUE_ALLOWLIST with a written reason;
+    # `next_action_for(...)` inside the sink argument is a CALL, which that
+    # guard refuses outright — correctly, since allowing calls there is how a
+    # formatted string would get in. Inlining this is exactly the edit the
+    # guard caught on 2026-08-26.
+    next_action = next_action_for(verdict)
+    hc_emit("next=" + next_action)
+    # Then the counters, most-acted-on first. On the three longest `next=`
+    # strings the cut reaches the tail of this group; every one of them is in
+    # the pod log's full body, which is where triage starts.
+    if prs_open >= 0:
+        hc_emit("prs_open=%d" % prs_open)
+    if oldest_pr_days >= 0:
+        hc_emit("oldest_pr_days=%d" % oldest_pr_days)
+    if dash_age_days >= 0:
+        hc_emit("dash_age_days=%d" % dash_age_days)
+    if config_issues >= 0:
+        hc_emit("config_issues=%d" % config_issues)
+    if oldest_pr >= 0:
+        hc_emit("oldest_pr=%d" % oldest_pr)
+    if http >= 0:
+        hc_emit("http=%d" % http)
+    # LAST, and the tokens the cut is meant to take first if anything has to go:
+    # the two thresholds this run was judged against, which an alert quotes back
+    # so the reader need not open the source -- but which are literals in that
+    # source and unchanged between runs, so losing them costs the least.
+    hc_emit("pr_age_red_days=%d" % PR_AGE_RED_DAYS)
+    hc_emit("renovate_alive_max_days=%d" % RENOVATE_ALIVE_MAX_DAYS)
+    return kuma_msg()
+
+
 if __name__ == "__main__":
-    # `-1` is the "not observed on this run" sentinel throughout this block. An
-    # indeterminate run omits the count fields entirely rather than emitting a
-    # placeholder string like `unknown`, which would break the
-    # integer-or-enum-literal rule the ping-body guard enforces.
     run_epoch = int(time.time())
     facts = {}
     try:
@@ -600,44 +690,7 @@ if __name__ == "__main__":
     if verdict not in VERDICTS:
         verdict = V_API_ERROR
 
-    # Every value below is the result of `int()` on something this script
-    # derived, or a member of VERDICTS. Nothing from GitHub reaches here (rule 4).
-    prs_open = int(facts.get("prs_open", -1))
-    oldest_pr = int(facts.get("oldest_pr", -1))
-    oldest_pr_days = int(facts.get("oldest_pr_days", -1))
-    dash_age_days = int(facts.get("dash_age_days", -1))
-    config_issues = int(facts.get("config_issues", -1))
-    http = int(facts.get("http", -1))
-
-    hc_summary(verdict)
-    # SECOND, not last: the command to run next. A fixed literal selected by the
-    # verdict -- see NEXT_ACTIONS. It sat last under a multi-line body, so the
-    # eye landed on it; a kuma msg is one line cut at 200 characters, so last
-    # would be the first thing lost.
-    next_action = next_action_for(verdict)
-    hc_emit("next=" + next_action)
-    if prs_open >= 0:
-        hc_emit("prs_open=%d" % prs_open)
-    if oldest_pr_days >= 0:
-        hc_emit("oldest_pr_days=%d" % oldest_pr_days)
-    if dash_age_days >= 0:
-        hc_emit("dash_age_days=%d" % dash_age_days)
-    if config_issues >= 0:
-        hc_emit("config_issues=%d" % config_issues)
-    if oldest_pr >= 0:
-        hc_emit("oldest_pr=%d" % oldest_pr)
-    if http >= 0:
-        hc_emit("http=%d" % http)
-    hc_emit("pr_age_red_days=%d" % PR_AGE_RED_DAYS)
-    # The liveness threshold this run was judged against, so an alert says what
-    # `renovate-stale` was measured with rather than making the reader look it
-    # up in the source.
-    hc_emit("renovate_alive_max_days=%d" % RENOVATE_ALIVE_MAX_DAYS)
-    # Kept, and deliberately last. kuma timestamps every heartbeat itself, so a
-    # DOWN alert already says when the last one arrived; this is the belt-and-
-    # braces version of the same fact and is the token the 200-character cut is
-    # meant to take first if anything has to go.
-    hc_emit("run_epoch=%d" % run_epoch)
+    msg = build_message(verdict, facts, run_epoch)
 
     # EVERY LINE TO THE POD LOG, then the cut-down one-liner to kuma. An
     # indeterminate verdict pushes NOTHING (rule 1), and push() returns without
@@ -646,5 +699,5 @@ if __name__ == "__main__":
     status = push_status(verdict)
     if status is None:
         log("indeterminate verdict %s: pushing nothing" % verdict)
-    make_pusher(os.environ.get("PUSH_URL", ""))(status, kuma_msg())
+    make_pusher(os.environ.get("PUSH_URL", ""))(status, msg)
     sys.exit(0)

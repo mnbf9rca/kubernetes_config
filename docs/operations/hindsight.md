@@ -419,7 +419,7 @@ Nothing else in the estate references hindsight, which was a design goal.
    `homelab/hindsight/` tree; `homelab/secrets/hindsight.yaml` and its line in
    `homelab/secrets/kustomization.yaml`; the namespace block in
    `homelab/bootstrap/namespaces.yaml`; the keel-exception clause naming `hindsight` in
-   `AGENTS.md`; the two `REQUIRED_TARGETS` lines in `scripts/check-ping-bodies.py`; the
+   `AGENTS.md`; the two `REQUIRED_TARGETS` lines in `scripts/check-ping-bodies.py`;
    every `HINDSIGHT_*` variable from `.env.tpl` and from **both** Makefile lists (eight of
    them as of August 2026 — grep rather than counting from here); the
    `hindsight-upgrade` target and its help line; the hindsight pattern and package rules

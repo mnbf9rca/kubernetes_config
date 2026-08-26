@@ -44,6 +44,14 @@ _spec = importlib.util.spec_from_file_location("update_watch", _PATH)
 uw = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(uw)
 
+# THE MODULE'S OWN DEFAULT, CAPTURED AT IMPORT, BEFORE ANY setUp HAS RUN.
+# TestHeartbeatMessage.setUp writes a default into SUMMARY[0] so each test starts
+# from a known state, and an assertion that reads SUMMARY[0] back is therefore
+# asserting on what the setUp just wrote -- it would stay green if the source's
+# default were changed to a success verdict, which is the exact regression it
+# claims to guard. Asserting on this captured value tests the source instead.
+DEFAULT_SUMMARY = uw.SUMMARY[0]
+
 NOW = datetime(2026, 8, 24, 6, 45, 0, tzinfo=timezone.utc)
 
 
@@ -622,16 +630,24 @@ class TestHeartbeatMessage(unittest.TestCase):
 
     def test_default_verdict_is_indeterminate_not_a_success(self):
         # If nothing ever calls hc_summary, the message must not claim a green
-        # read of the repo.
-        self.assertTrue(uw.hc_body().startswith("verdict="))
-        self.assertNotIn(uw.SUMMARY[0].split("=", 1)[1], uw.GREEN)
+        # read of the repo. Asserted against DEFAULT_SUMMARY, captured at import
+        # from the source, NOT against SUMMARY[0], which setUp has just written.
+        self.assertTrue(DEFAULT_SUMMARY.startswith("verdict="))
+        default = DEFAULT_SUMMARY.split("=", 1)[1]
+        self.assertIn(default, uw.VERDICTS)
+        self.assertNotIn(default, uw.GREEN)
+        self.assertNotIn(default, uw.DETERMINATE)
 
     def test_the_message_is_one_line_and_bounded(self):
         uw.hc_summary(uw.V_OK)
         for _ in range(80):
             uw.hc_emit("oldest_pr_days=12")
         msg = uw.kuma_msg()
-        self.assertEqual(len(msg), 200)
+        # At most the limit, and close to it: the trim to a token boundary gives
+        # back up to one token, so an exact-equality assertion here would fail
+        # for the right reason. A far-short result would mean the join broke.
+        self.assertLessEqual(len(msg), uw.MSG_LIMIT)
+        self.assertGreater(len(msg), uw.MSG_LIMIT - 20)
         self.assertNotIn("\n", msg)
 
     def test_the_summary_only_ever_carries_a_member_of_the_enum(self):
@@ -639,6 +655,79 @@ class TestHeartbeatMessage(unittest.TestCase):
             uw.hc_summary(verdict)
             self.assertEqual(uw.hc_body().splitlines()[0],
                              "verdict=" + verdict)
+
+    def test_the_cut_never_lands_mid_token(self):
+        uw.hc_summary(uw.V_OK)
+        for _ in range(40):
+            uw.hc_emit("oldest_pr_days=12")
+        msg = uw.kuma_msg()
+        self.assertLessEqual(len(msg), uw.MSG_LIMIT)
+        # Every token is a whole key=value pair the run actually emitted; a
+        # plain slice left fragments like `oldes` and `ht` behind.
+        for token in msg.split(" "):
+            self.assertRegex(token, r"^[a-z0-9_]+=\S*$", token)
+        self.assertTrue(msg.endswith("oldest_pr_days=12"))
+
+
+class TestMessageBudget(unittest.TestCase):
+    """`run_epoch=` and a whole `next=` must survive the cut for EVERY verdict.
+
+    This is a regression test for a real defect, not a style rule. `run_epoch=`
+    was emitted last, and the assembled message runs 130 to 289 characters, so
+    it was cut from every verdict except `ok` -- all four reds and
+    `updates-waiting` lost it. A silence-triggered alert carries the PREVIOUS
+    run's message, and `run_epoch=` is the only thing in it that says whether
+    the message is about this alert at all, so it was absent from exactly the
+    cases it exists for while monitoring.md told the operator to read it.
+
+    `next=` is 89 to 111 characters -- over half the budget -- so this asserts
+    the two fields that must survive, not that everything does. What the cut
+    takes is the tail of the counter group, and the pod log carries all of it.
+    """
+
+    # The widest realistic fact set: every optional field present and wide.
+    FACTS = {"prs_open": 3, "oldest_pr": 58, "oldest_pr_days": 48,
+             "dash_age_days": 2, "config_issues": 0, "http": 404}
+
+    RUN_EPOCH = 1787776469
+
+    def _assemble(self, verdict):
+        # Calls the MODULE's own build_message, never a copy of its ordering.
+        # An earlier draft of this test re-implemented the emit order here,
+        # which meant it asserted on itself and would have stayed green through
+        # a reordering of the real thing -- the same shape of mistake as a
+        # default-value assertion that reads back what its own setUp wrote.
+        uw.SUMMARY[0] = DEFAULT_SUMMARY
+        del uw.BODY_LINES[:]
+        return uw.build_message(verdict, dict(self.FACTS), self.RUN_EPOCH)
+
+    def tearDown(self):
+        uw.SUMMARY[0] = DEFAULT_SUMMARY
+        del uw.BODY_LINES[:]
+
+    def test_run_epoch_and_next_survive_the_cut_for_every_verdict(self):
+        for verdict in sorted(uw.VERDICTS):
+            with self.subTest(verdict=verdict):
+                msg = self._assemble(verdict)
+                self.assertLessEqual(len(msg), uw.MSG_LIMIT)
+                self.assertIn("run_epoch=%d" % self.RUN_EPOCH, msg)
+                # The WHOLE action, not a fragment of it.
+                self.assertIn("next=" + uw.next_action_for(verdict), msg)
+
+    def test_the_verdict_is_still_the_first_token_of_every_message(self):
+        for verdict in sorted(uw.VERDICTS):
+            with self.subTest(verdict=verdict):
+                self.assertTrue(
+                    self._assemble(verdict).startswith("verdict=%s " % verdict))
+
+    def test_no_next_action_can_grow_past_the_budget(self):
+        # The guard on the guard: a longer NEXT_ACTIONS entry would silently
+        # start pushing run_epoch= out again. 120 is the existing per-entry cap.
+        for verdict, action in uw.NEXT_ACTIONS.items():
+            with self.subTest(verdict=verdict):
+                self.assertLessEqual(
+                    len("verdict=%s " % verdict) + len("run_epoch=1787776469 ")
+                    + len("next=%s" % action), uw.MSG_LIMIT)
 
 
 if __name__ == "__main__":

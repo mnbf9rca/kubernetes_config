@@ -54,7 +54,8 @@ spec:
               # unauthenticated floating tags to bitnamilegacy/*, frozen since 2025-08-22,
               # capped at 1.33.4 — confirmed via registry API: bitnami/kubectl:1.33 and
               # :1.36 both 404). bitnamilegacy/kubectl:1.33 exists but has neither wget
-              # nor curl (verified in-cluster), which the hc-ping step below needs.
+              # nor curl (verified in-cluster), one of which the heartbeat push
+              # below needs.
               # rancher/kubectl:v1.36.0 exists and matches the server minor but ships no
               # shell at all. alpine/k8s:1.36.0 matches the cluster's server version
               # (v1.36.0) exactly and was verified in-cluster to have kubectl v1.36.0,

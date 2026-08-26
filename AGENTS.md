@@ -225,9 +225,11 @@ Full mechanics, target-by-target reference and failure modes:
   PUSH monitor, not a healthchecks.io check**: as of 2026-08-26 only four checks remain
   there — the two restic jobs, whose multi-line bodies are the triage runbook,
   `vps-uptime-kuma-alive`, and the hand-pinged `estate-update`. Everything else pushes.
-  The default contract for a new job is **`up` on exit 0 and `down` otherwise, from an EXIT
-  trap**, which is what the two hindsight jobs, `influx-backup`, `hermes-pull`,
-  `cloudflare-analytics` and both `keel-fresh` jobs do. There is **no `/start` equivalent**
+  The default contract for a new job is **`up` on exit 0 and `down` otherwise**, from an
+  EXIT trap in the shell runners — the two hindsight jobs, `influx-backup`, `hermes-pull`
+  and both `keel-fresh` jobs — or, in Python, from a module-level `try`/`except` that
+  catches every exception and pushes on the way out, which is what
+  `cloudflare-analytics` does. There is **no `/start` equivalent**
   and none may be invented: a push is a heartbeat carrying a status, so
   `activeDeadlineSeconds` is the whole of the hang bound and the monitor's interval plus
   retry is the silence bound. Two jobs deliberately push **nothing** on some runs and that

@@ -168,8 +168,8 @@ the freshness of the influx dumps and the hermes zip — see
 
 Until 2026-08 neither restic CronJob reported anywhere and neither had a runtime ceiling,
 so a hung run would have blocked every following night silently and been discovered at
-restore time. Both now ping healthchecks.io — they are two of the four jobs that still do —
-and carry `activeDeadlineSeconds` —
+restore time. Both now ping healthchecks.io — after the 2026-08-26 migration they are the
+only jobs in either cluster that still do — and carry `activeDeadlineSeconds` —
 [monitoring.md](monitoring.md#scheduled-work).
 
 ## Node network

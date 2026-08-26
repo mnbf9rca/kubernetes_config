@@ -42,6 +42,12 @@ _spec = importlib.util.spec_from_file_location("cf_ingest", _PATH)
 cf = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(cf)
 
+# The module's own default, captured at import before any setUp has run. An
+# assertion that reads SUMMARY[0] back after setUp wrote it is asserting on the
+# setUp, not on the source, and would stay green if the source's default were
+# changed to a success verdict -- the exact regression it claims to guard.
+DEFAULT_SUMMARY = cf.SUMMARY[0]
+
 UTC = timezone.utc
 
 
@@ -597,8 +603,8 @@ class HeartbeatMessage(unittest.TestCase):
         self.assertIn("chunks=3/8", cf.hc_body().splitlines())
 
     def test_every_line_is_a_key_value_pair_in_printable_ascii(self):
-        cf.hc_summary("ok \u2014 em dash and caf\u00e9")
-        cf.hc_emit("lag=37m")
+        cf.hc_summary("ok")
+        cf.hc_emit("lag=37m \u2014 em dash and caf\u00e9")
         cf.hc_emit("note=a\nb")
         body = cf.hc_body()
         self.assertTrue(body.endswith("\n"))
@@ -611,8 +617,34 @@ class HeartbeatMessage(unittest.TestCase):
 
     def test_default_verdict_is_a_failure_not_a_success(self):
         # If nothing ever calls hc_summary, the message must not claim success.
-        self.assertTrue(cf.hc_body().startswith("verdict=failed"))
-        self.assertTrue(cf.kuma_msg().startswith("verdict=failed"))
+        # Asserted against DEFAULT_SUMMARY, captured at import from the source,
+        # NOT against SUMMARY[0], which setUp has just written.
+        self.assertTrue(DEFAULT_SUMMARY.startswith("verdict="))
+        default = DEFAULT_SUMMARY.split("=", 1)[1]
+        self.assertIn(default, cf.VERDICTS)
+        self.assertEqual(default, "failed")
+
+    def test_a_verdict_off_the_enum_is_coerced_to_failed_and_logged(self):
+        # The enum is enforced in hc_summary, so it is live in the module rather
+        # than read only by this file. Coerced, never raised: a message may
+        # never cost a push, and `failed` is the safe direction.
+        logged = []
+        real_log, cf.log = cf.log, logged.append
+        try:
+            cf.hc_summary("ok - 3 chunks, 250 series")   # a formatted sentence
+        finally:
+            cf.log = real_log
+        self.assertEqual(cf.SUMMARY[0], "verdict=failed")
+        self.assertTrue(any("VERDICTS" in line for line in logged), logged)
+
+    def test_the_cut_never_lands_mid_token(self):
+        cf.hc_summary("ok")
+        for _ in range(40):
+            cf.hc_emit("committed_through=2026-08-26T18:00:00Z")
+        msg = cf.kuma_msg()
+        self.assertLessEqual(len(msg), cf.MSG_LIMIT)
+        for token in msg.split(" "):
+            self.assertRegex(token, r"^[a-z0-9_]+=\S*$", token)
 
     def test_the_summary_only_ever_carries_a_member_of_the_enum(self):
         # A kuma msg is one line and the first token is what an alert shows, so
@@ -627,7 +659,11 @@ class HeartbeatMessage(unittest.TestCase):
         for _ in range(60):
             cf.hc_emit("committed_through=2026-08-26T18:00:00Z")
         msg = cf.kuma_msg()
-        self.assertEqual(len(msg), 200)
+        # At most the limit, and close to it: the trim to a token boundary gives
+        # back up to one token, so exact equality would fail for the right
+        # reason. A far-short result would mean the join broke.
+        self.assertLessEqual(len(msg), cf.MSG_LIMIT)
+        self.assertGreater(len(msg), cf.MSG_LIMIT - 45)
         self.assertNotIn("\n", msg)
 
 

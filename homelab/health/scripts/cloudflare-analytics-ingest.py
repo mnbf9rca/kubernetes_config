@@ -170,7 +170,20 @@ def _clean(text):
 
 
 def hc_summary(text):
-    SUMMARY[0] = "verdict=" + _clean(text)
+    """Set the run's verdict. The argument MUST be a member of VERDICTS.
+
+    Enforced here rather than trusted, because the enum was otherwise dead in
+    this module -- only the test suite read it, and nothing bound the four call
+    sites to membership, so one could have drifted off the enum and every test
+    would still have passed. A drifted verdict is coerced to `failed` and
+    logged: it must not raise, because a message may never cost a push, and
+    `failed` is the safe direction for a value nobody can classify.
+    """
+    verdict = _clean(text)
+    if verdict not in VERDICTS:
+        log("BUG: %r is not a member of VERDICTS; reporting failed" % verdict)
+        verdict = "failed"
+    SUMMARY[0] = "verdict=" + verdict
 
 
 def hc_emit(key_value):
@@ -182,9 +195,20 @@ def hc_body():
     return "\n".join(SUMMARY + BODY_LINES) + "\n"
 
 
+# What kuma stores in a heartbeat's `msg` column.
+MSG_LIMIT = 200
+
+
 def kuma_msg():
-    """The same lines as ONE line, cut to what kuma stores."""
-    return " ".join(SUMMARY + BODY_LINES)[:200]
+    """The same lines as ONE line, cut to what kuma stores.
+
+    THE CUT LANDS ON A TOKEN BOUNDARY, NEVER MID-TOKEN, so a truncated message
+    ends with the last whole `key=value` pair rather than with half of one.
+    """
+    joined = " ".join(SUMMARY + BODY_LINES)
+    if len(joined) <= MSG_LIMIT:
+        return joined
+    return joined[:MSG_LIMIT].rsplit(" ", 1)[0]
 
 
 def env(name, default=None):
@@ -625,7 +649,7 @@ def main():
                 % (iso(start), iso(retention_floor), missing_hours,
                    RETENTION_HOURS))
             log("!!! retention and can never be fetched. Writing an ingest_gap")
-            log("!!! marker and exiting non-zero so the check goes red.")
+            log("!!! marker and exiting non-zero so the monitor is pushed down.")
             log("")
             start = retention_floor
 

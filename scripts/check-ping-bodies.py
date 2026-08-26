@@ -515,7 +515,7 @@ def main(argv):
         return 2
 
     if hits:
-        print("Unsafe healthchecks.io ping-body sink call(s):\n")
+        print("Unsafe ping-body / heartbeat-message sink call(s):\n")
         for path, number, reason in hits:
             print("  %s:%d: %s" % (path, number, reason))
         print("\nA reported message travels with the alert, and a "

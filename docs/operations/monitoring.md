@@ -357,8 +357,11 @@ trap. Under `set -e` alone, `xargs` swallows the prune step's `ls` failure and t
 success anyway. With the call on the last line instead of in a trap, a failing prune, a missing
 ConfigMap key or a dead influxdb pod produces *exactly nothing* until the silence bound expires
 about 30 hours later. The accepted cost — a transient failure now alerts instead of self-healing
-into silence — is the better trade. Both hindsight scripts and `cloudflare-analytics` follow the
-same EXIT-trap shape, for the same reason.
+into silence — is the better trade. Both hindsight scripts follow the same EXIT-trap shape, for
+the same reason. `cloudflare-analytics` reaches the same place by a different route: it is Python,
+with no trap at all, and gets its guarantee from a module-level `try`/`except` that catches
+`SystemExit`, `QueryFailed` and every other exception, sets a verdict for each, and pushes on the
+way out.
 
 `hindsight-canary` is the only signal here that watches a *request path* rather than an artifact,
 and it exists because nothing else could. Hermes fails open at four layers: with the memory server
@@ -404,7 +407,9 @@ discarded and the heartbeat lands as `up` with kuma's default message — observ
 `{"ok":true}`. On failure the image appends `/fail`, and on every run it makes a second POST to
 `/log`; kuma routes neither, so both answer Express's "Cannot POST" 404. That is the contract this
 repo wants — **a failed backup pushes nothing and the monitor goes DOWN by silence** — at the cost
-of two `WARNING: Failed to send…` lines in the pod log on every run, which are cosmetic.
+of one `WARNING: Failed to send…` line per unrouted request: one on a successful run, from the
+`/log` POST alone, and two on a failed one, where `/fail` 404s as well. Both are cosmetic. A
+successful run on August 26, 2026 logged exactly one, as expected.
 
 **`hermes-pull`** backs up the off-cluster hermes VM: it SSHes in with a forced-command key,
 runs `hermes backup`, and pulls the zip onto the `hermes-dumps` PVC
@@ -554,21 +559,27 @@ appears, then quiet until it is merged and the next run flips the monitor UP. Ma
 re-flip by pushing up-then-down stays rejected outright: it writes a false "everything is fine"
 event into the monitor's own history.
 
-**An open pull request is green.** The estate updates in a session every 4 to 6 weeks, so a
+**An open pull request is UP.** The estate updates in a session every 4 to 6 weeks, so a
 pending Renovate pull request is this design working, not a fault. `verdict=updates-waiting`
 is the green form and `verdict=updates-pending` is the red one; the boundary is
-`pr_age_red_days=` in the body, currently 45 days — a session and a half. The rule this
+`pr_age_red_days=` in the heartbeat, currently 45 days — a session and a half. The rule this
 replaced went red on any open pull request, which under session cadence made red the steady
 state, and an alarm that is normally red is not an alarm.
 
-**Renovate's own liveness is a red verdict on this same check**, `verdict=renovate-stale`.
+**Renovate's own liveness is a `down` verdict on this same monitor**, `verdict=renovate-stale`.
 It fires when the Dependency Dashboard's `updated_at` (a stable API field; nothing parses its
-markdown) exceeds `renovate_alive_max_days=` in the body, and it is evaluated **above** the
+markdown) exceeds `renovate_alive_max_days=` in the heartbeat, and it is evaluated **above** the
 pull-request rules, so a dead Renovate with a young pull request still open cannot read as the
 green `updates-waiting`. A missing dashboard and a configuration error keep their own, more
 specific verdicts — both are already red and both name their own `next=`. A dashboard whose
-timestamp does not parse is `api-error`, which pings `/log` and changes nothing: an unreadable
-field is never evidence that Renovate is alive.
+timestamp does not parse is `api-error`, which pushes **nothing at all** and so changes nothing:
+an unreadable field is never evidence that Renovate is alive.
+
+**Both threshold fields are the first things the 200-character cut takes, by design.**
+`pr_age_red_days=` and `renovate_alive_max_days=` are emitted last because they are literals in
+`update-watch.py` and identical between runs, so an alert that loses them costs the reader one
+look at the source. What must never be cut is `run_epoch=`, which is emitted first for that
+reason; `test_run_epoch_and_next_survive_the_cut_for_every_verdict` holds both ends of that.
 
 **The liveness threshold is the unarmed floor, 14 days, and it is due a re-arming.** The rule is
 twice the maximum `dash_age_days` this job has emitted across its last 30 heartbeats, floored at
@@ -745,8 +756,12 @@ variable-length token (`error=`, `next=`) where the cut will take it rather than
 Everything that used to be a body line is now printed to the pod log as well — the shell runners
 as a `detail:` line from the exit trap, the Python jobs as a `heartbeat message (full):` block — so
 nothing was lost, it moved. **Read the pod log first from now on**; the heartbeat history is the
-fallback, not the record. It is bounded by `ttlSecondsAfterFinished` on the Job, which is 3 days
-for most of these and 1 hour for `hindsight-canary`.
+fallback, not the record. It is bounded by `ttlSecondsAfterFinished` on the Job, and that
+varies more than it looks: **3 days** for `cloudflare-analytics`, `hermes-pull` and
+`update-watch`; **2 days** for `influx-backup` and `hindsight-pg-dump`; **1 day** for
+`ingest-freshness` and `jottacloud-backup`; and **1 hour** for `hindsight-canary`, which runs
+hourly. So the window in which the pod log is still there to be read is an hour on the canary
+and no more than three days on anything.
 
 `make check-ping-bodies` enforces all of this. It catches the one-intermediate-variable evasion
 (`M=$(cmd); emit "error=$M"`), and refuses a denied name in every parameter-expansion form —

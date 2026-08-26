@@ -356,6 +356,15 @@ awk's status, so a failed lookup used to leave the bucket ID empty and sail stra
 `make health-influx-cloudflare-bootstrap` **before** the apply that adds `cloudflare` here,
 or the next night's export fails.
 
+**A new bucket is three edits, not two.** Create it, add it to the `for B in ...` list in
+`influx-export-lp.sh`, **and** raise `LP_EXPECTED` in
+`homelab/health/scripts/influx-backup.sh`. That last one is the denominator of the
+`buckets=n/m` the `health-influx-backup` heartbeat carries, and it is a literal because the
+bucket list lives in the other pod's script and cannot be read from the driver. Nothing
+breaks if it drifts — the export already fails by name on a bucket it cannot find, so on the
+success path n always equals the real count — but a `buckets=5/4` in the heartbeat is the
+visible tell that somebody edited one and not the other.
+
 **InfluxDB restore drill:** `influx restore --full` self-defeats — it clobbers its own auth
 mid-restore. Use scoped `influx restore --bucket <name>` instead. First drill passed
 2026-07-26. Quarterly drills must also exercise the still-untested disaster-recovery
