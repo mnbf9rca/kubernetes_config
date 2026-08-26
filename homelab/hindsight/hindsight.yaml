@@ -1,0 +1,525 @@
+# Hindsight — the self-hosted memory backend for the Hermes agent profiles on
+# VM 103. One file, every resource declaring its own namespace explicitly, per
+# the repo's one-file-per-service rule.
+#
+# NO keel ANNOTATIONS ANYWHERE IN THIS NAMESPACE, and that is not an oversight.
+# This is a stateful store that runs Alembic migrations on startup and holds an
+# agent's memory; `keel.sh/policy: force` on it is how you get an unattended
+# schema migration at 3 a.m. with no dump taken first. Every image is
+# version-pinned, Renovate proposes the bumps, and the upgrade runs the dump-first
+# runbook — `make hindsight-upgrade`, then merge, diff, apply. AGENTS.md names
+# `hindsight` alongside `health` as an explicit exception to the keel rule, so a
+# future agent following that rule literally cannot re-add keel here.
+#
+# Runbook, restore procedure and key rotation: docs/operations/hindsight.md
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: hindsight-postgres
+  namespace: hindsight
+spec:
+  selector:
+    app: hindsight-postgres
+  ports:
+    - port: 5432
+      targetPort: 5432
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: hindsight-api
+  namespace: hindsight
+spec:
+  selector:
+    app: hindsight
+  ports:
+    - port: 8888
+      targetPort: 8888
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: hindsight-cp
+  namespace: hindsight
+spec:
+  selector:
+    app: hindsight
+  ports:
+    - port: 9999
+      targetPort: 9999
+---
+# THE PVC NAMES ARE LOAD-BEARING AND MUST NOT BE SHORTENED. local-path-provisioner
+# names each directory on the node `<pvName>_<namespace>_<pvcName>`, and the restic
+# verification gate in homelab/backup/restic-cronjob.yaml globs
+# `/data/pvc-*_hindsight_hindsight-dumps/...` literally. Rename either PVC and the
+# gate reports MISSING every night.
+#
+# 10Gi is a REQUEST, not a quota: local-path enforces nothing, so "full" means the
+# shared node SSD filled. The nightly gate's `df` check on /data is what notices
+# that (see the disk-usage block in restic-cronjob.yaml).
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: hindsight-postgres-data
+  namespace: hindsight
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 10Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: hindsight-dumps
+  namespace: hindsight
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 2Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hindsight-postgres
+  namespace: hindsight
+spec:
+  replicas: 1
+  # RWO local-path PVC on a single-node cluster: two postgres pods can never run
+  # at once, so a rolling update would deadlock on the volume.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: hindsight-postgres
+  template:
+    metadata:
+      labels:
+        app: hindsight-postgres
+    spec:
+      containers:
+        - name: postgres
+          # pgvector >= 0.8.0 covers the one documented feature floor (iterative
+          # scans); PostgreSQL 17 is chosen so the major does not need revisiting
+          # soon. Renovate watches homelab/hindsight/**, but MAJOR postgres bumps
+          # are disabled in renovate.json on purpose: a major is a dump-and-restore,
+          # not a tag edit, and a grouped PR carrying one would be a data-loss trap
+          # that `make hindsight-upgrade` could not catch — the dump would succeed
+          # and the new major would refuse the old data directory.
+          image: pgvector/pgvector:0.8.1-pg17
+          env:
+            # The image's entrypoint creates this database and role on an empty
+            # PGDATA. That role owns its database and can run `CREATE EXTENSION
+            # vector`, which the Hindsight API does itself on first startup. So
+            # there is NO bootstrap Job here — deliberately. A one-shot Job's
+            # spec.template is immutable, and a completed one that outlives its TTL
+            # breaks the next apply quietly; that is the defect that broke
+            # apply-homelab for four months.
+            - { name: POSTGRES_DB, value: hindsight }
+            - { name: POSTGRES_USER, value: hindsight }
+            - name: POSTGRES_PASSWORD
+              valueFrom: { secretKeyRef: { name: hindsight, key: pg-password } }
+            - { name: PGDATA, value: /var/lib/postgresql/data/pgdata }
+          ports:
+            - containerPort: 5432
+          # The official entrypoint starts as root, chowns PGDATA and su-execs to
+          # the postgres user, so `drop: [ALL]` and `runAsNonRoot` would break
+          # first boot. What the image does tolerate is the rest of the estate
+          # taste: no privilege gain, and the default seccomp profile.
+          securityContext:
+            allowPrivilegeEscalation: false
+            seccompProfile: { type: RuntimeDefault }
+          volumeMounts:
+            - { name: data, mountPath: /var/lib/postgresql/data }
+          # THE PROBE TRIO IS COPIED FROM vps/workloads/umami.yaml, VERBATIM but for
+          # the user and database names. Read the reasoning there before changing a
+          # threshold here; the short version:
+          #
+          # `test $? -lt 2` on startup and liveness. pg_isready exit 1 means "server
+          # is rejecting connections" — which is what crash recovery looks like —
+          # and must count as ALIVE. A strict exit-0-only liveness probe SIGKILLs
+          # the postmaster mid-recovery and never converges on a single replica with
+          # `strategy: Recreate`; there is no second postgres to fall back to. While
+          # a startupProbe is pending the other two are suppressed entirely, so a
+          # strict startup probe becomes the killer instead.
+          startupProbe:
+            exec:
+              command: ["sh", "-c", "pg_isready -q -U hindsight -d hindsight -h 127.0.0.1; test $? -lt 2"]
+            periodSeconds: 10
+            failureThreshold: 30
+            timeoutSeconds: 5
+          # -h 127.0.0.1 matters: without it pg_isready probes the UNIX SOCKET while
+          # the API talks TCP, so readiness could stay green with the only path the
+          # API uses broken. The STRICT form is correct here: a recovering postgres
+          # should carry no traffic.
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "hindsight", "-d", "hindsight", "-h", "127.0.0.1"]
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            timeoutSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            exec:
+              command: ["sh", "-c", "pg_isready -q -U hindsight -d hindsight -h 127.0.0.1; test $? -lt 2"]
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 6
+          resources:
+            requests: { cpu: 250m, memory: 512Mi }
+            limits: { cpu: "1", memory: 1Gi }
+      volumes:
+        - name: data
+          persistentVolumeClaim: { claimName: hindsight-postgres-data }
+---
+# ONE POD, TWO CONTAINERS. The control plane's default
+# HINDSIGHT_CP_DATAPLANE_API_URL of http://localhost:8888 then works untouched, the
+# hop between them never crosses the pod network, and there is exactly one thing to
+# restart. The control plane keeps its own container and its own readiness probe,
+# so a wedged UI process is visible rather than hidden behind a shared entrypoint;
+# it is optional by upstream design and can be dropped without touching the API.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hindsight
+  namespace: hindsight
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: hindsight
+  template:
+    metadata:
+      labels:
+        app: hindsight
+    spec:
+      # The Service is named hindsight-api, so Kubernetes's docker-style service
+      # links would inject HINDSIGHT_API_PORT=tcp://<ip>:8888 — the exact name
+      # of the app's own port config var, which crashes it at parse
+      # (ValueError, found at rollout 2026-08-24). Service DNS is unaffected.
+      enableServiceLinks: false
+      containers:
+        - name: api
+          # THE **FULL** IMAGE, NOT `-slim`, AND THAT IS A DELIBERATE ~9 GB. The slim
+          # image needs an external embeddings provider and reranker: a second
+          # billable dependency, an embedding-dimension lock-in, and — decisively —
+          # a remote-embeddings outage or key revocation would break READS too,
+          # because every recall must embed its query. The full image bundles
+          # BAAI/bge-small-en-v1.5 and ms-marco-MiniLM-L-6-v2 and runs them CPU-only,
+          # so recall is pure local search with zero external dependencies and only
+          # retain and reflect touch the paid LLM. Embeddings and reranker env stays
+          # at the `local` provider defaults — zero configuration.
+          #
+          # KEEP THIS PIN AT OR ABOVE 0.9.1 FOREVER. The liveness probe below uses
+          # /health/live, which exists from 0.9.1; 0.5.0+ also satisfies the dedup
+          # gate the canary relies on. Renovate watches homelab/hindsight/**;
+          # upgrade via `make hindsight-upgrade`, which takes the pre-upgrade dump
+          # that IS the rollback — migrations are forward-only.
+          image: ghcr.io/vectorize-io/hindsight-api:0.9.1
+          env:
+            # The full DSN lives in the Secret as one key, so the assembled URL
+            # exists in exactly one place and the password never appears in a plain
+            # manifest.
+            - name: HINDSIGHT_API_DATABASE_URL
+              valueFrom: { secretKeyRef: { name: hindsight, key: database-url } }
+            # Upstream's default, kept explicit. Alembic runs on startup under a
+            # Postgres advisory lock, which is harmless with one replica.
+            - { name: HINDSIGHT_API_RUN_MIGRATIONS_ON_STARTUP, value: "true" }
+            # A STABLE worker id, so a restart re-adopts its own in-flight retain and
+            # consolidation tasks instead of orphaning them. There are no worker
+            # pods: `worker.enabled=false` is the upstream default and a documented
+            # complete deployment — the API processes both in-process, which is
+            # plenty for one or two personal agents.
+            - { name: HINDSIGHT_API_WORKER_ID, value: hindsight-api-0 }
+            # Extraction runs SERVER-SIDE ONLY. Hermes talks pure HTTP in
+            # `local_external` mode, so this key never lands on VM 103. Switching
+            # provider later is these two lines plus a new value in the same Secret
+            # key — which is why that key is the provider-neutral `llm-api-key`.
+            - { name: HINDSIGHT_API_LLM_PROVIDER, value: openai }
+            # Bank-template manifest applied to every NEWLY created bank
+            # (undocumented but real: _parse_default_bank_template in the API's
+            # config.py). Turns on memory defense — the bundled secret-pattern
+            # scanner, redacting on match — by default, so a future profile's
+            # auto-created bank is defended without anyone remembering to set
+            # it. Existing banks are untouched: their policy is per-bank config,
+            # set by hand 2026-08-24, and nothing rescans old memories.
+            - name: HINDSIGHT_API_DEFAULT_BANK_TEMPLATE
+              value: '{"version":"1","bank":{"memory_defense":{"enabled":true,"rules":[{"on":"sensitive_data","action":"redact"}]}}}'
+            - { name: HINDSIGHT_API_LLM_MODEL, value: gpt-4o-mini }
+            - name: HINDSIGHT_API_LLM_API_KEY
+              valueFrom: { secretKeyRef: { name: hindsight, key: llm-api-key } }
+            # AUTH ON FROM DAY ONE. The server default is no authentication at all
+            # and there is no per-bank ACL, so unauthenticated any LAN or Tailscale
+            # device could read and write every bank — far too weak for a store whose
+            # threat model includes poisoning. No Traefik middleware: the estate has
+            # zero middleware precedent, and the Hermes client speaks
+            # `Authorization: Bearer` natively, so a second header scheme would only
+            # break it.
+            #
+            # Isolation between banks stays LOGICAL: one tenant key spans all banks.
+            # Accepted, because every profile is the same operator's own agent.
+            - { name: HINDSIGHT_API_TENANT_EXTENSION, value: "hindsight_api.extensions.builtin.tenant:ApiKeyTenantExtension" }
+            - name: HINDSIGHT_API_TENANT_API_KEY
+              valueFrom: { secretKeyRef: { name: hindsight, key: tenant-api-key } }
+          ports:
+            - containerPort: 8888
+          securityContext:
+            # The image's USER is the non-numeric name `hindsight`, which kubelet
+            # cannot verify against runAsNonRoot; 1000 is that user's UID (probed
+            # from the image on 2026-08-24: uid=1000(hindsight)).
+            runAsNonRoot: true
+            runAsUser: 1000
+            allowPrivilegeEscalation: false
+            capabilities: { drop: [ALL] }
+            seccompProfile: { type: RuntimeDefault }
+          # Migrations, and worst case a first-use model download, happen before
+          # /health returns 200; the startupProbe suppresses the other two for up to
+          # five minutes. Trim this budget once rollout step 3 has measured the real
+          # cold start.
+          startupProbe:
+            httpGet: { path: /health, port: 8888 }
+            periodSeconds: 10
+            failureThreshold: 30
+            timeoutSeconds: 5
+          # /health is DATABASE-GATED and returns 503 when postgres is unreachable,
+          # which drains traffic rather than restarting anything. Probing the data
+          # plane, not a static control-plane OK, is the repo rule — the
+          # vendor-documented shallow probe would have stayed green through the
+          # 2026-08-18 Pomerium wedge.
+          #
+          # A synthetic-recall probe was considered and rejected here: it needs auth
+          # and a bank and would exercise the reranker every tick. The canary CronJob
+          # covers that path end to end, at a sane cadence.
+          readinessProbe:
+            httpGet: { path: /health, port: 8888 }
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 3
+          # /health/live is IN-PROCESS ONLY and never touches the database (present
+          # from 0.9.1, which the pin guarantees), so a slow or recovering postgres
+          # cannot crashloop the single API replica. Restart is safe: the container
+          # is stateless and migrations re-run idempotently under the advisory lock.
+          livenessProbe:
+            httpGet: { path: /health/live, port: 8888 }
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 6
+          resources:
+            requests: { cpu: 500m, memory: 1536Mi }
+            limits: { cpu: "2", memory: 3Gi }
+        - name: control-plane
+          # Same version tag as the API, always. Renovate groups them, and a skewed
+          # pair is an untested combination.
+          image: ghcr.io/vectorize-io/hindsight-control-plane:0.9.1
+          env:
+            - { name: HINDSIGHT_CP_DATAPLANE_API_URL, value: "http://localhost:8888" }
+            # The control plane authenticates to the dataplane with the SAME tenant
+            # key — upstream documents this as required when the API is
+            # auth-protected. Without it, enabling API auth would silently break the
+            # admin console.
+            - name: HINDSIGHT_CP_DATAPLANE_API_KEY
+              valueFrom: { secretKeyRef: { name: hindsight, key: tenant-api-key } }
+            # The control plane is a FULL READ/WRITE ADMIN CONSOLE — retain, delete,
+            # bank delete, import and export. Unauthenticated it would be the widest
+            # poisoning and deletion surface in the design, so its own access key is
+            # set from day one (login page plus a 24h HMAC session cookie).
+            - name: HINDSIGHT_CP_ACCESS_KEY
+              valueFrom: { secretKeyRef: { name: hindsight, key: cp-access-key } }
+          ports:
+            - containerPort: 9999
+          # The control-plane image sets no USER and runs as root (verified at
+          # rollout, 2026-08-24: kubelet refuses it under runAsNonRoot). The
+          # namespace enforces PSA baseline, which permits root; the container
+          # keeps every other restriction. Revisit if upstream ships a non-root
+          # image.
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: [ALL] }
+            seccompProfile: { type: RuntimeDefault }
+          readinessProbe:
+            httpGet: { path: /, port: 9999 }
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 3
+          # NO LIVENESS. A wedged UI is an inconvenience, not an outage, and
+          # restart-on-probe of a single replica buys risk for nothing.
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }
+            limits: { cpu: 500m, memory: 1Gi }
+---
+# No `tls:` block: Traefik serves the wildcard *.cynexia.net cert as its default.
+# Both names are LAN/Tailscale only — every *.cynexia.net record points at
+# 10.100.0.100 — and nothing here is exposed publicly. If that ever changes, the
+# precedent is a Cloudflare Access app on a dedicated tunnel, never a Traefik
+# middleware.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: hindsight
+  namespace: hindsight
+spec:
+  ingressClassName: traefik
+  rules:
+    - host: hindsight.cynexia.net
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: hindsight-api
+                port:
+                  number: 8888
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: hindsight-ui
+  namespace: hindsight
+spec:
+  ingressClassName: traefik
+  rules:
+    - host: hindsight-ui.cynexia.net
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: hindsight-cp
+                port:
+                  number: 9999
+---
+# The recovery artifact. restic sweeps both PVCs live at 03:00, which captures the
+# postgres data directory TORN — deliberately, since the homelab runs no quiesce
+# sidecars. This logical dump is what actually restores.
+#
+# 02:15 UTC sits after hermes-pull (02:00) and before influx-backup (02:30) and the
+# 03:00 sweep, so the night's dump is always in the tree restic walks.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: hindsight-pg-dump
+  namespace: hindsight
+spec:
+  schedule: "15 2 * * *"
+  # Without timeZone the schedule follows kube-controller-manager's local zone,
+  # which is not something this repo controls.
+  timeZone: "UTC"
+  concurrencyPolicy: Forbid
+  # A missed window is retried for an hour, then dropped rather than lost silently.
+  startingDeadlineSeconds: 3600
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      # With concurrencyPolicy: Forbid, one hung run silently blocks every later
+      # night. This converts a hang into a failed ping instead.
+      activeDeadlineSeconds: 3600
+      ttlSecondsAfterFinished: 172800
+      template:
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: pg-dump
+              # postgres:17-alpine, NOT the server's pgvector image: the Debian
+              # pgvector image ships neither curl nor wget (verified at rollout
+              # 2026-08-24), so the healthchecks ping could never leave the pod
+              # and the check would go red by silence every night. Alpine's
+              # busybox wget closes that; pg_dump needs no vector extension
+              # client-side. Keep the MAJOR (17) matched to the server image
+              # above - bump the two together.
+              image: postgres:17.6-alpine
+              command: ["sh", "/scripts/hindsight-pg-dump.sh"]
+              env:
+                # `PGPASSWORD`, not the envsubst name. A generated script may never
+                # mention an ENVSUBST_VAR_NAMES variable: envsubst rewrites the
+                # ConfigMap's contents too, in the bare $NAME form as well as
+                # ${NAME}, so the real password would ship inside the ConfigMap.
+                - name: PGPASSWORD
+                  valueFrom: { secretKeyRef: { name: hindsight, key: pg-password } }
+                # healthchecks.io check UUID (op://Homelab/hindsight/healthcheck-uuid).
+                # Substituted at apply time; never committed.
+                - name: HC_UUID
+                  value: "${HINDSIGHT_HC_UUID}"
+              securityContext:
+                allowPrivilegeEscalation: false
+                capabilities: { drop: [ALL] }
+                seccompProfile: { type: RuntimeDefault }
+              volumeMounts:
+                - { name: dumps, mountPath: /dumps }
+                - { name: scripts, mountPath: /scripts, readOnly: true }
+              resources:
+                requests: { cpu: 100m, memory: 128Mi }
+                limits: { cpu: 500m, memory: 512Mi }
+          volumes:
+            - name: dumps
+              persistentVolumeClaim: { claimName: hindsight-dumps }
+            - name: scripts
+              configMap: { name: hindsight-scripts }
+---
+# The noticer. Read the header of scripts/hindsight-canary.sh for what it covers
+# and why an external monitor could not: uptime-kuma runs on the VPS, which has no
+# route to any *.cynexia.net address.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: hindsight-canary
+  namespace: hindsight
+spec:
+  # Hourly, not the every-15-minutes of the original design: a personal assistant's
+  # write path does not need 25-minute detection, and four runs an hour is four
+  # extraction-LLM calls an hour for a sentinel nobody reads. Detection latency
+  # becomes roughly 90 minutes (1 h period + 30 min grace on the healthchecks.io
+  # side, which is dashboard state - change the two together).
+  schedule: "0 * * * *"
+  timeZone: "UTC"
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 600
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      # Shorter than the schedule, so a hung run can never block the next one.
+      activeDeadlineSeconds: 300
+      ttlSecondsAfterFinished: 3600
+      template:
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: canary
+              # Renovate watches homelab/hindsight/**; this pin moves with the
+              # grouped PR like the rest.
+              image: curlimages/curl:8.14.1
+              command: ["sh", "/scripts/hindsight-canary.sh"]
+              env:
+                # `CANARY_API_KEY`, not HINDSIGHT_TENANT_API_KEY, for the same
+                # envsubst reason as the dump job above.
+                - name: CANARY_API_KEY
+                  valueFrom: { secretKeyRef: { name: hindsight, key: tenant-api-key } }
+                - name: HC_UUID
+                  value: "${HINDSIGHT_CANARY_HC_UUID}"
+              securityContext:
+                # curlimages/curl's USER is the non-numeric curl_user (uid 100),
+                # which kubelet cannot verify against runAsNonRoot alone.
+                runAsNonRoot: true
+                runAsUser: 100
+                allowPrivilegeEscalation: false
+                capabilities: { drop: [ALL] }
+                seccompProfile: { type: RuntimeDefault }
+              volumeMounts:
+                - { name: scripts, mountPath: /scripts, readOnly: true }
+              resources:
+                requests: { cpu: 50m, memory: 64Mi }
+                limits: { cpu: 200m, memory: 128Mi }
+          volumes:
+            - name: scripts
+              configMap: { name: hindsight-scripts }

@@ -52,7 +52,10 @@ REQUIRED_VARS := B2_ACCOUNT_ID B2_ACCOUNT_KEY RESTIC_PASSWORD RESTIC_REPOSITORY 
                  HEALTH_HAE_AUTH_TOKEN \
                  HEALTH_GARMIN_EMAIL HEALTH_GARMIN_B64_PASSWORD \
                  HEALTH_GRAFANA_ADMIN_PASSWORD \
-                 HEALTH_CF_API_TOKEN HEALTH_CF_ZONE_TAGS
+                 HEALTH_CF_API_TOKEN HEALTH_CF_ZONE_TAGS \
+                 HINDSIGHT_PG_PASSWORD HINDSIGHT_LLM_API_KEY \
+                 HINDSIGHT_TENANT_API_KEY HINDSIGHT_CP_ACCESS_KEY \
+                 HINDSIGHT_HC_UUID HINDSIGHT_CANARY_HC_UUID
 
 # Explicit envsubst allowlist. CRITICAL: envsubst with no allowlist substitutes
 # EVERY $VAR / ${VAR} token in the stream, including shell variables embedded in
@@ -79,7 +82,10 @@ ENVSUBST_VAR_NAMES := B2_ACCOUNT_ID B2_ACCOUNT_KEY RESTIC_PASSWORD RESTIC_REPOSI
                      HEALTH_HAE_AUTH_TOKEN \
                      HEALTH_GARMIN_EMAIL HEALTH_GARMIN_B64_PASSWORD \
                      HEALTH_GRAFANA_ADMIN_PASSWORD \
-                     HEALTH_CF_API_TOKEN HEALTH_CF_ZONE_TAGS
+                     HEALTH_CF_API_TOKEN HEALTH_CF_ZONE_TAGS \
+                     HINDSIGHT_PG_PASSWORD HINDSIGHT_LLM_API_KEY \
+                     HINDSIGHT_TENANT_API_KEY HINDSIGHT_CP_ACCESS_KEY \
+                     HINDSIGHT_HC_UUID HINDSIGHT_CANARY_HC_UUID
 ENVSUBST_VARS := $(foreach v,$(ENVSUBST_VAR_NAMES),$${$(v)})
 # Note: TAILSCALE_AUTH_KEY is deliberately NOT in ENVSUBST_VAR_NAMES.
 # Tailscale auth keys are one-shot and only needed for initial node
@@ -119,6 +125,9 @@ help:
 	@echo "  route-health-dns  - create/update CNAMEs for every hostname in the health cloudflared ConfigMap"
 	@echo "  health-influx-bootstrap - bootstrap InfluxDB buckets/DBRP mapping/tokens for the health stack"
 	@echo "  health-influx-cloudflare-bootstrap - create the 'cloudflare' bucket + mint its ingest/read tokens"
+	@echo ""
+	@echo "Hindsight namespace targets:"
+	@echo "  hindsight-upgrade - take a verified pre-upgrade pg_dump, then STOP and print the manual half"
 
 .PHONY: check-tools
 check-tools:
@@ -769,6 +778,97 @@ clear-tailscale-bootstrap:
 	}
 	@omnictl delete configpatch "900-bootstrap-tailscale-authkey-$(TALOS_MACHINE_ID)" \
 	  && echo "OK: bootstrap patch removed for machine $(TALOS_MACHINE_ID)"
+
+# --- hindsight namespace ---------------------------------------------------
+#
+# `make hindsight-upgrade` — the pre-upgrade dump, and nothing else.
+#
+# DUMB, LOUD, AND IT STOPS BEFORE THE INTERESTING PART. Hindsight's migrations are
+# forward-only, so THE DUMP IS THE ROLLBACK; taking it is the one step a human
+# reliably skips under time pressure, and it is the only step this target
+# automates. It never edits a pin, never merges a pull request and never applies:
+# chaining into `make apply-homelab` would apply EVERY pending change in the tree,
+# unreviewed. Merging, reading the diff, applying, watching the rollout and
+# deciding to roll back all stay manual — they are judgement calls with well-worn
+# guarded commands, and automating them produces a target nobody trusts enough to
+# run.
+#
+# A flat recipe, not a parameterised macro: the Makefile's stated doctrine is that
+# copy-paste duplication beats abstraction here, and a future `make health-upgrade`
+# is meant to be a sibling copy. A scripts/*.sh helper was considered and rejected
+# — `check-script-lint` only lints scripts that appear in the kustomize render, so
+# a repo-level helper would be the estate's first unlinted shell file.
+#
+# NOTE THE `$$(date …)`. Inside a Make recipe, `$(date …)` is a MAKE variable
+# reference and expands to the empty string. The timestamp is captured ONCE so
+# every later step names the same Job.
+#
+# The Job is created with `--from=cronjob/…`, so it inherits the whole pod spec —
+# image, Secret, script ConfigMap, PVC mount, ttlSecondsAfterFinished. Nothing is
+# duplicated here to drift, it is CronJob-shaped and therefore exempt from
+# check-job-ttl, and it self-collects. NO `kind: Job` MANIFEST IS ADDED TO THE
+# TREE: that walks straight into the immutable-spec.template trap that broke
+# apply-homelab for four months.
+.PHONY: hindsight-upgrade
+hindsight-upgrade: check-context
+	@kubectl -n hindsight get cronjob hindsight-pg-dump >/dev/null 2>&1 || { \
+	  echo "ERROR: cronjob/hindsight-pg-dump not found in namespace hindsight."; \
+	  echo "  This target exists to take a verified pre-upgrade dump. A target that"; \
+	  echo "  silently 'succeeds' without dumping is the worst possible outcome, so"; \
+	  echo "  it refuses rather than guessing."; \
+	  exit 1; \
+	}
+	@active=$$(kubectl -n hindsight get jobs \
+	    -o jsonpath='{range .items[?(@.status.active)]}{.metadata.name}{"\n"}{end}' \
+	  | grep -E '^(hindsight-pg-dump|pre-upgrade)' || true); \
+	if [ -n "$$active" ]; then \
+	  echo "ERROR: a dump Job is already running:"; \
+	  echo "$$active" | sed 's/^/  /'; \
+	  echo "  concurrencyPolicy: Forbid governs only CronJob-OWNED Jobs and cannot"; \
+	  echo "  see a manual one, so this guard is what keeps two dumps apart. Wait for"; \
+	  echo "  it, or watch it: kubectl -n hindsight logs -f job/<name>"; \
+	  exit 1; \
+	fi
+	@set -e; \
+	ts=$$(date -u +%Y%m%d%H%M%S); job=pre-upgrade-$$ts; \
+	kubectl -n hindsight create job --from=cronjob/hindsight-pg-dump "$$job"; \
+	if kubectl -n hindsight wait --for=condition=complete "job/$$job" --timeout=900s; then \
+	  kubectl -n hindsight logs "job/$$job" --tail=20 || true; \
+	  echo ""; \
+	  echo "### Pre-upgrade dump complete: $$job"; \
+	  echo "### The dump is the rollback. Migrations are forward-only."; \
+	  echo "###"; \
+	  echo "### Next, by hand:"; \
+	  echo "###   1. Merge the Renovate \"hindsight stack\" PR on GitHub, then: git pull"; \
+	  echo "###      (closing it unmerged does not snooze anything - Renovate recreates it)"; \
+	  echo "###   2. make diff-homelab      <- READ IT. Confirm only the image lines moved."; \
+	  echo "###   3. make apply-homelab"; \
+	  echo "###   4. kubectl -n hindsight rollout status deploy/hindsight --timeout=600s"; \
+	  echo "###   5. Verify: the startup probe settles, then \`hermes memory status\` on VM 103"; \
+	  echo "###   6. Confirm homelab-update-watch goes green after the next 06:45 run"; \
+	  echo "###      (or force one: kubectl -n ops create job --from=cronjob/update-watch now-$$ts)"; \
+	  echo "###"; \
+	  echo "### If it goes wrong, the restore runbook is in docs/operations/hindsight.md."; \
+	else \
+	  failed=$$(kubectl -n hindsight get "job/$$job" \
+	    -o jsonpath='{.status.conditions[?(@.type=="Failed")].status}' 2>/dev/null || true); \
+	  kubectl -n hindsight logs "job/$$job" --tail=40 || true; \
+	  echo ""; \
+	  if [ "$$failed" = "True" ]; then \
+	    echo "### DUMP FAILED - do not upgrade."; \
+	    echo "### The log above carries the script's own tables= and dump_bytes= numbers."; \
+	  else \
+	    echo "### DUMP STILL RUNNING after 900s - do not upgrade; do not delete the job."; \
+	    echo "### Watch it: kubectl -n hindsight logs -f job/$$job"; \
+	    echo "### 900s is shorter than the CronJob's own activeDeadlineSeconds (3600) on"; \
+	    echo "### purpose: a pre-upgrade dump that has not finished in 15 minutes on this"; \
+	    echo "### database is something to look at, not to wait out."; \
+	  fi; \
+	  echo "###"; \
+	  echo "### The Job is left in place - its TTL collects it, and until then it is"; \
+	  echo "### inspectable. Its own healthchecks.io ping has already fired."; \
+	  exit 1; \
+	fi
 
 # --- VPS cluster ---
 # Mirrors the homelab block. Separate context assertion, separate envsubst

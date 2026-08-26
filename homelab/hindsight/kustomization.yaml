@@ -1,0 +1,47 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# The `hindsight` namespace: the self-hosted memory backend for the Hermes agent
+# profiles on VM 103. Every image here is version-pinned and NO workload carries
+# keel annotations — see the header of hindsight.yaml, and the keel-rule exception
+# in AGENTS.md that names this namespace alongside `health`.
+resources:
+  - hindsight.yaml
+
+# Scripts that run in this namespace live as real files under scripts/ and reach
+# the cluster through a generator, never as an inline YAML string: a real file can
+# be imported, linted and diffed line by line, and `make check-script-lint` pulls
+# it back out of the render and runs shellcheck over it as POSIX sh.
+#
+# One generator for both scripts, and that is safe here because BOTH consumers are
+# CronJobs: a CronJob tolerates a hash move (the next scheduled Job simply mounts
+# the new name), whereas a one-shot Job's spec.template is immutable and a script
+# edit would make the next apply fail on it. If anything in this namespace ever
+# grows a `kind: Job`, give it its OWN generator entry — the reasoning is spelled
+# out at length in vps/backup/kustomization.yaml.
+#
+# `namespace:` is REQUIRED and is not decoration. A generator inherits no namespace
+# from anywhere (this kustomization deliberately sets no top-level one, so that no
+# resource's own namespace can be rewritten), and kustomize only rewrites a name
+# reference when referrer and referent agree on namespace. Omit it and you get a
+# silent double failure: the ConfigMap lands in `default` AND both CronJobs keep
+# pointing at the unsuffixed name, so the mount dangles and every run fails at
+# container start.
+#
+# The content-hash suffix is left ON, deliberately. Editing a script must roll the
+# workloads that mount it rather than leaving a stale copy behind.
+#
+# GENERATED SCRIPTS ARE NOT INERT TEXT. They ride the same stream as every
+# manifest, so envsubst rewrites them too — and it substitutes the bare `$NAME`
+# form as well as `${NAME}`. All six HINDSIGHT_* names are in ENVSUBST_VAR_NAMES,
+# so a script here that mentioned one would publish the tenant key or the database
+# password in plaintext inside this ConfigMap. Neither does: the containers map
+# each secret to a differently named variable (`PGPASSWORD`, `CANARY_API_KEY`,
+# `HC_UUID`) and the scripts see only those. `make check-script-substitution`
+# enforces it.
+configMapGenerator:
+  - name: hindsight-scripts
+    namespace: hindsight
+    files:
+      - hindsight-pg-dump.sh=scripts/hindsight-pg-dump.sh
+      - hindsight-canary.sh=scripts/hindsight-canary.sh

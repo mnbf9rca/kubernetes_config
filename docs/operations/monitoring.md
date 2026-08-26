@@ -13,6 +13,8 @@ catches. Manifests carry per-probe rationale in comments. Read
 | An ingest check is red | Check whether the operator synced a watch before suspecting the pipeline — [healthchecks.io checks](#healthchecksio-checks) |
 | `homelab-update-watch` is red | In a fresh body, `verdict=` names the cause and `next=` names the command to run; a stale `run_epoch=` means the watcher itself went quiet — [The update watcher](#the-update-watcher) |
 | A sidecar shows `RESTARTS: 0` but its snapshot is missing | Expected; they log rather than exit. Read the sidecar's stderr — [Why the sidecars have no probes](#why-the-sidecars-have-no-probes) |
+| `hindsight-canary` is red | Read `verdict=`: `retain-failed` is the API, the database or the tenant key; `recall-miss` is the retrieval side. An agent is losing memories right now — [hindsight.md](hindsight.md) |
+| `disk_pct` is climbing on homelab restic | `local-path` has no quota, so this is the node SSD every workload shares — [the gates](#the-backup-verification-gates) |
 | An uptime-kuma monitor is UP but the service is down | Suspect an Access redirect — [uptime-kuma.md](uptime-kuma.md#the-cloudflare-access-trap) |
 | Everything is green and the data is still wrong | Expected; several probes are shallow by design — [What this does not catch](#what-this-does-not-catch) |
 
@@ -102,6 +104,10 @@ Defaults, unless a service's entry below says otherwise:
 | garmin-grafana | none | It serves nothing. The `health-garmin-ingest` switch is the correct instrument |
 | cloudflare-analytics | none | Scheduled work. `homelab-cloudflare-analytics` plus `activeDeadlineSeconds: 1200` is the instrument |
 | update-watch | none | Scheduled work. `homelab-update-watch` plus `activeDeadlineSeconds: 300` is the instrument |
+| hindsight api | liveness `/health/live`, readiness and startup `/health` (:8888) | Split on purpose, the same way n8n's is. `/health` is database-gated, so a broken postgres drains traffic; `/health/live` is in-process and never touches the database, so a slow or recovering postgres cannot crashloop the single replica. `/health/live` needs image ≥ 0.9.1 — keep the pin at or above it |
+| hindsight control-plane | readiness `/` (:9999) | No liveness: a wedged admin UI is an inconvenience, not an outage, and restarting a single-replica pod over it buys risk for nothing |
+| postgres (hindsight) | readiness plain `pg_isready`; liveness and startup as `sh -c 'pg_isready -q …; test $? -lt 2'` | Copied verbatim from umami-postgres above, and for the same reasons |
+| hindsight-pg-dump, hindsight-canary | none | Scheduled work. `hindsight-pg-dump` and `hindsight-canary` plus their `activeDeadlineSeconds` are the instruments |
 
 ## Why the sidecars have no probes
 
@@ -156,10 +162,20 @@ write a `$VAR` into one.
 | Field | Value | Why |
 |---|---|---|
 | `timeZone: "UTC"` | every job | Otherwise the schedule follows kube-controller-manager's local zone |
-| `startingDeadlineSeconds` | 3600, except 1800 for cloudflare-analytics, 300 for jottacloud, and unset for `ingest-freshness` | A missed window retries for that long, then drops. `update-watch` takes the 3600 default deliberately: a silently skipped run is the failure it exists to prevent |
-| `activeDeadlineSeconds` | restic 14400, influx-backup 3600, hermes-pull 1800, cloudflare-analytics 1200, ingest-freshness 300, update-watch 300, jottacloud 21600 | With `concurrencyPolicy: Forbid`, one hung run silently blocks every later run |
-| `ttlSecondsAfterFinished` | 259200 on both restic jobs, hermes-pull, cloudflare-analytics and update-watch; 172800 on influx-backup; 86400 on the rest | A Friday failure on the restic jobs survives until Monday |
+| `startingDeadlineSeconds` | 3600, except 1800 for cloudflare-analytics, 600 for hindsight-canary, 300 for jottacloud, and unset for `ingest-freshness` | A missed window retries for that long, then drops. `update-watch` takes the 3600 default deliberately: a silently skipped run is the failure it exists to prevent |
+| `activeDeadlineSeconds` | restic 14400, influx-backup 3600, hindsight-pg-dump 3600, hermes-pull 1800, cloudflare-analytics 1200, ingest-freshness 300, update-watch 300, hindsight-canary 300, jottacloud 21600 | With `concurrencyPolicy: Forbid`, one hung run silently blocks every later run |
+| `ttlSecondsAfterFinished` | 259200 on both restic jobs, hermes-pull, cloudflare-analytics and update-watch; 172800 on influx-backup and hindsight-pg-dump; 3600 on hindsight-canary, which runs hourly; 86400 on the rest | A Friday failure on the restic jobs survives until Monday |
 | `terminationGracePeriodSeconds` | not set on any job | busybox `ash` runs as PID 1 and never forwards SIGTERM to restic, so a grace period only slows teardown. `restic unlock` at the head of the next run recovers the lock |
+
+Two of those are the hindsight jobs. `hindsight-pg-dump` runs at 02:15Z — after `hermes-pull`
+at 02:00, before `influx-backup` at 02:30 and the 03:00 sweep — with `startingDeadlineSeconds: 3600`,
+`activeDeadlineSeconds: 3600` and `ttlSecondsAfterFinished: 172800`, matching `influx-backup`
+exactly. `hindsight-canary` runs hourly with `startingDeadlineSeconds: 600`,
+`activeDeadlineSeconds: 300` — deliberately far shorter than its own schedule, so a hung run can
+never block the next one under `concurrencyPolicy: Forbid` — and `ttlSecondsAfterFinished: 3600`,
+so a completed run is reaped before the next one lands.
+
+**Neither hindsight CronJob carries a probe of any kind**, like every other scheduled job here.
 
 ### The restic ping wrapper
 
@@ -194,14 +210,25 @@ cluster's script is the source of truth for its thresholds; change them in the s
 |---|---|---|
 | What exists to check | A `*.restic` snapshot per app, published by the quiesce sidecars | No sidecars, so no artifact. Every PVC is backed up as live application state |
 | Assertion shape | Snapshot files: present, fresh, readable | The **tree**: mounted, right scale, listed files present and non-trivial |
-| Authoritative checks | Expected set, plus a `find` that must not error | Mount identity, tree scale, expected set, dump freshness |
-| Freshness limit | 15h (`STALE_MINUTES=900`), a 3h margin over the sidecars' 12h period | 30h (`STALE_MINUTES=1800`), on the two influx dumps and the hermes zip only |
-| Advisory, never fatal | Any `*.restic` past the threshold, so one orphaned PV directory cannot pin the gate red forever | An empty PVC directory, legitimate on a freshly provisioned PVC; and `du`'s exit status |
+| Authoritative checks | Expected set, plus a `find` that must not error | Mount identity, tree scale, disk usage, expected set, dump freshness |
+| Freshness limit | 15h (`STALE_MINUTES=900`), a 3h margin over the sidecars' 12h period | 30h (`STALE_MINUTES=1800`), on the two influx dumps, the Grafana dump, the hermes zip and the hindsight dump only |
+| Advisory, never fatal | Any `*.restic` past the threshold, so one orphaned PV directory cannot pin the gate red forever | An empty PVC directory, legitimate on a freshly provisioned PVC; `/data` above 80% full; and `du`'s exit status |
 | Runs | After `forget --prune` | **Before** `forget --prune`, which is skipped when the gate fails |
-| Verdicts in the body | `MISSING`, `STALE`, `UNREADABLE`, per app | `mount_ok`, `artifacts=n/m`, `dumps_fresh=n/m`, `pvc_dirs` |
+| Verdicts in the body | `MISSING`, `STALE`, `UNREADABLE`, per app | `mount_ok`, `artifacts=n/m`, `dumps_fresh=n/m`, `pvc_dirs`, `disk_pct` |
+
+**The homelab gate also watches free space, and it is the only thing that does.** `local-path`
+enforces no quota — a PVC's `storage:` figure is a request and nothing more — so "a PVC filled up"
+always means "the node SSD every workload shares filled up". The gate runs `df -Pk /data` and puts
+the result in the ping body as `disk_pct=` on every run, green or red, so the trend is readable
+before anything is wrong. Above 80% it prints a loud advisory and stays green, because a backup
+that runs is worth more than an alert about headroom; above 90% it fails the gate, which also
+defers `forget --prune` — correct, since pruning is the wrong thing to be doing while the node is
+about to wedge. An unparseable `df` reading **fails**, on the same "I could not look" rule as the
+rest of the gate. The residual is honest and small: this samples once a night, so a fill faster
+than a day still lands between runs.
 
 Both promote to failure only when restic itself succeeded, so a real restic failure keeps its own,
-more specific exit code. Both announce their passes (`8/8 artifacts present`, `2/2 newer than
+more specific exit code. Both announce their passes (`11/11 artifacts present`, `5/5 newer than
 30h`): a gate that prints nothing when happy is indistinguishable from one that never ran. In
 both, **"I could not look" must never be reported as "everything is fine"** — an unreadable
 `/data` or an unopenable PVC directory fails the job.
@@ -238,6 +265,7 @@ three produce no stale files.
 | homelab | influx-native-dump | `/data/pvc-*_health_health-dumps/native/*` | <30h |
 | homelab | influx-lp-export | `/data/pvc-*_health_health-dumps/lp/*.lp.gz` | <30h |
 | homelab | hermes-zip | `/data/pvc-*_backup_hermes-dumps/hermes-*.zip` | ≥16 MiB **and** <30h |
+| homelab | hindsight-dump | `/data/pvc-*_hindsight_hindsight-dumps/hindsight-*.sql.gz` | ≥1 KiB **and** <30h |
 
 Homelab byte floors sit an order of magnitude under observed sizes: they reject a zero-length or
 truncated file, not slow growth. `grafana-dump` is the one exception, and deliberately so: it is
@@ -308,16 +336,34 @@ newest match, because their glob is one PVC directory expected to match one path
 | `homelab-hermes-pull` | `op://Homelab/hermes-backup/healthcheck-uuid` | 1d / 2h | `hermes-pull` CronJob, `/start` and exit code, from an EXIT trap |
 | `jottacloud-backup` | `op://Homelab/jottacloud-backup/HEALTHCHECK_UUID` | 6-hourly schedule | The third-party image's own `backup.sh`, success only |
 | `homelab-update-watch` | `op://Homelab/update-watch/healthcheck-uuid` | 1d / 6h | `update-watch` CronJob in `ops`, exit code or `/log` — **never `/start`** |
+| `hindsight-pg-dump` | `op://Homelab/hindsight/healthcheck-uuid` | 1d / 2h | `hindsight-pg-dump` CronJob, `/start` and exit code, from an EXIT trap |
+| `hindsight-canary` | `op://Homelab/hindsight/canary-healthcheck-uuid` | 1h / 30m | `hindsight-canary` CronJob, `/start` and exit code, from an EXIT trap |
 
-**Five of the jobs this repo pings send `/start` and an exit code** — both restic jobs,
-`cloudflare-analytics`, `influx-backup` and `hermes-pull`. Follow that pattern for new jobs
-unless the job has `update-watch`'s reason not to.
+**Seven of the jobs this repo pings send `/start` and an exit code** — both restic jobs,
+`cloudflare-analytics`, `influx-backup`, `hermes-pull` and both hindsight jobs. Follow that
+pattern for new jobs unless the job has `update-watch`'s reason not to.
 `influx-backup` and `hermes-pull` need two things beyond that: `set -eu -o pipefail`, and their
 ping in an EXIT trap. Under `set -e` alone, `xargs` swallows the prune step's `ls` failure and the
 ping fires anyway. With the ping on the last line instead of in a trap, a failing prune, a missing
 ConfigMap key or a dead influxdb pod produces *exactly nothing* until the 6h grace expires about
 30 hours later. The accepted cost — a transient failure now pages instead of self-healing into
-silence — is the better trade.
+silence — is the better trade. Both hindsight scripts follow the same EXIT-trap shape from the
+start, for the same reason.
+
+`hindsight-canary` is the only check here that watches a *request path* rather than an artifact,
+and it exists because nothing else could. Hermes fails open at four layers: with the memory server
+down, a turn simply proceeds with no memories injected and a retain is dropped with a
+`logger.warning`, so the client-side symptom of a dead memory backend is an agent that has
+forgotten things — indistinguishable from an agent that was never told them. Worse, `/health`
+checks database connectivity and not auth validity, so a rotated or mistyped tenant key leaves
+every server-side signal green while every write is discarded. The canary authenticates with the
+real tenant key and performs a real retain followed by a real recall against a dedicated `canary`
+bank, hourly, so both failures surface within roughly 90 minutes. An uptime-kuma monitor
+could not have done this: kuma runs on the VPS, which has no route to any `*.cynexia.net` address
+(see [What this does not catch](#what-this-does-not-catch)), and an unauthenticated probe cannot
+see a broken write path in any case. **Rotating the tenant key is not finished until the VM-side
+smoke test in [hindsight.md](hindsight.md) has been re-run** — the canary proves the server
+accepts writes, not that Hermes still sends them.
 
 **The two ingest checks stay success-only and must not be converted.** A `/fail` on a stale
 bucket would flip the check DOWN on the first 6-hourly run that found nothing, trading a 36-hour
@@ -551,10 +597,13 @@ Probes fix hung request paths, not silently stopped background work — often th
 | **freshrss** | `/api/` never opens the database, and feed refresh runs from a separate `crond`. A dead cron serves the UI perfectly and stops fetching news |
 | **garmin-grafana** | `write_points_to_influxdb()` catches InfluxDB errors, logs them and returns normally, after which the caller advances the watermark. An InfluxDB outage causes permanent data loss for that window with the process Running and Ready. `ingest-freshness` covers it; no probe improves on that |
 | **influxdb-mcp** | Its probes are `tcpSocket`. A wedged HTTP handler with a live listener passes them. The MCP server exposes no health endpoint |
-| **homelab services** | The external layer runs on the VPS, which has no route to `*.cynexia.net`. Only the three health-tunnel hostnames get layer-3 coverage. sonarr, radarr, sabnzbd, emby, hydra2 and grafana have probes and nothing external |
+| **homelab services** | The external layer runs on the VPS, which has no route to `*.cynexia.net`. Only the three health-tunnel hostnames get layer-3 coverage. sonarr, radarr, sabnzbd, emby, hydra2 and grafana have probes and nothing external. `hindsight` is the one exception, and it got there by giving up on an external prober entirely: its noticer is an **in-cluster** authenticated canary CronJob with a healthchecks.io dead-man's-switch, which needs no route in and no public exposure |
 | **the VPS gate** | It proves each snapshot exists and is recent, and — through the sidecar's own refusal to publish a schema-less snapshot — that it holds at least one schema object. It does not prove the contents are complete or uncorrupted. A snapshot missing rows, or with a corrupt page below the `sqlite_master` read, passes everything here and surfaces at restore time |
 | **agent mail (hermes VM)** | Nothing monitors it at all — no probe, no check, no canary. A Purelymail outage, expired credential, DNS drift or send-cap exhaustion surfaces only as tool errors inside agent sessions. Deliberate for now; the planned round-trip canary is in [agent-mail.md](agent-mail.md#monitoring-and-backup-none-deliberately-for-now) |
-| **the homelab gate** | It proves the SSD is mounted and the tree is the right *shape*: right number of PVC directories, right order of magnitude, the listed files present and non-trivial. It says nothing about *content*. Every homelab PVC is copied live, with no quiesce step: a sqlite database mid-write is captured torn, `sonarr.db` at 14 MiB of corruption passes the size floor exactly as 14 MiB of working database does, and a PVC that stopped being written to weeks ago looks identical to one written a minute ago. Grafana is the one exception, and only in its dump: `grafana-dump` is taken with SQLite's online backup API and read back before it is published, so that artifact is consistent and verified even though the live `grafana.db` beside it is not. Only the two influx dumps, that Grafana dump and the hermes zip are age-checked. A retained orphan directory from a recreated PVC can satisfy an expected-set entry the live PVC no longer can — the resolved paths are printed so it is visible, but nothing fails on it. The rest surfaces at restore time |
+| **hindsight extraction** | Retain hands the content to an external LLM for extraction. A provider outage or a revoked key fails the retain task — the server retries three times and then logs, and nothing else notices. Recall is unaffected, because the full image runs embeddings and reranking locally, so a dead LLM account degrades to read-only memory rather than no memory. The canary proves the retain *pipeline* accepts writes; it does not judge whether what was extracted is any good |
+| **hindsight memory content** | Poisoning cannot be prevented — writing memories is the product. What limits it is that only Hermes holds the tenant key and only the operator holds the control-plane access key; what recovers from it is seven days of nightly dumps plus the control plane's per-memory delete |
+| **the hindsight dump** | The gate proves the dump exists, is fresh, is above a size floor and contains at least one `CREATE TABLE`. It does not prove the dump *restores*. The periodic restore drill in [hindsight.md](hindsight.md) is the only thing that does |
+| **the homelab gate** | It proves the SSD is mounted and the tree is the right *shape*: right number of PVC directories, right order of magnitude, the listed files present and non-trivial. It says nothing about *content*. Every homelab PVC is copied live, with no quiesce step: a sqlite database mid-write is captured torn, `sonarr.db` at 14 MiB of corruption passes the size floor exactly as 14 MiB of working database does, and a PVC that stopped being written to weeks ago looks identical to one written a minute ago. Grafana is the one exception, and only in its dump: `grafana-dump` is taken with SQLite's online backup API and read back before it is published, so that artifact is consistent and verified even though the live `grafana.db` beside it is not. The hindsight dump is verified the same way, at the shape level. Only the two influx dumps, that Grafana dump, the hindsight dump and the hermes zip are age-checked. A retained orphan directory from a recreated PVC can satisfy an expected-set entry the live PVC no longer can — the resolved paths are printed so it is visible, but nothing fails on it. The rest surfaces at restore time |
 | **cloudflare-analytics** | It proves the hours it fetched were fetched. It cannot prove Cloudflare's own numbers are right, and it does not alert on *content* — a hostname that stops receiving traffic entirely, or a spike, produces a perfectly green check. That is Phase 3 (Grafana alert rules), deliberately deferred until a baseline exists |
 | **update-watch (Renovate silence)** | Renovate is installed, has opened no error issue, and is proposing nothing. No pull requests and no error issue read as green, and the check cannot tell that from a genuinely up-to-date estate. This is the accepted price of counting pull requests instead of polling registries. The cover is the quarterly liveness drill above; `make check-renovate-scope` closes the commonest *partial* variant, a pinned namespace nobody added to `managerFilePatterns` |
 | **update-watch (merged but not applied)** | It watches the **repository**, not the cluster. Merging a Renovate pull request closes it, so the next run reports zero and the check goes green while the cluster still runs the old image. Merge and apply are one runbook operation for that reason; the independent noticer is drift in `make diff-homelab` |

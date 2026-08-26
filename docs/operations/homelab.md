@@ -197,6 +197,52 @@ change. On the Proxmox host:
 3. `systemctl start pve-guests`
 4. Re-run `clevis luks bind` so the TPM can unlock unattended again.
 
+### Hermes VM configuration layout and secrets
+
+The rules that hold for **every** Hermes plugin and profile on VM 103, learned the
+hard way while wiring hindsight (2026-08-24) and binding on any future integration:
+
+- **Plugin config resolves per `HERMES_HOME`, which makes it per PROFILE.** A profile is
+  a separate Hermes home directory, so profile `<name>` reads
+  `~/.hermes/profiles/<name>/<plugin>/config.json`. The path `~/.hermes/<plugin>/config.json`
+  is not shared: it belongs to the *default* profile, whose home is `~/.hermes` itself.
+  Each plugin loads the first source that exists — the profile's file, then a legacy
+  shared path, then environment defaults — and **the whole file wins with no merging**,
+  so malformed JSON presents as a config that reverted to defaults. Some keys accept an
+  environment variable as a per-key fallback, but only when the key is absent from the
+  file: **the file value wins over the environment.** Onboarding a profile therefore
+  means copying the config file, not relying on a shared one.
+- **Secrets are per profile and MUST go through hermes's 1Password integration** —
+  `hermes -p <profile> secrets onepassword set VAR "op://Vault/item/field"` — never a
+  plain value in `.env` or `config.yaml`. hermes stores its own `op://` reference in
+  the profile's `config.yaml` and resolves it at start ("1Password: applied N
+  secrets"), so no secret value rests on disk, and the nightly backup zip carries
+  references rather than values for these.
+- **Do not trust the dashboard GUI as the writer of record — it fails in both
+  directions.** It silently drops some writes: at least one field (the hindsight API
+  server URL) reports saved and is not. It also silently persists too much, writing an
+  API key into the plugin's `config.json` as **cleartext**, which defeats the 1Password
+  integration and puts a live credential in the nightly backup zip. After any GUI
+  session, read the config file back and delete any secret value you find there. Because
+  the file wins over the environment, a stored key shadows the 1Password-backed variable
+  until it is removed. To change a value reliably, edit the file and restart the affected
+  gateway (`systemctl --user restart hermes-gateway-<profile>`).
+- **Never disable a toolset that shares its name with a provider plugin's feature.**
+  `hermes tools disable memory` is the live case: `memory` names both a built-in tool and
+  a toolset, and the toolset gates every memory provider's tools as well. Disabling it
+  removes the provider's tools with no warning. Suppress the built-in tool through the
+  profile's `config.yaml` instead (`memory: {memory_enabled: false,
+  user_profile_enabled: false}`) and leave the toolset enabled per platform —
+  `--platform` defaults to `cli`, and gateway platforms are separate keys, so check
+  `hermes -p <profile> tools --summary`.
+- **A tool listing is not evidence that a plugin's tools are absent.** `/tools` and
+  `hermes tools list` render from the static registry, which knows nothing about provider
+  plugins; provider tools are appended to the agent afterwards and never appear in either
+  listing. Verify a plugin tool by asking the agent to call it, never by listing.
+
+Service-specific wiring lives in that service's runbook (for example
+`docs/operations/hindsight.md`); this section is the layout contract they share.
+
 ### Hermes VM backup and restore
 
 The `hermes-pull` CronJob (`homelab/backup/hermes-pull.yaml`) pulls a full
