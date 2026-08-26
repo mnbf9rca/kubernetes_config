@@ -11,7 +11,7 @@ that needed installing would not get run.
 What these lock down is the script's one piece of genuine logic -- the
 three-way outcome classification and the issue partition -- because a bug in
 either is INVISIBLE AT RUNTIME. A classifier that always reports "zero pull
-requests" produces a permanently green check over an unread repo, which looks
+requests" holds the monitor permanently UP over an unread repo, which looks
 exactly like a healthy estate.
 
   * `classify` must never turn a non-answer into an answer: 403, 429, 404, 5xx,
@@ -26,13 +26,14 @@ exactly like a healthy estate.
     and must ignore human issues and human pull requests. A young pull request
     is GREEN, which is the point of the relaxed threshold.
 
-No network and no ping: these exercise return values only and never call the
+No network and no push: these exercise return values only and never call the
 `hc_emit`/`hc_summary` sinks, so no test-local name can teach the ping-body
 guard that a name is safe to emit.
 """
 import importlib.util
 import os
 import unittest
+import urllib.parse
 from datetime import datetime, timedelta, timezone
 
 # The script is a kubectl-mounted file with a hyphen in its name, so it cannot
@@ -127,12 +128,12 @@ class TestClassify(unittest.TestCase):
         verdict, _ = uw.classify(0, {}, "")
         self.assertEqual(verdict, uw.V_API_ERROR)
 
-    def test_every_indeterminate_verdict_pings_log(self):
+    def test_every_indeterminate_verdict_is_log(self):
         for verdict in (uw.V_RATE_LIMITED, uw.V_SECONDARY_LIMIT,
                         uw.V_REPO_UNREACHABLE, uw.V_API_ERROR):
             self.assertEqual(uw.ping_suffix(verdict), "log", verdict)
 
-    def test_determinate_verdicts_ping_zero_or_fail(self):
+    def test_determinate_verdicts_are_zero_or_fail(self):
         for verdict in (uw.V_OK, uw.V_UPDATES_WAITING):
             self.assertEqual(uw.ping_suffix(verdict), "0", verdict)
         for verdict in (uw.V_UPDATES_PENDING, uw.V_DASHBOARD_MISSING,
@@ -233,11 +234,13 @@ class TestNextActions(unittest.TestCase):
             with self.subTest(verdict=verdict):
                 self.assertEqual(uw._clean(action), action)
                 self.assertNotIn("\n", action)
-                # The body travels verbatim into every notification transport,
-                # so an alert nobody scrolls is an alert nobody reads.
+                # The message travels verbatim into every notification
+                # transport, and kuma cuts it at 200 characters, so an alert
+                # nobody scrolls is an alert nobody reads.
                 self.assertLessEqual(len(action), 120)
-                # `confirm` in a body drives a healthchecks.io UI nag; the
-                # estate-wide rule is that no body may contain it.
+                # `confirm` drives a healthchecks.io UI nag. This job no longer
+                # reaches healthchecks.io, but the two restic checks do and one
+                # spelling across the estate is worth keeping.
                 self.assertNotIn("confirm", action.lower())
 
     def test_the_four_red_verdicts_name_a_command_or_a_place_to_look(self):
@@ -377,13 +380,14 @@ class TestRelaxedPullRequestThreshold(unittest.TestCase):
 
 
 class TestRenovateLiveness(unittest.TestCase):
-    """Renovate's own liveness, as a RED VERDICT ON THE SAME CHECK.
+    """Renovate's own liveness, as a RED VERDICT ON THE SAME SIGNAL.
 
-    An earlier design gave this a second UUID, on the argument that
-    healthchecks.io notifies on status FLIPS and the first check was
-    permanently red. This task removes the permanent red, so the one check
-    flips on a Renovate death exactly as a second one would have -- and the
-    account is capped at 20 checks. One check, one enum.
+    An earlier design gave this a destination of its own, on the argument that
+    an alerting backend notifies on status FLIPS and the first one was
+    permanently red. This task removes the permanent red, so the one signal
+    flips on a Renovate death exactly as a second one would have. One
+    destination, one enum -- and that held when the destination changed from a
+    healthchecks.io check to a kuma push monitor.
 
     What these lock down is that liveness OUTRANKS the pull-request rules.
     A dead Renovate with a young pull request still open must not read as
@@ -478,12 +482,13 @@ class TestRenovateLiveness(unittest.TestCase):
         # `test_the_threshold_was_armed_not_left_at_a_sentinel`, which claimed
         # something no assertion here can check: `>= 14` cannot tell a threshold
         # armed from observation apart from the unarmed floor, and as of
-        # 2026-08-26 the value IS the unarmed floor -- the check had logged six
-        # ping bodies, fewer than the fourteen the arming rule needs, and the
-        # only healthchecks.io API key in the vault cannot read them. The
-        # constant's own comment and monitoring.md carry that status; a test
-        # name must not contradict them. What this actually checks is the type
-        # and the floor.
+        # 2026-08-26 the value IS the unarmed floor -- six heartbeats had been
+        # logged, fewer than the fourteen the arming rule needs. Those six were
+        # healthchecks.io pings whose bodies the vault's read-only API key
+        # cannot fetch; the history now accumulates in the kuma monitor, where
+        # it is readable. The constant's own comment and monitoring.md carry
+        # that status; a test name must not contradict them. What this actually
+        # checks is the type and the floor.
         self.assertIsInstance(uw.RENOVATE_ALIVE_MAX_DAYS, int)
         self.assertGreaterEqual(uw.RENOVATE_ALIVE_MAX_DAYS, 14)
 
@@ -495,6 +500,145 @@ class TestRenovateLiveness(unittest.TestCase):
                      "ALIVE_NEXT_ACTIONS", "alive_next_action_for",
                      "A_OK", "A_STALE", "A_UNKNOWN"):
             self.assertFalse(hasattr(uw, name), name)
+
+
+class TestKumaPush(unittest.TestCase):
+    """`log` means SEND NOTHING, and that is the whole migration risk.
+
+    healthchecks.io had a third ping kind that recorded an event and changed
+    no state. The kuma push API has two states and no third kind, so an
+    indeterminate run must push NOTHING - pushing `up` would report a
+    successful read that did not happen, and pushing `down` would turn every
+    transient GitHub 503 into an alert.
+    """
+
+    def test_green_verdicts_push_up(self):
+        for verdict in sorted(uw.GREEN):
+            self.assertEqual(uw.push_status(verdict), "up", verdict)
+
+    def test_determinate_reds_push_down(self):
+        for verdict in sorted(uw.DETERMINATE - uw.GREEN):
+            self.assertEqual(uw.push_status(verdict), "down", verdict)
+
+    def test_indeterminate_verdicts_push_nothing(self):
+        for verdict in sorted(uw.VERDICTS - uw.DETERMINATE):
+            self.assertIsNone(uw.push_status(verdict), verdict)
+
+    def test_push_status_agrees_with_ping_suffix(self):
+        # One decision, two spellings. If they ever disagree, the check's
+        # meaning has quietly forked.
+        mapping = {"0": "up", "fail": "down", "log": None}
+        for verdict in sorted(uw.VERDICTS):
+            self.assertEqual(uw.push_status(verdict),
+                             mapping[uw.ping_suffix(verdict)], verdict)
+
+
+class TestPusher(unittest.TestCase):
+    """A push must never fail the job, and a message must never cost a push."""
+
+    def setUp(self):
+        self.calls = []
+        self._real = uw.urllib.request.urlopen
+        uw.urllib.request.urlopen = self._fake
+        self.logged = []
+        self._real_log = uw.log
+        uw.log = self.logged.append
+
+    def tearDown(self):
+        uw.urllib.request.urlopen = self._real
+        uw.log = self._real_log
+
+    def _fake(self, request, data=None, timeout=None):
+        self.calls.append((request.full_url, request))
+
+        class _R:
+            def close(self_inner):
+                pass
+        return _R()
+
+    def test_status_and_message_ride_the_query_string(self):
+        uw.make_pusher("https://uptime.example/api/push/tok")(
+            "up", "verdict=ok next=none")
+        self.assertEqual(len(self.calls), 1)
+        url, request = self.calls[0]
+        self.assertIsNone(request.data, "the push is a GET, not a POST")
+        query = urllib.parse.parse_qs(urllib.parse.urlparse(url).query)
+        self.assertEqual(query["status"], ["up"])
+        self.assertEqual(query["msg"], ["verdict=ok next=none"])
+
+    def test_the_user_agent_is_never_urllibs_default(self):
+        # Cloudflare fronts uptime-kuma and answers `Python-urllib/3.x` with
+        # 403 `error code: 1010` before kuma ever sees the request - and a
+        # failed push is swallowed by design, so the loss would be silent.
+        uw.make_pusher("https://uptime.example/api/push/tok")("up", "verdict=ok")
+        agent = self.calls[0][1].get_header("User-agent")
+        self.assertTrue(agent)
+        self.assertNotIn("urllib", agent.lower())
+        self.assertEqual(agent, uw.USER_AGENT)
+
+    def test_a_none_status_sends_nothing_at_all(self):
+        # The indeterminate path. push_status returns None and the pusher must
+        # make no request whatever, not a request with a missing status.
+        uw.make_pusher("https://uptime.example/api/push/tok")(None, "verdict=x")
+        self.assertEqual(self.calls, [])
+
+    def test_message_is_cut_to_what_kuma_stores(self):
+        uw.make_pusher("https://uptime.example/api/push/tok")("down", "x" * 500)
+        query = urllib.parse.parse_qs(
+            urllib.parse.urlparse(self.calls[0][0]).query)
+        self.assertEqual(len(query["msg"][0]), 200)
+
+    def test_push_failure_is_swallowed_and_never_quotes_the_url(self):
+        def boom(request, data=None, timeout=None):
+            raise OSError("connection refused")
+        uw.urllib.request.urlopen = boom
+        uw.make_pusher("https://uptime.example/api/push/s3cr3ttoken")(
+            "up", "verdict=ok")                  # must not raise
+        self.assertTrue(self.logged)
+        for line in self.logged:
+            self.assertNotIn("s3cr3ttoken", line)
+            self.assertNotIn("uptime.example", line)
+            self.assertIn("OSError", line)
+
+    def test_empty_push_url_pushes_nothing(self):
+        uw.make_pusher("")("up", "verdict=ok")
+        self.assertEqual(self.calls, [])
+
+
+class TestHeartbeatMessage(unittest.TestCase):
+    """One line, verdict first, cut to what kuma stores."""
+
+    def setUp(self):
+        uw.SUMMARY[0] = "verdict=api-error"
+        del uw.BODY_LINES[:]
+
+    tearDown = setUp
+
+    def test_verdict_is_the_first_token(self):
+        uw.hc_emit("prs_open=3")
+        uw.hc_summary(uw.V_UPDATES_PENDING)
+        self.assertTrue(uw.kuma_msg().startswith(
+            "verdict=" + uw.V_UPDATES_PENDING + " "))
+
+    def test_default_verdict_is_indeterminate_not_a_success(self):
+        # If nothing ever calls hc_summary, the message must not claim a green
+        # read of the repo.
+        self.assertTrue(uw.hc_body().startswith("verdict="))
+        self.assertNotIn(uw.SUMMARY[0].split("=", 1)[1], uw.GREEN)
+
+    def test_the_message_is_one_line_and_bounded(self):
+        uw.hc_summary(uw.V_OK)
+        for _ in range(80):
+            uw.hc_emit("oldest_pr_days=12")
+        msg = uw.kuma_msg()
+        self.assertEqual(len(msg), 200)
+        self.assertNotIn("\n", msg)
+
+    def test_the_summary_only_ever_carries_a_member_of_the_enum(self):
+        for verdict in sorted(uw.VERDICTS):
+            uw.hc_summary(verdict)
+            self.assertEqual(uw.hc_body().splitlines()[0],
+                             "verdict=" + verdict)
 
 
 if __name__ == "__main__":

@@ -17,7 +17,7 @@ procedures live under `docs/` and are referenced from here rather than duplicate
 | `docs/operations/homelab.md` | Homelab cluster: platform stack, namespaces/workloads, NFS and storage, node network, DNS/Route53, encryption at rest, operational gotchas |
 | `docs/operations/homelab-health.md` | The `health` namespace: ingest pipeline, image-pin rationale, InfluxDB bootstrap, backups/restore, Garmin re-auth, monitoring, probe rationale |
 | `docs/operations/vps.md` | VPS cluster: shape, workloads, Cloudflare tunnel/Access, DB decisions, backups |
-| `docs/operations/monitoring.md` | How failures get noticed: the triage table, probe policy and inventory, CronJob deadlines, the backup verification gates, healthchecks.io checks and ping bodies, and what none of it catches |
+| `docs/operations/monitoring.md` | How failures get noticed: the triage table, probe policy and inventory, CronJob deadlines, the backup verification gates, the four healthchecks.io checks that remain, the ten uptime-kuma push monitors, the disclosure rules for both, and what none of it catches |
 | `docs/operations/uptime-kuma.md` | Layer 3/4 runbook: creating uptime-kuma monitors by hand, per-monitor HTTP settings, the Cloudflare Access trap, the push monitors driven from inside the clusters and the bypass they need, the self-monitor |
 | `docs/operations/hindsight.md` | The `hindsight` namespace: the self-hosted memory backend for the Hermes profiles — topology, auth, the canary, upgrade and restore runbooks, the restore drill, key rotation, and the removal path |
 | `docs/operations/agent-mail.md` | Per-agent email for Hermes agents: Purelymail mailboxes on cynexia.io, per-profile mcp-email-server config, provisioning runbook, credential scheme, limits, and the deliberate monitoring/backup gaps |
@@ -221,31 +221,50 @@ Full mechanics, target-by-target reference and failure modes:
 - **Scheduled work gets a dead-man's-switch, not a probe.** Every CronJob sets
   `timeZone: "UTC"` and `activeDeadlineSeconds` (with `concurrencyPolicy: Forbid`, one
   hung run silently blocks every later run), plus `startingDeadlineSeconds` where a missed
-  window must be retried rather than dropped. New jobs must ping healthchecks.io on
-  **start and exit code** — the two restic jobs, `cloudflare-analytics` and `influx-backup`
-  do; the two ingest checks and `jottacloud backup` ping on success only, so a failure
-  shows up as silence. For the ingest checks that is deliberate and must not change;
-  jottacloud's ping comes from `backup.sh` inside a third-party image. `update-watch`
-  sends **no `/start` at all**, also deliberately: it pings `/log` when it could not read
-  GitHub, and a `/start` with no success inside the grace would turn every such run into
-  a false alarm. Do not "complete" its ping set. Inventory and
-  per-job semantics: `docs/operations/monitoring.md`.
-- **A ping body is a disclosure channel.** Every ping carries a short `key=value` summary
-  (`summary=` first, printable ASCII), and **never a command's output** — the exec'd influx
-  scripts carry the operator token on argv, and a failing `wget` quotes the ping URL, which is
-  the check's write credential. The rule is blanket because a script cannot sort the tiers
-  below apart at runtime. Emit a count, an age, a size, a path built from a literal glob, or a
-  verdict from a fixed enum.
-  `make check-ping-bodies` enforces it and is the only thing that catches
-  `M=$(cmd); emit "error=$M"`. The body also travels with the alert: upstream's email,
-  webhook, Slack, Telegram, Matrix, GitHub and MS Teams transports all read it into the
-  notification, so a failure body reaches every channel this account has configured — a
-  list nobody has enumerated. Policy, the accepted residuals and that open item:
+  window must be retried rather than dropped. **New scheduled work drives an uptime-kuma
+  PUSH monitor, not a healthchecks.io check**: as of 2026-08-26 only four checks remain
+  there — the two restic jobs, whose multi-line bodies are the triage runbook,
+  `vps-uptime-kuma-alive`, and the hand-pinged `estate-update`. Everything else pushes.
+  The default contract for a new job is **`up` on exit 0 and `down` otherwise, from an EXIT
+  trap**, which is what the two hindsight jobs, `influx-backup`, `hermes-pull`,
+  `cloudflare-analytics` and both `keel-fresh` jobs do. There is **no `/start` equivalent**
+  and none may be invented: a push is a heartbeat carrying a status, so
+  `activeDeadlineSeconds` is the whole of the hang bound and the monitor's interval plus
+  retry is the silence bound. Two jobs deliberately push **nothing** on some runs and that
+  must not change: `ingest-freshness` pushes only when both buckets are fresh, because a
+  `down` on a stale bucket would trade a 36-hour tolerance for a 6-hour one on a signal
+  that depends on the operator syncing a watch; and `update-watch` pushes nothing on an
+  indeterminate run, because "I could not read GitHub" is neither a success nor a failure.
+  `jottacloud-backup` is success-only too, but for a third reason — the request comes from
+  an image this repo does not build. Inventory and per-job semantics:
+  `docs/operations/monitoring.md` and `docs/operations/uptime-kuma.md`.
+- **A ping body and a heartbeat message are both disclosure channels, and one rule set
+  covers both.** Every one carries a short `key=value` summary (a verdict first, printable
+  ASCII), and **never a command's output** — the exec'd influx scripts carry the operator
+  token on argv, and a failing `wget` or `curl` quotes the URL it was handed, which is the
+  reporting credential either way: a healthchecks.io ping UUID, or a kuma push **token**,
+  which is the last path segment of `PUSH_URL`. The rule is blanket because a script cannot
+  sort the tiers below apart at runtime. Emit a count, an age, a size, a path built from a
+  literal glob, or a verdict from a fixed enum.
+  `make check-ping-bodies` enforces it — it recognises a sink by FUNCTION NAME (`emit`,
+  `say_err`, `fatal`; `hc_emit`, `hc_summary`) and never by the destination host, which is
+  why the sinks kept their names through the 2026-08-26 migration — and it is the only thing
+  that catches `M=$(cmd); emit "error=$M"`. What differs between the two destinations is
+  only size and storage: a healthchecks.io body is multi-line and held by a third party; a
+  kuma `msg` is **one line, cut at 200 characters**, held on the operator's own VPS. So a
+  migrated runner emits the verdict first, the values an operator acts on next, and any
+  variable-length token last where the cut will take it — and prints the full detail to the
+  pod log, which is now where triage starts. Either one travels with the alert to every
+  notification transport its destination has configured, a list nobody has enumerated on
+  either side. Policy, the accepted residuals and that open item:
   `docs/operations/monitoring.md`.
-- **A new InfluxDB bucket in the `health` namespace means two edits, not one:** create it
-  (a `make health-influx-*-bootstrap` target) **and** add it to the explicit bucket list in
-  `homelab/health/backups.yaml`. A bucket missing from that list is silently never
-  exported; a bucket in the list that does not exist now fails the nightly job by name.
+- **A new InfluxDB bucket in the `health` namespace means three edits, not one:** create it
+  (a `make health-influx-*-bootstrap` target), add it to the explicit `for B in ...` list in
+  `homelab/health/scripts/influx-export-lp.sh`, **and** raise `LP_EXPECTED` in
+  `homelab/health/scripts/influx-backup.sh`, which is the denominator of the `buckets=n/m`
+  the heartbeat carries. A bucket missing from the export list is silently never exported;
+  a bucket in that list that does not exist fails the nightly job by name; and a stale
+  `LP_EXPECTED` shows up as a visibly wrong `buckets=` and nothing worse.
   Bootstrap before applying (`docs/operations/homelab-health.md`).
 - **One-shot `Job`s must set `ttlSecondsAfterFinished`.** A Job's `spec.template` is
   immutable, so a completed Job that is never garbage collected pins the version of
@@ -383,10 +402,13 @@ Full mechanics, target-by-target reference and failure modes:
   1. **Secrets grant access.** Tokens, passwords, private keys, API keys, session cookies,
      the 1Password service-account token. Disclosure means honesty box **and** rotation.
   2. **Spam-target identifiers grant no access but let a stranger cause a nuisance.**
-     healthchecks.io ping UUIDs are the case that matters here: anyone holding one can ping
-     your check and mask a genuine failure. Keep them out of this public repo (`op://`
-     reference only) — but a transcript or a pod log is **not** a disclosure, they need
-     **no rotation**, and they get **no honesty-box row**. This has been ruled three times.
+     healthchecks.io ping UUIDs and uptime-kuma push tokens are the cases that matter here:
+     anyone holding one can report a heartbeat and mask a genuine failure, and grants
+     nothing else. Keep them out of this public repo (`op://` reference only) and type them
+     `[text]` in the vault — but a transcript or a pod log is **not** a disclosure, they
+     need **no rotation**, and they get **no honesty-box row**. This has been ruled three
+     times. Note that `jottacloud-backup`'s own image prints its push URL to the pod log on
+     every run; that is the same tier and needs no action.
   3. **Ordinary identifiers are not sensitive at all.** Restic repository URIs, B2 and
      InfluxDB bucket names, Cloudflare zone IDs, PVC UUIDs, namespaces, FreshRSS usernames,
      hostnames. They grant nothing and enable nothing. They are fine in pod logs, in ping

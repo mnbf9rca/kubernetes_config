@@ -46,7 +46,7 @@ PSA warnings — a hardening pass to `restricted` is a queued follow-up.
 - **`influx-backup` runs on `alpine/k8s:1.36.0`**, version-matched to the cluster's
   server minor — not `bitnami/kubectl`, which no longer publishes plain version tags on
   Docker Hub (moved to the frozen, unauthenticated `bitnamilegacy/*`, and that image
-  lacks `wget`, which the healthchecks.io ping needs).
+  has neither `wget` nor `curl`, one of which the heartbeat push needs).
 
 ## Ingress
 
@@ -343,8 +343,8 @@ catches it.
 
 The size floor is a **placeholder** (64 KiB, in `MIN_BYTES`), matched by the gate row in
 `homelab/backup/restic-cronjob.yaml`. The first nightly run reports the real size as
-`grafana_kib=` in the `health-influx-backup` ping body — raise both to roughly an order of
-magnitude below it then, as every other floor in the gate was set.
+`grafana_kib=` in the `health-influx-backup` heartbeat message — raise both to roughly an
+order of magnitude below it then, as every other floor in the gate was set.
 
 **Adding a bucket means adding it to that list**, or it is silently never exported — the
 same class of bug as the VPS backup gate's expected-set assertion
@@ -474,27 +474,29 @@ CronJob runs at 02:30 and the restic gate at 03:00, with its 30-hour window desc
 [monitoring.md](monitoring.md) — so a `health-upgrade` that passes proves the dump exists
 and is well-formed, not that anything upstream is still producing data.
 
-**Where the numbers actually are.** The script is silent on success: it records each step
-and emits the totals into the healthchecks.io ping body, not to stdout. So the log tail the
-target prints ends with `grafana-sqlite-backup.py`'s own line — the dump's byte size and
-schema-object count — while the native-dump size (`native_kib=`), the line-protocol size
-and file count (`lp_kib=`, `lp_files=`, one export per bucket) and the three prune counts
-are read off the `health-influx-backup` ping body instead.
+**Where the numbers actually are — and they moved on August 26, 2026.** They used to be in
+the healthchecks.io ping body only. The heartbeat that replaced it is one line and carries
+just `verdict=`, `buckets=n/m` and `grafana_kib=`, so the exit trap now also prints a
+`detail:` line to the pod log carrying everything the body did: the native-dump size
+(`native_kib=`, `native_mib=`), the line-protocol size and file count (`lp_kib=`,
+`lp_files=`, one export per bucket) and the three prune counts. `make health-upgrade` tails
+that log, so the numbers are in front of you rather than in a third party's Events page.
 
 **On failure, the log ends with whatever failed.** That is a `FATAL:` line when
 `influx-backup.sh` or one of the scripts it runs recognises the fault and names it, and the
 underlying tool's own error — kubectl's, influx's — when it does not. Do not expect a
-particular shape: read the tail. The ping body carries `failed_step=` whenever the script
+particular shape: read the tail. The heartbeat carries `failed_step=` whenever the script
 exited normally, which is every failure except a kill — an out-of-memory kill, a node
-eviction or the active deadline leaves no exit trap to run and so no ping at all.
+eviction or the active deadline leaves no exit trap to run and so no push at all, which is
+what turns the monitor DOWN by silence instead.
 
 **A Grafana major is not a tag revert.** Grafana migrates `grafana.db` in place on first
 start, so rolling back a failed major means restoring the dump this target took, not
 changing the tag back. Read the restore runbook above before you start one.
 
-**A manual dump pings `health-influx-backup`.** The Job inherits the CronJob's pod spec,
-ping UUID included, so the check's history shows the manual run alongside the nightly ones.
-That is expected; do not read it as an out-of-schedule nightly backup.
+**A manual dump pushes to `health-influx-backup`.** The Job inherits the CronJob's pod
+spec, push URL included, so the monitor's heartbeat history shows the manual run alongside
+the nightly ones. That is expected; do not read it as an out-of-schedule nightly backup.
 
 **The wait is 600 seconds, and that number is measured.** The two retained nightly runs
 took 26 and 25 seconds start to completion, and a timed run of the target itself took 27 —
@@ -538,7 +540,7 @@ changes, and the token is read-only.
 | Dataset | `httpRequestsAdaptiveGroups`, grouped by `datetimeHour` |
 | Bucket | `cloudflare`, **infinite** retention, raw hourly rows, no downsampling |
 | Measurement | `http_requests`; tags `zone`, `host`, `path`, `status`, `country`; fields `count`, `sample_interval` |
-| Monitoring | `homelab-cloudflare-analytics`, pinged `/start` and exit code |
+| Monitoring | The `homelab-cloudflare-analytics` uptime-kuma push monitor: `up` on exit 0, `down` otherwise |
 
 Two bookkeeping measurements share the bucket: `ingest_status` (one point per committed
 chunk) and `ingest_gap` (see below).
@@ -597,7 +599,7 @@ future run can recover them. The job then:
 1. logs the exact missing range,
 2. writes an `ingest_gap` point (fields `missing_hours`, `gap_end`) timestamped at the gap
    start, so the hole is visible in Grafana instead of reading as a quiet week, and
-3. **exits non-zero**, so `homelab-cloudflare-analytics` goes red.
+3. **exits non-zero**, so `homelab-cloudflare-analytics` is pushed DOWN with `verdict=gap`.
 
 It still ingests everything that *is* still available in the same run. The alarm fires
 once: the next run's watermark is current again, which is the intended behaviour — a
@@ -649,8 +651,9 @@ The job cannot run until four things exist. None of them are created by `make ap
    identify the account and this repo is public, so they are resolved at apply time like
    everything else. Mark it `[text]`, not concealed — it is an identifier, and a concealed
    value makes the vault harder to debug.
-3. **healthchecks.io check** `homelab-cloudflare-analytics`, period 1h, grace 2h. UUID into
-   `op://Homelab/health-healthchecks/cloudflare-uuid`.
+3. **uptime-kuma push monitor** `homelab-cloudflare-analytics`, 3600s interval with one
+   retry at 7200s. Token into
+   `op://Homelab/health-healthchecks/cloudflare-kuma-push-token`.
 4. **InfluxDB bucket and token**: `make health-influx-cloudflare-bootstrap`. See below.
 
 Then `make apply-homelab`, and force the first run rather than waiting an hour:
@@ -704,8 +707,8 @@ sidecar upstream was healthy the whole time.
 
 Nothing noticed for 18.5 hours, because the `pomerium` container had no liveness or
 readiness probe: Kubernetes considered a process that answered no requests to be
-perfectly healthy, and the healthchecks.io checks in this namespace watch *data
-freshness*, not the auth proxy.
+perfectly healthy, and this namespace's scheduled checks watch *data freshness*, not the
+auth proxy.
 
 A `kubectl rollout restart` restored service immediately — 401 in 0.86s afterwards
 versus a 20s hang before. **Root cause of the wedge itself is not established**; treat it
@@ -749,37 +752,47 @@ scratchpad for comparison.
 
 ## Monitoring
 
-Four healthchecks.io checks; UUIDs in 1Password item `health-healthchecks`:
+Three uptime-kuma **push** monitors; tokens in 1Password item `health-healthchecks`. They
+replaced four healthchecks.io checks on August 26, 2026 — the two ingest checks merged,
+because one CronJob checks both buckets in one process and two monitors would have been one
+signal counted twice. The names were kept so the estate reads as one inventory across the
+change. Roster and per-monitor settings: [uptime-kuma.md](uptime-kuma.md#push-monitors).
 
-| Check | Period / grace | Signals failure by |
+| Monitor | Interval / retry | Signals failure by |
 |---|---|---|
-| `health-apple-ingest` | 1d / 12h | silence |
-| `health-garmin-ingest` | 1d / 12h | silence |
-| `health-influx-backup` | 1d / 6h | **`/start` + exit code** |
-| `homelab-cloudflare-analytics` | 1h / 2h | **`/start` + exit code** |
+| `health-ingest` | 1d / 12h | silence |
+| `health-influx-backup` | 1d / 6h | **a `down` push from an EXIT trap** |
+| `homelab-cloudflare-analytics` | 1h / 2h | **a `down` push from the exit path** |
 
-**The two ingest checks signal failure by silence; the other two do not.**
+**`health-ingest` signals failure by silence; the other two do not.**
 
-- `influx-backup` sends `/start` at the top and `hc-ping.com/<uuid>/<rc>` from an EXIT
-  trap, so a failure is red within a minute and is distinguishable from a never-scheduled
-  run. It did not always: the ping used to be the script's last statement under `set -eu`,
-  which meant a failing prune, a missing ConfigMap key or a dead influxdb pod produced
-  *exactly nothing* until grace expired some 30 hours later. The accepted cost of the
-  conversion is that a transient fault — an influxdb pod mid-restart when `kubectl exec`
-  lands — now pages instead of self-healing into silence. The body carries the dump sizes,
-  the export count, the Grafana dump size and the prune counts, so a green ping says what
-  it actually captured. `ttlSecondsAfterFinished` is 48h so the Job's own logs outlive a
-  weekend.
-- `ingest-freshness` (every 6h) pings the apple/garmin checks **only when that source's
-  InfluxDB data is actually less than 24h old** — so a real ingest gap surfaces as a
-  healthchecks.io alert instead of being masked by an unrelated cron firing on schedule.
-  It **always exits 0 on purpose**: the signal is the absent ping, not a failed Job. Do
-  not "fix" it into a non-zero exit.
-
-- `cloudflare-analytics` (hourly) follows the **restic** pattern instead: `/start` at the
-  top and `hc-ping.com/<uuid>/<rc>` at the exit, so a failure is distinguishable from a
-  never-scheduled run without waiting for grace expiry. Pings are best-effort and can
+- `influx-backup` pushes `up` or `down` from an EXIT trap, so a failure is DOWN within a
+  minute and is distinguishable from a never-scheduled run. It did not always: the report
+  used to be the script's last statement under `set -eu`, which meant a failing prune, a
+  missing ConfigMap key or a dead influxdb pod produced *exactly nothing* until the silence
+  bound expired some 30 hours later. The accepted cost of the conversion is that a transient
+  fault — an influxdb pod mid-restart when `kubectl exec` lands — now alerts instead of
+  self-healing into silence. The heartbeat carries `verdict=`, `buckets=n/m` and
+  `grafana_kib=`; the pod log's `detail:` line carries every size and prune count.
+  `ttlSecondsAfterFinished` is 48h so the Job's own logs outlive a weekend.
+- `ingest-freshness` (every 6h) pushes `up` **only when BOTH buckets hold InfluxDB data less
+  than 24h old**, and pushes nothing at all otherwise — so a real ingest gap surfaces as an
+  absent heartbeat instead of being masked by an unrelated cron firing on schedule. It
+  **always exits 0 on purpose**: the signal is the absent push, not a failed Job. Do not
+  "fix" it into a non-zero exit, and do not give it a `down` path — that would trade a
+  36-hour tolerance for a 6-hour one on a signal that depends on the operator syncing a
+  watch. Every `up` push carries `apple_age_h=` and `garmin_age_h=`, which is the merged
+  monitor's only per-path resolution: the last message before the silence names which
+  bucket was ageing. The pod log carries the full per-bucket verdict and keeps "stale"
+  apart from "query failed", which the monitor's one bit cannot.
+- `cloudflare-analytics` (hourly) is Python and pushes `up` on rc 0 and `down` otherwise,
+  the unrecoverable-gap path included, so a failure is distinguishable from a
+  never-scheduled run without waiting for the silence bound. Pushes are best-effort and can
   never fail the job.
+
+**There is no `/start` equivalent on the push API, and none of these three has one.** A push
+is a heartbeat carrying a status, so `activeDeadlineSeconds` is the whole of the hang bound
+and the monitor's interval plus retry is the silence bound.
 
 All three are bounded by `timeZone: "UTC"` and `activeDeadlineSeconds` (3600 for
 `influx-backup`, 300 for `ingest-freshness`, 1200 for `cloudflare-analytics`) — with
@@ -788,7 +801,7 @@ nothing alerting. `influx-backup` sets `startingDeadlineSeconds: 3600` and
 `cloudflare-analytics` 1800; `ingest-freshness` deliberately does not, since it runs again
 in six hours anyway.
 
-This namespace's checks watch **data freshness**, not the edge — which is why the
+This namespace's monitors watch **data freshness**, not the edge — which is why the
 2026-08-18 Pomerium wedge went unnoticed (that proxy has since been removed).
 External availability of `mcp.cynexia.com` and the other tunnel hostnames is
 layer 3, in [uptime-kuma.md](uptime-kuma.md#monitor-list).

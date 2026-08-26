@@ -4,17 +4,18 @@
 #
 # It takes two kinds of InfluxDB dump by exec-ing into the influxdb pod, takes a
 # consistent point-in-time copy of Grafana's SQLite database in this pod, prunes
-# the short tail of all three, and pings healthchecks.io. restic sweeps the same
-# PVC an hour later and holds the long history in B2.
+# the short tail of all three, and pushes a heartbeat to uptime-kuma. restic
+# sweeps the same PVC THIRTY MINUTES later - this CronJob runs at 02:30 and the
+# restic job with its freshness gate at 03:00 - and holds the long history in B2.
 #
 # THE GRAFANA STEP RUNS HERE, NOT OVER `kubectl exec`, and not in a job of its
 # own. The grafana pod has no sqlite3 and no python3, so the copy has to be
 # taken from outside it; local-path is node-local and ReadWriteOnce permits a
 # second pod on the SAME node, so this pod mounts the `grafana-data` PVC
 # read-only at /grafana and reads the database directly. A sibling CronJob would
-# have bought a second healthchecks.io check, a second image pin and a second
-# set of deadlines for one `.backup` call. See grafana-sqlite-backup.py for why
-# it is Python rather than the sqlite3 CLI.
+# have bought a second monitor, a second image pin and a second set of deadlines
+# for one `.backup` call. See grafana-sqlite-backup.py for why it is Python
+# rather than the sqlite3 CLI.
 #
 # TWO MOUNT PATHS, ONE VOLUME — read this before "fixing" a path.
 # The `health-dumps` PVC is mounted at /backups inside the influxdb pod and at
@@ -36,56 +37,80 @@ set -eu
 # swallowing a broken pipeline.
 set -o pipefail
 
-# ---- healthchecks.io ping with a body ------------------------------------
-# CONVERTED FROM SUCCESS-ONLY TO /start + EXIT CODE. This script is `set -eu`
-# with the ping last, so until now a failing prune, a missing script or a dead
-# influxdb pod produced EXACTLY NOTHING until the 6h grace expired ~30 hours
-# later. It is the only check here whose failures were invisible.
-#
-# THIS CHANGES WHEN THE CHECK ALERTS, and that is the point:
-#
-#   script exits non-zero   was: silence, red ~30h later   now: red in a minute
-#   pod killed/unscheduled  was: red at last_ping+1d+6h     now: red at last_start+6h
-#   success                 was: green                      now: green, with a duration
-#
-# The accepted cost is a transient failure - an influxdb pod mid-restart when
-# `kubectl exec` lands, an API-server blip - that used to self-heal into
-# silence and now pages immediately. 30 hours of silence on a hard failure is
+# ---- uptime-kuma push with a short message --------------------------------
+# EXIT CODE FROM AN EXIT TRAP, NOT SUCCESS-ONLY. This script is `set -eu` with
+# the heartbeat last, so under the original success-only shape a failing prune,
+# a missing script or a dead influxdb pod produced EXACTLY NOTHING until the
+# grace expired ~30 hours later. It was the only check here whose failures were
+# invisible. The trap pushes `down` instead, so a hard failure alerts in a
+# minute. The accepted cost is a transient failure - an influxdb pod mid-restart
+# when `kubectl exec` lands, an API-server blip - that used to self-heal into
+# silence and now alerts immediately. 30 hours of silence on a hard failure is
 # worse than an occasional false red on a nightly job.
 #
-# A PING MUST NEVER FAIL THE JOB, AND A BODY MUST NEVER COST A PING.
+# THE SWITCH FROM healthchecks.io TO AN uptime-kuma PUSH MONITOR (2026-08-26)
+# changed two things and nothing else:
+#
+#   NO /start PING. The push API has no such concept: a push is a heartbeat
+#   carrying a status. So `activeDeadlineSeconds` on the CronJob is the WHOLE of
+#   the hang bound, and the monitor's heartbeat interval plus retries is the
+#   silence bound. A run that starts and wedges is killed by the deadline and
+#   then shows up as a missing heartbeat - the same alarm, one step later.
+#
+#   THE MESSAGE IS SHORT AND FIXED-SHAPE. kuma stores one `msg` string per
+#   heartbeat, so what travels with the alert is a verdict plus two numbers. The
+#   full nightly detail - every size and every prune count - is echoed to this
+#   pod's log by the trap instead. Read the pod log first; the heartbeat history
+#   is the fallback, not the record.
+#
+# A PUSH MUST NEVER FAIL THE JOB, AND A MESSAGE MUST NEVER COST A PUSH.
 # NEVER EMIT A COMMAND'S OUTPUT: this script `kubectl exec`s two scripts that
 # pass the InfluxDB OPERATOR token on argv, so anything echoing argv - a
 # syntax error, a CLI usage dump, a future `set -x` - would put the token that
-# reads and writes every health bucket into a third-party-held body, repeated
-# nightly. `make check-ping-bodies` enforces it; spec section 9.2 says why.
-# A BARE TRAILING SLASH IS AN HTTP 400, so the URL is built conditionally.
+# reads and writes every health bucket into the alert, repeated nightly. And a
+# failing curl quotes the URL, which for a push carries the monitor's token as
+# its last path segment. `make check-ping-bodies` enforces both; spec section
+# 9.2 says why. `emit` deliberately keeps its name: that guard recognises a body
+# sink by FUNCTION NAME, never by the ping host, so renaming it would drop this
+# file out of coverage.
+#
+# THE TOKEN REACHES THIS SCRIPT AS `PUSH_URL`, NOT AS ITS REAL NAME. Generated
+# scripts ride the same envsubst stream as every manifest and envsubst
+# substitutes the bare $NAME form as well as ${NAME}, so naming the allowlisted
+# variable here - even in a comment - would publish the token inside a
+# ConfigMap. `make check-script-substitution` enforces the rename; the real name
+# is in homelab/health/backups.yaml, where substitution is what is meant to
+# happen. PUSH_URL arrives already carrying the token.
+#
 # `true >`, not `: >`: a redirection error on a POSIX special built-in aborts
-# the shell even behind `|| true`.
-HC_BODY=/tmp/hc-body
-# The stderr redirection PRECEDES the body redirection in both. Redirections
-# are applied left to right, so `>> "$HC_BODY" 2>/dev/null` cannot suppress the
+# the shell even behind `|| true`. Tokens are space-separated on ONE line,
+# because a kuma msg is one line.
+MSG_FILE=/tmp/kuma-msg
+# The stderr redirection PRECEDES the message redirection in both. Redirections
+# are applied left to right, so `>> "$MSG_FILE" 2>/dev/null` cannot suppress the
 # shell's own "cannot create" diagnostic - only this order can (verified in dash
-# and busybox 1.36.1). Property 4 above is what keeps the job alive on that day;
-# this is what keeps its log readable.
-hc_reset() { true 2>/dev/null > "$HC_BODY" || true; }
-emit() { { printf '%s' "$*" | LC_ALL=C tr -cd '\040-\176'; printf '\n'; } 2>/dev/null >> "$HC_BODY" || true; }
+# and busybox 1.36.1). Keeping the push alive on that day is what the `|| true`
+# does; this is what keeps the log readable.
+msg_reset() { true 2>/dev/null > "$MSG_FILE" || true; }
+# shellcheck disable=SC2329 # called only from on_exit, which runs from the EXIT trap.
+emit() { { printf '%s ' "$*" | LC_ALL=C tr -cd '\040-\176'; } 2>/dev/null >> "$MSG_FILE" || true; }
 
-# ping_hc [SUFFIX] - "" | start | <exit-status>. Always returns 0.
-ping_hc() {
-  _sf=${1:-}
-  _u="https://hc-ping.com/$HC_UUID"
-  [ -z "$_sf" ] || _u="$_u/$_sf"
-  if [ -s "$HC_BODY" ]; then
-    if curl -fsS -m 15 -o /dev/null --data-binary @"$HC_BODY" "$_u"; then
-      hc_reset; return 0
-    fi
-    echo "hc: body POST failed, retrying without a body" >&2
-  fi
-  # Fixed text. No URL, no tool output: for a ping the URL IS the write
-  # credential, and a pod log is not a place to put one either.
-  curl -fsS -m 15 -o /dev/null "$_u" || echo "hc: ping not delivered" >&2
-  hc_reset
+# GET https://uptime.cynexia.com/api/push/<token>?status=up|down&msg=<short>
+# `-G --data-urlencode` builds the query safely: the message never has to be
+# escaped by hand, and no value is interpolated into the URL string. The msg is
+# capped at 200 characters because kuma stores it in one column and an alert
+# nobody can read is worse than a shorter one. curl, not wget: alpine/k8s:1.36.0
+# has both (re-verified in-cluster 2026-08-26) and curl is what does the
+# encoding.
+# shellcheck disable=SC2329 # called only from on_exit, which runs from the EXIT trap.
+push_kuma() {
+  _st=$1
+  _m=$(cut -c1-200 "$MSG_FILE" 2>/dev/null) || _m=""
+  curl -fsS -m 15 -o /dev/null -G \
+    --data-urlencode "status=$_st" \
+    --data-urlencode "msg=$_m" \
+    "$PUSH_URL" || echo "kuma: push not delivered" >&2
+  msg_reset
   return 0
 }
 
@@ -96,15 +121,25 @@ FATAL_MSG=""
 step() { STEP=$1; FATAL_MSG=""; }
 
 # ONE SINK PER DIAGNOSTIC. `fatal` writes the message to stderr exactly as the
-# FATAL: echoes it replaces did, and holds it for the body. Both existing
-# FATAL branches were written to be read; today nothing reads them.
+# FATAL: echoes it replaces did, and holds it for the heartbeat message, where
+# the trap emits it last so a long one is what the 200-character cut takes.
 fatal() {
   FATAL_MSG=$*
   echo "FATAL: $*" >&2
   exit 1
 }
 
-# Body values. `unknown` sentinels so `set -u` cannot bite in the trap if the
+# How many line-protocol exports a complete run produces: one per bucket in
+# influx-export-lp.sh's explicit `for B in ...` list. It is a literal here
+# because that list lives in the OTHER pod's script and cannot be read from this
+# one. Nothing depends on the two agreeing - influx-export-lp.sh already fails by
+# name on a bucket it cannot find, so on the success path n is always m - but a
+# `buckets=5/4` in the heartbeat is the visible tell that a bucket was added
+# there and not here. Adding a bucket is three edits now: create it, list it in
+# influx-export-lp.sh, and raise this.
+LP_EXPECTED=4
+
+# Message values. `unknown` sentinels so `set -u` cannot bite in the trap if the
 # run dies before a measurement ran, and so a missing measurement reads as
 # missing rather than as zero.
 NATIVE_KIB=unknown
@@ -125,36 +160,45 @@ PRUNED_GRAFANA=unknown
 on_exit() {
   _xrc=$?
   trap - EXIT
-  hc_reset
+  # THE FULL NIGHTLY DETAIL GOES HERE, TO THE POD LOG, and only a verdict plus
+  # two numbers travel with the alert. This line is what the multi-line
+  # healthchecks.io body used to be; the migration to a one-line kuma msg is why
+  # it exists. Read it before ttlSecondsAfterFinished collects the pod.
+  echo "detail: rc=$_xrc step=$STEP native_kib=$NATIVE_KIB native_mib=$NATIVE_MIB" \
+       "lp_files=$LP_FILES lp_kib=$LP_KIB grafana_kib=$GRAFANA_KIB" \
+       "pruned_native=$PRUNED_NATIVE pruned_lp=$PRUNED_LP pruned_grafana=$PRUNED_GRAFANA"
+  msg_reset
   if [ "$_xrc" -eq 0 ]; then
-    emit "summary=ok - native dump $NATIVE_MIB MiB, $LP_FILES lp exports, grafana dump $GRAFANA_KIB KiB, pruned $PRUNED_NATIVE native / $PRUNED_LP lp / $PRUNED_GRAFANA grafana"
-    emit "native_kib=$NATIVE_KIB"
-    emit "lp_files=$LP_FILES"
-    emit "lp_kib=$LP_KIB"
-    emit "grafana_kib=$GRAFANA_KIB"
-    emit "pruned_native=$PRUNED_NATIVE"
-    emit "pruned_lp=$PRUNED_LP"
-    emit "pruned_grafana=$PRUNED_GRAFANA"
+    emit "verdict=ok"
   else
-    emit "summary=FAILED rc=$_xrc - $STEP"
+    emit "verdict=failed"
     emit "failed_step=$STEP"
-    # NOTHING CAPTURED, EVER. failed_step=native and failed_step=lp are bare
-    # `kubectl exec` calls with no FATAL of their own, and the only diagnostic
-    # available for them is the exec'd script's output - which is produced by
-    # scripts that pass the operator token on argv. Those two branches emit
-    # failed_step and nothing else, by construction: FATAL_MSG is empty unless
-    # `fatal` set it. If a diagnostic is wanted there, add a FATAL: line to
-    # THIS script naming the step, in the same commit, and emit that literal.
-    [ -z "$FATAL_MSG" ] || emit "error=$FATAL_MSG"
   fi
-  ping_hc "$_xrc"
+  emit "buckets=$LP_FILES/$LP_EXPECTED"
+  emit "grafana_kib=$GRAFANA_KIB"
+  # LAST, because it is the only variable-length token and the msg is cut at 200
+  # characters: everything above it is guaranteed to survive.
+  #
+  # NOTHING CAPTURED, EVER. failed_step=native and failed_step=lp are bare
+  # `kubectl exec` calls with no FATAL of their own, and the only diagnostic
+  # available for them is the exec'd script's output - which is produced by
+  # scripts that pass the operator token on argv. Those two branches emit
+  # failed_step and nothing else, by construction: FATAL_MSG is empty unless
+  # `fatal` set it. If a diagnostic is wanted there, add a FATAL: line to
+  # THIS script naming the step, in the same commit, and emit that literal.
+  if [ "$_xrc" -ne 0 ] && [ -n "$FATAL_MSG" ]; then
+    emit "error=$FATAL_MSG"
+  fi
+  if [ "$_xrc" -eq 0 ]; then
+    push_kuma up
+  else
+    push_kuma down
+  fi
   exit "$_xrc"
 }
 trap on_exit EXIT
 
-hc_reset
-emit "summary=starting"
-ping_hc start
+msg_reset
 
 step influxdb-pod-lookup
 DATE=$(date +%F)
@@ -170,8 +214,8 @@ POD=$(kubectl -n health get pod -l app=influxdb -o jsonpath='{.items[0].metadata
 #   - `sh -c ''` exits 0.
 #
 # Both exec steps would therefore become silent no-ops, `prune_to` would find
-# the PREVIOUS nights' dumps and succeed, and the healthchecks.io ping at the
-# end would report SUCCESS for a backup that captured nothing. Verified:
+# the PREVIOUS nights' dumps and succeed, and the trap would push an `up`
+# heartbeat for a backup that captured nothing. Verified:
 #
 #   $ sh -c 'set -eu; printf "[%s]" "$(cat /nonexistent 2>/dev/null)"; \
 #            sh -c "" n a; echo rc=$?'
@@ -225,8 +269,8 @@ python3 /scripts/grafana-sqlite-backup.py /grafana/grafana.db /dumps/grafana "$D
 # under `set -eu`, and a pipeline exits with its LAST command's status — so the
 # verdict came from `xargs`, which succeeds at doing nothing. Every way `ls`
 # can fail (an unmatched glob, the PVC not mounted, a permissions problem)
-# therefore produced exit 0, `set -e` never fired, the script ran on to the
-# healthchecks.io ping below, and the check went GREEN. Retention would have
+# therefore produced exit 0, `set -e` never fired, the run reached its exit
+# trap with rc 0, and the monitor went UP. Retention would have
 # stopped silently, health-dumps would have filled, and the failure would first
 # have surfaced as the next influx backup dying on ENOSPC.
 #
@@ -285,7 +329,7 @@ step prune-grafana
 prune_to grafana 14 /dumps/grafana/*-grafana.db
 PRUNED_GRAFANA=$PRUNED
 
-# ---- measurements for the ping body --------------------------------------
+# ---- measurements for the heartbeat message and the detail line -----------
 # EVERY COMMAND HERE IS SUFFIXED `|| true` WITH A SENTINEL. A measurement must
 # never be able to fail a backup that succeeded, and `set -e` is in force.
 # `du -sk`, not `du -sb`: busybox du has no -b, and -sk is what the restic gate
@@ -316,11 +360,11 @@ case "$GRAFANA_KIB" in ''|*[!0-9]*) GRAFANA_KIB=unknown ;; esac
 # check-ping-bodies: untaint GRAFANA_KIB - du's KiB total, gated to digits by the case above
 # THIS NUMBER IS HOW THE GATE FLOOR GETS SET. grafana-sqlite-backup.py ships a
 # deliberately conservative 64 KiB placeholder and homelab/backup/restic-cronjob.yaml
-# a matching one; after the first real run, read grafana_kib= off the ping and
-# raise both to roughly an order of magnitude below it.
+# a matching one; after the first real run, read grafana_kib= off the heartbeat
+# message and raise both to roughly an order of magnitude below it.
 
 # The dead-man's switch fires from the EXIT trap above, on every path. There is
-# deliberately no ping on this line any more: a ping here would only be reached
-# on success, which is the behaviour this conversion exists to remove.
+# deliberately no push on this line: a push here would only be reached on
+# success, which is the behaviour the exit-trap conversion exists to remove.
 step finished
 exit 0

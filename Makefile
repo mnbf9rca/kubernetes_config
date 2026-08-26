@@ -42,7 +42,11 @@ HOMELAB_CONTEXT ?= cynexia-homelab
 # do not strictly require these — require-vars is called from apply/diff only.
 REQUIRED_VARS := B2_ACCOUNT_ID B2_ACCOUNT_KEY RESTIC_PASSWORD RESTIC_REPOSITORY \
                  RESTIC_HC_UUID HERMES_HC_UUID OPS_HC_UPDATE_UUID \
-                 OPS_KUMA_KEEL_TOKEN \
+                 OPS_KUMA_KEEL_TOKEN OPS_KUMA_UPDATE_TOKEN HERMES_KUMA_TOKEN \
+                 JOTTACLOUD_KUMA_TOKEN \
+                 HEALTH_KUMA_BACKUP_TOKEN HEALTH_KUMA_CLOUDFLARE_TOKEN \
+                 HEALTH_KUMA_INGEST_TOKEN \
+                 HINDSIGHT_KUMA_TOKEN HINDSIGHT_CANARY_KUMA_TOKEN \
                  ROUTE53_ACCESS_KEY_ID ROUTE53_SECRET_ACCESS_KEY \
                  ACME_EMAIL HEALTHCHECK_UUID \
                  HEALTH_HC_APPLE_UUID HEALTH_HC_GARMIN_UUID HEALTH_HC_BACKUP_UUID \
@@ -72,7 +76,11 @@ REQUIRED_VARS := B2_ACCOUNT_ID B2_ACCOUNT_KEY RESTIC_PASSWORD RESTIC_REPOSITORY 
 # silently substitute an empty value into a manifest.
 ENVSUBST_VAR_NAMES := B2_ACCOUNT_ID B2_ACCOUNT_KEY RESTIC_PASSWORD RESTIC_REPOSITORY \
                      RESTIC_HC_UUID HERMES_HC_UUID OPS_HC_UPDATE_UUID \
-                     OPS_KUMA_KEEL_TOKEN \
+                     OPS_KUMA_KEEL_TOKEN OPS_KUMA_UPDATE_TOKEN HERMES_KUMA_TOKEN \
+                     JOTTACLOUD_KUMA_TOKEN \
+                     HEALTH_KUMA_BACKUP_TOKEN HEALTH_KUMA_CLOUDFLARE_TOKEN \
+                     HEALTH_KUMA_INGEST_TOKEN \
+                     HINDSIGHT_KUMA_TOKEN HINDSIGHT_CANARY_KUMA_TOKEN \
                      ROUTE53_ACCESS_KEY_ID ROUTE53_SECRET_ACCESS_KEY \
                      ACME_EMAIL \
                      HEALTHCHECK_UUID \
@@ -108,7 +116,7 @@ help:
 	@echo "  check-placeholder-coverage - assert no .env.tpl \$${VAR} survives the render (both clusters)"
 	@echo "  check-job-ttl   - assert every standalone Job sets ttlSecondsAfterFinished (both clusters)"
 	@echo "  check-script-substitution - assert no configMapGenerator script names an envsubst var"
-	@echo "  check-ping-bodies - assert no healthchecks.io ping body is built from a command's output"
+	@echo "  check-ping-bodies - assert no ping body or heartbeat message is built from a command's output"
 	@echo "  check-script-lint - shellcheck (-s sh) every script in the RENDER + compile/test the Python"
 	@echo "  check-renovate-scope - assert every container is in exactly one update mode (both clusters)"
 	@echo "                    keel for floating tags, Renovate for pinned ones, never both; per container"
@@ -225,17 +233,30 @@ check-script-substitution-homelab:
 check-script-substitution-vps:
 	@scripts/check-script-substitution.py vps
 
-# Third guard in the same family, and the one that keeps a ping BODY honest.
+# Third guard in the same family, and the one that keeps a REPORTED MESSAGE
+# honest — a healthchecks.io ping body or an uptime-kuma heartbeat `msg`, which
+# since 2026-08-26 are both in play and share one rule set.
 #
-# A ping body leaves the estate: healthchecks.io is a third-party SaaS, the body
-# is stored in their object storage, and it is repeated on every run until
-# somebody fixes the script. So an `emit` call is a line in a public file.
+# A healthchecks.io body leaves the estate: it is a third-party SaaS, the body is
+# stored in their object storage, and it is repeated on every run until somebody
+# fixes the script. A kuma msg stays on the operator's own VPS, but it is still
+# written to a database, still repeated, and still read verbatim into every
+# notification the monitor sends. So an `emit` call is a line in a public file
+# either way.
 #
-# The rule it enforces (spec section 9.2) is: never build a body from a
-# command's output. restic error messages quote the repository URL; the two
-# scripts influx-backup.sh execs into the influxdb pod pass the InfluxDB
-# OPERATOR token on argv, so anything echoing argv would ship it nightly; a
-# failing wget quotes the ping URL, which IS the check's write credential.
+# The rule it enforces (spec section 9.2) is: never build one from a command's
+# output. restic error messages quote the repository URL; the two scripts
+# influx-backup.sh execs into the influxdb pod pass the InfluxDB OPERATOR token
+# on argv, so anything echoing argv would ship it nightly; and a failing wget or
+# curl quotes the URL it was handed, which is the reporting credential either
+# way — a ping UUID, or a push token as the last path segment of PUSH_URL.
+#
+# It recognises a sink by FUNCTION NAME, never by destination host, which is why
+# `emit`/`hc_emit`/`hc_summary` kept their names through the migration. Its OK:
+# line reports a sink-call COUNT: read it per file, not in aggregate. The
+# aggregate fell when multi-line bodies collapsed into one-line messages; what
+# must never happen is a file losing its last sink call or dropping out of the
+# scan.
 #
 # Reads source files only — no cluster, no 1Password, no kustomize. So it is on
 # BOTH halves of diff-*/apply-*, like check-script-substitution and unlike
@@ -327,7 +348,7 @@ check-script-lint-vps:
 # a container's mode wrong fails quietly — a pinned tag carrying keel
 # annotations is frozen while looking covered, an incomplete keel set silently
 # downgrades a semver tag to `:latest`, and a pinned tag outside Renovate's
-# scope receives nothing at all while `homelab-update-watch` stays green.
+# scope receives nothing at all while `homelab-update-watch` stays UP.
 #
 # It renders the cluster with `kustomize build` and evaluates ONE CONTAINER AT A
 # TIME, so a file holding both a keel-managed Deployment and a pinned CronJob is
@@ -933,7 +954,8 @@ hindsight-upgrade: check-context
 	  echo "###   3. make apply-homelab"; \
 	  echo "###   4. kubectl -n hindsight rollout status deploy/hindsight --timeout=600s"; \
 	  echo "###   5. Verify: the startup probe settles, then \`hermes memory status\` on VM 103"; \
-	  echo "###   6. Confirm homelab-update-watch goes green after the next 06:45 run"; \
+	  echo "###   6. Confirm the homelab-update-watch monitor goes UP after the next"; \
+	  echo "###      06:45 run"; \
 	  echo "###      (or force one: kubectl -n ops create job --from=cronjob/update-watch now-$$ts)"; \
 	  echo "###"; \
 	  echo "### If it goes wrong, the restore runbook is in docs/operations/hindsight.md."; \
@@ -954,9 +976,9 @@ hindsight-upgrade: check-context
 	  fi; \
 	  echo "###"; \
 	  echo "### The Job is left in place - its TTL collects it, and until then it is"; \
-	  echo "### inspectable. The check goes red either way: on the exit ping, or - if"; \
-	  echo "### the Job is still running, or was killed before it could ping - when"; \
-	  echo "### the grace expires."; \
+	  echo "### inspectable. The monitor goes DOWN either way: on the exit trap's"; \
+	  echo "### 'down' push, or - if the Job is still running, or was killed before"; \
+	  echo "### the trap could run - when the heartbeat interval plus retry expires."; \
 	  exit 1; \
 	fi
 
@@ -1050,9 +1072,11 @@ health-upgrade: check-context
 	  echo "### Pre-upgrade dump complete: $$job"; \
 	  echo "### It covers BOTH stateful components: the InfluxDB logical export and"; \
 	  echo "### the Grafana SQLite dump. The log above ends with the Grafana dump's"; \
-	  echo "### own size and schema-object count; influx-backup.sh keeps quiet on"; \
-	  echo "### success, so its artifact sizes and counts (lp_files= is one export"; \
-	  echo "### per bucket) are in the health-influx-backup ping body, not stdout."; \
+	  echo "### own size and schema-object count, then influx-backup.sh's own"; \
+	  echo "### 'detail:' line, which carries every artifact size and count"; \
+	  echo "### (lp_files= is one export per bucket). The one-line heartbeat sent to"; \
+	  echo "### the health-influx-backup monitor carries only the verdict, buckets="; \
+	  echo "### and grafana_kib=, so the log above is the fuller record."; \
 	  echo "###"; \
 	  echo "### Next, by hand. DEPLOY, THEN MERGE - never the other way round:"; \
 	  echo "###   1. gh pr checkout <the Renovate \"health stack\" PR>. Do NOT merge it"; \
@@ -1070,13 +1094,13 @@ health-upgrade: check-context
 	  echo "###   5. make apply-homelab"; \
 	  echo "###   6. kubectl -n health rollout status deploy/influxdb --timeout=600s"; \
 	  echo "###      kubectl -n health rollout status deploy/grafana  --timeout=600s"; \
-	  echo "###   7. Verify ingest: force one freshness run and read its body -"; \
+	  echo "###   7. Verify ingest: force one freshness run and read its POD LOG -"; \
 	  echo "###      kubectl -n health create job --from=cronjob/ingest-freshness now-$$ts"; \
 	  echo "###   8. Open a Grafana dashboard and confirm it renders against InfluxDB."; \
 	  echo "###   9. ONLY NOW, with the cluster healthy:"; \
 	  echo "###      gh pr merge --squash --delete-branch   (this repo squashes only)"; \
 	  echo "###      git checkout master && git pull"; \
-	  echo "###  10. Confirm homelab-update-watch is green after the next 06:45 run"; \
+	  echo "###  10. Confirm the homelab-update-watch monitor is UP after the next 06:45 run"; \
 	  echo "###      (or force one: kubectl -n ops create job --from=cronjob/update-watch now-$$ts)"; \
 	  echo "###"; \
 	  echo "### If it goes wrong, the restore runbook is in docs/operations/homelab-health.md."; \
@@ -1091,9 +1115,10 @@ health-upgrade: check-context
 	    echo "### DUMP FAILED - do not upgrade."; \
 	    echo "### The log ends with whatever failed: a FATAL: line from influx-backup.sh"; \
 	    echo "### or from one of the scripts it runs, or else the underlying tool's own"; \
-	    echo "### error. The health-influx-backup ping body names it as failed_step="; \
+	    echo "### error. The health-influx-backup heartbeat names it as failed_step="; \
 	    echo "### whenever the script exited normally - every failure except a kill"; \
-	    echo "### (OOM, eviction, the active deadline), where no exit trap runs."; \
+	    echo "### (OOM, eviction, the active deadline), where no exit trap runs and"; \
+	    echo "### so nothing is pushed at all."; \
 	  else \
 	    echo "### DUMP STILL RUNNING after 600s - do not upgrade; do not delete the job."; \
 	    echo "### Watch it: kubectl -n health logs -f job/$$job"; \
@@ -1103,9 +1128,9 @@ health-upgrade: check-context
 	  fi; \
 	  echo "###"; \
 	  echo "### The Job is left in place - its TTL collects it, and until then it is"; \
-	  echo "### inspectable. The check goes red either way: on the exit ping, or - if"; \
-	  echo "### the Job is still running, or was killed before it could ping - when"; \
-	  echo "### the grace expires."; \
+	  echo "### inspectable. The monitor goes DOWN either way: on the exit trap's"; \
+	  echo "### 'down' push, or - if the Job is still running, or was killed before"; \
+	  echo "### the trap could run - when the heartbeat interval plus retry expires."; \
 	  exit 1; \
 	fi
 

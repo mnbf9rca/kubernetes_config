@@ -201,7 +201,7 @@ Note that 1Password **document** items (e.g. `health-cloudflared`) need
 | `check-vars-consistency` | Asserts `ENVSUBST_VAR_NAMES` ⊆ `REQUIRED_VARS`. Runs in the parent shell, before the `op run` child exists. Cannot detect a var *missing* from `ENVSUBST_VAR_NAMES` |
 | `check-job-ttl` | Asserts every standalone `kind: Job` sets `ttlSecondsAfterFinished`, across both clusters. `check-job-ttl-homelab` scopes it to one cluster and runs in the `diff-homelab`/`apply-homelab` preflight |
 | `check-script-substitution` | Asserts no `configMapGenerator` script names an envsubst-allowlisted variable, across both cluster trees. `check-script-substitution-homelab` scopes the *scan* to one tree — both allowlists still apply — and runs in the `diff-homelab`/`apply-homelab` preflight |
-| `check-ping-bodies` | Asserts no healthchecks.io ping body is built from a command's output, across both cluster trees. `check-ping-bodies-homelab` scopes the scan to one tree and runs in the `diff-homelab`/`apply-homelab` preflight |
+| `check-ping-bodies` | Asserts no healthchecks.io ping body and no uptime-kuma heartbeat message is built from a command's output, across both cluster trees — it recognises a sink by function name, never by destination host. `check-ping-bodies-homelab` scopes the scan to one tree and runs in the `diff-homelab`/`apply-homelab` preflight. Its `OK:` line's sink-call count is to be read per file, not in aggregate |
 | `check-script-lint` | Lints every script the clusters run, from the **rendered** stream rather than the source tree, plus the repo's Python. `check-script-lint-homelab` scopes the render to one cluster and runs in the `diff-homelab`/`apply-homelab` preflight. See below |
 | `check-renovate-scope` | Asserts every container is in exactly one update mode — floating means keel, pinned means Renovate, never both — from the `kustomize build` render, one container at a time, across both clusters. `check-renovate-scope-homelab` scopes it to one cluster and runs in the `diff-homelab`/`apply-homelab` preflight, joining it as the fifth per-cluster guard and the third render-based one. See below |
 | `check-keel-fresh-parity` | Asserts the two `ops/keel-fresh` copies — runner script and CronJob manifest — differ only inside a stated allowlist. **The one guard with no per-cluster half**, because it compares the two trees against each other; it runs whole on both halves of all four chains. See below |
@@ -243,7 +243,7 @@ generated target, and two clusters is not enough to justify the abstraction.
 | `create-health-cloudflared-secret` | Recreates the health tunnel creds Secret via `op document get health-cloudflared` |
 | `route-health-dns` | CNAMEs for every hostname in `homelab/health/cloudflared.yaml` onto the `cynexia-health` tunnel |
 | `health-influx-bootstrap` | InfluxDB buckets, v1 DBRP mapping, v1-compat auth user, and the two scoped tokens — see [homelab-health.md](homelab-health.md) |
-| `health-upgrade` | Creates a one-off Job from `cronjob/influx-backup`, waits for it, tails the log and **stops** — the pre-upgrade dump of InfluxDB *and* Grafana, and nothing else. The script is silent on success, so its sizes and counts arrive in the `health-influx-backup` ping body rather than on stdout. Applies nothing, merges nothing, edits no pin. See [homelab-health.md](homelab-health.md) |
+| `health-upgrade` | Creates a one-off Job from `cronjob/influx-backup`, waits for it, tails the log and **stops** — the pre-upgrade dump of InfluxDB *and* Grafana, and nothing else. The script's sizes and counts arrive on the log's `detail:` line, which the target tails; the one-line heartbeat sent to the `health-influx-backup` monitor carries only the verdict, `buckets=` and `grafana_kib=`. Applies nothing, merges nothing, edits no pin. See [homelab-health.md](homelab-health.md) |
 
 ### Hindsight namespace
 
@@ -320,7 +320,7 @@ on a pin only refreshes the digest. An incomplete keel annotation set is worse
 than none, because without `match-tag` keel silently downgrades a semver tag to
 `:latest`. A pinned tag with no keel annotations and outside Renovate's scope
 receives nothing at all, while `homelab-update-watch` counts zero open pull
-requests and stays green over it.
+requests and stays UP over it.
 
 The version this replaced could see none of that. It asked whether a *file*
 mentioned `keel.sh/policy` anywhere and whether a *file* pinned any image, so a

@@ -80,9 +80,11 @@ spec:
       # The pull itself takes well under a minute (203 MB in ~23 s measured
       # end to end on 2026-08-24, LAN); 30 minutes bounds a hung ssh that the
       # script's ServerAlive options somehow did not catch. A deadline kill
-      # skips the script's EXIT trap, so that failure mode shows on
-      # healthchecks.io as started-but-never-finished — intended. Revisit
-      # from recorded durations per docs/operations/monitoring.md.
+      # skips the script's EXIT trap, so that failure mode pushes NOTHING and
+      # the `homelab-hermes-pull` monitor goes DOWN by silence at its interval
+      # plus retry — intended, and the whole signature for a hang now that there
+      # is no start signal to contradict. Revisit from recorded durations per
+      # docs/operations/monitoring.md.
       activeDeadlineSeconds: 1800
       backoffLimit: 1
       # A completed Job that is never collected pins its immutable template
@@ -133,11 +135,15 @@ spec:
               image: kroniak/ssh-client@sha256:cfb58718a2cfbb248214a9c33655f16438e0f1014c054e0e524d3eb232ccdb2b
               command: ["sh", "/scripts/hermes-pull.sh"]
               env:
-                # Renamed on purpose: only HC_UUID reaches the script, so the
+                # uptime-kuma push monitor `homelab-hermes-pull`
+                # (op://Homelab/hermes-backup/kuma-push-token).
+                #
+                # Renamed on purpose: only PUSH_URL reaches the script, so the
                 # generated ConfigMap cannot be rewritten by envsubst. The
-                # placeholder below is the allowlisted name.
-                - name: HC_UUID
-                  value: "${HERMES_HC_UUID}"
+                # placeholder below is the allowlisted name, and the whole URL
+                # is assembled here so the script never builds one.
+                - name: PUSH_URL
+                  value: "https://uptime.cynexia.com/api/push/${HERMES_KUMA_TOKEN}"
               securityContext:
                 allowPrivilegeEscalation: false
                 readOnlyRootFilesystem: true

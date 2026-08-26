@@ -3,10 +3,11 @@
 #
 # Counts the open `renovate[bot]` pull requests on this repo with ONE
 # unauthenticated GitHub REST call and drives the `homelab-update-watch`
-# healthchecks.io check: green while updates simply wait, red when one has
-# waited long enough that an update session was plainly skipped, red when
-# Renovate itself has gone quiet or is visibly broken, red through silence when
-# this job stops running.
+# uptime-kuma PUSH monitor: UP while updates simply wait, DOWN when one has
+# waited long enough that an update session was plainly skipped, DOWN when
+# Renovate itself has gone quiet or is visibly broken, DOWN through silence when
+# this job stops running. A run that could not read GitHub pushes NOTHING, which
+# is what stops "I could not look" reading as "everything is fine".
 # Without it, a pinned namespace's updates sit in GitHub with nothing pointing
 # at them — which is exactly what happened to `health`.
 #
@@ -21,7 +22,8 @@
 # ownership; and `backup` runs at PSA privileged for restic's hostPaths, which a
 # pure outbound-HTTPS poller has no business inheriting. It needs no hostPath, no
 # hostNetwork, no ServiceAccount and no RBAC — only egress to api.github.com and
-# hc-ping.com. A separate tree also makes removal one `rm -r` plus one line.
+# uptime.cynexia.com. A separate tree also makes removal one `rm -r` plus one
+# line.
 #
 # NO GITHUB TOKEN, deliberately. The repo is public, /repos/*/issues needs no
 # auth, and the unauthenticated budget is 60 requests per hour per egress IP
@@ -37,9 +39,11 @@
 # hindsight) to both cluster trees. That widening did not change anything stated
 # here: this tree was inside the old scope and is inside the new one.
 #
-# NO PROBES. This is scheduled work, so the instrument is the healthchecks.io
-# dead-man's-switch plus activeDeadlineSeconds, not a probe. And note there is
-# deliberately NO `/start` ping: see docs/operations/monitoring.md and the
+# NO PROBES. This is scheduled work, so the instrument is the push monitor's
+# dead-man's-switch plus activeDeadlineSeconds, not a probe. There is no start
+# signal and none may be invented — the push API has no such concept, so
+# activeDeadlineSeconds is the whole of the hang bound and the monitor's interval
+# plus retry is the silence bound. See docs/operations/monitoring.md and the
 # script's own rule 2.
 apiVersion: batch/v1
 kind: CronJob
@@ -92,19 +96,20 @@ spec:
                 - { name: PYTHONUNBUFFERED, value: "1" }
                 # Tier-3 identifier: the public repo path this watches.
                 - { name: GH_REPO, value: "mnbf9rca/kubernetes_config" }
-                # healthchecks.io check `homelab-update-watch`
-                # (op://Homelab/update-watch/healthcheck-uuid). Substituted by
+                # uptime-kuma push monitor `homelab-update-watch`
+                # (op://Homelab/update-watch/kuma-push-token). Substituted by
                 # envsubst at apply time; never committed.
                 #
-                # RENAMED ON PURPOSE. Only HC_UUID reaches the script, because a
+                # RENAMED ON PURPOSE. Only PUSH_URL reaches the script, because a
                 # generated script rides the same envsubst stream as this
                 # manifest and envsubst rewrites the bare `$NAME` form too — a
-                # script naming OPS_HC_UPDATE_UUID would publish the ping UUID
-                # inside a ConfigMap. `make check-script-substitution` enforces
-                # it. The placeholder belongs HERE, in a manifest, where
-                # substitution is what is meant to happen.
-                - name: HC_UUID
-                  value: "${OPS_HC_UPDATE_UUID}"
+                # script naming the allowlisted variable would publish the push
+                # token inside a ConfigMap. `make check-script-substitution`
+                # enforces it. The placeholder belongs HERE, in a manifest, where
+                # substitution is what is meant to happen, and the whole URL is
+                # assembled here so the script never builds one.
+                - name: PUSH_URL
+                  value: "https://uptime.cynexia.com/api/push/${OPS_KUMA_UPDATE_TOKEN}"
               volumeMounts:
                 - { name: scripts, mountPath: /scripts, readOnly: true }
                 - { name: tmp, mountPath: /tmp }

@@ -32,13 +32,19 @@ RESTIC_REPOSITORY=op://Homelab/b2-restic/repository
 # healthchecks.io dead-man's-switch for the nightly restic CronJob
 RESTIC_HC_UUID=op://Homelab/b2-restic/healthcheck-uuid
 
-# healthchecks.io dead-man's-switch for the nightly hermes-pull CronJob
-# (Hermes VM backup; the SSH key itself is multi-line and goes through
-# `make create-hermes-ssh-secret`, not through this pipeline)
+# uptime-kuma push token for the nightly hermes-pull CronJob (Hermes VM backup;
+# the SSH key itself is multi-line and goes through
+# `make create-hermes-ssh-secret`, not through this pipeline).
+HERMES_KUMA_TOKEN=op://Homelab/hermes-backup/kuma-push-token
+# The healthchecks.io UUID this job used until 2026-08-26. It is kept resolvable
+# only until the operator deletes the retired check; see the note at the foot of
+# this section.
 HERMES_HC_UUID=op://Homelab/hermes-backup/healthcheck-uuid
 
-# healthchecks.io check for the daily Renovate update watcher (ops namespace).
-# Red while an update is waiting; see docs/operations/monitoring.md.
+# uptime-kuma push monitor for the daily Renovate update watcher (ops
+# namespace). `up` while updates simply wait, `down` on a determinate red,
+# nothing at all on an indeterminate run; see docs/operations/monitoring.md.
+OPS_KUMA_UPDATE_TOKEN=op://Homelab/update-watch/kuma-push-token
 OPS_HC_UPDATE_UUID=op://Homelab/update-watch/healthcheck-uuid
 
 # uptime-kuma push token for the daily keel dead-man's-switch (ops namespace).
@@ -53,8 +59,18 @@ ROUTE53_SECRET_ACCESS_KEY=op://Homelab/route53-cert-manager/secret-access-key
 # ACME contact email for Let's Encrypt (Task 2.5)
 ACME_EMAIL=op://Homelab/acme/email
 
-# Jottacloud backup healthcheck (Phase 4)
+# Jottacloud backup heartbeat. The container environment key is still called
+# HEALTHCHECK_UUID because the image reads that name, but the value it now
+# carries is a kuma push token — see homelab/workloads/jottacloud-backup.yaml.
+JOTTACLOUD_KUMA_TOKEN=op://Homelab/jottacloud-backup/kuma-push-token
 HEALTHCHECK_UUID=op://Homelab/jottacloud-backup/HEALTHCHECK_UUID
+
+# health namespace — uptime-kuma push tokens
+HEALTH_KUMA_BACKUP_TOKEN=op://Homelab/health-healthchecks/backup-kuma-push-token
+HEALTH_KUMA_CLOUDFLARE_TOKEN=op://Homelab/health-healthchecks/cloudflare-kuma-push-token
+# ONE token for both ingest buckets: a single CronJob checks apple and garmin in
+# one process, so two monitors would be one signal counted twice.
+HEALTH_KUMA_INGEST_TOKEN=op://Homelab/health-healthchecks/ingest-kuma-push-token
 
 # health namespace — healthchecks.io ping UUIDs
 HEALTH_HC_APPLE_UUID=op://Homelab/health-healthchecks/apple-uuid
@@ -107,9 +123,22 @@ HINDSIGHT_PG_PASSWORD=op://Homelab/hindsight/pg-password
 HINDSIGHT_LLM_API_KEY=op://Homelab/hindsight/openai-api-key
 HINDSIGHT_TENANT_API_KEY=op://Homelab/hindsight/tenant-api-key
 HINDSIGHT_CP_ACCESS_KEY=op://Homelab/hindsight/cp-access-key
-# healthchecks.io dead-man's-switches: the nightly pg_dump and the 15-minute canary
+# uptime-kuma push tokens: the nightly pg_dump and the hourly canary
+HINDSIGHT_KUMA_TOKEN=op://Homelab/hindsight/kuma-push-token
+HINDSIGHT_CANARY_KUMA_TOKEN=op://Homelab/hindsight/canary-kuma-push-token
 HINDSIGHT_HC_UUID=op://Homelab/hindsight/healthcheck-uuid
 HINDSIGHT_CANARY_HC_UUID=op://Homelab/hindsight/canary-healthcheck-uuid
+
+# THE NINE `*_HC_*` / `HEALTHCHECK_UUID` LINES ABOVE ARE RETIRED BUT STILL WIRED.
+# On 2026-08-26 nine routine heartbeats moved from healthchecks.io to uptime-kuma
+# push monitors, and no manifest references those UUIDs any more. They stay in
+# this file, in REQUIRED_VARS and in ENVSUBST_VAR_NAMES until the operator has
+# deleted the corresponding checks: red at healthchecks.io next to green in kuma
+# is the proof the migration took, and until then the old credentials must stay
+# resolvable in case anything needs backing out. Removing them is a follow-up
+# commit. Two exceptions are NOT retired — RESTIC_HC_UUID and
+# VPS_RESTIC_HC_UUID still drive live checks, because a restic ping body is the
+# triage runbook and a one-line kuma message cannot carry it.
 
 # --- VPS cluster secrets (Phase 2) ---
 

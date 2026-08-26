@@ -204,7 +204,7 @@ spec:
 
                   # The influx dumps are written nightly at 02:30 by the health/influx-backup
                   # CronJob, 30 minutes before this job. 30h tolerates one missed or delayed run
-                  # (health/influx-backup has its own healthchecks.io check for that) and fails on
+                  # (health/influx-backup has its own uptime-kuma monitor for that) and fails on
                   # two consecutive misses or on the dumps disappearing entirely.
                   STALE_MINUTES=1800
                   STALE_SECONDS=$(( STALE_MINUTES * 60 ))

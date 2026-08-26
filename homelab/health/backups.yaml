@@ -25,8 +25,8 @@ kind: CronJob
 metadata:
   # STILL NAMED influx-backup, and it also takes the nightly Grafana SQLite
   # dump. The name is kept because it is the identity of the CronJob, of its
-  # healthchecks.io check (`health-influx-backup`) and of every runbook that
-  # names it; renaming would orphan the check and the history behind it for a
+  # uptime-kuma push monitor (`health-influx-backup`) and of every runbook that
+  # names it; renaming would orphan the monitor and the history behind it for a
   # cosmetic gain. What the job actually does is one logical backup pass over
   # the whole namespace — see influx-backup.sh.
   name: influx-backup
@@ -69,8 +69,19 @@ spec:
               # edit.
               command: ["sh", "/scripts/influx-backup.sh"]
               env:
-                - name: HC_UUID
-                  value: "${HEALTH_HC_BACKUP_UUID}"
+                # uptime-kuma push monitor `health-influx-backup`
+                # (token at op://Homelab/health-healthchecks/backup-kuma-push-token).
+                # Substituted by envsubst at apply time; never committed.
+                #
+                # RENAMED AT THIS BOUNDARY. Only PUSH_URL reaches the script: a
+                # generated script rides the same envsubst stream as this
+                # manifest and envsubst rewrites the bare `$NAME` form too, so
+                # naming the allowlisted variable there would publish the token
+                # inside a ConfigMap. `make check-script-substitution` enforces
+                # it. The whole URL is assembled here, so the script never has
+                # to build one from a value it was handed.
+                - name: PUSH_URL
+                  value: "https://uptime.cynexia.com/api/push/${HEALTH_KUMA_BACKUP_TOKEN}"
               volumeMounts:
                 - { name: dumps, mountPath: /dumps }
                 - { name: scripts, mountPath: /scripts, readOnly: true }

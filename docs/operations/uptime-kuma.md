@@ -256,9 +256,43 @@ There is **no `/start` equivalent** on this API and there must not be a syntheti
 is a heartbeat carrying a status. The hang bound is the job's own `activeDeadlineSeconds`; the
 silence bound is the interval plus retries below.
 
+**Every push in this estate is made from inside a cluster, outbound, through the Cloudflare Access
+bypass described above.** That is what lets the private homelab cluster — which uptime-kuma cannot
+reach, because it probes from a Hetzner IP and every `*.cynexia.net` name resolves to a LAN
+address — report to a monitor at all. It is also why the bypass is load-bearing rather than a
+convenience: without it every push monitor here would be permanently DOWN.
+
+**Some monitors deliberately receive nothing on some runs, so silence is not always a fault.**
+`health-ingest` pushes only when both its buckets are fresh, and `homelab-update-watch` pushes
+nothing when it could not read GitHub. Both are the deliberate equivalent of healthchecks.io's
+`/log` ping, which recorded an event and changed no state; kuma has two states and no third kind,
+so the equivalent of "record nothing" is to send nothing. The consequence is that a monitor which
+has not moved in a while may be working exactly as designed, and its **silence bound is the
+interval plus retry** in the table below — not any per-run signal. Read the last message it did
+receive, and the pod log, before treating a gap as an incident.
+
+**One trap is Python-only and it is silent.** Cloudflare answers urllib's default
+`Python-urllib/3.x` User-Agent with HTTP 403 and `error code: 1010` before the request reaches
+kuma — measured in-cluster on August 26, 2026, where the default agent got 403/1010 and a named
+one got kuma's own 404 for a bogus token, from the same URL in the same process. Both Python jobs
+therefore set an explicit `User-Agent` on the push and both suites assert it; curl and wget are
+unaffected. It matters because a failed push is swallowed by design, so the only symptom would be
+a monitor that never goes UP.
+
+**A silent runner is proof the heartbeat landed.** kuma answers an unknown or inactive token with
+`404 {"ok":false,"msg":"Monitor not found or not active."}`, which `curl -f` and busybox `wget`
+both treat as a failure, and every runner prints a fixed line when its push fails. So a forced run
+whose log carries no push-failure line has already proved the token, the bypass and the monitor.
+Confirming UP in the UI is the second half, not the first.
+
 Creating one is a hand job in the kuma UI — see the note on monitor creation above; kuma v2
 exposes monitor CRUD over Socket.IO only. Set the type to **Push**, take the token from the
-generated push URL — the last path segment, and nothing else — and store it in 1Password.
+generated push URL — the last path segment, and nothing else — and store it in 1Password. The
+manifest, never the script, assembles the URL: the `env:` block sets
+`PUSH_URL: "https://uptime.cynexia.com/api/push/${TOKEN_VAR}"`, and only `PUSH_URL` reaches the
+runner. A generated script rides the same envsubst stream as its manifest and envsubst rewrites
+the bare `$NAME` form too, so a script naming the allowlisted variable would publish the token
+inside a ConfigMap; `make check-script-substitution` enforces the rename.
 
 The last column records **per-job semantics**, not a uniform contract: each job decides for
 itself what it pushes and when, and they genuinely differ. Read it per row rather than
@@ -268,6 +302,44 @@ assuming up-on-success everywhere.
 |---|---|---|---|
 | `homelab-keel-fresh` | `op://Homelab/keel-fresh/kuma-push-token` | 86400s, 1 retry at 21600s | `keel-fresh` CronJob in `ops`, from an EXIT trap: `up` on exit 0, `down` on any failure. Never silent on a failure it can observe |
 | `vps-keel-fresh` | `op://VPS/keel-fresh/kuma-push-token` | 86400s, 1 retry at 21600s | `keel-fresh` CronJob in the VPS `ops` namespace, from an EXIT trap: `up` on exit 0, `down` on any failure. The same contract as the row above, from the cluster this uptime-kuma runs on |
+| `health-influx-backup` | `op://Homelab/health-healthchecks/backup-kuma-push-token` | 86400s, 1 retry at 21600s | `influx-backup` CronJob in `health`, from an EXIT trap: `up` on exit 0, `down` otherwise. `msg` carries `verdict=`, `buckets=n/m` and `grafana_kib=`, plus `failed_step=` and `error=` on a failure |
+| `homelab-cloudflare-analytics` | `op://Homelab/health-healthchecks/cloudflare-kuma-push-token` | 3600s, 1 retry at 7200s | `cloudflare-analytics` CronJob in `health`, Python: `up` on rc 0, `down` otherwise, the unrecoverable-gap path included. `msg` carries `verdict=` from `ok\|incomplete\|gap\|failed`, `chunks=n/m`, `rows=` and `series=` |
+| `health-ingest` | `op://Homelab/health-healthchecks/ingest-kuma-push-token` | 86400s, 1 retry at 43200s | `ingest-freshness` CronJob in `health`, **success only**: `up` when BOTH buckets are under 24h, and **nothing at all** when either is stale or the query failed. One monitor for two buckets because one process checks both. `msg` carries `apple_age_h=` and `garmin_age_h=` on every push — the last message before the silence is what names which path was ageing |
+| `homelab-hermes-pull` | `op://Homelab/hermes-backup/kuma-push-token` | 86400s, 1 retry at 7200s | `hermes-pull` CronJob in `backup`, from an EXIT trap: `up` on exit 0, `down` otherwise. `msg` carries `verdict=`, `zip_kib=` and `sha256_match=yes\|no` |
+| `hindsight-pg-dump` | `op://Homelab/hindsight/kuma-push-token` | 86400s, 1 retry at 7200s | `hindsight-pg-dump` CronJob in `hindsight`, from an EXIT trap: `up` on exit 0, `down` otherwise. `msg` carries `verdict=`, `dump_kib=`, `tables=` and `kept=` |
+| `hindsight-canary` | `op://Homelab/hindsight/canary-kuma-push-token` | 3600s, 1 retry at 1800s | `hindsight-canary` CronJob in `hindsight`, from an EXIT trap: `up` when retain and recall both pass, `down` when either fails. `msg` carries `verdict=` from that script's enum plus both HTTP statuses |
+| `homelab-update-watch` | `op://Homelab/update-watch/kuma-push-token` | 86400s, 1 retry at 21600s | `update-watch` CronJob in `ops`, Python: `up` on a green verdict, `down` on a determinate red, and **nothing at all** on an indeterminate one. `msg` carries `verdict=`, `next=` and the counters |
+| `jottacloud-backup` | `op://Homelab/jottacloud-backup/kuma-push-token` | 21600s, 1 retry at 7200s | The `jottacloud-backup-scheduled` CronJob's own image, on success only. This repo does not build that image and does not control the request — see the note below |
+
+Each row's interval and retry mirror the period and grace of the healthchecks.io check it
+replaced, so nothing got quieter or noisier in the move (August 26, 2026).
+
+### The one monitor whose request this repo does not control
+
+`jottacloud-backup` is driven by `ghcr.io/mnbf9rca/jottacloud-backup`, whose
+`scripts/healthcheck-notify.sh` joins two container environment keys — `HEALTHCHECK_URL` and
+`HEALTHCHECK_UUID` — with a single `/`. Those key names are fixed by the image; only their values
+changed. So the ConfigMap sets `HEALTHCHECK_URL: "https://uptime.cynexia.com/api/push"` and
+`HEALTHCHECK_UUID` to the push token.
+
+Its request shape was **measured, not assumed**, on August 26, 2026, because the whole migration of
+this job rested on somebody else's script:
+
+- On success it makes a **POST**, with the tail of the backup log as the body. kuma's push route
+  accepts a POST — checked against the live endpoint with a bogus token, which answered kuma's own
+  `{"ok":false,"msg":"Monitor not found or not active."}` rather than Express's "Cannot POST" page,
+  so the request reached the handler. kuma reads `status` and `msg` from the **query string**, so
+  the body is discarded and the heartbeat lands as `up` with kuma's default message. Observed live:
+  `{"ok":true}`.
+- On failure it appends `/fail`, and on every run it makes a second POST to `/log`. kuma routes
+  neither, so both answer `404 Cannot POST`. **That is the contract this repo wants**: a failed
+  backup pushes nothing and the monitor goes DOWN by silence at its interval plus retry.
+- The cost is two `WARNING: Failed to send…` lines in the pod log on every run, from the image's
+  `--fail-with-body` curl seeing the `/log` 404. Cosmetic, and not a fault.
+
+If a future image version changes any of that — a suffix on the success path, or a switch to a
+method kuma does not route — this job stops reporting silently, and the monitor goes DOWN. Re-check
+the three bullets above after any bump.
 
 ## Reviewing who used the token
 

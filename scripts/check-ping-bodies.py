@@ -1,14 +1,23 @@
 #!/usr/bin/env python3
-"""Assert no healthchecks.io ping body is built from a command's output.
+"""Assert no ping body or heartbeat message is built from a command's output.
 
 WHY THIS EXISTS
 ---------------
-A ping body leaves the estate. healthchecks.io is a third-party SaaS; the body
-is stored in their object storage and stays there until the ping log rotates.
-So an `emit` call is a line in a public file, and the rule that keeps it safe is
-in the spec as section 9.2:
+There are two destinations and one rule set. A healthchecks.io **body** leaves
+the estate: it is a third-party SaaS, the body is stored in their object storage
+and stays there until the ping log rotates. An uptime-kuma **heartbeat message**
+stays on the operator's own VPS, but it is still written to a database, still
+repeated on every run, and still read verbatim into every notification that
+monitor sends. So an `emit` call is a line in a public file either way, and the
+rule that keeps it safe is in the spec as section 9.2:
 
-    NEVER BUILD A BODY FROM A COMMAND'S OUTPUT.
+    NEVER BUILD ONE FROM A COMMAND'S OUTPUT.
+
+Nine routine heartbeats moved from healthchecks.io to kuma push monitors on
+2026-08-26; two restic jobs still ping healthchecks.io. This check does not care
+which. It recognises a sink by FUNCTION NAME and never by destination host,
+which is exactly why the sinks kept their names through that migration --
+renaming one is the single edit that would silently drop a file out of coverage.
 
 healthchecks.io's own documentation teaches the opposite (`m=$(certbot renew
 2>&1); curl --data-raw "$m" ...`) and for this estate that pattern leaks:
@@ -18,9 +27,11 @@ healthchecks.io's own documentation teaches the opposite (`m=$(certbot renew
     that pass the InfluxDB OPERATOR token on argv (influx-native-backup.sh:21,
     influx-export-lp.sh:36), so anything echoing argv puts that token in a body,
     repeated nightly;
-  - `wget`/`curl` errors quote the full URL, which for a ping IS the check's
-    write credential;
-  - and none of it is bounded.
+  - `wget`/`curl` errors quote the full URL, which is the reporting credential
+    either way -- a healthchecks.io ping UUID, or a kuma push token as the last
+    path segment of PUSH_URL;
+  - and none of it is bounded. The 200-character cut kuma applies to a `msg` is
+    not a bound in this sense: a truncated secret is still a disclosed secret.
 
 The obvious enforcement - "grep every emit for a `$(` in review" - is defeated
 by one intermediate assignment:
@@ -87,7 +98,7 @@ REQUIRED_TARGETS = (
 
 # Shell/YAML sinks. `say_err` and `fatal` are checked too because they FEED
 # `emit`: one sink per diagnostic is the convention (spec 7.2), so the argument
-# that reaches the pod log is the same string that reaches the third party.
+# that reaches the pod log is the same string that leaves the pod.
 SHELL_SINKS = ("emit", "say_err", "fatal")
 
 # Python sinks.
@@ -507,16 +518,24 @@ def main(argv):
         print("Unsafe healthchecks.io ping-body sink call(s):\n")
         for path, number, reason in hits:
             print("  %s:%d: %s" % (path, number, reason))
-        print("\nA ping body leaves the estate and is retained by a third party."
-              "\nNever build one from a command's output: restic quotes the "
-              "repository URL,\nthe exec'd influx scripts carry the operator "
-              "token on argv, and a failing\nwget quotes the ping URL, which IS "
-              "the check's write credential.\n"
+        print("\nA reported message travels with the alert, and a "
+              "healthchecks.io body leaves the estate\nentirely. Never build one "
+              "from a command's output: restic quotes the repository URL,\nthe "
+              "exec'd influx scripts carry the operator token on argv, and a "
+              "failing wget\nquotes the URL it was handed, which is the "
+              "reporting credential - a ping UUID, or\na kuma push token as the "
+              "last path segment of PUSH_URL.\n"
               "\nEmit a count, an age, a byte size, a path the script built from "
               "a literal\nglob, or a verdict from a fixed enum. See spec section "
               "9.2 and the header of\nscripts/check-ping-bodies.py.")
         return 1
 
+    # READ THE CALL COUNT PER FILE, NOT IN AGGREGATE. It fell from 153 to 124
+    # over the homelab tree on 2026-08-26, when nine multi-line bodies collapsed
+    # into one-line heartbeat messages -- that drop is the migration, not a
+    # regression. What must never happen is a FILE losing its last sink call, or
+    # dropping out of the scan entirely; REQUIRED_TARGETS above catches the
+    # second half of that, and review catches the first.
     print("OK: %d file(s) under %s, %d ping-body sink call(s), none unsafe"
           % (scanned, ", ".join(roots), calls))
     return 0

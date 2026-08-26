@@ -17,9 +17,10 @@
 #
 # This file passes through envsubst on its way into a ConfigMap, so it must
 # not name any allowlisted variable, bare or braced, even in a comment. The
-# healthchecks UUID therefore arrives pre-renamed: the CronJob's `env:` block
-# is where the allowlisted placeholder lives, and only the runtime name
-# HC_UUID reaches this file. See `make check-script-substitution`.
+# uptime-kuma push token therefore arrives pre-renamed and pre-assembled: the
+# CronJob's `env:` block is where the allowlisted placeholder lives, and only
+# the runtime name PUSH_URL — already carrying the token as its last path
+# segment — reaches this file. See `make check-script-substitution`.
 #
 # shellcheck disable=SC3040 # `set -o pipefail` is not POSIX, but this image's
 # /bin/sh is busybox ash, which implements it. If a future image did not, this
@@ -33,35 +34,54 @@ set -o pipefail
 # ssh's config probing fails. Exported before anything else runs.
 export HOME=/tmp
 
-# ---- healthchecks.io plumbing -------------------------------------
-# Same contract as the two restic scripts and influx-backup.sh: /start plus
-# exit code, a key=value body, a ping never fails the job, a body never costs
-# a ping, and NOTHING CAPTURED FROM A COMMAND is ever emitted. This image has
-# wget (busybox) and no curl, so the POST uses --post-file like the restic
-# jobs, not influx-backup's curl.
-HC_BODY=/tmp/hc-body
-# `true >`, not `: >`; stderr redirection precedes the body redirection. Both
+# ---- uptime-kuma push plumbing ------------------------------------------
+# Since 2026-08-26 this job drives the `homelab-hermes-pull` uptime-kuma PUSH
+# monitor rather than a healthchecks.io check. The contract it keeps from the
+# two restic scripts is the important half: the exit code, from an EXIT trap, a
+# short key=value message, a push that can never fail the job, a message that can
+# never cost a push, and NOTHING CAPTURED FROM A COMMAND ever emitted.
+#
+# What the move changed: there is NO /start push, because the push API has no
+# such concept - a push is a heartbeat carrying a status. So
+# activeDeadlineSeconds is the whole of the hang bound and the monitor's
+# heartbeat interval plus retry is the silence bound, and the multi-line body
+# becomes one short line plus a detail line in this pod's log.
+#
+# WGET, NOT curl, AND THE CHOICE IS PER-IMAGE. kroniak/ssh-client has busybox
+# wget and no curl - re-probed in-cluster on 2026-08-26. Do not copy the curl
+# form from the health scripts into this file without re-probing.
+#
+# `true >`, not `: >`; stderr redirection precedes the message redirection. Both
 # properties are load-bearing — see the long-form comments in
-# vps/backup/scripts/restic-backup.sh, which this block mirrors.
-hc_reset() { true 2>/dev/null > "$HC_BODY" || true; }
-emit() { { printf '%s' "$*" | LC_ALL=C tr -cd '\040-\176'; printf '\n'; } 2>/dev/null >> "$HC_BODY" || true; }
+# vps/backup/scripts/restic-backup.sh, which this block mirrors. Tokens are
+# space-separated on ONE line, because a kuma msg is one line.
+MSG_FILE=/tmp/kuma-msg
+msg_reset() { true 2>/dev/null > "$MSG_FILE" || true; }
+# shellcheck disable=SC2329 # called only from on_exit, which runs from the EXIT trap.
+emit() { { printf '%s ' "$*" | LC_ALL=C tr -cd '\040-\176'; } 2>/dev/null >> "$MSG_FILE" || true; }
 
-HC="https://hc-ping.com/${HC_UUID}"
-# ping_hc [SUFFIX] - "" | start | <exit-status>. A bare trailing slash is an
-# HTTP 400, so the URL is built conditionally. A failed ping prints FIXED
-# text: for a ping the URL IS the write credential.
-ping_hc() {
-  _sf=${1:-}
-  _u=$HC
-  [ -z "$_sf" ] || _u="$HC/$_sf"
-  if [ -s "$HC_BODY" ]; then
-    if wget -q -T 10 -O- --post-file="$HC_BODY" "$_u" >/dev/null 2>&1; then
-      hc_reset; return 0
-    fi
-    echo "hc: body POST failed, retrying without a body" >&2
-  fi
-  wget -q -T 10 -O- "$_u" >/dev/null 2>&1 || echo "hc: ping not delivered" >&2
-  hc_reset
+# GET https://uptime.cynexia.com/api/push/<token>?status=up|down&msg=<short>
+#
+# THE MESSAGE IS MADE URL-SAFE HERE, BY TRANSLITERATION, because wget has no
+# `--data-urlencode`: every character outside the unreserved set plus `=:/.-`
+# becomes `+`, which a query parser decodes back to a space. Every message this
+# script builds is key=value pairs of digits, lower-case words and a fixed enum,
+# so nothing legible is lost, and no value is ever interpolated into the URL as
+# syntax. Capped at 200 characters, the width kuma stores.
+#
+# stderr is discarded and FIXED text printed instead: wget's diagnostics quote
+# what they were handed, and for a push the URL carries the monitor's token.
+#
+# THE TOKEN REACHES THIS SCRIPT AS `PUSH_URL`, NOT AS ITS REAL NAME - see the
+# envsubst paragraph in this file's header.
+# shellcheck disable=SC2329 # called only from on_exit, which runs from the EXIT trap.
+push_kuma() {
+  _st=$1
+  _m=$(cut -c1-200 "$MSG_FILE" 2>/dev/null | tr -d '\n' \
+       | LC_ALL=C tr -c 'A-Za-z0-9=._:/-' '+') || _m=""
+  wget -q -T 15 -O /dev/null "$PUSH_URL?status=$_st&msg=$_m" >/dev/null 2>&1 \
+    || echo "kuma: push not delivered" >&2
+  msg_reset
   return 0
 }
 
@@ -72,14 +92,15 @@ FATAL_MSG=""
 step() { STEP=$1; FATAL_MSG=""; echo "==> $STEP"; }
 
 # ONE SINK PER DIAGNOSTIC: `fatal` writes the message to the pod log and holds
-# it for the ping body from a single call.
+# it for the heartbeat message from a single call. The trap emits it LAST, so a
+# long one is what the 200-character cut takes rather than the counters.
 fatal() {
   FATAL_MSG=$*
   echo "FATAL: $*" >&2
   exit 1
 }
 
-# Body values. `unknown` sentinels so `set -u` cannot bite in the trap if the
+# Message values. `unknown` sentinels so `set -u` cannot bite in the trap if the
 # run dies before a measurement ran, and so a missing measurement reads as
 # missing rather than as zero.
 ZIP_KIB=unknown
@@ -88,9 +109,10 @@ LOCAL_COPIES=unknown
 PRUNED=unknown
 
 # THE TRAP'S FIRST ACTION IS CAPTURING $?. It is armed before the first thing
-# that can fail. An activeDeadlineSeconds SIGKILL skips this trap entirely —
-# that shows on healthchecks.io as started-but-never-finished, which is the
-# intended signature for a hang.
+# that can fail. An activeDeadlineSeconds SIGKILL skips this trap entirely, so a
+# hang pushes NOTHING — with no /start equivalent on the push API that is the
+# whole signature for a hang, and the monitor goes DOWN by silence at its
+# heartbeat interval plus retry.
 # shellcheck disable=SC2329 # invoked by `trap ... EXIT` below, not by name.
 on_exit() {
   _xrc=$?
@@ -98,34 +120,43 @@ on_exit() {
   # Defense in depth: the key copy dies with the trap, not with the pod (a
   # completed Job's pod - and its emptyDir - is retained for ttl days).
   rm -f /tmp/id_ed25519 2>/dev/null || true
-  hc_reset
+  # The full detail goes to the pod log; a verdict plus two values travel with
+  # the alert. This line is what the multi-line healthchecks.io body used to be.
+  echo "detail: rc=$_xrc step=$STEP zip_kib=$ZIP_KIB sha256_match=$SHA_MATCH" \
+       "local_copies=$LOCAL_COPIES pruned=$PRUNED"
+  msg_reset
   if [ "$_xrc" -eq 0 ]; then
-    emit "summary=ok - zip verified, $ZIP_KIB KiB, sha256 $SHA_MATCH, pruned $PRUNED"
-    emit "zip_kib=$ZIP_KIB"
-    emit "sha256_match=$SHA_MATCH"
-    emit "local_copies=$LOCAL_COPIES"
-    emit "pruned=$PRUNED"
+    emit "verdict=ok"
   else
-    emit "summary=FAILED rc=$_xrc - $STEP"
+    emit "verdict=failed"
     emit "failed_step=$STEP"
-    # FATAL_MSG is empty unless `fatal` set it, and every fatal message is a
-    # literal plus digits-gated numbers. Checksum values, ssh output and
-    # hermes output never reach a sink: output this script did not construct
-    # cannot be classified at runtime.
-    [ -z "$FATAL_MSG" ] || emit "error=$FATAL_MSG"
   fi
-  ping_hc "$_xrc"
+  emit "zip_kib=$ZIP_KIB"
+  emit "sha256_match=$SHA_MATCH"
+  # LAST, because it is the only variable-length token and the msg is cut at 200
+  # characters: everything above it is guaranteed to survive.
+  #
+  # FATAL_MSG is empty unless `fatal` set it, and every fatal message is a
+  # literal plus digits-gated numbers. Checksum values, ssh output and
+  # hermes output never reach a sink: output this script did not construct
+  # cannot be classified at runtime.
+  if [ "$_xrc" -ne 0 ] && [ -n "$FATAL_MSG" ]; then
+    emit "error=$FATAL_MSG"
+  fi
+  if [ "$_xrc" -eq 0 ]; then
+    push_kuma up
+  else
+    push_kuma down
+  fi
   exit "$_xrc"
 }
 trap on_exit EXIT
 
-hc_reset
-emit "summary=starting"
-ping_hc start
+msg_reset
 
 # One function, not a multi-word variable (SC2086-clean). The ServerAlive pair
 # makes a peer that dies mid-stream fail in ~2 minutes with a real exit code
-# and a proper exit ping, instead of hanging until activeDeadlineSeconds
+# and a proper `down` push, instead of hanging until activeDeadlineSeconds
 # SIGKILLs the pod and skips the EXIT trap. The host key is pinned: a
 # mismatch (VM rebuilt) fails closed, and the fix is re-keyscanning into the
 # hermes-known-hosts ConfigMap, never StrictHostKeyChecking=no.

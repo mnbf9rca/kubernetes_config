@@ -154,8 +154,13 @@ credential, a wedged mcp-email-server process, a DNS record drift, or
 send-cap exhaustion all surface only as tool errors inside agent
 sessions. The designed-but-unbuilt detector is a round-trip canary (a
 cron on the hermes VM: send from a canary mailbox to itself, poll IMAP,
-ping healthchecks.io on start and completion) — see the archived spec
-before building it.
+report the outcome) — see the archived spec before building it. Note that
+the archived spec says healthchecks.io; since August 26, 2026 new scheduled
+work in this estate drives an uptime-kuma **push** monitor instead, and only
+four checks remain at healthchecks.io
+([monitoring.md](monitoring.md#healthchecksio-checks)). The hermes VM is
+off-cluster, so such a canary would push outbound to `uptime.cynexia.com`
+through the same Access bypass the in-cluster jobs use.
 
 **There is no backup.** Purelymail's own durability is the only copy of
 agent mail, `delete_email` is permanent, and the hermes VM itself has no

@@ -431,11 +431,13 @@ spec:
             - name: pg-dump
               # postgres:17-alpine, NOT the server's pgvector image: the Debian
               # pgvector image ships neither curl nor wget (verified at rollout
-              # 2026-08-24), so the healthchecks ping could never leave the pod
-              # and the check would go red by silence every night. Alpine's
-              # busybox wget closes that; pg_dump needs no vector extension
-              # client-side. Keep the MAJOR (17) matched to the server image
-              # above - bump the two together.
+              # 2026-08-24), so the heartbeat could never leave the pod and the
+              # monitor would go DOWN by silence every night. Alpine's busybox
+              # wget closes that - re-verified 2026-08-26 on postgres:17.6-alpine,
+              # which has wget and no curl, which is why the script's push helper
+              # is the wget one. pg_dump needs no vector extension client-side.
+              # Keep the MAJOR (17) matched to the server image above - bump the
+              # two together.
               image: postgres:17.6-alpine
               command: ["sh", "/scripts/hindsight-pg-dump.sh"]
               env:
@@ -445,10 +447,13 @@ spec:
                 # ${NAME}, so the real password would ship inside the ConfigMap.
                 - name: PGPASSWORD
                   valueFrom: { secretKeyRef: { name: hindsight, key: pg-password } }
-                # healthchecks.io check UUID (op://Homelab/hindsight/healthcheck-uuid).
-                # Substituted at apply time; never committed.
-                - name: HC_UUID
-                  value: "${HINDSIGHT_HC_UUID}"
+                # uptime-kuma push monitor `hindsight-pg-dump`
+                # (op://Homelab/hindsight/kuma-push-token). Substituted at apply
+                # time; never committed. RENAMED AT THIS BOUNDARY for the same
+                # envsubst reason as PGPASSWORD above: the whole URL is
+                # assembled here, and only PUSH_URL reaches the script.
+                - name: PUSH_URL
+                  value: "https://uptime.cynexia.com/api/push/${HINDSIGHT_KUMA_TOKEN}"
               securityContext:
                 allowPrivilegeEscalation: false
                 capabilities: { drop: [ALL] }
@@ -477,8 +482,8 @@ spec:
   # Hourly, not the every-15-minutes of the original design: a personal assistant's
   # write path does not need 25-minute detection, and four runs an hour is four
   # extraction-LLM calls an hour for a sentinel nobody reads. Detection latency
-  # becomes roughly 90 minutes (1 h period + 30 min grace on the healthchecks.io
-  # side, which is dashboard state - change the two together).
+  # becomes roughly 90 minutes (1 h heartbeat interval + a 30 min retry interval
+  # on the uptime-kuma side, which is monitor state - change the two together).
   schedule: "0 * * * *"
   timeZone: "UTC"
   concurrencyPolicy: Forbid
@@ -505,8 +510,11 @@ spec:
                 # envsubst reason as the dump job above.
                 - name: CANARY_API_KEY
                   valueFrom: { secretKeyRef: { name: hindsight, key: tenant-api-key } }
-                - name: HC_UUID
-                  value: "${HINDSIGHT_CANARY_HC_UUID}"
+                # uptime-kuma push monitor `hindsight-canary`
+                # (op://Homelab/hindsight/canary-kuma-push-token), renamed at
+                # this boundary for the same envsubst reason as the key above.
+                - name: PUSH_URL
+                  value: "https://uptime.cynexia.com/api/push/${HINDSIGHT_CANARY_KUMA_TOKEN}"
               securityContext:
                 # curlimages/curl's USER is the non-numeric curl_user (uid 100),
                 # which kubelet cannot verify against runAsNonRoot alone.

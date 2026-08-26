@@ -13,9 +13,9 @@ spec:
     spec:
       backoffLimit: 1
       # Bounds a hung curl. Worst case per run: 2 freshness queries at -m 30, 2
-      # last-point queries at -m 10, and up to 4 ping attempts at -m 15 (a body
-      # POST plus a bodiless fallback, per check) = ~140s. 300 leaves headroom
-      # without letting a wedged run block the next window.
+      # last-point queries at -m 10, and at most ONE push at -m 15 (there is a
+      # single monitor now, and a run that pushes at all pushes once) = ~95s.
+      # 300 leaves headroom without letting a wedged run block the next window.
       activeDeadlineSeconds: 300
       ttlSecondsAfterFinished: 86400
       template:
@@ -31,8 +31,17 @@ spec:
               env:
                 - name: TOKEN
                   valueFrom: { secretKeyRef: { name: health-influxdb, key: read-token } }
-                - { name: HC_APPLE, value: "${HEALTH_HC_APPLE_UUID}" }
-                - { name: HC_GARMIN, value: "${HEALTH_HC_GARMIN_UUID}" }
+                # ONE push monitor, `health-ingest`, for both buckets — one
+                # CronJob checks apple and garmin in a single process, so two
+                # monitors would be one signal counted twice. Token at
+                # op://Homelab/health-healthchecks/ingest-kuma-push-token.
+                #
+                # RENAMED AT THIS BOUNDARY. Only PUSH_URL reaches the script,
+                # because a generated script rides the same envsubst stream as
+                # this manifest and envsubst rewrites the bare `$NAME` form too.
+                # `make check-script-substitution` enforces it.
+                - name: PUSH_URL
+                  value: "https://uptime.cynexia.com/api/push/${HEALTH_KUMA_INGEST_TOKEN}"
               volumeMounts:
                 - { name: scripts, mountPath: /scripts, readOnly: true }
           volumes:

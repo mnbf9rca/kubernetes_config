@@ -33,12 +33,13 @@ resources:
 #
 # GENERATED SCRIPTS ARE NOT INERT TEXT. They ride the same stream as every
 # manifest, so envsubst rewrites them too — and it substitutes the bare `$NAME`
-# form as well as `${NAME}`. All six HINDSIGHT_* names are in ENVSUBST_VAR_NAMES,
-# so a script here that mentioned one would publish the tenant key or the database
-# password in plaintext inside this ConfigMap. Neither does: the containers map
-# each secret to a differently named variable (`PGPASSWORD`, `CANARY_API_KEY`,
-# `HC_UUID`) and the scripts see only those. `make check-script-substitution`
-# enforces it.
+# form as well as `${NAME}`. Every HINDSIGHT_* name is in ENVSUBST_VAR_NAMES, so a
+# script here that mentioned one would publish the tenant key, the database
+# password or a kuma push token in plaintext inside this ConfigMap. None does: the
+# containers map each value to a differently named variable (`PGPASSWORD`,
+# `CANARY_API_KEY`, and `PUSH_URL`, which the manifest assembles from the token so
+# the script never has to build a URL) and the scripts see only those.
+# `make check-script-substitution` enforces it.
 configMapGenerator:
   - name: hindsight-scripts
     namespace: hindsight

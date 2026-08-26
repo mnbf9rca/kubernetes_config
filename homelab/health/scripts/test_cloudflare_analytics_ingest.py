@@ -31,6 +31,7 @@ import io
 import json
 import os
 import unittest
+import urllib.parse
 from datetime import datetime, timedelta, timezone
 
 # The script is named with hyphens (it is a kubectl-mounted file, not a module),
@@ -474,12 +475,15 @@ class Tunables(unittest.TestCase):
                              cf.RETENTION_HOURS)
 
 
-class Pinger(unittest.TestCase):
-    """A ping must never fail the job, and a body must never cost a ping.
+class Pusher(unittest.TestCase):
+    """A push must never fail the job, and a message must never cost a push.
 
-    These two are the whole reason the pinger is not three lines. The exit-code
-    ping is the difference between "the job failed" and "the job never ran", so
-    anything that can stop it reaching hc-ping.com is a monitoring outage.
+    These two are the whole reason the pusher is not three lines. The heartbeat
+    is the difference between "the job failed" and "the job never ran", so
+    anything that can stop it reaching uptime.cynexia.com is a monitoring
+    outage. The healthchecks.io pinger this replaces was built around the same
+    pair; what changed is that there is no body to fall back from, so a broken
+    message must not take the heartbeat with it.
     """
 
     def setUp(self):
@@ -494,89 +498,103 @@ class Pinger(unittest.TestCase):
         cf.urllib.request.urlopen = self._real
         cf.log = self._real_log
 
-    def _fake(self, url, data=None, timeout=None):
-        self.calls.append((url, data))
-        if data is not None and self.fail_bodied:
-            # Built and registered for cleanup before it is raised: an
-            # HTTPError is file-like, and an unclosed one emits a
-            # ResourceWarning at teardown, which `-W error::ResourceWarning`
-            # is there to catch for real faults rather than for this stub.
-            err = cf.urllib.error.HTTPError(
-                url, 400, "Bad Request", {}, io.BytesIO(b""))
-            self.addCleanup(err.close)
-            raise err
+    def _fake(self, request, data=None, timeout=None):
+        self.calls.append((request.full_url, request))
 
         class _R:
             def close(self_inner):
                 pass
         return _R()
 
-    def test_body_post_failure_falls_back_to_a_bodiless_ping(self):
-        # A failed body POST must not cost the ping. It retries the SAME url
-        # with no body; the check still records an event.
-        self.fail_bodied = True
-        cf.make_pinger("uu")("0", "summary=ok\n")
-        self.assertEqual([c[0] for c in self.calls],
-                         ["https://hc-ping.com/uu/0"] * 2)
-        self.assertIsNotNone(self.calls[0][1])
-        self.assertIsNone(self.calls[1][1])
+    def test_status_and_message_ride_the_query_string(self):
+        # kuma reads both from the query string; a POST body would be ignored.
+        cf.make_pusher("https://uptime.example/api/push/tok")(
+            "up", "verdict=ok chunks=1/8")
+        self.assertEqual(len(self.calls), 1)
+        url, request = self.calls[0]
+        self.assertIsNone(request.data, "the push is a GET, not a POST")
+        self.assertTrue(url.startswith("https://uptime.example/api/push/tok?"))
+        query = urllib.parse.parse_qs(urllib.parse.urlparse(url).query)
+        self.assertEqual(query["status"], ["up"])
+        self.assertEqual(query["msg"], ["verdict=ok chunks=1/8"])
 
-    def test_ping_failure_is_swallowed_entirely(self):
-        self.fail_bodied = True
+    def test_the_user_agent_is_never_urllibs_default(self):
+        # Cloudflare fronts uptime-kuma and answers `Python-urllib/3.x` with
+        # 403 `error code: 1010` before kuma ever sees the request - and a
+        # failed push is swallowed by design, so the loss would be silent.
+        cf.make_pusher("https://uptime.example/api/push/tok")("up", "verdict=ok")
+        agent = self.calls[0][1].get_header("User-agent")
+        self.assertTrue(agent)
+        self.assertNotIn("urllib", agent.lower())
+        self.assertEqual(agent, cf.PUSH_USER_AGENT)
 
-        def boom(url, data=None, timeout=None):
+    def test_message_is_cut_to_what_kuma_stores(self):
+        cf.make_pusher("https://uptime.example/api/push/tok")("up", "x" * 500)
+        query = urllib.parse.parse_qs(
+            urllib.parse.urlparse(self.calls[0][0]).query)
+        self.assertEqual(len(query["msg"][0]), 200)
+
+    def test_push_failure_is_swallowed_entirely(self):
+        def boom(request, data=None, timeout=None):
             raise OSError("no route to host")
         cf.urllib.request.urlopen = boom
-        cf.make_pinger("uu")("1", "summary=x\n")     # must not raise
+        cf.make_pusher("https://uptime.example/api/push/tok")(
+            "down", "verdict=failed")            # must not raise
 
-    def test_unencodable_body_still_pings(self):
+    def test_unencodable_message_does_not_cost_the_push_or_the_run(self):
         # The encode is inside the try. Evaluated outside it, this would
-        # propagate past sys.exit(rc) and the exit-code ping would be lost.
-        self.fail_bodied = False
-
+        # propagate past sys.exit(rc) and the run would die in its own reporter.
         class Unencodable:
-            def encode(self, *a, **k):
+            def __str__(self):
                 raise UnicodeEncodeError("ascii", "x", 0, 1, "boom")
-        cf.make_pinger("uu")("0", Unencodable())
-        self.assertEqual(len(self.calls), 1)
-        self.assertIsNone(self.calls[0][1])
+        cf.make_pusher("https://uptime.example/api/push/tok")(
+            "up", Unencodable())                 # must not raise
+        self.assertEqual(self.calls, [])
 
-    def test_ping_failure_log_names_the_class_not_the_repr(self):
+    def test_push_failure_log_names_the_class_not_the_repr(self):
         # repr(exc) is banned: the exception in hand may be a QueryFailed whose
         # message carries a zone tag from CF_ZONE_TAGS or a raw response body.
-        self.fail_bodied = False
-
-        def boom(url, data=None, timeout=None):
+        def boom(request, data=None, timeout=None):
             raise cf.QueryFailed("zone tag abc123 said: <secret payload>")
         cf.urllib.request.urlopen = boom
-        cf.make_pinger("uu")("1")
+        cf.make_pusher("https://uptime.example/api/push/tok")("down")
         self.assertTrue(self.logged, "the failure should be logged")
         for line in self.logged:
             self.assertNotIn("abc123", line)
             self.assertNotIn("secret payload", line)
             self.assertIn("QueryFailed", line)
 
-    def test_empty_uuid_pings_nothing(self):
-        self.fail_bodied = False
-        cf.make_pinger("")("0", "summary=x\n")
+    def test_push_failure_log_never_quotes_the_url(self):
+        # The push URL carries the monitor's token as its last path segment.
+        def boom(request, data=None, timeout=None):
+            raise OSError("connection refused")
+        cf.urllib.request.urlopen = boom
+        cf.make_pusher("https://uptime.example/api/push/s3cr3ttoken")("up")
+        self.assertTrue(self.logged)
+        for line in self.logged:
+            self.assertNotIn("s3cr3ttoken", line)
+            self.assertNotIn("uptime.example", line)
+
+    def test_empty_push_url_pushes_nothing(self):
+        cf.make_pusher("")("up", "verdict=ok")
         self.assertEqual(self.calls, [])
 
 
-class PingBody(unittest.TestCase):
+class HeartbeatMessage(unittest.TestCase):
     """Format rules from spec section 5, enforced rather than trusted."""
 
     def setUp(self):
-        cf.SUMMARY[0] = "summary=FAILED - see pod log"
+        cf.SUMMARY[0] = "verdict=failed"
         del cf.BODY_LINES[:]
 
     tearDown = setUp
 
-    def test_summary_is_always_line_one(self):
+    def test_verdict_is_always_first(self):
         cf.hc_emit("chunks=3/8")
-        cf.hc_summary("ok - 3 chunks")
-        body = cf.hc_body()
-        self.assertEqual(body.splitlines()[0], "summary=ok - 3 chunks")
-        self.assertIn("chunks=3/8", body.splitlines())
+        cf.hc_summary("ok")
+        self.assertEqual(cf.hc_body().splitlines()[0], "verdict=ok")
+        self.assertTrue(cf.kuma_msg().startswith("verdict=ok "))
+        self.assertIn("chunks=3/8", cf.hc_body().splitlines())
 
     def test_every_line_is_a_key_value_pair_in_printable_ascii(self):
         cf.hc_summary("ok \u2014 em dash and caf\u00e9")
@@ -591,9 +609,26 @@ class PingBody(unittest.TestCase):
         # keyless record: three emits in, three lines out.
         self.assertEqual(len(body.splitlines()), 3)
 
-    def test_default_summary_is_a_failure_not_a_success(self):
-        # If nothing ever calls hc_summary, the body must not claim success.
-        self.assertTrue(cf.hc_body().startswith("summary=FAILED"))
+    def test_default_verdict_is_a_failure_not_a_success(self):
+        # If nothing ever calls hc_summary, the message must not claim success.
+        self.assertTrue(cf.hc_body().startswith("verdict=failed"))
+        self.assertTrue(cf.kuma_msg().startswith("verdict=failed"))
+
+    def test_the_summary_only_ever_carries_a_member_of_the_enum(self):
+        # A kuma msg is one line and the first token is what an alert shows, so
+        # the verdict must be one of a fixed few - not a formatted sentence.
+        for verdict in cf.VERDICTS:
+            cf.hc_summary(verdict)
+            self.assertEqual(cf.hc_body().splitlines()[0],
+                             "verdict=" + verdict)
+
+    def test_the_message_is_one_line_and_never_longer_than_kuma_stores(self):
+        cf.hc_summary("ok")
+        for _ in range(60):
+            cf.hc_emit("committed_through=2026-08-26T18:00:00Z")
+        msg = cf.kuma_msg()
+        self.assertEqual(len(msg), 200)
+        self.assertNotIn("\n", msg)
 
 
 if __name__ == "__main__":

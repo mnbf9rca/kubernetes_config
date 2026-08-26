@@ -726,7 +726,7 @@ def main(argv):
                 print("  %s" % text)
             print("\nA pattern that matches nothing fails silently: Renovate "
                   "scans no manifest,\nopens no pull request, and "
-                  "homelab-update-watch stays green over an estate\nthat has "
+                  "homelab-update-watch stays UP over an estate\nthat has "
                   "stopped receiving updates. Fix the pattern, or delete it in "
                   "the same\ncommit that removed the tree it pointed at.")
             return 1

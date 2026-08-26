@@ -134,8 +134,10 @@ kubectl -n hindsight scale deploy/hindsight --replicas=1
 Migrations reconcile on startup. Then verify, in this order:
 
 1. `kubectl -n hindsight get pods` — both containers Ready.
-2. The next canary run pings green (or force one: `kubectl -n hindsight create job
-   --from=cronjob/hindsight-canary now-$(date -u +%s)`).
+2. The `hindsight-canary` monitor goes UP on the next run (or force one:
+   `kubectl -n hindsight create job --from=cronjob/hindsight-canary now-$(date -u +%s)`;
+   a pod log with no `kuma: push not delivered` line already proves the heartbeat
+   landed).
 3. `hermes memory status` on VM 103.
 4. Spot-check a recall in the control plane at `hindsight-ui.cynexia.net`.
 
@@ -363,12 +365,22 @@ plane.
 
 ## Monitoring
 
-Two healthchecks.io checks, both pinging on start and on exit code:
-`hindsight-pg-dump` (1 day / 2 hours) and `hindsight-canary` (1 hour / 30 minutes).
-The full table, and the reasoning behind the canary, is in
+Two uptime-kuma **push** monitors, both driven from an EXIT trap — `up` on exit 0, `down`
+otherwise: `hindsight-pg-dump` (86400s interval, one retry at 7200s) and `hindsight-canary`
+(3600s interval, one retry at 1800s). They replaced two healthchecks.io checks of the same
+names on August 26, 2026; tokens are in the `hindsight` 1Password item. There is no start
+signal — the push API has none — so `activeDeadlineSeconds` is the whole of the hang bound
+and the monitor's interval plus retry is the silence bound. The roster is in
+[uptime-kuma.md](uptime-kuma.md#push-monitors) and the reasoning behind the canary is in
 [monitoring.md](monitoring.md#healthchecksio-checks).
 
-Read `verdict=` in a canary failure body first:
+An uptime-kuma **HTTP** monitor still could not do the canary's job: kuma runs on the VPS,
+which has no route to any `*.cynexia.net` address. A **push** monitor reverses the
+direction — the canary pod calls outward to `uptime.cynexia.com` through the Access
+bypass — which is why the reporting side could move to kuma while the probing side could
+not.
+
+Read `verdict=` in a canary failure heartbeat first:
 
 | `verdict=` | What broke |
 |---|---|
@@ -376,15 +388,18 @@ Read `verdict=` in a canary failure body first:
 | `recall-failed` | The write landed but the search call errored |
 | `recall-miss` | Both calls succeeded and the search returned nothing. The retrieval side — embeddings, the reranker, or an emptied bank |
 
-And in a dump failure body:
+And in a dump failure heartbeat:
 
 | `verdict=` | What broke |
 |---|---|
 | `dump-failed` | `pg_dump` itself. Usually the database being down or the password being wrong |
 | `empty-dump` | The dump ran and produced nothing worth keeping — no `CREATE TABLE`, or below the size floor. It was **not** published, deliberately |
 
-Silence on either check is a failure too, and that is the point of the dead-man's-switch:
-a cluster that is down never sends a start ping.
+Silence on either monitor is a failure too, and that is the point of the
+dead-man's-switch: a cluster that is down runs no CronJob, so it pushes nothing at all and
+the monitor goes DOWN at its interval plus retry. The full detail behind each verdict — the
+table counts, the byte sizes, the two HTTP statuses — is on the pod log's `detail:` line;
+the one-line heartbeat carries the verdict and one or two numbers.
 
 **What none of this catches:** whether the extraction model is producing *good*
 memories. The canary proves writes are accepted, not that they were understood. If
@@ -405,11 +420,13 @@ Nothing else in the estate references hindsight, which was a design goal.
    `homelab/secrets/kustomization.yaml`; the namespace block in
    `homelab/bootstrap/namespaces.yaml`; the keel-exception clause naming `hindsight` in
    `AGENTS.md`; the two `REQUIRED_TARGETS` lines in `scripts/check-ping-bodies.py`; the
-   six variables from `.env.tpl` and from **both** Makefile lists; the
+   every `HINDSIGHT_*` variable from `.env.tpl` and from **both** Makefile lists (eight of
+   them as of August 2026 — grep rather than counting from here); the
    `hindsight-upgrade` target and its help line; the hindsight pattern and package rules
-   in `renovate.json`; and the gate entries plus the monitoring.md rows.
+   in `renovate.json`; and the gate entries plus the monitoring.md and uptime-kuma.md
+   rows.
 5. `make apply-homelab`, then `kubectl delete namespace hindsight`.
-6. Retire both healthchecks.io checks and delete both Route53 records.
+6. Delete both uptime-kuma push monitors and both Route53 records.
 7. `local-path` uses `reclaimPolicy: Retain`, so the PV directories survive on the node.
    Delete them by hand once the final restic snapshot is confirmed.
 8. Keep the 1Password item until the dumps have aged out of restic retention, then

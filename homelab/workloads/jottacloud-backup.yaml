@@ -35,8 +35,28 @@ data:
   S3_ENDPOINT: "s3.eu-central-003.backblazeb2.com"
   S3_BUCKET: "cloud-files-backup"
   S3_REGION: "eu-central-003"
-  HEALTHCHECK_URL: "https://hc-ping.com"
-  HEALTHCHECK_UUID: "${HEALTHCHECK_UUID}"
+  # These two keys drive the `jottacloud-backup` uptime-kuma PUSH monitor, not a
+  # healthchecks.io check. The KEY NAMES are fixed by the image
+  # (ghcr.io/mnbf9rca/jottacloud-backup, whose scripts/healthcheck-notify.sh
+  # joins them with a single `/`); only the values changed, on 2026-08-26.
+  #
+  # WHAT THAT IMAGE ACTUALLY SENDS, verified against the live endpoint the same
+  # day rather than assumed. On success it POSTs to the two keys below joined
+  # by a slash (the names are spelled without a leading sigil on purpose: this
+  # manifest rides the envsubst stream and one of them is on the allowlist)
+  # with the tail of the backup log as the body; kuma's push route accepts the
+  # POST (checked with a bogus token: it answered kuma's own
+  # `{"ok":false,"msg":"Monitor not found or not active."}`, which only the
+  # handler produces) and reads `status` and `msg` from the QUERY STRING, so the
+  # body is discarded and the heartbeat lands as `up` with kuma's default
+  # message. On failure the image appends `/fail`, and on every run it makes a
+  # second POST to `/log`; kuma routes neither, so both answer Express's
+  # "Cannot POST" 404. That is the contract this repo wants: a failed backup
+  # pushes NOTHING and the monitor goes DOWN by silence at its interval. The
+  # cost is two "WARNING: Failed to send..." lines in the pod log on every run —
+  # cosmetic, and not a fault.
+  HEALTHCHECK_URL: "https://uptime.cynexia.com/api/push"
+  HEALTHCHECK_UUID: "${JOTTACLOUD_KUMA_TOKEN}"
   BACKUP_TIMEOUT: "6h"
   MAX_PARALLEL_UPLOADS: "4"
 ---
