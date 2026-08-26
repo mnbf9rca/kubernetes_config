@@ -177,6 +177,32 @@ assert_eq "bad" "$(classify_chat 401)" "classify_chat rejects 401"
 assert_eq "bad" "$(classify_chat 000)" "classify_chat rejects a connection failure"
 assert_eq "bad" "$(classify_chat '')"  "classify_chat rejects an empty status"
 
+# ---- count_words / the derived unit count ----------------------------------
+# UNIT_COUNT used to be a hand-written 5 beside a five-name list. A sixth unit
+# added without bumping it makes assert_health pass with exactly one unit DOWN
+# — the single failure the health assertion exists to catch — so the count is
+# now derived and these assertions are what keep it derived.
+assert_eq "3" "$(count_words 'a b c')"     "count_words counts a three-word list"
+assert_eq "0" "$(count_words '')"          "count_words counts an empty list as zero"
+assert_eq "2" "$(count_words '  a   b  ')" "count_words ignores repeated spaces"
+assert_eq "5" "$(count_words "$UNITS")"    "count_words counts the five hermes units"
+assert_eq "$(count_words "$UNITS")" "$UNIT_COUNT" \
+  "UNIT_COUNT is derived from UNITS, not written beside it"
+
+# ---- rb_fail ---------------------------------------------------------------
+# The rollback records the FIRST step that failed and keeps running. A later
+# failure must not overwrite an earlier one: a client pin that fails after the
+# venv was left half restored is a symptom, and reporting it as the cause sends
+# the operator to the wrong place.
+ROLLBACK_STATE=complete
+rb_fail failed-agent-reset 2>/dev/null
+assert_eq "failed-agent-reset" "$ROLLBACK_STATE" "rb_fail records the step that failed"
+rb_fail failed-restart 2>/dev/null
+assert_eq "failed-agent-reset" "$ROLLBACK_STATE" \
+  "rb_fail keeps the FIRST failure when a later step also fails"
+ROLLBACK_STATE=complete
+assert_eq "complete" "$ROLLBACK_STATE" "a rollback with no failed step stays complete"
+
 if [ "$FAILED" -ne 0 ]; then
   printf '\nFAILED\n'; exit 1
 fi

@@ -100,6 +100,16 @@ HERMES_HOME=/home/hermes/.hermes
 AGENT_DIR=$HERMES_HOME/hermes-agent
 VENV=$AGENT_DIR/venv/bin
 WEBUI_DIR=/home/hermes/hermes-webui
+# The hermes user's home directory, used for ONE thing: as the pinned working
+# directory of the `import run_agent` check in assert_health. Python puts the
+# CURRENT WORKING DIRECTORY on sys.path, so an unpinned import asserts something
+# different depending on who invoked the script - a shell in the home directory,
+# a systemd unit with no WorkingDirectory=, or an operator sitting in /tmp. This
+# is the home directory because that is both what the survey verified the import
+# under and what a systemd USER unit uses when WorkingDirectory= is unset, so
+# the check asserts the condition the five units actually run in. Task 3's unit
+# should set WorkingDirectory= to the same path rather than rely on that default.
+HERMES_USER_HOME=/home/hermes
 # The passenger tracks origin/master. The newest-tag policy was RETIRED on
 # 2026-08-26 against observed upstream practice: upstream stopped tagging five
 # weeks earlier and the newest tag was 560 commits BEHIND the deployed master,
@@ -115,6 +125,14 @@ WEBUI_LAST_GOOD=$HERMES_HOME/webui.last-good
 # profile's API_SERVER_KEY for the health chat turn. NEVER cat this file — it
 # also holds OP_SERVICE_ACCOUNT_TOKEN.
 AGENT_ENV=$HERMES_HOME/.env
+
+# No git operation may ever wait on a human. Run by hand over a terminal, a
+# fetch against a repository that has started asking for credentials would block
+# forever, and the EXIT trap cannot fire while a foreground child is blocked -
+# so the run would hang with no ping and no timeout. 0 turns the prompt into an
+# immediate failure, which routes into the fail-closed branch like any other.
+GIT_TERMINAL_PROMPT=0
+export GIT_TERMINAL_PROMPT
 
 # The stamp `unattended-upgrade` writes for ITSELF, in write_stamp_file():
 # open(os.path.join(statedir, "unattended-upgrades-stamp"), "w"). The other
@@ -135,8 +153,52 @@ WEBUI_HEALTH=http://127.0.0.1:8787/health
 # code but is inert here (gateway.multiplex_profiles is off), so a prefix would
 # reach this same listener anyway — the plain path says what is meant.
 CHAT_URL=http://127.0.0.1:8642/v1/chat/completions
+
+# ---- the time budget -------------------------------------------------------
+# EVERY child that can block on a network, a package index or a credential
+# prompt runs under `timeout`, through run_bounded below. This is not belt and
+# braces: a POSIX sh trap CANNOT run while a foreground child is blocked, so an
+# unbounded child means a TimeoutStartSec expiry or the 04:45 reboot arrives as
+# a SIGKILL and the run reports NOTHING. Bounding the children is the only
+# mechanism this shell has to keep that promise, so an unbounded network call
+# added later silently removes it.
+#
+# WORST-CASE WALL CLOCK, summing the longest path (update succeeds, health
+# fails, the full rollback runs, health is re-asserted): 7725 seconds, a little
+# over 2 hours 8 minutes. Task 3's service unit must allow more than that -
+# TimeoutStartSec=9000 leaves headroom for the local git operations, which are
+# not bounded because they cannot block on a network. A typical run is minutes;
+# these ceilings exist to make a hang finite, not to describe normal work.
+TO_KILL_GRACE=30
+TO_CURL=15
+TO_CHAT=120
+TO_GIT_FETCH=300
+TO_HERMES_UPDATE=1200
+TO_PIP=900
+TO_PIP_FREEZE=120
+TO_PY_IMPORT=60
+TO_SYSTEMCTL=120
+
+# Readiness is POLLED, not slept through. Five Python services restarting on a
+# loaded VM can take longer than any single number anyone would write here, and
+# the penalty for being two seconds early was a full destructive rollback of a
+# machine that was about to be fine. The deadline is a hard ceiling, so a set of
+# units that never comes up is still bounded.
+WAIT_READY_SECS=180
+WAIT_POLL_SECS=5
+
+# Count the words in $1. UNIT_COUNT is DERIVED from UNITS rather than written
+# beside it: a hand-maintained count that someone forgets to bump when they add
+# a sixth unit makes assert_health pass with exactly one unit DOWN, which is the
+# single failure this whole script exists to catch.
+count_words() {
+  # shellcheck disable=SC2086 # the word split IS the measurement
+  set -- ${1:-}
+  printf '%s\n' "$#"
+}
+
 UNITS="hermes-gateway hermes-gateway-emh hermes-gateway-hal hermes-dashboard hermes-webui"
-UNIT_COUNT=5
+UNIT_COUNT=$(count_words "$UNITS")
 
 # Scratch under $HERMES_HOME at mode 0700, NEVER /tmp. Every agent session on
 # this VM runs as this same user with an unfiltered os.environ.copy()
@@ -149,10 +211,18 @@ UNIT_COUNT=5
 # only because a pod filesystem is private; this is a shared host.
 # PrivateTmp= is NOT relied on: user units cannot always use it, and the script
 # is also run directly over ssh.
+#
+# The pip constraints file lives here for the same reason, and NOT in `mktemp`'s
+# /tmp: it is derived from `pip freeze` of the venv the five units execute from,
+# and a planted symlink at a predictable /tmp name would let a local process
+# choose what the next install is constrained to. Its fixed name is safe because
+# the flock below makes two concurrent runs impossible.
 RUNDIR=$HERMES_HOME/hermes-update.run
 HC_BODY=$RUNDIR/hc-body
 CHAT_REQ=$RUNDIR/chat-req.json
 CHAT_RESP=$RUNDIR/chat-resp.json
+PIP_CONSTRAINTS=$RUNDIR/pip-constraints.txt
+LOCK_FILE=$RUNDIR/lock
 
 # ---- argument parsing ------------------------------------------------------
 # `run`  — update, assert, roll back on failure, ping.
@@ -191,13 +261,13 @@ ping_hc() {
   _u="https://hc-ping.com/$HERMES_UPDATE_HC_UUID"
   [ -z "$_sf" ] || _u="$_u/$_sf"
   if [ -s "$HC_BODY" ]; then
-    if curl -fsS -m 15 -o /dev/null --data-binary @"$HC_BODY" "$_u"; then
+    if curl -fsS -m "$TO_CURL" -o /dev/null --data-binary @"$HC_BODY" "$_u"; then
       hc_reset; return 0
     fi
     echo "hc: body POST failed, retrying without a body" >&2
   fi
   # Fixed text. No URL and no tool output.
-  curl -fsS -m 15 -o /dev/null "$_u" || echo "hc: ping not delivered" >&2
+  curl -fsS -m "$TO_CURL" -o /dev/null "$_u" || echo "hc: ping not delivered" >&2
   hc_reset
   return 0
 }
@@ -210,11 +280,20 @@ ping_hc() {
 # three free checks. A green run that skipped the turn is visibly weaker than
 # one that made it, and the body has to say so. The sentinels keep `set -u`
 # harmless inside the trap.
+#
+# ROLLBACK_SOURCE says where the restore TARGET came from. ROLLBACK_STATE, a
+# third fixed enum, says whether the restore FINISHED - `complete`, or the name
+# of the step it stopped at. Those are different questions and reporting only
+# the first is how a rollback that died half way through used to report
+# `rollback_source=last-good` and look like it had worked. POST_ROLLBACK is the
+# fourth: whether the restored machine passed the health assertion afterwards.
 VERDICT=update-failed
 AGENT_CHANGED=no
 WEBUI_CHANGED=no
 CLIENT_CHANGED=no
 ROLLBACK_SOURCE=none
+ROLLBACK_STATE=none
+POST_ROLLBACK=not-attempted
 UNITS_ACTIVE=0
 CHAT_HTTP=000
 CHAT_MODE=not-attempted
@@ -225,6 +304,55 @@ RUN_EPOCH=0
 
 # ---- phases ----------------------------------------------------------------
 
+# Run $2... under a hard time limit of $1 seconds, SIGKILLing it if it ignores
+# the TERM. See "the time budget" above for why nothing that touches a network
+# may be run any other way.
+run_bounded() {
+  _lim=$1
+  shift
+  timeout -k "$TO_KILL_GRACE" "$_lim" "$@"
+}
+
+# Set UNITS_ACTIVE to the number of the five units that are active. Assigns the
+# global rather than printing a count a caller would have to capture: a captured
+# count is command output, and the ping body reports this number.
+count_active_units() {
+  UNITS_ACTIVE=0
+  for _u in $UNITS; do
+    if systemctl --user is-active --quiet "$_u"; then
+      UNITS_ACTIVE=$(( UNITS_ACTIVE + 1 ))
+    fi
+  done
+}
+
+# Wait for the units to come up AND for the WebUI to answer, up to a hard
+# deadline. This replaced a fixed `sleep 15`: the units bind their listeners
+# some time after systemd reports them started, and how long that takes depends
+# on the machine's load, not on a number chosen at authoring time.
+wait_ready() {
+  _deadline=$(( $(date -u +%s) + WAIT_READY_SECS ))
+  while :; do
+    count_active_units
+    if [ "$UNITS_ACTIVE" -eq "$UNIT_COUNT" ] \
+      && curl -fsS -m "$TO_CURL" -o /dev/null "$WEBUI_HEALTH"; then
+      return 0
+    fi
+    _now=$(date -u +%s)
+    case "$_now" in ''|*[!0-9]*) _now=$_deadline ;; esac
+    [ "$_now" -lt "$_deadline" ] || break
+    sleep "$WAIT_POLL_SECS"
+  done
+  echo "ERROR: the hermes units were not ready within ${WAIT_READY_SECS}s" >&2
+  return 1
+}
+
+# 0 when the units restarted and came back. RETURNS rather than aborting: a
+# failed restart is the single most likely consequence of a bad update, and it
+# happens AFTER the working tree has moved, so it must route into the rollback
+# like any other post-mutation failure. Killing the shell here - which is what
+# a bare `systemctl restart` under errexit did - skipped the rollback entirely
+# and then reported `rollback_source=none`, whose documented meaning is the
+# opposite: that nothing had moved yet.
 restart_units() {
   # `hermes update` restarts the three GATEWAY units itself (its --plan output
   # says so). It knows nothing about hermes-webui or hermes-dashboard, because
@@ -233,9 +361,11 @@ restart_units() {
   # to be discovered from a journal.
   echo "==> restarting the five hermes user units"
   # shellcheck disable=SC2086 # UNITS is a deliberate word-split list of unit names
-  systemctl --user restart $UNITS
-  # The gateways bind their listeners after systemd reports the unit started.
-  sleep 15
+  if ! run_bounded "$TO_SYSTEMCTL" systemctl --user restart $UNITS; then
+    echo "ERROR: systemctl --user restart did not succeed" >&2
+    return 1
+  fi
+  wait_ready
 }
 
 install_webui_requirements() {
@@ -250,23 +380,41 @@ install_webui_requirements() {
   # five units execute from; without -c, an upstream requirements.txt that
   # raised a floor past one of hermes-agent's pyproject pins would silently
   # mutate their runtime and pip would report success.
-  _c=$(mktemp)
+  #
   # `|| true` then an emptiness check, NOT a bare pipeline: there is no pipefail
   # in POSIX sh, so the pipeline's status is grep's, and grep exits 1 on no
   # match. Under errexit inside rollback() that would abort the rollback midway
   # — after `git reset --hard` and `git checkout` had already run — leaving the
   # agent restored and the webui dependencies not.
-  "$VENV/pip" freeze --local | grep -E '^[A-Za-z0-9._-]+==' > "$_c" || true
-  if [ ! -s "$_c" ]; then
-    rm -f "$_c"
+  run_bounded "$TO_PIP_FREEZE" "$VENV/pip" freeze --local \
+    | grep -E '^[A-Za-z0-9._-]+==' > "$PIP_CONSTRAINTS" || true
+  if [ ! -s "$PIP_CONSTRAINTS" ]; then
+    rm -f "$PIP_CONSTRAINTS"
     echo "ERROR: pip freeze produced no pinned requirements - refusing to install unconstrained" >&2
     return 1
   fi
-  if ! "$VENV/pip" install -q -r "$WEBUI_DIR/requirements.txt" -c "$_c"; then
-    rm -f "$_c"
+  if ! run_bounded "$TO_PIP" "$VENV/pip" install -q -r "$WEBUI_DIR/requirements.txt" -c "$PIP_CONSTRAINTS"; then
+    rm -f "$PIP_CONSTRAINTS"
     return 1
   fi
-  rm -f "$_c"
+  rm -f "$PIP_CONSTRAINTS"
+}
+
+# Move the webui checkout to $1, DISCARDING any uncommitted change in it. One
+# function so the forward path and the rollback path cannot drift apart.
+#
+# -f is what makes "discards uncommitted changes" true. Without it `checkout -B`
+# ABORTS on a dirty tree, so a stray operator edit under this checkout - the
+# runbook tells them not to, which is not the same as nobody doing it - failed
+# every forward run AND then killed the rollback at the same command, which is
+# the worst of the three possible behaviours. The agent side has always used
+# `reset --hard`, which genuinely discards; these two are now symmetric.
+#
+# -B, not a bare checkout: it restores the SHA while leaving HEAD ATTACHED to
+# master, which is the state the tracking rule maintains. A detached rollback
+# would look healthy and then quietly stop following upstream at the next run.
+checkout_webui() {
+  git -C "$WEBUI_DIR" checkout -q -f -B "$WEBUI_BRANCH" "$1"
 }
 
 # The deployed hindsight server's version, over plain HTTP. /health/live is
@@ -274,7 +422,7 @@ install_webui_requirements() {
 # describes what is RUNNING, which is the whole point: the VM holds no
 # kubeconfig and the repo pin is intent, not state.
 deployed_hindsight_version() {
-  curl -fsS -m 15 "$HINDSIGHT_URL/health/live" \
+  curl -fsS -m "$TO_CURL" "$HINDSIGHT_URL/health/live" \
     | python3 -c 'import json,sys; print(json.load(sys.stdin).get("version",""))'
 }
 
@@ -298,7 +446,10 @@ agent_env_value() {
 #      catches the documented silent failure: a venv missing those leaves every
 #      unit active and /health answering `status: ok` while the iOS app says
 #      `AIAgent not available` (homelab.md, "Do not give it a venv of its own").
-#      Importing hermes_cli.main instead would NOT catch it;
+#      Importing hermes_cli.main instead would NOT catch it. Run from a PINNED
+#      working directory in a subshell, because Python puts the cwd on sys.path
+#      and an assertion whose answer depends on the caller's directory is not an
+#      assertion;
 #   3. the WebUI answers its own /health on loopback;
 #   4. a real chat turn against the DEFAULT profile's local API server — WHEN
 #      that server is enabled and its key is a usable literal. When it is not,
@@ -306,29 +457,28 @@ agent_env_value() {
 #      which fallback fired. That degradation is deliberate (operator ruling,
 #      2026-08-26) and must stay visible in the body rather than silent.
 assert_health() {
-  UNITS_ACTIVE=0
-  for _u in $UNITS; do
-    if systemctl --user is-active --quiet "$_u"; then
-      UNITS_ACTIVE=$(( UNITS_ACTIVE + 1 ))
-    fi
-  done
+  count_active_units
   if [ "$UNITS_ACTIVE" -ne "$UNIT_COUNT" ]; then
     echo "ERROR: $UNITS_ACTIVE of $UNIT_COUNT hermes units active" >&2
     return 1
   fi
 
-  if ! "$VENV/python" -c 'import run_agent' >/dev/null 2>&1; then
+  if ! ( cd "$HERMES_USER_HOME" \
+    && run_bounded "$TO_PY_IMPORT" "$VENV/python" -c 'import run_agent' ) >/dev/null 2>&1; then
     echo "ERROR: the agent venv cannot import run_agent" >&2
     return 1
   fi
 
-  if ! curl -fsS -m 15 -o /dev/null "$WEBUI_HEALTH"; then
+  if ! curl -fsS -m "$TO_CURL" -o /dev/null "$WEBUI_HEALTH"; then
     echo "ERROR: webui /health did not answer" >&2
     return 1
   fi
 
   # Rollback-drill hook. Documented in docs/operations/hermes-vm-updates.md and
-  # exercised by Task 9 of this plan; unset in every ordinary run.
+  # exercised by Task 9 of this plan; unset in every ordinary run. It stays set
+  # through the post-rollback re-assertion ON PURPOSE, so the drill exercises
+  # the failing path twice; `rollback_state` is what tells the drill's
+  # `rollback-failed` apart from a genuinely broken rollback.
   if [ "${HERMES_UPDATE_FORCE_HEALTH_FAIL:-0}" = "1" ]; then
     echo "ERROR: forced health failure (HERMES_UPDATE_FORCE_HEALTH_FAIL=1)" >&2
     CHAT_HTTP=000
@@ -375,12 +525,15 @@ JSON
 
   # The key reaches curl through a config file on stdin written by `printf`, a
   # shell BUILT-IN, so it is never an argument to an executed program and never
-  # appears in a process listing.
+  # appears in a process listing. It is unset immediately afterwards: nothing
+  # below this point has any business reading it, and a variable that no longer
+  # holds it cannot be emitted by a future edit.
   CHAT_HTTP=$(printf 'header = "Authorization: Bearer %s"\n' "$_k" \
-    | curl -sS -m 120 -K - -o "$CHAT_RESP" -w '%{http_code}' \
+    | curl -sS -m "$TO_CHAT" -K - -o "$CHAT_RESP" -w '%{http_code}' \
       -X POST "$CHAT_URL" \
       -H 'Content-Type: application/json' \
       --data-binary @"$CHAT_REQ") || CHAT_HTTP=000
+  unset _k
   case "$CHAT_HTTP" in ''|*[!0-9]*) CHAT_HTTP=000 ;; esac
   # check-ping-bodies: untaint CHAT_HTTP - curl's %{http_code}, gated to digits by the case above; the response body goes to a file and is never emitted
   if [ "$(classify_chat "$CHAT_HTTP")" != "ok" ]; then
@@ -410,22 +563,101 @@ PY
   return 0
 }
 
+# Write the rollback target ATOMICALLY: a temporary file in the same directory,
+# then a rename. `>` truncates in place, so a reboot or a SIGKILL landing in the
+# middle of the old version could leave hermes-update.last-good stale and
+# webui.last-good EMPTY - and the manual rollback runbook in
+# docs/operations/homelab.md reads that second file directly, so an empty one
+# breaks a procedure this script never touches.
+#
+# umask is set inside the subshells, not around the whole function: it used to
+# leak into the rest of the process. `>` also does not change the mode of a file
+# that already exists, so a last-good left at 0644 by an earlier version stayed
+# 0644 forever - a rename replaces the inode and with it the mode.
 write_last_good() {
-  umask 077
-  cat > "$LAST_GOOD" <<EOF
-agent_sha=$(git -C "$AGENT_DIR" rev-parse HEAD)
-webui_sha=$(git -C "$WEBUI_DIR" rev-parse HEAD)
-client_version=$(installed_client_version)
-stamp=$(date -u +%s)
-EOF
+  _a=$(git -C "$AGENT_DIR" rev-parse HEAD) || return 1
+  _w=$(git -C "$WEBUI_DIR" rev-parse HEAD) || return 1
+  _cv=$(installed_client_version)
+  _st=$(date -u +%s)
+  ( umask 077
+    printf 'agent_sha=%s\nwebui_sha=%s\nclient_version=%s\nstamp=%s\n' \
+      "$_a" "$_w" "$_cv" "$_st" > "$LAST_GOOD.new" ) || return 1
+  mv -f "$LAST_GOOD.new" "$LAST_GOOD" || return 1
   # Keep the pre-existing webui.last-good in step: the manual rollback runbook
   # in docs/operations/homelab.md reads that file and predates this script.
-  git -C "$WEBUI_DIR" rev-parse HEAD > "$WEBUI_LAST_GOOD"
+  ( umask 077; printf '%s\n' "$_w" > "$WEBUI_LAST_GOOD.new" ) || return 1
+  mv -f "$WEBUI_LAST_GOOD.new" "$WEBUI_LAST_GOOD"
+}
+
+# Recompute every value the ping body reports from the machine as it IS. Called
+# at the end of a rollback, because the values captured on the way in describe a
+# state that no longer exists: the body used to report `webui_changed=yes` and
+# the SHA the run had just rolled AWAY from, which is precisely backwards for
+# the operator reading it.
+refresh_reported_state() {
+  _ra=$(git -C "$AGENT_DIR" rev-parse HEAD 2>/dev/null) || _ra=""
+  if [ -n "$_ra" ] && [ "$_ra" != "$PREV_AGENT" ]; then
+    AGENT_CHANGED=yes
+  else
+    AGENT_CHANGED=no
+  fi
+
+  _rw=$(git -C "$WEBUI_DIR" rev-parse HEAD 2>/dev/null) || _rw=""
+  if valid_sha40 "$_rw"; then
+    WEBUI_SHA=$_rw
+  else
+    WEBUI_SHA=unreadable
+  fi
+  # check-ping-bodies: untaint WEBUI_SHA - a git object name, gated to 40 hex characters by valid_sha40 immediately above; a commit SHA is a tier-3 identifier
+  if [ -n "$_rw" ] && [ "$_rw" != "$PREV_WEBUI" ]; then
+    WEBUI_CHANGED=yes
+  else
+    WEBUI_CHANGED=no
+  fi
+
+  _rc=$(installed_client_version) || _rc=""
+  if valid_semver "$_rc"; then
+    CLIENT_VERSION=$_rc
+  else
+    CLIENT_VERSION=unreadable
+  fi
+  # check-ping-bodies: untaint CLIENT_VERSION - the version installed in the venv, gated to X.Y.Z by valid_semver immediately above; a version string is a tier-3 identifier
+  if [ -n "$_rc" ] && [ "$_rc" != "$PREV_CLIENT" ]; then
+    CLIENT_CHANGED=yes
+  else
+    CLIENT_CHANGED=no
+  fi
+
+  count_active_units
+}
+
+# Narrow ROLLBACK_STATE to the FIRST step that failed. Later failures do not
+# overwrite an earlier one, because the first is the one that explains the rest:
+# a client pin that fails after the venv was left half restored is a symptom,
+# not the fault. Every caller passes a literal from the fixed enum.
+rb_fail() {
+  echo "ERROR: rollback step failed: $1" >&2
+  if [ "$ROLLBACK_STATE" = complete ]; then
+    ROLLBACK_STATE=$1
+  fi
 }
 
 # Restore the last state that passed the assertion. The recorded file wins over
 # the pre-run state because it is only ever written after a green assertion; the
 # pre-run state is the fallback for the first run.
+#
+# THIS RESTORES CODE, NOT STATE. `hermes update`'s configuration and state.db
+# migrations are forward-only and nothing here reverses them; the snapshot that
+# makes those recoverable is taken by the --backup flag in phase 1, and
+# restoring it is a human's job. See that comment before promising an operator
+# a rollback is total.
+#
+# NO STEP MAY ABORT THIS FUNCTION. Every one runs under `if !`, so errexit never
+# sees a non-zero status: a rollback that died at its first command used to
+# leave the agent moved, the webui moved, the units unrestarted - and a body
+# still reporting `rollback_source=last-good`, which reads as "restored". The
+# rollback now always runs to its end, always attempts the restart, and always
+# says where it stopped.
 rollback() {
   if RB_AGENT=$(lg_get agent_sha) && RB_WEBUI=$(lg_get webui_sha) && RB_CLIENT=$(lg_get client_version); then
     ROLLBACK_SOURCE=last-good
@@ -435,30 +667,70 @@ rollback() {
     RB_CLIENT=$PREV_CLIENT
     ROLLBACK_SOURCE=pre-run
   fi
+  ROLLBACK_STATE=complete
   echo "==> rolling back (source: $ROLLBACK_SOURCE)"
-  git -C "$AGENT_DIR" reset --hard "$RB_AGENT"
+
+  if ! git -C "$AGENT_DIR" reset --hard "$RB_AGENT"; then
+    rb_fail failed-agent-reset
+  fi
   # Braces, not "$AGENT_DIR[all]": the bare form is semantically correct POSIX
   # ([ cannot begin a name) but shellcheck rejects it as SC1087, an ERROR, and
   # `make check-vm-scripts` would fail.
-  "$VENV/pip" install -q -e "${AGENT_DIR}[all]"
-  # -B, not a bare checkout: it restores the recorded SHA while leaving HEAD
-  # ATTACHED to master, which is the state the tracking rule maintains. A
-  # detached rollback would look healthy and then quietly stop following
-  # upstream at the next run.
-  git -C "$WEBUI_DIR" checkout -q -B "$WEBUI_BRANCH" "$RB_WEBUI"
-  install_webui_requirements
-  if [ -n "$RB_CLIENT" ]; then
-    "$VENV/pip" install -q "hindsight-client==$RB_CLIENT"
+  if ! run_bounded "$TO_PIP" "$VENV/pip" install -q -e "${AGENT_DIR}[all]"; then
+    rb_fail failed-agent-install
   fi
-  restart_units
+  if ! checkout_webui "$RB_WEBUI"; then
+    rb_fail failed-webui-checkout
+  fi
+  if ! install_webui_requirements; then
+    rb_fail failed-webui-requirements
+  fi
+  if [ -n "$RB_CLIENT" ]; then
+    if ! run_bounded "$TO_PIP" "$VENV/pip" install -q "hindsight-client==$RB_CLIENT"; then
+      rb_fail failed-client-pin
+    fi
+  fi
+  if ! restart_units; then
+    rb_fail failed-restart
+  fi
+
+  refresh_reported_state
+  echo "==> rollback finished (state: $ROLLBACK_STATE)"
+  return 0
 }
 
-# ---- the exit trap ---------------------------------------------------------
+# Re-assert health after a rollback and record the answer. EVERY rollback path
+# calls this: a rollback that restores a state which is itself broken used to
+# exit looking green on three of the four paths, because only the health-failure
+# path re-asserted. The caller decides what the verdict becomes; this decides
+# what the body says happened.
+post_rollback_assert() {
+  if assert_health; then
+    POST_ROLLBACK=healthy
+    return 0
+  fi
+  POST_ROLLBACK=unhealthy
+  echo "==> the rolled-back state does not pass the health assertion" >&2
+  return 1
+}
+
+# ---- the exit traps --------------------------------------------------------
+# Seed mode pings nothing - it is an install-time step, not a monitored run -
+# but it does make a chat turn, so it leaves the agent's own reply on disk. This
+# removes it. Without the trap those files sat under $HERMES_HOME indefinitely.
+# shellcheck disable=SC2329 # invoked by `trap ... EXIT` below, not by name.
+on_exit_seed() {
+  _src=$?
+  trap - EXIT
+  rm -f "$CHAT_REQ" "$CHAT_RESP" "$PIP_CONSTRAINTS" 2>/dev/null || true
+  exit "$_src"
+}
+
 # shellcheck disable=SC2329 # invoked by `trap ... EXIT` below, not by name.
 on_exit() {
   _xrc=$?
   trap - EXIT
-  rm -f "$CHAT_REQ" "$CHAT_RESP" 2>/dev/null || true
+  rm -f "$CHAT_REQ" "$CHAT_RESP" "$PIP_CONSTRAINTS" 2>/dev/null || true
   hc_reset
   if [ "$_xrc" -eq 0 ]; then
     emit "summary=ok - agent, webui and hindsight-client current; chat=$CHAT_MODE"
@@ -473,6 +745,8 @@ on_exit() {
   emit "webui_sha=$WEBUI_SHA"
   emit "client_version=$CLIENT_VERSION"
   emit "rollback_source=$ROLLBACK_SOURCE"
+  emit "rollback_state=$ROLLBACK_STATE"
+  emit "post_rollback=$POST_ROLLBACK"
   emit "units_active=$UNITS_ACTIVE"
   emit "chat_mode=$CHAT_MODE"
   emit "chat_http=$CHAT_HTTP"
@@ -483,18 +757,65 @@ on_exit() {
   exit "$_xrc"
 }
 
+# ---- preconditions ---------------------------------------------------------
+# The tools that carry a guarantee, checked by name so a missing one is a
+# sentence rather than a mid-run surprise. `flock` IS the single-instance guard
+# and `timeout` IS the hang bound; a run without either is not the run this
+# script promises, so neither is optional. Both ship in Debian's essential set
+# (util-linux and coreutils).
+require_tools() {
+  for _t in flock timeout curl git python3 systemctl; do
+    if ! command -v "$_t" >/dev/null 2>&1; then
+      echo "ERROR: required tool not found: $_t" >&2
+      exit 70
+    fi
+  done
+}
+
+# ---- the single-instance guard ---------------------------------------------
+# `flock` on a file descriptor, NOT a lock directory and NOT a PID file: the
+# kernel releases it when the process dies, however it dies, so there is no
+# stale lock and nothing a SIGKILL or a reboot can leave behind to block every
+# future run. That property is the requirement - a guard that can wedge the job
+# until a human notices is worse than the collision it prevents.
+#
+# The collision is real and was demonstrated: two runs share $CHAT_RESP, and one
+# run's cleanup deleting the other's chat response between its curl and its read
+# made the second run conclude `chat-empty` and roll back a healthy system.
+# Concurrent pip installs into the one venv the five units execute from, and two
+# last-good writers, are the same hazard with slower symptoms.
+#
+# A second run exits immediately and, DELIBERATELY, pings nothing: the traps are
+# registered after this point. A duplicate invocation that pinged would either
+# reset the check's timer with a /start or mark it red with a failure - in both
+# cases describing a run that never happened, while the real one is still
+# working. The operator who typed the second command sees the message and the
+# distinct exit code (75, EX_TEMPFAIL); healthchecks.io hears only from the run
+# that is doing the work.
+take_lock() {
+  exec 9>"$LOCK_FILE" || {
+    echo "ERROR: could not open $LOCK_FILE for the single-instance guard" >&2
+    exit 73
+  }
+  if flock -n 9; then
+    return 0
+  fi
+  VERDICT=already-running
+  echo "ERROR: another hermes-update run holds the lock - doing nothing (verdict: already-running)" >&2
+  exit 75
+}
+
 # ---- main ------------------------------------------------------------------
 main() {
   MODE=$(parse_mode "${1:-}")
+  require_tools
 
   (umask 077; mkdir -p "$RUNDIR")
   chmod 0700 "$RUNDIR"
-
-  PREV_AGENT=$(git -C "$AGENT_DIR" rev-parse HEAD)
-  PREV_WEBUI=$(git -C "$WEBUI_DIR" rev-parse HEAD)
-  PREV_CLIENT=$(installed_client_version)
+  take_lock
 
   if [ "$MODE" = "seed" ]; then
+    trap on_exit_seed EXIT
     echo "==> seed: asserting health without updating anything"
     assert_health
     write_last_good
@@ -503,6 +824,7 @@ main() {
     return 0
   fi
 
+  # Asserted before the traps because without it there is nothing to ping.
   : "${HERMES_UPDATE_HC_UUID:?set HERMES_UPDATE_HC_UUID (see /home/hermes/.hermes/hermes-update.env)}"
 
   RUN_EPOCH=$(date -u +%s)
@@ -515,6 +837,20 @@ main() {
   # reboot landing on a long run would ping NOTHING: no body, no failure, just
   # silence, on the one channel that is watching. Converting each signal to an
   # exit lets on_exit run and report.
+  #
+  # THE LIMIT OF THAT GUARANTEE, because the comment used to overstate it: a
+  # POSIX sh trap runs between commands, NOT while a foreground child is
+  # blocked. A signal arriving mid-`pip install` is not acted on until pip
+  # returns, and a SIGKILL is never delivered to the shell at all. So these
+  # traps cover a signal that lands between steps; what covers a signal that
+  # lands DURING one is `run_bounded`, which makes every step finite. There is
+  # no arrangement of traps in this shell that reports a SIGKILL, and this
+  # script does not claim to.
+  #
+  # Everything from here on is inside the reported window: the previous-state
+  # capture below used to sit above the traps, so a `git rev-parse` that failed
+  # - on a corrupt checkout, exactly when an operator most needs to hear about
+  # it - exited in total silence.
   trap 'exit 143' TERM
   trap 'exit 130' INT
   trap 'exit 129' HUP
@@ -524,9 +860,58 @@ main() {
   emit "run_epoch=$RUN_EPOCH"
   ping_hc start
 
+  PREV_AGENT=$(git -C "$AGENT_DIR" rev-parse HEAD)
+  PREV_WEBUI=$(git -C "$WEBUI_DIR" rev-parse HEAD)
+  PREV_CLIENT=$(installed_client_version)
+
+  # ---- 0. preflight: read what a later phase needs, before anything moves ---
+  # hindsight.cynexia.net is a DIFFERENT MACHINE. Read while this one is still
+  # untouched, so that machine being down or reshaped is a clean exit with
+  # `rollback_source=none` rather than a destructive rollback of a VM nothing
+  # ever found unhealthy. Only the READ moves; the pin itself stays in phase 3,
+  # in its original order. An unreadable version stays a HARD failure - no
+  # floating pin, no fallback: pinning to a version nobody verified is deployed
+  # is the thing this phase exists to prevent.
+  echo "==> reading the deployed hindsight version"
+  CLIENT_VERSION=$(deployed_hindsight_version) || CLIENT_VERSION=""
+  if ! valid_semver "$CLIENT_VERSION"; then
+    CLIENT_VERSION=unreadable
+    VERDICT=client-failed
+    echo "ERROR: could not read a X.Y.Z version from $HINDSIGHT_URL/health/live" >&2
+    exit 1
+  fi
+  # check-ping-bodies: untaint CLIENT_VERSION - the hindsight server's own version, gated to X.Y.Z by valid_semver above; a version string is a tier-3 identifier
+
   # ---- 1. the agent ---------------------------------------------------------
+  # --backup, and the reason matters more than the flag. `hermes update`
+  # rewrites ~/.hermes/config.yaml IN PLACE, advances a schema version, and
+  # applies in-place schema changes to the 54 MB state.db - column additions and
+  # table renames among them. Those migrations are FORWARD-ONLY: the migration
+  # module defines no downgrade, rollback or revert function anywhere, and some
+  # steps RESET or REMOVE settings outright. So this script's rollback -
+  # `git reset --hard` plus `pip install -e` - restores the agent's CODE and
+  # CANNOT restore its STATE. Without a snapshot, an update that migrates the
+  # configuration and then fails the assertion leaves older code running against
+  # migrated configuration and a migrated database, while the ping reports a
+  # successful rollback.
+  #
+  # The flag therefore guarantees a restorable snapshot exists; it does NOT make
+  # the automated rollback complete. Read that literally: recovery of the
+  # agent's state is a HUMAN restoring the archive this creates, not something
+  # this script does. It is the same doctrine this repository already applies to
+  # the other two forward-only migrators - the Hindsight store
+  # (`make hindsight-upgrade`) and Grafana's grafana.db (`make health-upgrade`):
+  # where migrations are forward-only, the pre-upgrade dump IS the rollback.
+  #
+  # The flag is resolved before configuration is read, so it wins over
+  # updates.pre_update_backup for THIS run without modifying it: an operator's
+  # own `hermes update` keeps behaving exactly as they configured it. It cannot
+  # hang or fail the run either - nothing in the backup path prompts, and every
+  # failure branch there warns and continues. Cost is bounded: about 200 MiB a
+  # run, pruned to the five most recent. It also runs the state.db integrity
+  # check that the operator's current setting otherwise skips on every update.
   echo "==> hermes update"
-  "$HERMES_BIN" update < /dev/null
+  run_bounded "$TO_HERMES_UPDATE" "$HERMES_BIN" update --backup < /dev/null
   if [ "$(git -C "$AGENT_DIR" rev-parse HEAD)" != "$PREV_AGENT" ]; then
     AGENT_CHANGED=yes
   fi
@@ -541,7 +926,7 @@ main() {
   # 04:45 automatic reboot. Up to that point, a failure exits with
   # rollback_source=none, which is what distinguishes the two webui-failed
   # cases in the runbook table.
-  if ! git -C "$WEBUI_DIR" fetch --quiet --prune "$WEBUI_REMOTE"; then
+  if ! run_bounded "$TO_GIT_FETCH" git -C "$WEBUI_DIR" fetch --quiet --prune "$WEBUI_REMOTE"; then
     echo "ERROR: could not fetch $WEBUI_REMOTE for hermes-webui - refusing to move the checkout" >&2
     exit 1
   fi
@@ -552,18 +937,21 @@ main() {
     exit 1
   fi
   # check-ping-bodies: untaint WEBUI_SHA - a git object name, gated to 40 hex characters by valid_sha40 above; a commit SHA is a tier-3 identifier
-  # From here the working tree MOVES. `checkout -B` force-sets the local master
+  # From here the working tree MOVES. checkout_webui force-sets the local master
   # to the fetched SHA and keeps HEAD attached, so `git checkout master && git
   # pull --ff-only` — the runbook operators already have in their fingers — now
   # AGREES with this script instead of defeating it. It also discards
   # uncommitted changes in this checkout, which Task 0 Step 3 warns about.
   # The `if ... then : else` shape is what suppresses errexit so an `else` arm
   # exists at all.
-  if git -C "$WEBUI_DIR" checkout -q -B "$WEBUI_BRANCH" "$WEBUI_SHA" && install_webui_requirements; then
+  if checkout_webui "$WEBUI_SHA" && install_webui_requirements; then
     :
   else
     echo "==> the webui checkout or its constrained install failed" >&2
     rollback
+    if ! post_rollback_assert; then
+      echo "==> rolled back, but the result is still unhealthy" >&2
+    fi
     exit 1
   fi
   if [ "$(git -C "$WEBUI_DIR" rev-parse HEAD)" != "$PREV_WEBUI" ]; then
@@ -571,19 +959,15 @@ main() {
   fi
 
   # ---- 3. passenger two: hindsight-client -----------------------------------
+  # CLIENT_VERSION was read and gated in phase 0, before anything moved.
   VERDICT=client-failed
   echo "==> hindsight-client"
-  CLIENT_VERSION=$(deployed_hindsight_version) || CLIENT_VERSION=""
-  if ! valid_semver "$CLIENT_VERSION"; then
-    CLIENT_VERSION=unreadable
-    echo "ERROR: could not read a X.Y.Z version from $HINDSIGHT_URL/health/live" >&2
-    rollback
-    exit 1
-  fi
-  # check-ping-bodies: untaint CLIENT_VERSION - the hindsight server's own version, gated to X.Y.Z by valid_semver above; a version string is a tier-3 identifier
-  if ! "$VENV/pip" install -q "hindsight-client==$CLIENT_VERSION"; then
+  if ! run_bounded "$TO_PIP" "$VENV/pip" install -q "hindsight-client==$CLIENT_VERSION"; then
     echo "==> pinning hindsight-client failed" >&2
     rollback
+    if ! post_rollback_assert; then
+      echo "==> rolled back, but the result is still unhealthy" >&2
+    fi
     exit 1
   fi
   if [ "$(installed_client_version)" != "$PREV_CLIENT" ]; then
@@ -591,8 +975,21 @@ main() {
   fi
 
   # ---- 4. restart and assert ------------------------------------------------
+  # A restart failure here is post-mutation and routes into the rollback, same
+  # as any other. It is reported as its own verdict because "the units would not
+  # come back" and "the units came back broken" want different first moves from
+  # whoever reads the body.
+  VERDICT=restart-failed
+  if ! restart_units; then
+    echo "==> the units did not come back after the update" >&2
+    rollback
+    if ! post_rollback_assert; then
+      echo "==> rolled back, but the result is still unhealthy" >&2
+    fi
+    exit 1
+  fi
+
   VERDICT=health-failed
-  restart_units
   if assert_health; then
     write_last_good
     VERDICT=ok
@@ -600,7 +997,7 @@ main() {
     echo "==> health assertion failed"
     VERDICT=rollback-failed
     rollback
-    if assert_health; then
+    if post_rollback_assert; then
       VERDICT=rolled-back
     fi
     exit 1
