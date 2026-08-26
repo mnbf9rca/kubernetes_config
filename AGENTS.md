@@ -187,7 +187,10 @@ Full mechanics, target-by-target reference and failure modes:
   cannot reach a cluster. `hindsight` is the sharpest case: it runs Alembic
   migrations on startup against the store holding an agent's memory, and those
   migrations are forward-only, so the pre-upgrade dump is the only rollback.
-  `make hindsight-upgrade` takes it.
+  `make hindsight-upgrade` takes it. `health` is the same shape in miniature — a
+  Grafana major migrates `grafana.db` in place on first start, so a tag revert is
+  not a rollback there either; `make health-upgrade` takes that dump, and it
+  covers the InfluxDB export in the same Job.
 - **`pinDigests` is on at the top level and off on the keel-managed trees, and that
   split is load-bearing.** `pinDigest` is an updateType that fires on any Docker
   dependency without a digest, **floating tags included**, so top-level `pinDigests`

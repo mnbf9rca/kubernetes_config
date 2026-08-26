@@ -438,11 +438,71 @@ new one.
    or two, not before.
 
 **Before a Grafana major upgrade**, take a dump on demand rather than trusting last
-night's: the migration runs on first start of the new version and is not reversible.
-Trigger the nightly job by hand with
-`kubectl -n health create job --from=cronjob/influx-backup grafana-predump`, confirm the
-new file in `/dumps/grafana`, then change the pinned tag. (Issue #54's `make health-upgrade`
-target is the intended way to do this in one step; until it lands, do it by hand.)
+night's: the migration runs on first start of the new version and is not reversible. That
+is what `make health-upgrade` is for — see [Upgrading the health
+stack](#upgrading-the-health-stack) below. Do not hand-roll the Job instead: the target's
+concurrency guard recognises the names it uses, and a differently named one is invisible
+to it.
+
+## Upgrading the health stack
+
+Renovate proposes the image bumps; `make health-upgrade` takes the rollback before you
+apply them. Run it from the `cynexia-homelab` context:
+
+    make health-upgrade
+
+It creates a one-off Job from `cronjob/influx-backup`, waits for it, tails the log, and
+then stops. It applies nothing, merges nothing and edits no pin —
+checking out the Renovate pull request, rebasing it, reading the diff, applying, verifying,
+merging and deciding to roll back all stay manual. The banner it prints is the runbook for
+the rest, and it is written **deploy-then-merge**: check out the pull request, apply from
+the branch, confirm the cluster is healthy, and only then merge. `master` records what has
+been deployed, never intent.
+
+**It covers both stateful components.** The CronJob is named for InfluxDB by history, but
+it takes the Grafana SQLite dump as well, through a read-only mount of the `grafana-data`
+PVC. So a health-stack bump has a logical rollback for each.
+
+**It verifies nothing of its own.** `influx-backup.sh` already asserts its own artifacts —
+the bucket list, their freshness, their size — and fails the Job if they do not hold. A
+second, weaker copy of those assertions inside the Makefile would only create a place for
+the two to disagree, so the target's verdict *is* the Job's exit status.
+
+**Where the numbers actually are.** The script is silent on success: it records each step
+and emits the totals into the healthchecks.io ping body, not to stdout. So the log tail the
+target prints ends with `grafana-sqlite-backup.py`'s own line — the dump's byte size and
+schema-object count — and the bucket count, native-dump size, line-protocol file count and
+prune counts are read off the `health-influx-backup` ping body instead. On failure the log
+does carry a diagnostic: the script's `FATAL:` line names the step it died in.
+
+**A Grafana major is not a tag revert.** Grafana migrates `grafana.db` in place on first
+start, so rolling back a failed major means restoring the dump this target took, not
+changing the tag back. Read the restore runbook above before you start one.
+
+**A manual dump pings `health-influx-backup`.** The Job inherits the CronJob's pod spec,
+ping UUID included, so the check's history shows the manual run alongside the nightly ones.
+That is expected; do not read it as an out-of-schedule nightly backup.
+
+**The wait is 600 seconds, and that number is measured.** The two retained nightly runs
+took 26 and 25 seconds start to completion, and a timed run of the target itself took 27 —
+a manual `--from=cronjob/` Job behaves like a scheduled one. So the wait is roughly twenty
+times the observed span — room for a cold image pull and for years of growth, and still far
+below the CronJob's own
+`activeDeadlineSeconds` of 3600, which is what actually kills a hung run. If the wait
+expires, the target says so, leaves the Job in place to be inspected, and exits non-zero.
+It never reports a dump it did not watch finish.
+
+**Name a by-hand dump so the guard can see it.** `concurrencyPolicy: Forbid` governs only
+the CronJob's *own* Jobs and cannot see a manual one, so the target refuses to start if any
+active Job in `health` is named `influx-backup…` or `pre-upgrade…`. That is the whole of
+the protection against two dumps writing the same staging path. If you ever create one
+outside the target, call it `influx-backup-manual` — the convention `monitoring.md` already
+uses for forcing a scheduled job — and never something the pattern misses.
+
+**Other pinned images in this namespace have no independent rollback story** — the
+apple-health-ingester, garmin-fetch-data, influxdb-mcp and the cloudflared sidecar are all
+stateless, so their rollback *is* a tag revert and they need no dump. Only InfluxDB and
+Grafana hold state here.
 
 ## Cloudflare analytics ingest
 

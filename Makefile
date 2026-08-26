@@ -126,6 +126,7 @@ help:
 	@echo "  route-vps-dns     - create/update CNAMEs for every hostname in the cloudflared ConfigMap"
 	@echo ""
 	@echo "Health namespace targets:"
+	@echo "  health-upgrade    - take a verified pre-upgrade dump (InfluxDB + Grafana), then STOP"
 	@echo "  create-health-cloudflared-secret - imperatively recreate the health cloudflared creds Secret from 1P"
 	@echo "  route-health-dns  - create/update CNAMEs for every hostname in the health cloudflared ConfigMap"
 	@echo "  health-influx-bootstrap - bootstrap InfluxDB buckets/DBRP mapping/tokens for the health stack"
@@ -888,7 +889,8 @@ hindsight-upgrade: check-context
 	  echo "###"; \
 	  echo "### Next, by hand:"; \
 	  echo "###   1. Merge the Renovate \"hindsight stack\" PR on GitHub, then: git pull"; \
-	  echo "###      (closing it unmerged does not snooze anything - Renovate recreates it)"; \
+	  echo "###      (do NOT close it unmerged - not a supported move today, and it"; \
+	  echo "###       snoozes homelab-update-watch; docs/operations/monitoring.md)"; \
 	  echo "###   2. make diff-homelab      <- READ IT. Confirm only the image lines moved."; \
 	  echo "###   3. make apply-homelab"; \
 	  echo "###   4. kubectl -n hindsight rollout status deploy/hindsight --timeout=600s"; \
@@ -911,6 +913,137 @@ hindsight-upgrade: check-context
 	    echo "### 900s is shorter than the CronJob's own activeDeadlineSeconds (3600) on"; \
 	    echo "### purpose: a pre-upgrade dump that has not finished in 15 minutes on this"; \
 	    echo "### database is something to look at, not to wait out."; \
+	  fi; \
+	  echo "###"; \
+	  echo "### The Job is left in place - its TTL collects it, and until then it is"; \
+	  echo "### inspectable. Its own healthchecks.io ping has already fired."; \
+	  exit 1; \
+	fi
+
+# --- health namespace ------------------------------------------------------
+#
+# `make health-upgrade` — the pre-upgrade dump, and nothing else. Closes issue #54.
+#
+# A FLAT SIBLING OF hindsight-upgrade, copy-pasted rather than parameterised, per
+# this Makefile's stated doctrine that duplication beats abstraction at two
+# instances. Read that target first; everything structural here is the same, and
+# only the namespace, the CronJob name, the timeout and the banner differ.
+#
+# WHAT IT COVERS, WHICH IS BOTH STATEFUL COMPONENTS. The `influx-backup` CronJob
+# is misnamed by history: it takes the InfluxDB logical export AND the Grafana
+# SQLite dump (grafana-sqlite-backup.py, through a read-only mount of the
+# grafana-data PVC). Issue #54's open question — whether Grafana needed a real
+# logical backup before this target could be honest — was answered by building
+# one, so this target's banner can promise a rollback for both.
+#
+# The target performs NO verification of its own. influx-backup.sh asserts its
+# own artifacts (bucket list, freshness, size) and a second, weaker copy of those
+# assertions would only create a place for the two to disagree.
+#
+# WHERE THE 600s COMES FROM. Measured, not guessed. The retained nightly Jobs ran
+# 26s and 25s start-to-completion; a timed run of THIS target on 2026-08-26 took
+# 27s (18:17:29 -> 18:17:56), so a manual `--from=cronjob/` Job behaves like a
+# scheduled one and the nightly history is a fair guide. 600s is ~22x that, which
+# buys a cold `alpine/k8s` pull and years of data growth, and it stays well under
+# the CronJob's own activeDeadlineSeconds of 3600 — the pod is killed there
+# regardless, so a longer wait would only sit watching a Job the cluster has
+# already given up on. The failure mode of a tight timeout is the expensive one:
+# FAILED printed over a healthy dump.
+#
+# NOTE THE `$$(date …)`. Inside a Make recipe `$(date …)` is a MAKE variable
+# reference and expands to the empty string. The timestamp is captured ONCE so
+# every later step names the same Job.
+#
+# The Job is created with `--from=cronjob/…`, so it inherits the whole pod spec —
+# image, ServiceAccount, script ConfigMap, both PVC mounts, ttlSecondsAfterFinished.
+# It is CronJob-shaped and therefore exempt from check-job-ttl, and it self-collects.
+# NO `kind: Job` MANIFEST IS ADDED TO THE TREE: that walks straight into the
+# immutable-spec.template trap that broke apply-homelab for four months.
+#
+# THE CONCURRENCY GUARD IS NAME-BASED, so the names have to agree with the docs.
+# It matches `influx-backup*` (the CronJob's own runs, and the `<name>-manual`
+# convention in monitoring.md) and `pre-upgrade*` (what this target creates).
+# docs/operations/homelab-health.md used to tell an operator to create a manual
+# dump called `grafana-predump`, which this pattern would not have caught; that
+# procedure is gone, replaced by this target. Any new by-hand dump Job must be
+# named to match, or this guard is decorative.
+.PHONY: health-upgrade
+health-upgrade: check-context
+	@kubectl -n health get cronjob influx-backup >/dev/null 2>&1 || { \
+	  echo "ERROR: cronjob/influx-backup not found in namespace health."; \
+	  echo "  This target exists to take a verified pre-upgrade dump. A target that"; \
+	  echo "  silently 'succeeds' without dumping is the worst possible outcome, so"; \
+	  echo "  it refuses rather than guessing."; \
+	  exit 1; \
+	}
+	@active=$$(kubectl -n health get jobs \
+	    -o jsonpath='{range .items[?(@.status.active)]}{.metadata.name}{"\n"}{end}' \
+	  | grep -E '^(influx-backup|pre-upgrade)' || true); \
+	if [ -n "$$active" ]; then \
+	  echo "ERROR: a dump Job is already running:"; \
+	  echo "$$active" | sed 's/^/  /'; \
+	  echo "  concurrencyPolicy: Forbid governs only CronJob-OWNED Jobs and cannot"; \
+	  echo "  see a manual one, so this guard is what keeps two dumps off the same"; \
+	  echo "  staging path. Wait for it, or watch it:"; \
+	  echo "    kubectl -n health logs -f job/<name>"; \
+	  exit 1; \
+	fi
+	@set -e; \
+	ts=$$(date -u +%Y%m%d%H%M%S); job=pre-upgrade-$$ts; \
+	kubectl -n health create job --from=cronjob/influx-backup "$$job"; \
+	if kubectl -n health wait --for=condition=complete "job/$$job" --timeout=600s; then \
+	  kubectl -n health logs "job/$$job" --tail=25 || true; \
+	  echo ""; \
+	  echo "### Pre-upgrade dump complete: $$job"; \
+	  echo "### It covers BOTH stateful components: the InfluxDB logical export and"; \
+	  echo "### the Grafana SQLite dump. The log above ends with the Grafana dump's"; \
+	  echo "### own size and schema-object count; influx-backup.sh keeps quiet on"; \
+	  echo "### success, so its bucket count and per-artifact sizes are in the"; \
+	  echo "### health-influx-backup ping body rather than on stdout."; \
+	  echo "###"; \
+	  echo "### Next, by hand. DEPLOY, THEN MERGE - never the other way round:"; \
+	  echo "###   1. gh pr checkout <the Renovate \"health stack\" PR>. Do NOT merge it"; \
+	  echo "###      yet: master records what has been deployed, never intent. Do NOT"; \
+	  echo "###      close it unmerged either - that is not a supported move today;"; \
+	  echo "###      docs/operations/monitoring.md carries the reasoning."; \
+	  echo "###   2. git rebase origin/master, and carry every other deployed-but-"; \
+	  echo "###      unmerged branch that touches these files. Find them with:"; \
+	  echo "###      gh pr list --state open   <- read the FILE list, not just titles"; \
+	  echo "###   3. git push --force-with-lease   <- the rebase rewrote this branch,"; \
+	  echo "###      and --force-with-lease refuses if anyone else pushed to it since."; \
+	  echo "###   4. make diff-homelab      <- READ IT IN FULL. Only the image lines"; \
+	  echo "###      may move, beyond the usual always-differs Secrets, PVs and"; \
+	  echo "###      cert-manager webhooks. Anything else is a revert until proven."; \
+	  echo "###   5. make apply-homelab"; \
+	  echo "###   6. kubectl -n health rollout status deploy/influxdb --timeout=600s"; \
+	  echo "###      kubectl -n health rollout status deploy/grafana  --timeout=600s"; \
+	  echo "###   7. Verify ingest: force one freshness run and read its body -"; \
+	  echo "###      kubectl -n health create job --from=cronjob/ingest-freshness now-$$ts"; \
+	  echo "###   8. Open a Grafana dashboard and confirm it renders against InfluxDB."; \
+	  echo "###   9. ONLY NOW, with the cluster healthy:"; \
+	  echo "###      gh pr merge --squash --delete-branch   (this repo squashes only)"; \
+	  echo "###      git checkout master && git pull"; \
+	  echo "###  10. Confirm homelab-update-watch is green after the next 06:45 run"; \
+	  echo "###      (or force one: kubectl -n ops create job --from=cronjob/update-watch now-$$ts)"; \
+	  echo "###"; \
+	  echo "### If it goes wrong, the restore runbook is in docs/operations/homelab-health.md."; \
+	  echo "### A Grafana MAJOR migrates grafana.db in place on first start, so its"; \
+	  echo "### rollback is a restore from the dump above, never a tag revert."; \
+	else \
+	  failed=$$(kubectl -n health get "job/$$job" \
+	    -o jsonpath='{.status.conditions[?(@.type=="Failed")].status}' 2>/dev/null || true); \
+	  kubectl -n health logs "job/$$job" --tail=40 || true; \
+	  echo ""; \
+	  if [ "$$failed" = "True" ]; then \
+	    echo "### DUMP FAILED - do not upgrade."; \
+	    echo "### The log above ends with the script's FATAL line naming the step it"; \
+	    echo "### died in; the same step name rides the health-influx-backup ping."; \
+	  else \
+	    echo "### DUMP STILL RUNNING after 600s - do not upgrade; do not delete the job."; \
+	    echo "### Watch it: kubectl -n health logs -f job/$$job"; \
+	    echo "### 600s is shorter than the CronJob's own activeDeadlineSeconds (3600) on"; \
+	    echo "### purpose: this export takes about 27 seconds, so one still running after"; \
+	    echo "### 10 minutes is something to look at, not to wait out."; \
 	  fi; \
 	  echo "###"; \
 	  echo "### The Job is left in place - its TTL collects it, and until then it is"; \
