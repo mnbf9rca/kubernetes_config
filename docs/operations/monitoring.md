@@ -481,8 +481,9 @@ is exactly what the 45-day threshold spends before going red.
 against an already-down check sends nothing further: one email on the day an update appears, then
 quiet until it is merged and the next run flips the check green. The supported fix is an
 account-level nag (Profile → reports, Hourly or Daily); it is account-wide, so every down check
-nags. **Decision, taken August 26, 2026: Daily**, and confirmed already set on the account that
-day — it needs no action. It was
+nags. **Decision, taken August 26, 2026: Daily**, and already set on the account — recorded on
+the operator's confirmation, since the Management API does not expose the report frequency and
+nothing here can check it. It was
 deferred while `homelab-update-watch` went red on any open pull request, because a nag over
 a permanently-red check is noise that trains the operator to ignore it. Under the 45-day
 threshold red means a session was skipped or Renovate broke — both worth a daily reminder
@@ -543,10 +544,11 @@ field, its body is not.
 grace, pinged by hand at the end of each session. It exists because a pull request's age is not a
 reliable proxy for a skipped session. `recreateWhen: "always"` means a **closed** pull request is
 recreated rather than dropped, and the recreation is a new pull request with a new `created_at`,
-so anything that closes one restarts its clock at zero. An untouched pull request does keep its
-age, so `updates-pending` still fires on a genuinely stalled one — but a close, or a stream of
-churning updates, hides a skipped session from any age-based threshold. This check cannot be
-fooled that way, because nothing but a human ever pings it. Ping it with:
+so closing one **without merging it** restarts its clock at zero. (Merging closes a pull request
+too, but there is no recreation and no clock left to restart — the update is done.) An untouched
+pull request does keep its age, so `updates-pending` still fires on a genuinely stalled one — but
+a close, or a stream of churning updates, hides a skipped session from any age-based threshold.
+This check cannot be fooled that way, because nothing but a human ever pings it. Ping it with:
 
     curl -fsS -m 15 -o /dev/null --data-binary 'summary=estate-update session complete' \
       "https://hc-ping.com/$(op read 'op://Homelab/estate-update/healthcheck-uuid')"
@@ -577,26 +579,34 @@ appears within a cycle. `make check-renovate-scope` closes the commonest variant
 no file in scope names. If the drill ever fails for a reason that guard cannot see, the first
 thing to build is a registry canary.
 
-**Closing a Renovate pull request IS a snooze on this check, of up to 45 days.** This paragraph
-said the opposite until the 45-day threshold landed, and the threshold inverted it. `renovate.json`
-sets `recreateWhen: "always"`, so a closed pull request is recreated rather than left on the
-dashboard's Closed/Ignored list where Renovate's default would strand it — the update itself is
-not lost. What recreation cannot carry over is **age**: the replacement is a *new* pull request
-with a new `created_at`, and the watcher judges on `created_at`. So closing one that had reached
-`updates-pending` resets it to `updates-waiting`, and the check goes **green** for up to another
-`pr_age_red_days=`.
+**Never close a Renovate pull request** — the operating rule from the design spec, and it still
+stands. `renovate.json` sets `recreateWhen: "always"`, so a closed pull request is *supposed* to be
+recreated rather than left on the dashboard's Closed/Ignored list where Renovate's default would
+strand it. **That recreation has never been verified live against a real closed pull request**,
+and the verification is a rollout step nobody has done. Until it passes, a close risks the worst
+outcome this page has: if `recreateWhen` is not doing what the config says, the update goes to
+Closed/Ignored and never comes back — a green check over an update that is silently gone. That
+risk, not tidiness, is why the prohibition exists. Merging is not closing in this sense and is
+unaffected.
 
-**Nothing on this check will tell you that happened.** An operator who closes a red pull request
-to tidy up silences the watcher for a month and a half without meaning to. This is precisely why
-`estate-update` exists on its own 45-day period, pinged only by a human at the end of a session:
-no amount of pull-request churn can reset it, so it is what still catches the skipped session
-underneath a silenced watcher. Closing is not forbidden — it is invisible here, and covered
-there.
+**Once that verification passes, closing becomes a snooze on this check of up to 45 days.** The
+45-day threshold inverted this: the paragraph here said closing was *not* a snooze, because under
+the old rule any open pull request was red and a recreated one turned the check red again. What
+recreation cannot carry over is **age**. The replacement is a *new* pull request with a new
+`created_at`, and the watcher judges on `created_at`, so closing an aged pull request without
+merging it restarts that clock at zero and can drop the check from `updates-pending` back to the
+green `updates-waiting` for up to another `pr_age_red_days=`.
 
-One residual, unchanged by any of the above: **the recreation has never been verified live**
-against a real closed pull request. If `recreateWhen` is not doing what the config says, a close
-moves the update to Closed/Ignored and it never comes back — a green check over an update that is
-silently gone, rather than merely snoozed.
+**"Can", not "will": `oldest_pr_days` is the maximum over every open pull request.** Closing one
+aged pull request while another aged one is still open leaves the check red on the survivor. Do
+not read a still-red check as "the close did not take" and close more — read `oldest_pr` in the
+body, which names the pull request the verdict is now about.
+
+**And nothing on this check will tell you a close happened at all.** An operator who closes a red
+pull request to tidy up silences the watcher for a month and a half without meaning to. That is
+precisely why `estate-update` exists on its own 45-day period, pinged only by a human at the end
+of a session: no amount of pull-request churn can reset it, so it is what still catches the
+skipped session underneath a silenced watcher.
 
 ### Ping bodies
 
