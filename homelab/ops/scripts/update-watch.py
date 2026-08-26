@@ -22,8 +22,9 @@ THE FOUR RULES THIS SCRIPT EXISTS TO ENFORCE. Read them before changing anything
   2. NOR IS IT "IT FAILED". There is deliberately NO `/start` ping. Upstream
      marks a check down when a start signal is not followed by a success within
      the grace time, and a `/log` ping does not clear `last_start` -- so a
-     `/start` plus a single transient GitHub 503 would alert six hours later.
-     Dropping `/start` is what makes rule 1 true. Do not "complete" the ping set.
+     `/start` plus a single transient GitHub 503 would alert one grace period
+     later. Dropping `/start` is what makes rule 1 true. Do not "complete" the
+     ping set.
 
   3. THE DASHBOARD IS IDENTIFIED POSITIVELY, BY TITLE. Renovate opens other
      non-pull-request issues from the same account -- most importantly "Action
@@ -169,7 +170,7 @@ NEXT_ACTIONS = {
     # 105 characters, and it must stay under 120: the existing
     # test_every_action_is_one_line_of_short_printable_ascii caps every entry
     # in this map. It keeps BOTH substrings
-    # test_the_three_red_verdicts_name_a_command_or_a_place_to_look asserts on,
+    # test_the_four_red_verdicts_name_a_command_or_a_place_to_look asserts on,
     # `gh pr list` and `apply-homelab`.
     V_UPDATES_PENDING:
         "run the update session: gh pr list -R mnbf9rca/kubernetes_config"
