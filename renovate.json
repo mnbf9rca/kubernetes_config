@@ -1,41 +1,59 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": ["config:recommended"],
-  "enabledManagers": ["kubernetes"],
+  "enabledManagers": ["kubernetes", "kustomize"],
   "recreateWhen": "always",
+  "pinDigests": true,
+  "minimumReleaseAge": "3 days",
   "kubernetes": {
     "managerFilePatterns": [
-      "/^homelab/health/.+\\.yaml$/",
-      "/^homelab/ops/.+\\.yaml$/",
-      "/^homelab/hindsight/.+\\.yaml$/"
+      "/^homelab/.+\\.ya?ml$/",
+      "/^vps/.+\\.ya?ml$/"
     ]
   },
-  "minimumReleaseAge": "3 days",
+  "kustomize": {
+    "managerFilePatterns": [
+      "/(^|/)kustomization\\.ya?ml$/"
+    ]
+  },
+  "ignorePaths": [
+    "**/secrets/**",
+    "legacy-microk8s/**",
+    "no_longer_used/**"
+  ],
   "packageRules": [
+    { "matchFileNames": [
+        "homelab/workloads/**",
+        "homelab/bootstrap/keel/**",
+        "vps/workloads/**",
+        "vps/bootstrap/keel/**",
+        "vps/bootstrap/cloudflared/**"
+      ],
+      "pinDigests": false,
+      "description": "NO DIGEST PINNING ON THE KEEL-MANAGED TREES. pinDigest is an updateType that fires on any Docker dependency without a digest, floating tags INCLUDED, so top-level pinDigests plus the widened scope would have Renovate open 'Pin Docker digests' pull requests against linuxserver/emby:latest, cloudflare/cloudflared:latest, karakeep:release and the rest — the images keel is supposed to own. Merging one produces the pinned-tag-with-keel-annotations state this whole strategy exists to abolish, and creates permanent keel-versus-git drift: keel rewrites the live Deployment's digest every six hours while the repo holds the merged one, so make diff-homelab reports a changed Deployment forever and the read-the-diff-in-full discipline dies. The keel Deployments are listed because they are pinned by digest ALREADY, by hand, and Renovate re-proposing that pin adds nothing." },
     { "matchFileNames": ["homelab/health/**"],
       "groupName": "health stack",
       "automerge": false,
-      "prPriority": 5,
-      "pinDigests": true },
+      "prPriority": 5 },
     { "matchFileNames": ["homelab/ops/**"],
       "groupName": "ops tooling",
       "automerge": false,
       "prPriority": 1,
-      "pinDigests": true,
       "description": "The update watcher's own image — watched so the watcher is not the one unwatched pin in the estate." },
     { "matchFileNames": ["homelab/hindsight/**"],
       "groupName": "hindsight stack",
       "automerge": false,
       "prPriority": 5,
-      "pinDigests": true,
       "description": "Pinned, no keel. Upgrades run the dump-first runbook: make hindsight-upgrade, then merge, diff, apply." },
-    { "matchFileNames": ["homelab/hindsight/**"],
-      "matchUpdateTypes": ["major"],
-      "matchPackageNames": ["pgvector/pgvector"],
+    { "matchUpdateTypes": ["major"],
+      "dependencyDashboardApproval": true,
+      "description": "Every major waits on the dependency dashboard. The update session reviews the dashboard and approves what it wants to take; an unattended major PR against a stateful workload is exactly the ceremony this estate wants to keep manual." },
+    { "matchUpdateTypes": ["major"],
+      "matchPackageNames": ["postgres", "pgvector/pgvector"],
       "enabled": false,
-      "description": "PostgreSQL major bumps are a dump-and-restore, not a tag edit. Propose by hand when the runbook is ready; a grouped PR must never carry one." },
+      "description": "PostgreSQL major bumps are a dump-and-restore, not a tag edit. BOTH names are listed: `pgvector/pgvector` is hindsight's database and `postgres` is umami's database and hindsight's dump client, and naming only the first is how PR #66 slipped through. Order against the all-majors rule above is NOT load-bearing: Renovate merges matching rules later-wins PER FIELD, and `enabled` and `dependencyDashboardApproval` are different fields, so `enabled: false` applies from either position. Do not reorder these two believing it changes the outcome." },
     { "matchPackageNames": ["thisisarpanghosh/garmin-fetch-data"],
-      "enabled": false,
-      "description": "digest-pinned to main build; v0.5.0 latest release is broken (client.profile crash); re-enable when a release newer than v0.5.0 exists" }
+      "dependencyDashboardApproval": true,
+      "description": "Digest-pinned to a main build; the v0.5.0 release is broken (client.profile crash). Dashboard-only rather than disabled, so an upstream fix surfaces without auto-PRing a regression." }
   ]
 }

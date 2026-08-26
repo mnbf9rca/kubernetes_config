@@ -36,10 +36,12 @@ StatefulSets, ReplicaSets, ReplicationControllers, Pods, Jobs and CronJobs — i
 component where an unattended upstream tag change is a security event rather than a
 convenience, so its bump belongs in a reviewed pull request rather than a six-hour poll.
 
-Renovate does not reach this cluster at all yet: every pattern in `renovate.json` is
-scoped under `homelab/`, so nothing in `vps/` is watched. The pin is unwatched today and
-is bumped **by hand**; widening that scope is what makes the pull request arrive on its
-own.
+Renovate has reached this cluster since 2026-08-26, when `renovate.json` gained a
+`/^vps/.+\.ya?ml$/` pattern alongside the homelab one, so keel's bump here arrives as a
+pull request like every other pinned image in `vps/`. `check-renovate-scope-vps` runs in
+the `diff-vps`/`apply-vps` preflight and fails the apply if that scope is ever lost.
+`vps/bootstrap/keel/**` sits on the `pinDigests: false` packageRule: the image is
+already pinned by tag and digest by hand, so there is nothing for Renovate to add.
 
 Its RBAC was trimmed on August 26, 2026 (PR #68): no `secrets` rule, no
 `pods/portforward`. Verify keel's permissions with a SelfSubjectAccessReview issued

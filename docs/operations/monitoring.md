@@ -685,6 +685,29 @@ against, so its gate stops at shape. Closing the rest means `sqlite3 <file> 'pra
 integrity_check'` inside the gate, hence sqlite in the `restic/restic` image. Until then a periodic
 manual restore drill is the only real proof, and the only cover for homelab's torn-copy exposure.
 
+### Frozen while looking covered: the update-mode rule
+
+**Floating tag means keel; pinned tag means Renovate; never both.** `keel.sh/match-tag:
+"true"` on a pinned tag only refreshes the digest, so a semver pin carrying keel
+annotations is frozen while looking covered. `traefik:v3.3` and `meilisearch:v1.41.0`
+were both in that state until August 26, 2026. `make check-renovate-scope` now refuses
+the combination outright, on both clusters, one container at a time, and both
+per-cluster halves run in their cluster's `diff-*` and `apply-*` preflight.
+
+The guard also settles the scope question that used to sit under it. Renovate watches
+`homelab/**` and `vps/**` as of the same date, so a pinned, keel-free container has to be
+named by a file in its own cluster's tree that `kubernetes.managerFilePatterns` matches —
+and the guard fails the apply when it is not. What the guard does *not* claim to cover is
+an image it never sees: one from a remote base, which it reports as advisory because
+nothing here can edit it, and one embedded inside another resource, such as
+local-path-provisioner's helper Pod inside a ConfigMap.
+
+`jottacloud-backup` is the one written exemption on that guard's `FLOATING_EXEMPT` list,
+and not because it is keel-managed — it carries no keel annotations at all. It is a CronJob,
+so every scheduled run starts a fresh pod that pulls `:latest`, which already delivers the
+auto-pull behaviour keel would provide. Correct anywhere the estate's own text says
+otherwise.
+
 ### Named accepted residual: the ingest checks leak a presence timeline
 
 `last_point` and `last_point_age` on `health-apple-ingest` and `health-garmin-ingest` are emitted

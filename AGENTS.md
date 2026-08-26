@@ -46,7 +46,7 @@ kubernetes_config/
 ├── .envrc                    # direnv entrypoint (loads 1Password-backed vars)
 ├── .env.tpl                  # op-template with VAR=op://... lines (committed; no real secret values)
 ├── Makefile                  # build/diff/apply per cluster + secret and bootstrap helpers
-├── renovate.json             # scoped to homelab/health/**, homelab/ops/** and homelab/hindsight/** (pinDigests)
+├── renovate.json             # scoped to homelab/** and vps/** (pinDigests, off on the keel-managed trees)
 ├── secrets-to-rotate.md      # honesty box for disclosed secret values (identifiers only)
 ├── docs/                     # operational documentation (docs/superpowers/ is gitignored)
 ├── homelab/                  # Talos homelab cluster
@@ -168,19 +168,31 @@ Full mechanics, target-by-target reference and failure modes:
   **floating tag means keel; pinned tag means Renovate; never both.**
   `match-tag: "true"` on a pinned tag only refreshes the digest, so a semver pin
   carrying keel annotations is frozen while looking covered.
-- **Pinned does not mean watched, and the difference is per-path.** Every image in
-  `health`, `ops` and `hindsight` is version/digest-pinned **and** inside Renovate's
-  scope, so bumps arrive as pull requests
+- **Every pinned image in both clusters is watched, and keeping it that way is a
+  standing obligation.** `renovate.json` scopes Renovate to `homelab/**` and `vps/**`
+  as of 2026-08-26, so every version- or digest-pinned image in either tree — `health`,
+  `ops`, `hindsight`, `backup`, keel itself, traefik and the VPS workloads alike —
+  gets its bump as a pull request
   (`docs/operations/homelab-health.md`, `docs/operations/homelab.md`,
-  `docs/operations/hindsight.md`). `backup` and keel itself are pinned but
-  deliberately **unwatched**: `renovate.json` scopes Renovate to `homelab/health/**`,
-  `homelab/ops/**` and `homelab/hindsight/**` only, so those pins get no bump
-  pull request and are moved by hand until something widens that scope. Nothing under
-  `vps/` is watched at all — which is why `check-renovate-scope` names them all today
-  and is not yet on any preflight. `hindsight` is the sharpest case: it runs Alembic
+  `docs/operations/hindsight.md`). Two things sit outside that and always will: images
+  from remote bases, which no file here names and only a fork could change, and images
+  embedded inside another resource. `make check-renovate-scope` reports both as
+  advisory and hard-fails everything else, so a new pinned image that nothing watches
+  cannot reach a cluster. `hindsight` is the sharpest case: it runs Alembic
   migrations on startup against the store holding an agent's memory, and those
   migrations are forward-only, so the pre-upgrade dump is the only rollback.
   `make hindsight-upgrade` takes it.
+- **`pinDigests` is on at the top level and off on the keel-managed trees, and that
+  split is load-bearing.** `pinDigest` is an updateType that fires on any Docker
+  dependency without a digest, **floating tags included**, so top-level `pinDigests`
+  over the widened scope would have Renovate propose "Pin Docker digests" against the
+  images keel owns. Merging one recreates the pinned-tag-with-keel-annotations state
+  this whole arrangement abolishes, and leaves keel rewriting the live digest every six
+  hours against a repo holding a different one — so `make diff-homelab` reports a
+  changed Deployment forever. The first `packageRule` turns it back off for
+  `homelab/workloads/**`, `vps/workloads/**`, `vps/bootstrap/cloudflared/**` and both
+  keel trees. **Adding a keel-annotated workload outside those paths means extending
+  that rule in the same commit.**
 - **Probes: readiness on every long-running container that serves traffic; liveness only
   where that probe can actually detect the failure *and* a restart is a safe remedy**
   (everything here is single-replica, so an over-eager liveness probe manufactures
@@ -230,9 +242,12 @@ Full mechanics, target-by-target reference and failure modes:
   broke `diff-homelab` and `apply-homelab` for four months. Deleting the stale Job is the
   recovery; the TTL is the prevention. `make check-job-ttl` enforces it across both
   clusters, and `diff-*`/`apply-*` run the per-cluster variant as a preflight, so it
-  cannot be forgotten (the preflight is `check-vars-consistency`, `check-job-ttl`,
-  `check-script-substitution`, `check-ping-bodies` and `check-script-lint`;
-  `check-renovate-scope` is defined per cluster but not yet wired onto any chain).
+  cannot be forgotten. The preflight is a context assertion, a vars-consistency check,
+  and **five render-based guards that each run as their cluster's half** —
+  `check-script-substitution`, `check-job-ttl`, `check-ping-bodies`,
+  `check-script-lint` and `check-renovate-scope` — on all four of `diff-homelab`,
+  `apply-homelab`, `diff-vps` and `apply-vps`. `check-renovate-scope` joined them on
+  2026-08-26, in the commit that widened Renovate far enough for it to pass.
   Jobs *generated by a CronJob* are exempt and the check ignores
   them: each run gets a unique name, so they never collide, and pile-up is bounded by
   `successfulJobsHistoryLimit`.
@@ -283,8 +298,11 @@ Full mechanics, target-by-target reference and failure modes:
   the frozen state (`match-tag` only refreshes the digest) and fails; an
   **incomplete** set fails on any tag, because a missing `match-tag` silently
   downgrades a semver tag to `:latest`. A pinned, keel-free image must be named by
-  a repo file inside `kubernetes.managerFilePatterns` and outside `ignorePaths` —
-  a `packageRule` alone does **not** widen scope. keel annotations are a
+  a repo file **in the same cluster's tree** that is inside
+  `kubernetes.managerFilePatterns` and outside `ignorePaths` — a `packageRule` alone
+  does **not** widen scope, and the per-cluster confinement is load-bearing, because
+  both trees name many of the same images and a repo-wide lookup would let a watched
+  homelab file vouch for an unwatched VPS container. keel annotations are a
   **workload** property: a pinned sidecar beside a floating app image is
   Renovate's, not frozen, so only a workload with nothing floating in it can be
   frozen. Floating tags are forbidden in the `health`, `hindsight`, `ops` and

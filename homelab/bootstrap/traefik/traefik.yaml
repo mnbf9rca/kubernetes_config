@@ -68,11 +68,17 @@ kind: DaemonSet
 metadata:
   name: traefik
   namespace: traefik
-  annotations:
-    keel.sh/policy: force
-    keel.sh/match-tag: "true"
-    keel.sh/trigger: poll
-    keel.sh/pollSchedule: "@every 6h"
+  # NO keel ANNOTATIONS. Removed 2026-08-26 together with the Renovate scope
+  # widening that replaced them.
+  #
+  # traefik:v3.3 is a PINNED tag, and `keel.sh/match-tag: "true"` on a pinned tag
+  # only refreshes the digest — so these annotations froze traefik at v3.3 while
+  # looking like coverage. It is the estate's TLS-terminating ingress on
+  # hostNetwork; an unattended minor bump here is not a convenience.
+  #
+  # Renovate now watches homelab/** (renovate.json) and proposes the bump as a
+  # pull request the update session reads and applies. Floating tag means keel;
+  # pinned tag means Renovate; never both.
 spec:
   selector:
     matchLabels:
@@ -89,7 +95,9 @@ spec:
       containers:
         - name: traefik
           image: traefik:v3.3
-          imagePullPolicy: Always
+          # A pinned tag with nothing rewriting it in place: `Always` bought a
+          # registry round trip per pod start and, with keel gone, nothing else.
+          imagePullPolicy: IfNotPresent
           args:
             - --global.checkNewVersion=false
             - --global.sendAnonymousUsage=false

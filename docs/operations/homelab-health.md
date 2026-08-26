@@ -20,7 +20,9 @@ records store, multi-person registry) is scoped there, not here.
 
 **No keel in this namespace.** This is a data pipeline; auto-upgrading it is not wanted.
 Every image is version- or digest-pinned and Renovate proposes bumps instead. Renovate is
-scoped to `homelab/health/**` only, with `pinDigests` (see `renovate.json`).
+scoped to `homelab/**` and `vps/**`, with `pinDigests` on at the top level (see
+`renovate.json`); a `homelab/health/**` packageRule groups this namespace's bumps as
+`health stack` and keeps them off automerge.
 
 `namespaces.yaml` marks `health` as Pod Security Admission (PSA) `baseline` (nothing
 here needs hostPath/hostNetwork), but every workload already trips `restricted`-level

@@ -202,7 +202,7 @@ Note that 1Password **document** items (e.g. `health-cloudflared`) need
 | `check-job-ttl` | Asserts every standalone `kind: Job` sets `ttlSecondsAfterFinished`, across both clusters. `check-job-ttl-homelab` scopes it to one cluster and runs in the `diff-homelab`/`apply-homelab` preflight |
 | `check-script-substitution` | Asserts no `configMapGenerator` script names an envsubst-allowlisted variable, across both cluster trees. `check-script-substitution-homelab` scopes the *scan* to one tree — both allowlists still apply — and runs in the `diff-homelab`/`apply-homelab` preflight |
 | `check-script-lint` | Lints every script the clusters run, from the **rendered** stream rather than the source tree, plus the repo's Python. `check-script-lint-homelab` scopes the render to one cluster and runs in the `diff-homelab`/`apply-homelab` preflight. See below |
-| `check-renovate-scope` | Asserts every container is in exactly one update mode — floating means keel, pinned means Renovate, never both — from the `kustomize build` render, one container at a time, across both clusters. `check-renovate-scope-homelab` scopes it to one cluster. **Not yet on any preflight chain: the Renovate scope-widening commit arms it.** See below |
+| `check-renovate-scope` | Asserts every container is in exactly one update mode — floating means keel, pinned means Renovate, never both — from the `kustomize build` render, one container at a time, across both clusters. `check-renovate-scope-homelab` scopes it to one cluster and runs in the `diff-homelab`/`apply-homelab` preflight, which is six guards rather than five. See below |
 | `require-vars` | Re-enters under `op run` and asserts every `REQUIRED_VARS` entry is set and not still an `op://` reference |
 | `build-homelab` | `kustomize build homelab/ \| envsubst` to stdout under `op run`. **PREVIEW ONLY — secret values are masked.** No cluster contact. Never redirect this to a file and apply it |
 | `diff-homelab` | Same pipeline into `kubectl diff`, inside the `op run` child (real values, printed diff masked) |
@@ -218,8 +218,8 @@ Note that 1Password **document** items (e.g. `health-cloudflared`) need
 |---|---|
 | `check-vps-context` | Asserts `kubectl current-context == cynexia-vps` (override with `VPS_CONTEXT=`) |
 | `check-vps-vars-consistency` / `require-vps-vars` | VPS equivalents of the homelab preflights |
-| `check-job-ttl-vps` / `check-script-substitution-vps` / `check-script-lint-vps` | The per-cluster halves of the repo-wide checks, run in the `diff-vps`/`apply-vps` preflight. Scoping them per cluster is the point: a VPS-only fault must not block `apply-homelab`, and vice versa |
-| `check-renovate-scope-vps` | The VPS half of the update-mode guard, scoped to the `vps/` render. It has its own row rather than sharing the one above because it is not wired the way those three are. **Not yet on any preflight chain: the Renovate scope-widening commit arms it.** See below |
+| `check-job-ttl-vps` / `check-script-substitution-vps` / `check-ping-bodies-vps` / `check-script-lint-vps` | The per-cluster halves of the repo-wide checks, run in the `diff-vps`/`apply-vps` preflight. Scoping them per cluster is the point: a VPS-only fault must not block `apply-homelab`, and vice versa |
+| `check-renovate-scope-vps` | The VPS half of the update-mode guard, scoped to the `vps/` render, and the fifth per-cluster guard in the `diff-vps`/`apply-vps` preflight. It keeps its own row rather than joining the one above because it arrived later, in the commit that widened Renovate's scope far enough for it to pass. See below |
 | `build-vps` / `diff-vps` / `apply-vps` | Same pipeline and the same masking split over `vps/` with `VPS_ENVSUBST_VARS` |
 | `route-vps-dns` | `cloudflared tunnel route dns cynexia-vps <host>` for every hostname in `vps/bootstrap/cloudflared/cloudflared.yaml` |
 | `create-cloudflared-secret` | Imperative Secret creation for the VPS tunnel creds from `op://VPS/cloudflared/credentials-json` |
@@ -381,14 +381,20 @@ scheduled run, so the schedule already delivers what keel would, which is why it
 carries no keel annotations and needs none.
 
 The targets are `check-renovate-scope-homelab` and `check-renovate-scope-vps`,
-plus the bare `check-renovate-scope` which sweeps both. **Not yet on any preflight chain: the Renovate scope-widening commit arms it.** It cannot
-pass against a `renovate.json` that watches only `homelab/health`, `homelab/ops`
-and `homelab/hindsight`: every pinned, keel-free container outside those three
-genuinely receives nothing, which is the estate's true state rather than a bug
-in the guard. Wiring a guard into a preflight it does not pass makes an apply
-impossible and teaches the next person to route around the gate, so the two
-targets are defined and left unarmed until the widening lands. Run them by hand
-in the meantime.
+plus the bare `check-renovate-scope` which sweeps both. **Both per-cluster
+targets run in their cluster's `diff-*` and `apply-*` preflight**, on the public
+half, as of the 2026-08-26 commit that widened Renovate to `homelab/**` and
+`vps/**`. That makes the homelab preflight six guards rather than five, and the
+VPS preflight five per-cluster guards behind its context and vars checks.
+
+Arming it needed that widening first, and the order is worth keeping in mind if
+the scope ever narrows again. The guard cannot pass against a `renovate.json`
+that watches only `homelab/health`, `homelab/ops` and `homelab/hindsight`: every
+pinned, keel-free container outside those three genuinely receives nothing,
+which is the estate's true state rather than a bug in the guard. Wiring a guard
+into a preflight it does not pass makes an apply impossible and teaches the next
+person to route around the gate. Widen scope, prove a clean run against both
+renders, then arm — never the reverse.
 
 ## Talos machine config patches
 

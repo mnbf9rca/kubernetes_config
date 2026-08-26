@@ -113,9 +113,7 @@ help:
 	@echo "  check-renovate-scope - assert every container is in exactly one update mode (both clusters)"
 	@echo "                    keel for floating tags, Renovate for pinned ones, never both; per container"
 	@echo "  check-renovate-scope-homelab / -vps - the per-cluster halves of that guard"
-	@echo "                    (the FOUR above check-renovate-scope also run in the diff-*/apply-* preflight,"
-	@echo "                     all four per-cluster; check-renovate-scope is run by hand until the Renovate"
-	@echo "                     scope-widening commit arms it)"
+	@echo "                    (the five above also run in the diff-*/apply-* preflight, now all five per cluster)"
 	@echo ""
 	@echo "VPS cluster targets:"
 	@echo "  check-vps-context - assert kubectl current-context matches VPS_CONTEXT ($(VPS_CONTEXT))"
@@ -304,24 +302,26 @@ check-script-lint-vps:
 # judged twice rather than once. keel annotations are a WORKLOAD property, so a
 # pinned sidecar beside a floating app image is Renovate's and not frozen; only
 # a workload with nothing floating in it can be frozen. It reads renovate.json
-# for scope; images that appear in no repo file come from a remote base and are
-# advisory, like check-script-lint's upstream findings.
+# for scope; an image named by no file in ITS OWN cluster's tree came from a
+# remote base and is advisory, like check-script-lint's upstream findings. The
+# lookup is confined per cluster on purpose — the two trees name many of the
+# same images, so a repo-wide one would let a watched homelab file vouch for an
+# unwatched VPS container.
 #
 # Per-cluster variants like the other render-based guards, so a VPS-only render
-# fault cannot block an unrelated `apply-homelab`. When it is armed it WILL
-# belong on the PUBLIC half of both diff/apply chains: it shells out to a full
+# fault cannot block an unrelated `apply-homelab`. Both sit on the PUBLIC half
+# of their cluster's diff and apply chains: the guard shells out to a full
 # `kustomize build`, and what it protects is the update path, not a secret —
-# nothing it catches can leak a value. It is on neither half today; the next
-# paragraph says why.
+# nothing it catches can leak a value.
 #
-# NOT ON ANY PREFLIGHT YET, DELIBERATELY, AND ONLY UNTIL THE NEXT COMMIT. This
-# rewritten guard cannot pass against a renovate.json that still watches three
-# namespaces: every pinned, keel-free container outside them genuinely receives
-# nothing, which is the true state of the estate and exactly what the scope
-# widening fixes. Wiring a guard into a preflight it does not pass makes an
-# apply impossible and teaches the next person to route around the gate. The
-# widening commit proves a clean run against both renders and re-arms the two
-# per-cluster targets on all four chains in the same breath.
+# ARMED 2026-08-26, in the commit that widened Renovate to homelab/** and vps/**
+# and de-keeled the two frozen semver pins. Order mattered and still does: the
+# guard cannot pass against a renovate.json that watches three namespaces,
+# because every pinned, keel-free container outside them genuinely receives
+# nothing — the estate's true state, not a bug in the guard. Widen scope first,
+# prove a clean run against both renders, then arm. Never the reverse: wiring a
+# guard into a preflight it does not pass makes an apply impossible and teaches
+# the next person to route around the gate.
 .PHONY: check-renovate-scope check-renovate-scope-homelab check-renovate-scope-vps
 check-renovate-scope:
 	@scripts/check-renovate-scope.py
@@ -598,7 +598,7 @@ check-context:
 # THAT it changed, never WHAT it changed to. Use
 # `kubectl -n <ns> get secret <name> -o jsonpath=...` to confirm a value landed.
 .PHONY: diff-homelab
-diff-homelab: check-vars-consistency check-context check-script-substitution-homelab check-job-ttl-homelab check-ping-bodies-homelab check-script-lint-homelab
+diff-homelab: check-vars-consistency check-context check-script-substitution-homelab check-job-ttl-homelab check-ping-bodies-homelab check-script-lint-homelab check-renovate-scope-homelab
 	@$(OP_RUN) $(MAKE) --no-print-directory _diff-homelab-inner
 
 # The old `|| true` here swallowed EVERYTHING, including a kustomize failure.
@@ -619,7 +619,7 @@ _diff-homelab-inner: check-context check-script-substitution-homelab check-ping-
 	exit 0
 
 .PHONY: apply-homelab
-apply-homelab: check-vars-consistency check-context check-script-substitution-homelab check-job-ttl-homelab check-ping-bodies-homelab check-script-lint-homelab
+apply-homelab: check-vars-consistency check-context check-script-substitution-homelab check-job-ttl-homelab check-ping-bodies-homelab check-script-lint-homelab check-renovate-scope-homelab
 	@$(OP_RUN) $(MAKE) --no-print-directory _apply-homelab-inner
 
 # RENDER FULLY, VERIFY, THEN APPLY — never stream straight into kubectl.
@@ -1003,7 +1003,7 @@ _build-vps-inner:
 # closed on a wrong context no matter how it is entered. See the GUARD
 # PLACEMENT note above diff-homelab.
 .PHONY: diff-vps
-diff-vps: check-vps-context check-vps-vars-consistency check-script-substitution-vps check-job-ttl-vps check-ping-bodies-vps check-script-lint-vps
+diff-vps: check-vps-context check-vps-vars-consistency check-script-substitution-vps check-job-ttl-vps check-ping-bodies-vps check-script-lint-vps check-renovate-scope-vps
 	@$(OP_RUN) $(MAKE) --no-print-directory _diff-vps-inner
 
 # See _diff-homelab-inner for why this is a PIPESTATUS check and not `|| true`.
@@ -1017,7 +1017,7 @@ _diff-vps-inner: check-vps-context check-script-substitution-vps check-ping-bodi
 	exit 0
 
 .PHONY: apply-vps
-apply-vps: check-vps-context check-vps-vars-consistency check-script-substitution-vps check-job-ttl-vps check-ping-bodies-vps check-script-lint-vps
+apply-vps: check-vps-context check-vps-vars-consistency check-script-substitution-vps check-job-ttl-vps check-ping-bodies-vps check-script-lint-vps check-renovate-scope-vps
 	@$(OP_RUN) $(MAKE) --no-print-directory _apply-vps-inner
 
 # Same render-fully-then-apply shape as _apply-homelab-inner; see the note there.

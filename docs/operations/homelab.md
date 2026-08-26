@@ -37,13 +37,16 @@ StatefulSets, ReplicaSets, ReplicationControllers, Pods, Jobs and CronJobs — i
 component where an unattended upstream tag change is a security event rather than a
 convenience, so its bump belongs in a reviewed pull request rather than a six-hour poll.
 
-Renovate does not watch `homelab/bootstrap/**` yet: `renovate.json` is scoped to
-`homelab/health/**`, `homelab/ops/**` and `homelab/hindsight/**`. So the pin is
-unwatched today and is bumped **by hand**; widening that scope is what makes the pull
-request arrive on its own. `scripts/check-renovate-scope.py` no longer exempts this
-directory — since the guard was rewritten per container it reports
-`homelab/bootstrap/keel/keel.yaml` as out of scope, correctly, which is one of the
-findings the widening clears.
+Renovate has watched `homelab/bootstrap/**` since 2026-08-26, when `renovate.json` was
+widened from three namespaces to `homelab/**` and `vps/**`, so keel's own bump now
+arrives as a pull request instead of waiting for someone to remember it.
+`scripts/check-renovate-scope.py` reports `homelab/bootstrap/keel/keel.yaml` as in
+scope, and runs in the `diff-homelab`/`apply-homelab` preflight — so if that scope is
+ever narrowed again, the next apply fails rather than the pin going quietly stale.
+
+One thing the widening deliberately did **not** do is let Renovate re-propose keel's
+digest: `homelab/bootstrap/keel/**` is on the `pinDigests: false` packageRule, because
+the image is already pinned by tag and digest by hand.
 
 Its RBAC was trimmed on August 26, 2026 (PR #68): no `secrets` rule, no
 `pods/portforward`. Verify keel's permissions with a SelfSubjectAccessReview issued
@@ -103,9 +106,9 @@ Three things about this namespace are deliberate and should survive a refactor:
   privileged for restic's hostPaths, which an outbound-HTTPS poller has no business inheriting.
   `ops` is PSA baseline, the cluster default, and needs no ServiceAccount and no RBAC.
 - **No keel here.** Every image is version-pinned and Renovate watches this tree, so neither
-  job's own pin is the estate's one unwatched image. `make check-renovate-scope` catches it if
-  that scope is ever lost — but it gates nothing today: the rewritten guard is run **by hand**
-  until the Renovate scope-widening commit arms it on the diff/apply preflight.
+  job's own pin is an unwatched image. `make check-renovate-scope` catches it if that scope is
+  ever lost, and since 2026-08-26 it gates: `check-renovate-scope-homelab` runs in the
+  `diff-homelab`/`apply-homelab` preflight, so losing the scope fails the next apply.
 - **Removal is one commit,** but it is a longer list than it was with one job. Drop `- ops` from
   `homelab/kustomization.yaml`, `rm -r homelab/ops/`, remove the namespace block, remove **both**
   `OPS_HC_UPDATE_UUID` and `OPS_KUMA_KEEL_TOKEN` from `.env.tpl` and from both Makefile lists,

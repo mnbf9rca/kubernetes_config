@@ -52,14 +52,16 @@ metadata:
   #
   # Two facts make re-adding them worse than useless. `match-tag: "true"` on a
   # PINNED tag only refreshes the digest, so the annotations would look like
-  # coverage while freezing the version — the state traefik and meilisearch
-  # are still in as of 2026-08-26, and which later work in this plan removes.
-  # And an incomplete set is worse still: without `match-tag`, keel silently
-  # downgrades a semver tag to `:latest`.
+  # coverage while freezing the version — the state traefik and meilisearch were
+  # in until they were de-keeled on 2026-08-26. And an incomplete set is worse
+  # still: without `match-tag`, keel silently downgrades a semver tag to
+  # `:latest`.
   #
-  # The image below is pinned by tag AND digest. Task 4 widens Renovate to
-  # homelab/** (renovate.json) so the bump arrives as a pull request, and the
-  # update session takes it through the normal read-the-diff / apply flow.
+  # The image below is pinned by tag AND digest. Renovate watches homelab/**
+  # (renovate.json) as of 2026-08-26, so the bump arrives as a pull request and
+  # the update session takes it through the normal read-the-diff / apply flow.
+  # This directory is on the `pinDigests: false` packageRule: the digest is
+  # already here by hand, so Renovate has nothing to add by re-proposing it.
 spec:
   replicas: 1
   selector:

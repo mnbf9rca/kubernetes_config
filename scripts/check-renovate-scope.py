@@ -421,11 +421,20 @@ def render(cluster):
 # no flow mappings at the levels read here. Five things are extracted - kind,
 # namespace, the workload's annotations, and each container's name and image.
 #
-# WHAT "REPORTED, NEVER SKIPPED" MEANS HERE, PRECISELY. Two reader failures are
-# possible and both are printed as advisories rather than dropped: a non-empty
+# WHAT "REPORTED, NEVER SKIPPED" MEANS HERE, PRECISELY, AND WHERE IT STOPS. Two
+# reader failures are printed as advisories rather than dropped: a non-empty
 # document whose `kind` cannot be read, and a pod-parent document this reader
-# finds no `image:` in. Silence on either would be the check claiming coverage
-# it does not have.
+# finds no `image:` in AT ALL. Silence on either would be the check claiming
+# coverage it does not have.
+#
+# The bound worth stating: the second advisory fires only on a pod parent that
+# yields NO container. A pod parent where SOME `image:` values are read and
+# others are not - a container whose image is a block scalar or a flow
+# collection, which `_value` returns None for - is judged on the containers it
+# did read and says nothing about the ones it missed. That is a silently
+# PARTIAL verdict, not a silent skip, and this reader cannot tell the two
+# apart without a real YAML parser. Neither render contains such a workload
+# today. If one appears, the missed container is unjudged and unreported.
 #
 # What it does NOT see, and cannot: a manifest embedded inside another
 # resource. local-path-provisioner ships its helper Pod - untagged
