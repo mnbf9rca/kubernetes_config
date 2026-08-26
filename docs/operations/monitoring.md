@@ -451,14 +451,15 @@ app-installations page for `dashboard-missing`, the pod-log command for the inde
 verdicts, and `none` for both green verdicts (`updates-waiting`'s line says so explicitly, so a
 green body is not mistaken for one whose `next=` went missing). Each string is a fixed literal
 in the script's `NEXT_ACTIONS` map, keyed by verdict, so the alert is self-contained and nothing
-derived at run time is formatted into it. Read `next=` together with `run_epoch=`: a stale body's advice is
-about the last run that completed, not about the silence that raised the alert.
+derived at run time is formatted into it. Read `next=` together with `run_epoch=`: a stale
+body's advice is about the last run that completed, not about the silence that raised the alert.
 
 **It deliberately sends no `/start`, and that must not be "completed" later.** healthchecks.io
 marks a check down when a start signal is not followed by a success inside the grace time, and a
 `/log` ping does not clear `last_start`. So a watcher that sent `/start` and then hit a single
-transient GitHub 503 would send `/start` then `/log` and go **down one grace period later** — turning
-every unreadable run into a false alarm and destroying the property the `/log` branch exists for.
+transient GitHub 503 would send `/start` then `/log` and go **down one grace period later** —
+turning every unreadable run into a false alarm and destroying the property the `/log` branch
+exists for.
 `/start` would have bought only a duration graph for a job already bounded by
 `activeDeadlineSeconds: 300`, and period-plus-grace silence already covers "did not run".
 
@@ -468,16 +469,6 @@ paginated response, an HTTP 200 carrying a JSON *object*, and a Dependency Dashb
 "Renovate is alive". A `log` ping records an event and cannot postpone, suppress or trigger an
 alert; if the outage persists no success ping arrives either and the check goes red on its own
 once period plus grace expires.
-
-**Its grace does not match this page, and one of the two is wrong.** Reconciled against the
-Management API on August 26, 2026: every other check in the table above matches its documented
-period and grace exactly, and this one alone is live at **1d / 2h** against the **1d / 6h** the
-table records. Nothing here can tell which is the error — the check may have been created at a
-copied grace, or the table may record an intent never applied — and the read-only API key cannot
-change it either way. Resolve it by picking one and making the other match, then delete this
-paragraph. The choice is not load-bearing for any argument on this page: every claim above is
-now written in terms of "period plus grace" rather than a number, and a *shorter* grace only
-strengthens the case for sending no `/start`.
 
 **Why `/fail` here when `ingest-freshness` was refused it.** That refusal rested on tolerance: a
 stale bucket self-heals and was routinely, legitimately stale. Neither half transfers. An update
@@ -692,10 +683,10 @@ A seventh non-repo check existed until 2026-08-26 and is worth remembering as a 
 `homelab-keel-fresh`, created against the original spec, which gave that job a healthchecks.io
 check before the check-budget ruling moved it to an uptime-kuma push monitor. Nothing here could
 ever ping it — the CronJob receives a kuma push URL and its runner holds no `hc-ping`
-reference — so it sat `new` forever and cost a slot. It has been deleted, and no `vps-keel-fresh` equivalent
-was ever created. **A superseded design can leave a check behind that no repository grep will
-find**, which is what this census is for: reconcile the account against the table above whenever a
-job changes which instrument it drives.
+reference — so it sat `new` forever and cost a slot. It has been deleted, and no
+`vps-keel-fresh` equivalent was ever created. **A superseded design can leave a check behind
+that no repository grep will find**, which is what this census is for: reconcile the account
+against the table above whenever a job changes which instrument it drives.
 
 ## Layers 3 and 4: uptime-kuma
 
