@@ -60,6 +60,19 @@ for bad in '' 3b9c632a HEAD master origin/master \
   if valid_sha40 "$bad"; then fail "valid_sha40 accepted '$bad'"
   else pass "valid_sha40 rejects '$bad'"; fi
 done
+# The multi-line cases are the regression: the first implementation piped into
+# `grep -qE`, which matches per LINE, so ANY input holding one conforming line
+# passed regardless of the rest. That is strictly more than "exactly a
+# 40-character lowercase hex object name", and a value with a newline in it
+# would break the one-key-per-line ping-body format. These are named
+# individually rather than added to the loop above because a newline inside
+# "$bad" would split the `ok` line in two.
+MULTI=$(printf 'notasha\n3b9c632a1fa339abcfd457973dcf10810640e760')
+if valid_sha40 "$MULTI"; then fail "valid_sha40 accepted a SHA on a later line"
+else pass "valid_sha40 rejects a conforming line preceded by junk"; fi
+MULTI=$(printf '3b9c632a1fa339abcfd457973dcf10810640e760\n3b9c632a1fa339abcfd457973dcf10810640e760')
+if valid_sha40 "$MULTI"; then fail "valid_sha40 accepted two conforming lines"
+else pass "valid_sha40 rejects two conforming lines"; fi
 
 # ---- valid_semver ----------------------------------------------------------
 for good in 0.9.1 1.0.0 10.20.30; do
@@ -70,6 +83,40 @@ for bad in '' 0.9 v0.9.1 0.9.1a 0.9.1.2 'x'; do
   if valid_semver "$bad"; then fail "valid_semver accepted '$bad'"
   else pass "valid_semver rejects '$bad'"; fi
 done
+MULTI=$(printf 'not-a-version\n0.9.1')
+if valid_semver "$MULTI"; then fail "valid_semver accepted a version on a later line"
+else pass "valid_semver rejects a conforming line preceded by junk"; fi
+MULTI=$(printf '0.9.1\n1.0.0')
+if valid_semver "$MULTI"; then fail "valid_semver accepted two conforming lines"
+else pass "valid_semver rejects two conforming lines"; fi
+
+# ---- file_mtime ------------------------------------------------------------
+# The apt_age_days assertions below take their expected values FROM file_mtime,
+# so a file_mtime that returned a wrong-but-stable number — ctime instead of
+# mtime, or a BSD/GNU field mix-up — would leave all three green. These two pin
+# it directly, and neither expected value passes through the function under
+# test: the first comes from `date`, the second from the `touch -m` above it.
+#
+# GNU date first, BSD date second — the mirror of file_mtime's own fallback,
+# but a DIFFERENT tool, so whichever half of that fallback this machine takes,
+# the oracle is independent of it.
+epoch_of() {  # 'CCYY-MM-DD hh:mm:ss' in local time
+  date -d "$1" +%s 2>/dev/null || date -j -f '%Y-%m-%d %H:%M:%S' "$1" +%s
+}
+
+PROBE=$WORK/mtime-probe
+: > "$PROBE"
+touch -m -t 202001020304.05 "$PROBE"
+WANT_MT=$(epoch_of '2020-01-02 03:04:05')
+assert_eq "$WANT_MT" "$(file_mtime "$PROBE")" \
+  "file_mtime returns the file's mtime as an epoch second"
+
+# -a moves ONLY atime and chmod moves ONLY ctime, so a file_mtime reading
+# either field would now disagree with the mtime `touch -m` pinned above.
+touch -a -t 203001020304.05 "$PROBE"
+chmod 600 "$PROBE"
+assert_eq "$WANT_MT" "$(file_mtime "$PROBE")" \
+  "file_mtime reads mtime, not atime or ctime"
 
 # ---- apt_age_days ----------------------------------------------------------
 NOW=1000000000
