@@ -80,8 +80,10 @@ that is two CronJobs, both dead-man's-switches over the update path itself:
   healthchecks.io check so a waiting update is visible instead of silent. Full behaviour, every
   cause of red, and the deliberate absence of a `/start` ping:
   [monitoring.md](monitoring.md#the-update-watcher).
-- **`keel-fresh`**, at 07:15Z daily, reads keel's own `/metrics` across the cluster and pushes
-  the `homelab-keel-fresh` uptime-kuma monitor. It is the only thing that would notice keel's
+- **`keel-fresh`**, at 07:15Z daily, makes one request to keel's own `/metrics` — a single
+  ClusterIP endpoint, `keel.keel.svc.cluster.local:9300`, reached across the namespace boundary
+  from `ops`; it scrapes nothing else and holds no cluster-wide read — and pushes the
+  `homelab-keel-fresh` uptime-kuma monitor. It is the only thing that would notice keel's
   registry poll loop had wedged — keel's own probes hit `/healthz`, which stays green while the
   poll goroutine is dead. Verdict enum, the image floor and why there is no `/start`:
   [monitoring.md](monitoring.md#the-keel-dead-mans-switch).

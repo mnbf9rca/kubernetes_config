@@ -256,7 +256,14 @@ assuming up-on-success everywhere.
 
 | Monitor | Token | Interval / retries | Pushed by, and on what |
 |---|---|---|---|
-| `homelab-keel-fresh` | `op://Homelab/keel-fresh/kuma-push-token` | 86400s, 1 retry at 21600s | `keel-fresh` CronJob in `ops`, from an EXIT trap: `up` on exit 0, `down` on any failure. Never silent on a failure it can observe |
+| `homelab-keel-fresh` *(PENDING)* | `op://Homelab/keel-fresh/kuma-push-token` *(item not yet created)* | 86400s, 1 retry at 21600s | `keel-fresh` CronJob in `ops`, from an EXIT trap: `up` on exit 0, `down` on any failure. Never silent on a failure it can observe |
+
+**Nothing in this table exists yet.** The `homelab-keel-fresh` monitor has not been created and
+`op://Homelab/keel-fresh/kuma-push-token` resolves to nothing, so the row states the intended
+configuration rather than deployed fact. The `keel-fresh` manifest is committed but unapplied,
+and because `OPS_KUMA_KEEL_TOKEN` is in `REQUIRED_VARS`, no homelab apply can run until the
+1Password item exists. Drop the two *(PENDING)* markers and this paragraph once the monitor and
+the item are both in place.
 
 ## Reviewing who used the token
 

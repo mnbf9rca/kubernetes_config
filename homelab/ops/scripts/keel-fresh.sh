@@ -272,19 +272,23 @@ if [ "$IMAGES" -lt "$IMAGE_FLOOR" ]; then
   exit 1
 fi
 
-# A present counter summing to zero means keel has tracked images but has never
-# scanned one. That is the stalled poll loop, caught on the very first run
-# rather than a day later.
-if [ "$POLLS" -eq 0 ]; then
-  VERDICT=polls-stalled
-  echo "ERROR: $POLL_METRIC is present but sums to zero; no registry ever scanned" >&2
-  exit 1
-fi
-
 # ---- 4. compare against the previous run -----------------------------------
 # The state file is two integers on one line: the start epoch and the counter.
-# Anything else - missing, truncated, non-numeric - is treated as absent, which
-# costs one `first-run` verdict and never a wrong answer.
+# Anything that is not two USABLE integers - missing, truncated, non-numeric, or
+# a line carrying extra fields - is treated as absent, which costs one
+# `first-run` verdict and never a wrong answer.
+#
+# A STORED COUNTER OF ZERO IS ALSO ABSENT, AND THAT IS LOAD-BEARING. `read` with
+# three or more fields on the line puts the whole remainder into LAST_POLLS, so
+# the embedded space fails the digit gate and zeroes it - while LAST_START
+# parsed fine and stays valid. A partial write does the same. Without the
+# `-eq 0` arm below, that combination skips the `first-run` guard and computes
+# the delta against zero, which is ALWAYS positive because the counter has
+# already been proven non-zero. The run would report `verdict=ok` with an
+# inflated delta and hold the monitor UP over a genuinely dead poll loop, for a
+# whole day. A stored zero is never a legitimate value to compare against: it is
+# either that corruption, or the restart branch below recording a keel that had
+# not scanned yet, and both want a fresh baseline rather than a comparison.
 if [ -r "$STATE_FILE" ]; then
   read -r LAST_START LAST_POLLS < "$STATE_FILE" || true
 fi
@@ -298,18 +302,15 @@ write_state() {
     || echo "WARNING: could not write $STATE_FILE" >&2
 }
 
-if [ "$LAST_START" -eq 0 ]; then
-  # Green on evidence, not on assumption: reaching here means /metrics answered,
-  # all three metrics are present, the counter is non-zero and keel tracks at
-  # least IMAGE_FLOOR images.
-  VERDICT=first-run
-  POLLS_DELTA=0
-  write_state
-  echo "==> first run: stored start=$START_EPOCH polls=$POLLS"
-  exit 0
-fi
-
-if [ "$START_EPOCH" -ne "$LAST_START" ]; then
+# THE RESTART BRANCH GETS FIRST REFUSAL, BEFORE THE ZERO-COUNTER CHECK BELOW.
+# keel restarting sets the counter back to zero and only raises it on its first
+# registry scan, so there is a window of seconds between process start and first
+# scan in which the counter is legitimately zero. This job's own `backoffLimit`
+# retry lands about ten seconds after a failure, likely still inside that
+# window, so testing the counter first would report a red `polls-stalled` for a
+# keel that had simply just started. The stored start epoch is what distinguishes
+# the two, so it is consulted first.
+if [ "$LAST_START" -ne 0 ] && [ "$START_EPOCH" -ne "$LAST_START" ]; then
   # keel restarted between runs, so the counter reset legitimately. A restarting
   # keel is a keel that polls on start; the image floor above is the assertion
   # that carries this run.
@@ -317,6 +318,32 @@ if [ "$START_EPOCH" -ne "$LAST_START" ]; then
   POLLS_DELTA=0
   write_state
   echo "==> keel restarted since the last run; counter reset is expected"
+  exit 0
+fi
+
+# A present counter summing to zero means keel has tracked images but has never
+# scanned one: the stalled poll loop, caught without waiting a day for a delta.
+#
+# THIS SITS ABOVE `first-run`, NOT BELOW IT, AND THE ORDER IS DELIBERATE. A
+# stored zero reads as absent, so if this check ran after the `first-run` guard
+# a permanently-zero counter would store zero, read it back as absent, and take
+# the green `first-run` branch again on every subsequent run - a wedged keel,
+# green forever. Placed here it is reached in every case except the restart
+# above, which is the only one where a zero counter is explainable.
+if [ "$POLLS" -eq 0 ]; then
+  VERDICT=polls-stalled
+  echo "ERROR: $POLL_METRIC is present but sums to zero; no registry ever scanned" >&2
+  exit 1
+fi
+
+if [ "$LAST_START" -eq 0 ] || [ "$LAST_POLLS" -eq 0 ]; then
+  # Green on evidence, not on assumption: reaching here means /metrics answered,
+  # all three metrics are present, the counter is non-zero and keel tracks at
+  # least IMAGE_FLOOR images.
+  VERDICT=first-run
+  POLLS_DELTA=0
+  write_state
+  echo "==> first run: stored start=$START_EPOCH polls=$POLLS"
   exit 0
 fi
 
