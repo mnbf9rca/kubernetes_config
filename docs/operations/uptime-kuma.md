@@ -129,6 +129,12 @@ process end to end. `/api/health` is on the dashboard's unauthenticated
 allowlist, so the origin asks for nothing; the credential this monitor needs is
 the one Access asks for.
 
+The health tunnel publishes a fourth hostname, `hermes-app.cynexia.com`
+(hermes-webui, for the Hermex iOS app), which has **no monitor by decision** - see
+[monitoring.md](monitoring.md#what-this-does-not-catch). Adding one is not a copy of
+the `hermes` monitor: its Access app authenticates every request with Service Auth,
+so a monitor must send the service-token headers and set `maxredirects: 0`.
+
 **The triage here inverted on August 25, 2026.** The monitor used to reach the
 origin because it probes from the VPS's Hetzner IP, which an Access bypass
 policy admitted, and a 302 or 401 therefore meant that policy had lost the VPS

@@ -26,6 +26,18 @@ data:
       # gates it at the edge; the dashboard's own login is the second gate.
       - hostname: hermes.cynexia.com
         service: http://hermes.cynexia.net:9119
+      # Off-cluster origin: hermes-webui on the same VM, the server the Hermex
+      # iOS app talks to (github.com/uzairansaruzi/hermex). Access app
+      # "hermes-app" gates it at the edge, with a Service Auth policy so the
+      # app's token is verified and logged rather than waved through.
+      # That gate is doing more work than it looks: hermes-webui serves
+      # /share/*, /api/share/* and /static/* with NO authentication of its own
+      # (api/auth.py PUBLIC_PATHS + the prefix matches in check_auth), so
+      # "the WebUI password is the second gate" is true of the app but NOT of
+      # every path. Must serve at the root on 443 — the app appends no path
+      # or port.
+      - hostname: hermes-app.cynexia.com
+        service: http://hermes.cynexia.net:8787
       - service: http_status:404
 ---
 apiVersion: apps/v1
