@@ -440,9 +440,7 @@ new one.
 **Before a Grafana major upgrade**, take a dump on demand rather than trusting last
 night's: the migration runs on first start of the new version and is not reversible. That
 is what `make health-upgrade` is for — see [Upgrading the health
-stack](#upgrading-the-health-stack) below. Do not hand-roll the Job instead: the target's
-concurrency guard recognises the names it uses, and a differently named one is invisible
-to it.
+stack](#upgrading-the-health-stack) below.
 
 ## Upgrading the health stack
 
@@ -464,16 +462,31 @@ it takes the Grafana SQLite dump as well, through a read-only mount of the `graf
 PVC. So a health-stack bump has a logical rollback for each.
 
 **It verifies nothing of its own.** `influx-backup.sh` already asserts its own artifacts —
-the bucket list, their freshness, their size — and fails the Job if they do not hold. A
-second, weaker copy of those assertions inside the Makefile would only create a place for
-the two to disagree, so the target's verdict *is* the Job's exit status.
+the shipped scripts are non-empty, every expected bucket exists, every prune glob matches
+something, and the Grafana dump clears its byte and schema-object floors — and it fails the
+Job if any of that does not hold. A second, weaker copy of those assertions inside the
+Makefile would only create a place for the two to disagree, so the target's verdict *is*
+the Job's exit status.
+
+**Those are existence checks, so they say nothing about age.** A stale dump satisfies every
+one of them. Artifact freshness is checked an hour later by a different Job — the restic
+gate's 30-hour window, described in [monitoring.md](monitoring.md) — so a `health-upgrade`
+that passes proves the dump exists and is well-formed, not that anything upstream is still
+producing data.
 
 **Where the numbers actually are.** The script is silent on success: it records each step
 and emits the totals into the healthchecks.io ping body, not to stdout. So the log tail the
 target prints ends with `grafana-sqlite-backup.py`'s own line — the dump's byte size and
-schema-object count — and the bucket count, native-dump size, line-protocol file count and
-prune counts are read off the `health-influx-backup` ping body instead. On failure the log
-does carry a diagnostic: the script's `FATAL:` line names the step it died in.
+schema-object count — while the native-dump size (`native_kib=`), the line-protocol size
+and file count (`lp_kib=`, `lp_files=`, one export per bucket) and the three prune counts
+are read off the `health-influx-backup` ping body instead.
+
+**On failure, where the reason lands depends on the step.** The prune steps and the Grafana
+dump each end the log with a `FATAL:` line of their own, as does the guard on the shipped
+scripts. The two InfluxDB steps do not: they are bare `kubectl exec` calls, so a failure
+there leaves kubectl's or influx's own error output and no `FATAL:` line at all. What is
+always present is the ping body's `failed_step=`, which names the step whichever way it
+died.
 
 **A Grafana major is not a tag revert.** Grafana migrates `grafana.db` in place on first
 start, so rolling back a failed major means restoring the dump this target took, not
@@ -492,12 +505,14 @@ below the CronJob's own
 expires, the target says so, leaves the Job in place to be inspected, and exits non-zero.
 It never reports a dump it did not watch finish.
 
-**Name a by-hand dump so the guard can see it.** `concurrencyPolicy: Forbid` governs only
-the CronJob's *own* Jobs and cannot see a manual one, so the target refuses to start if any
-active Job in `health` is named `influx-backup…` or `pre-upgrade…`. That is the whole of
-the protection against two dumps writing the same staging path. If you ever create one
-outside the target, call it `influx-backup-manual` — the convention `monitoring.md` already
-uses for forcing a scheduled job — and never something the pattern misses.
+**It refuses to start if a dump is already running, whatever it is called.**
+`concurrencyPolicy: Forbid` governs only the Jobs the CronJob itself creates, so the target
+does its own check — and it filters on the Job's `ownerReferences`, not on its name.
+`kubectl create job --from=cronjob/influx-backup` sets that owner and a
+`cronjob.kubernetes.io/instantiate: manual` annotation, so a by-hand dump is as visible to
+the guard as a nightly one and you can name it anything. The one thing it cannot see is a
+Job someone hand-rolls with a copied pod spec and no owner reference, which no procedure
+here produces.
 
 **Other pinned images in this namespace have no independent rollback story** — the
 apple-health-ingester, garmin-fetch-data, influxdb-mcp and the cloudflared sidecar are all

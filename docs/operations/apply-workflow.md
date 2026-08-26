@@ -241,7 +241,12 @@ generated target, and two clusters is not enough to justify the abstraction.
 | `create-health-cloudflared-secret` | Recreates the health tunnel creds Secret via `op document get health-cloudflared` |
 | `route-health-dns` | CNAMEs for every hostname in `homelab/health/cloudflared.yaml` onto the `cynexia-health` tunnel |
 | `health-influx-bootstrap` | InfluxDB buckets, v1 DBRP mapping, v1-compat auth user, and the two scoped tokens — see [homelab-health.md](homelab-health.md) |
-| `health-upgrade` | Creates a one-off Job from `cronjob/influx-backup`, waits for it, prints the script's own artifact numbers and **stops** — the pre-upgrade dump of InfluxDB *and* Grafana, and nothing else. Applies nothing, merges nothing, edits no pin. See [homelab-health.md](homelab-health.md) |
+| `health-upgrade` | Creates a one-off Job from `cronjob/influx-backup`, waits for it, tails the log and **stops** — the pre-upgrade dump of InfluxDB *and* Grafana, and nothing else. The script is silent on success, so its sizes and counts arrive in the `health-influx-backup` ping body rather than on stdout. Applies nothing, merges nothing, edits no pin. See [homelab-health.md](homelab-health.md) |
+
+### Hindsight namespace
+
+| Target | What it does |
+|---|---|
 | `hindsight-upgrade` | The same shape one namespace over: a one-off Job from `cronjob/hindsight-pg-dump`, waited on, then stop. See [hindsight.md](hindsight.md) |
 
 ### `check-script-lint`: linting what the cluster actually runs

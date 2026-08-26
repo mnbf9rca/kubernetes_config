@@ -916,7 +916,9 @@ hindsight-upgrade: check-context
 	  fi; \
 	  echo "###"; \
 	  echo "### The Job is left in place - its TTL collects it, and until then it is"; \
-	  echo "### inspectable. Its own healthchecks.io ping has already fired."; \
+	  echo "### inspectable. If it FAILED, its exit ping has already fired; if it is"; \
+	  echo "### STILL RUNNING, only the start ping has gone and the check goes red"; \
+	  echo "### on its own when the grace expires."; \
 	  exit 1; \
 	fi
 
@@ -937,8 +939,12 @@ hindsight-upgrade: check-context
 # one, so this target's banner can promise a rollback for both.
 #
 # The target performs NO verification of its own. influx-backup.sh asserts its
-# own artifacts (bucket list, freshness, size) and a second, weaker copy of those
-# assertions would only create a place for the two to disagree.
+# own artifacts — every expected bucket present, every prune glob matching, the
+# Grafana dump over its byte and schema-object floors — and a second, weaker copy
+# of those assertions would only create a place for the two to disagree. Note
+# what that list does NOT include: those are existence checks, so a stale dump
+# satisfies them. Artifact FRESHNESS is the restic gate's 30 h check, a different
+# Job half an hour later.
 #
 # WHERE THE 600s COMES FROM. Measured, not guessed. The retained nightly Jobs ran
 # 26s and 25s start-to-completion; a timed run of THIS target on 2026-08-26 took
@@ -955,18 +961,23 @@ hindsight-upgrade: check-context
 # every later step names the same Job.
 #
 # The Job is created with `--from=cronjob/…`, so it inherits the whole pod spec —
-# image, ServiceAccount, script ConfigMap, both PVC mounts, ttlSecondsAfterFinished.
-# It is CronJob-shaped and therefore exempt from check-job-ttl, and it self-collects.
-# NO `kind: Job` MANIFEST IS ADDED TO THE TREE: that walks straight into the
-# immutable-spec.template trap that broke apply-homelab for four months.
+# image, ServiceAccount, script ConfigMap, both PVC mounts, ttlSecondsAfterFinished
+# (172800, confirmed on the real run), so it self-collects. NO `kind: Job`
+# MANIFEST IS ADDED TO THE TREE: that walks straight into the
+# immutable-spec.template trap that broke apply-homelab for four months. Nothing
+# here is exempted from check-job-ttl, either — that guard reads the kustomize
+# render, and a Job created at run time never appears in it.
 #
-# THE CONCURRENCY GUARD IS NAME-BASED, so the names have to agree with the docs.
-# It matches `influx-backup*` (the CronJob's own runs, and the `<name>-manual`
-# convention in monitoring.md) and `pre-upgrade*` (what this target creates).
-# docs/operations/homelab-health.md used to tell an operator to create a manual
-# dump called `grafana-predump`, which this pattern would not have caught; that
-# procedure is gone, replaced by this target. Any new by-hand dump Job must be
-# named to match, or this guard is decorative.
+# THE CONCURRENCY GUARD FILTERS ON THE OWNER, NOT THE NAME. `kubectl create job
+# --from=cronjob/X` sets an ownerReferences entry naming X (controller: true) and
+# a `cronjob.kubernetes.io/instantiate: manual` annotation — verified with a
+# client-side dry run — so a manual Job is as identifiable as a scheduled one and
+# NOTHING here depends on what anyone calls it. An earlier draft matched name
+# prefixes instead, which missed the `grafana-predump` that this repo's own
+# documentation used to tell an operator to create: the one collision the guard
+# exists to catch. Names are a convention nothing enforces; the owner is set by
+# the API server. The residual is a Job someone hand-rolls with a copied pod spec
+# and no owner, which nothing here can see and no documented procedure produces.
 .PHONY: health-upgrade
 health-upgrade: check-context
 	@kubectl -n health get cronjob influx-backup >/dev/null 2>&1 || { \
@@ -977,14 +988,14 @@ health-upgrade: check-context
 	  exit 1; \
 	}
 	@active=$$(kubectl -n health get jobs \
-	    -o jsonpath='{range .items[?(@.status.active)]}{.metadata.name}{"\n"}{end}' \
-	  | grep -E '^(influx-backup|pre-upgrade)' || true); \
+	    -o jsonpath='{range .items[?(@.status.active)]}{.metadata.ownerReferences[*].name}{" "}{.metadata.name}{"\n"}{end}' \
+	  | awk '$$1 == "influx-backup" { print $$2 }'); \
 	if [ -n "$$active" ]; then \
 	  echo "ERROR: a dump Job is already running:"; \
 	  echo "$$active" | sed 's/^/  /'; \
-	  echo "  concurrencyPolicy: Forbid governs only CronJob-OWNED Jobs and cannot"; \
-	  echo "  see a manual one, so this guard is what keeps two dumps off the same"; \
-	  echo "  staging path. Wait for it, or watch it:"; \
+	  echo "  concurrencyPolicy: Forbid governs only the Jobs the CronJob itself"; \
+	  echo "  creates, so this guard is what keeps a manual dump off the staging"; \
+	  echo "  path a running one is using. Wait for it, or watch it:"; \
 	  echo "    kubectl -n health logs -f job/<name>"; \
 	  exit 1; \
 	fi
@@ -998,8 +1009,8 @@ health-upgrade: check-context
 	  echo "### It covers BOTH stateful components: the InfluxDB logical export and"; \
 	  echo "### the Grafana SQLite dump. The log above ends with the Grafana dump's"; \
 	  echo "### own size and schema-object count; influx-backup.sh keeps quiet on"; \
-	  echo "### success, so its bucket count and per-artifact sizes are in the"; \
-	  echo "### health-influx-backup ping body rather than on stdout."; \
+	  echo "### success, so its artifact sizes and counts (lp_files= is one export"; \
+	  echo "### per bucket) are in the health-influx-backup ping body, not stdout."; \
 	  echo "###"; \
 	  echo "### Next, by hand. DEPLOY, THEN MERGE - never the other way round:"; \
 	  echo "###   1. gh pr checkout <the Renovate \"health stack\" PR>. Do NOT merge it"; \
@@ -1036,8 +1047,11 @@ health-upgrade: check-context
 	  echo ""; \
 	  if [ "$$failed" = "True" ]; then \
 	    echo "### DUMP FAILED - do not upgrade."; \
-	    echo "### The log above ends with the script's FATAL line naming the step it"; \
-	    echo "### died in; the same step name rides the health-influx-backup ping."; \
+	    echo "### WHERE THE REASON IS depends on the step. The prune and Grafana steps"; \
+	    echo "### end the log with a FATAL: line of their own; the two InfluxDB steps"; \
+	    echo "### are bare kubectl exec calls, so a failure there leaves kubectl's or"; \
+	    echo "### influx's own error and no FATAL: line at all. Either way the step"; \
+	    echo "### name rides the health-influx-backup ping body as failed_step=."; \
 	  else \
 	    echo "### DUMP STILL RUNNING after 600s - do not upgrade; do not delete the job."; \
 	    echo "### Watch it: kubectl -n health logs -f job/$$job"; \
@@ -1047,7 +1061,9 @@ health-upgrade: check-context
 	  fi; \
 	  echo "###"; \
 	  echo "### The Job is left in place - its TTL collects it, and until then it is"; \
-	  echo "### inspectable. Its own healthchecks.io ping has already fired."; \
+	  echo "### inspectable. If it FAILED, its exit ping has already fired and the"; \
+	  echo "### check is red; if it is STILL RUNNING, only the start ping has gone"; \
+	  echo "### and the check goes red on its own when the grace expires."; \
 	  exit 1; \
 	fi
 
