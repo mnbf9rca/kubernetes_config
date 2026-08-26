@@ -416,9 +416,10 @@ images are pinned, Renovate proposes the bumps, and until this check existed not
 the waiting pull requests. Detection for `health` came free on day one.
 
 **Red means one of eight things.** Four arrive as a `/fail` ping and name themselves in the
-body's `verdict=` field. The other four turn the check red through **silence** past the 30-hour
-window: the job did not run, it ran and hung, its ping UUID is well-formed but wrong, or GitHub
-has been unreachable for a day.
+body's `verdict=` field. The other four turn the check red through **silence** past its period
+plus grace: the job did not run, it ran and hung, its ping UUID is well-formed but wrong, or GitHub
+has for a day been either unreachable or answering with something this script refuses to parse —
+every `/log` verdict in the table below, sustained.
 
 **Every verdict the check can emit, and the ping each one sends.** `/0` is green, `/fail` is red,
 and `/log` records an event and changes nothing — it cannot postpone, suppress or trigger an
@@ -449,23 +450,34 @@ for `renovate-stale`, the `gh issue list` command for `renovate-config-error`, t
 app-installations page for `dashboard-missing`, the pod-log command for the indeterminate
 verdicts, and `none` for both green verdicts (`updates-waiting`'s line says so explicitly, so a
 green body is not mistaken for one whose `next=` went missing). Each string is a fixed literal
-in the script's `NEXT_ACTIONS` map, keyed by verdict, so the alert is self-contained and nothing derived at run
-time is formatted into it. Read `next=` together with `run_epoch=`: a stale body's advice is
+in the script's `NEXT_ACTIONS` map, keyed by verdict, so the alert is self-contained and nothing
+derived at run time is formatted into it. Read `next=` together with `run_epoch=`: a stale body's advice is
 about the last run that completed, not about the silence that raised the alert.
 
 **It deliberately sends no `/start`, and that must not be "completed" later.** healthchecks.io
 marks a check down when a start signal is not followed by a success inside the grace time, and a
 `/log` ping does not clear `last_start`. So a watcher that sent `/start` and then hit a single
-transient GitHub 503 would send `/start` then `/log` and go **down six hours later** — turning
+transient GitHub 503 would send `/start` then `/log` and go **down one grace period later** — turning
 every unreadable run into a false alarm and destroying the property the `/log` branch exists for.
 `/start` would have bought only a duration graph for a job already bounded by
 `activeDeadlineSeconds: 300`, and period-plus-grace silence already covers "did not run".
 
 **Indeterminate runs ping `/log` and change nothing.** A rate limit, a 404, a 5xx, a timeout, a
-paginated response and an HTTP 200 carrying a JSON *object* are all "I could not look", never
-"zero pull requests". A `log` ping records an event and cannot postpone, suppress or trigger an
-alert; if the outage persists no success ping arrives either and the check goes red on its own at
-30 hours.
+paginated response, an HTTP 200 carrying a JSON *object*, and a Dependency Dashboard whose
+`updated_at` will not parse are all "I could not look", never "zero pull requests" and never
+"Renovate is alive". A `log` ping records an event and cannot postpone, suppress or trigger an
+alert; if the outage persists no success ping arrives either and the check goes red on its own
+once period plus grace expires.
+
+**Its grace does not match this page, and one of the two is wrong.** Reconciled against the
+Management API on August 26, 2026: every other check in the table above matches its documented
+period and grace exactly, and this one alone is live at **1d / 2h** against the **1d / 6h** the
+table records. Nothing here can tell which is the error — the check may have been created at a
+copied grace, or the table may record an intent never applied — and the read-only API key cannot
+change it either way. Resolve it by picking one and making the other match, then delete this
+paragraph. The choice is not load-bearing for any argument on this page: every claim above is
+now written in terms of "period plus grace" rather than a number, and a *shorter* grace only
+strengthens the case for sending no `/start`.
 
 **Why `/fail` here when `ingest-freshness` was refused it.** That refusal rested on tolerance: a
 stale bucket self-heals and was routinely, legitimately stale. Neither half transfers. An update
@@ -523,9 +535,11 @@ a red check is red.
 
 **The watcher counts OPEN pull requests, so anything held on the Dependency Dashboard is
 invisible to it.** Renovate lists an update as a dashboard checkbox rather than opening a pull
-request whenever a rule says to: `dependencyDashboardApproval` on all major bumps, and — since
-August 26, 2026 — on `kroniak/ssh-client` digest bumps, because that container carries an SSH
-private key and an archive of live secrets. Such an update waits for a human tick indefinitely
+request whenever a rule says to. **The list is `renovate.json`, not this page:** every rule there
+setting `dependencyDashboardApproval` holds its matches on the dashboard, which today means all
+majors, `kroniak/ssh-client` digest bumps and `thisisarpanghosh/garmin-fetch-data`. Read the
+config rather than trusting an enumeration here, which has drifted once already. Such an update
+waits for a human tick indefinitely
 while this check reports `ok` with zero open pull requests, and `renovate-stale` does not catch
 it either: Renovate is alive and touching the dashboard the whole time. **Read the Dependency
 Dashboard, not just the pull-request list, at the start of every update session.** Making the
@@ -534,24 +548,33 @@ rule 3 in `update-watch.py` deliberately refuses — the issue's `updated_at` is
 field, its body is not.
 
 **`estate-update` is the session's own dead-man's-switch**, at roughly 45 days with a 7-day
-grace, pinged by hand at the end of each session. It exists because `recreateWhen: "always"`
-resets pull-request ages every cycle, so no pull-request-age threshold can see a skipped
-session. Ping it with:
+grace, pinged by hand at the end of each session. It exists because a pull request's age is not a
+reliable proxy for a skipped session: `recreateWhen: "always"` means a superseding version closes
+and reopens a pull request, and the replacement starts its age at zero. An untouched pull request
+does keep its age, so `updates-pending` still fires on a genuinely stalled one — but a stream of
+churning updates can hide a skipped session from any age-based threshold, and this check cannot
+be fooled that way because nothing but a human ever pings it. Ping it with:
 
     curl -fsS -m 15 -o /dev/null --data-binary 'summary=estate-update session complete' \
       "https://hc-ping.com/$(op read 'op://Homelab/estate-update/healthcheck-uuid')"
 
-**Two operator actions are still outstanding on this, as of August 26, 2026**, because both are
-account writes that no credential in the vault can make — the only healthchecks.io API key stored
-is read-only, and the account report setting is not in the API at all. Create the `estate-update`
-check by hand (period 45 days, grace 7 days) and store its UUID as
-`op://Homelab/estate-update/healthcheck-uuid`, typed `[text]`: a ping UUID grants no access, it
-only lets a stranger mask a failure, so it stays out of this public repository but is not
-concealed in the vault. Then set Profile → reports to **Daily**, per the decision above, and
-reload the page to confirm it took. Until the check exists, the table row above and the `op read`
-in the command are a specification, not a description. Note the budget while you are there: the
-account held 19 checks on that date against a cap of 20, so `estate-update` is the last free slot
-until the heartbeat migration to uptime-kuma frees more.
+The check and its UUID both exist, created by hand on August 26, 2026 — neither could be scripted:
+the only healthchecks.io API key in the vault is read-only, and creating a check needs a
+read-write one. The UUID is typed `[text]` in 1Password, not concealed, because a ping UUID
+grants no access and only lets a stranger mask a failure; that is why it stays out of this public
+repository but is legible in the vault.
+
+**`estate-update` took the twentieth and last slot on the account, and the account is back to 19.**
+The arithmetic is worth writing down because it did not add up on first inspection: this repository
+drives 12 checks and the operator holds 6 more outside it, which is 18. The missing one was an
+orphaned `homelab-keel-fresh` healthchecks.io check — created against the original spec, which
+specified a healthchecks.io check for that job, before the check-budget ruling moved `keel-fresh`
+to an uptime-kuma push monitor instead. Nothing in this repository could ever have pinged it: the
+CronJob is handed a kuma push URL and its runner contains no `hc-ping` reference at all, so it sat
+`new` forever, costing a slot and alarming on nothing. 12 plus 6 plus that orphan is 19, and
+`estate-update` made 20. The orphan has been deleted and there is no `vps-keel-fresh` equivalent,
+so the account stands at 19 of 20. New scheduled work takes a push monitor, per the policy in
+[Layers 3 and 4](#layers-3-and-4-uptime-kuma) — that is what keeps this from happening again.
 
 **The quarterly liveness drill, narrowed.** `renovate-stale` now covers the *idle-Renovate* case
 this drill was invented for, so what is left of it is the residual: a Renovate that keeps
@@ -658,11 +681,21 @@ command; a one-off needs nothing.
 
 ### Checks in the account that this repo does not ping
 
-The Management API returns 16 checks and the table above lists the 10 this repo owns, counted
-2026-08-24. The other six — `adsb.cynexia.net`, `pve3.cynexia.net`, `fs.cynexia.net`,
+The Management API returns 19 checks and the table above lists the 13 this repo owns, counted
+2026-08-26. The other six — `adsb.cynexia.net`, `pve3.cynexia.net`, `fs.cynexia.net`,
 `tailscale unattended upgrades`, `Home Assistant`, `upsd.cynexia.net` — are pinged from Proxmox
-hosts, Home Assistant and host cron, and are deliberately outside this repo. They are recorded so that "not in the table" can be told from
-"does not exist". **`upsd.cynexia.net` has `n_pings=0`**: never pinged, so wire it up or delete it.
+hosts, Home Assistant and host cron, and are deliberately outside this repo. They are recorded so
+that "not in the table" can be told from "does not exist". **`upsd.cynexia.net` has `n_pings=0`**:
+never pinged, so wire it up or delete it.
+
+A seventh non-repo check existed until 2026-08-26 and is worth remembering as a shape: an orphaned
+`homelab-keel-fresh`, created against the original spec, which gave that job a healthchecks.io
+check before the check-budget ruling moved it to an uptime-kuma push monitor. Nothing here could
+ever ping it — the CronJob receives a kuma push URL and its runner holds no `hc-ping`
+reference — so it sat `new` forever and cost a slot. It has been deleted, and no `vps-keel-fresh` equivalent
+was ever created. **A superseded design can leave a check behind that no repository grep will
+find**, which is what this census is for: reconcile the account against the table above whenever a
+job changes which instrument it drives.
 
 ## Layers 3 and 4: uptime-kuma
 
@@ -760,7 +793,7 @@ Probes fix hung request paths, not silently stopped background work — often th
 | **the homelab gate** | It proves the SSD is mounted and the tree is the right *shape*: right number of PVC directories, right order of magnitude, the listed files present and non-trivial. It says nothing about *content*. Every homelab PVC is copied live, with no quiesce step: a sqlite database mid-write is captured torn, `sonarr.db` at 14 MiB of corruption passes the size floor exactly as 14 MiB of working database does, and a PVC that stopped being written to weeks ago looks identical to one written a minute ago. Grafana is the one exception, and only in its dump: `grafana-dump` is taken with SQLite's online backup API and read back before it is published, so that artifact is consistent and verified even though the live `grafana.db` beside it is not. The hindsight dump is verified the same way, at the shape level. Only the two influx dumps, that Grafana dump, the hindsight dump and the hermes zip are age-checked. A retained orphan directory from a recreated PVC can satisfy an expected-set entry the live PVC no longer can — the resolved paths are printed so it is visible, but nothing fails on it. The rest surfaces at restore time |
 | **cloudflare-analytics** | It proves the hours it fetched were fetched. It cannot prove Cloudflare's own numbers are right, and it does not alert on *content* — a hostname that stops receiving traffic entirely, or a spike, produces a perfectly green check. That is Phase 3 (Grafana alert rules), deliberately deferred until a baseline exists |
 | **update-watch (Renovate silence)** | Renovate is installed, has opened no error issue, and is proposing nothing. Since August 26, 2026 the *idle* form is a determinate verdict on this same check: a Dependency Dashboard that has not moved in `renovate_alive_max_days=` is `verdict=renovate-stale`, red. What is left uncovered is a Renovate that keeps touching its dashboard while proposing nothing — a `managerFilePatterns` that stopped matching, or a registry lookup failing silently. `make check-renovate-scope` closes the commonest variant, a pinned image no in-scope file names; the rest is the narrowed quarterly drill above |
-| **update-watch (held on the dashboard)** | The watcher counts OPEN pull requests, and an update held for `dependencyDashboardApproval` — every major bump, and `kroniak/ssh-client` digest bumps — is a dashboard checkbox, not a pull request. It can wait for a human tick indefinitely while the check reads `ok`, and `renovate-stale` will not fire because Renovate is alive and updating the dashboard throughout. The cover is procedural: read the Dependency Dashboard at the start of every update session |
+| **update-watch (held on the dashboard)** | The watcher counts OPEN pull requests, and an update held by any `dependencyDashboardApproval` rule in `renovate.json` — today all majors, `kroniak/ssh-client` digests and `thisisarpanghosh/garmin-fetch-data`, but read the config, not this cell — is a dashboard checkbox, not a pull request. It can wait for a human tick indefinitely while the check reads `ok`, and `renovate-stale` will not fire because Renovate is alive and updating the dashboard throughout. The cover is procedural: read the Dependency Dashboard at the start of every update session |
 | **update-watch (merged but not applied)** | It watches the **repository**, not the cluster. Merging a Renovate pull request closes it, so the next run reports zero and the check goes green while the cluster still runs the old image. Merge and apply are one runbook operation for that reason; the independent noticer is drift in `make diff-homelab` |
 
 Queued, not configured: a changedetection `overdue_watches` json-query monitor and a karakeep

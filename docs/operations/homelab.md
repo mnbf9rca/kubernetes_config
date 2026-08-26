@@ -88,8 +88,10 @@ that is two CronJobs, both dead-man's-switches over the update path itself:
 
 - **`update-watch`**, at 06:45Z daily, makes a single unauthenticated GitHub call, counts the
   open Renovate pull requests on this repo, and drives the `homelab-update-watch`
-  healthchecks.io check so a waiting update is visible instead of silent. Full behaviour, every
-  cause of red, and the deliberate absence of a `/start` ping:
+  healthchecks.io check so an update that has waited past the threshold goes red instead of
+  passing unnoticed. A *waiting* update is green — the check exists to catch a skipped update
+  session, not to nag about the normal state. Full behaviour, every cause of red, and the
+  deliberate absence of a `/start` ping:
   [monitoring.md](monitoring.md#the-update-watcher).
 - **`keel-fresh`**, at 07:15Z daily, makes one request to keel's own `/metrics` — a single
   ClusterIP endpoint, `keel.keel.svc.cluster.local:9300`, reached across the namespace boundary
@@ -119,8 +121,11 @@ Three things about this namespace are deliberate and should survive a refactor:
   `homelab/kustomization.yaml`, `rm -r homelab/ops/`, remove the namespace block, remove **both**
   `OPS_HC_UPDATE_UUID` and `OPS_KUMA_KEEL_TOKEN` from `.env.tpl` and from both Makefile lists,
   and from `scripts/check-ping-bodies.py` remove **both** `REQUIRED_TARGETS` entries
-  (`update-watch.py` and `keel-fresh.sh`), the eight `PY_VALUE_ALLOWLIST` names, and `PUSH_URL`
-  from `DENY_VARS`. Then apply, `kubectl delete namespace ops` — which takes the
+  (`update-watch.py` and `keel-fresh.sh`), **every name in that file's `update-watch.py`
+  block of `PY_VALUE_ALLOWLIST`** — no count is written here, because it read "eight" while the
+  block held nine and it now holds eleven, and a stale count leaves names on a security allowlist
+  for code that no longer exists — and `PUSH_URL` from `DENY_VARS`. Then apply,
+  `kubectl delete namespace ops` — which takes the
   `keel-fresh-state` PVC with it — and delete the `keel` **Service** in the `keel` namespace,
   which exists only to serve `keel-fresh` and is not removed by deleting the `ops` namespace.
   Finally retire both instruments: the `homelab-update-watch` healthchecks.io check *and* the

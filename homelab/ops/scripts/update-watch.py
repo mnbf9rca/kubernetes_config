@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Turn a healthchecks.io check red while a Renovate update is waiting.
+"""Drive one healthchecks.io check from this repo's Renovate state.
 
 WHY THIS EXISTS
 ---------------
@@ -174,9 +174,10 @@ NEXT_ACTIONS = {
     V_UPDATES_PENDING:
         "run the update session: gh pr list -R mnbf9rca/kubernetes_config"
         " -A app/renovate, then make apply-homelab",
-    # 111 characters. This was ALIVE_NEXT_ACTIONS[A_STALE] when Renovate's
-    # liveness had a check of its own; the sentence is unchanged and it now
-    # lives in the one map, held to the one contract.
+    # 111 characters. Carried over from the superseded two-check design, in
+    # which Renovate's liveness had a UUID of its own; that design never
+    # shipped, so searching history for its identifiers finds nothing. The
+    # sentence is unchanged and it now lives in the one map, one contract.
     V_RENOVATE_STALE:
         "Renovate has gone quiet - read the Mend job log, then check"
         " renovate.json managerFilePatterns still match files",
@@ -415,7 +416,6 @@ def decide(pull_requests, dashboard, config_issues, now):
         if ages:
             facts["oldest_pr_days"] = max(ages)
 
-    dash_age = None
     if dashboard is not None:
         dash_age = age_days(parse_github_time(dashboard.get("updated_at")), now)
         if dash_age is not None:
@@ -442,8 +442,18 @@ def decide(pull_requests, dashboard, config_issues, now):
 
     if pull_requests:
         # An open pull request is normal; an OLD one means a session was
-        # skipped. `oldest_pr_days` is absent only when every pull request had
-        # an unparseable timestamp, which is not evidence of age either way.
+        # skipped. `oldest_pr_days` is absent only when EVERY pull request had
+        # an unparseable timestamp.
+        #
+        # THE ASYMMETRY WITH THE DASHBOARD CLAUSE ABOVE IS DELIBERATE. There, an
+        # unparseable timestamp is `api-error`, because the field IS the
+        # evidence: with no readable `updated_at` there is nothing left saying
+        # Renovate is alive, and defaulting to green would invent that. Here the
+        # field is not the evidence -- the pull requests were still counted, so
+        # "updates are waiting" is known to be true either way and only their
+        # AGE is unreadable. Defaulting to the green `updates-waiting` therefore
+        # states something true and merely declines to escalate, where the same
+        # default above would state something unknown. Both are tested.
         if facts.get("oldest_pr_days", 0) > PR_AGE_RED_DAYS:
             return V_UPDATES_PENDING, facts
         return V_UPDATES_WAITING, facts

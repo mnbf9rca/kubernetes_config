@@ -240,11 +240,16 @@ class TestNextActions(unittest.TestCase):
                 # estate-wide rule is that no body may contain it.
                 self.assertNotIn("confirm", action.lower())
 
-    def test_the_three_red_verdicts_name_a_command_or_a_place_to_look(self):
-        # The intended signal and the two liveness failures are the ones an
-        # operator acts on, so each must point somewhere specific.
+    def test_the_four_red_verdicts_name_a_command_or_a_place_to_look(self):
+        # The intended signal and the three liveness failures are the ones an
+        # operator acts on, so each must point somewhere specific. Renamed from
+        # "three" when `renovate-stale` joined them: an unasserted literal is
+        # one a reword can silently gut.
         self.assertIn("gh pr list", uw.NEXT_ACTIONS[uw.V_UPDATES_PENDING])
         self.assertIn("apply-homelab", uw.NEXT_ACTIONS[uw.V_UPDATES_PENDING])
+        self.assertIn("Mend job log", uw.NEXT_ACTIONS[uw.V_RENOVATE_STALE])
+        self.assertIn("managerFilePatterns",
+                      uw.NEXT_ACTIONS[uw.V_RENOVATE_STALE])
         self.assertIn("installations", uw.NEXT_ACTIONS[uw.V_DASHBOARD_MISSING])
         self.assertIn("gh issue list", uw.NEXT_ACTIONS[uw.V_CONFIG_ERROR])
 
@@ -346,6 +351,14 @@ class TestRelaxedPullRequestThreshold(unittest.TestCase):
                                self.dash, [], self.now)
         self.assertEqual(verdict, uw.V_UPDATES_WAITING)
 
+    def test_a_pull_request_at_exactly_the_threshold_is_still_green(self):
+        # The boundary itself. `decide` compares with `>`, so the threshold day
+        # is the last green one -- the same shape as the dashboard clause.
+        verdict, facts = uw.decide([self._pr(uw.PR_AGE_RED_DAYS)],
+                                   self.dash, [], self.now)
+        self.assertEqual(verdict, uw.V_UPDATES_WAITING)
+        self.assertEqual(facts["oldest_pr_days"], uw.PR_AGE_RED_DAYS)
+
     def test_a_pull_request_past_the_threshold_is_red(self):
         verdict, facts = uw.decide([self._pr(uw.PR_AGE_RED_DAYS + 1)],
                                    self.dash, [], self.now)
@@ -439,12 +452,38 @@ class TestRenovateLiveness(unittest.TestCase):
         self.assertEqual(verdict, uw.V_API_ERROR)
         self.assertEqual(uw.ping_suffix(verdict), "log")
 
+    def test_unparseable_pull_request_timestamps_stay_green_unlike_the_dashboard(self):
+        # THE ASYMMETRY, ASSERTED SO IT IS A DECISION AND NOT AN OVERSIGHT. An
+        # unparseable DASHBOARD timestamp is `api-error`, because that field is
+        # the only evidence Renovate is alive. An unparseable pull-request
+        # `created_at` is not: the pull requests were still counted, so
+        # "updates are waiting" is known true and only their age is unreadable,
+        # and the green `updates-waiting` states that truth without escalating.
+        pr = {"user": {"login": uw.RENOVATE_LOGIN},
+              "pull_request": {"url": "x"},
+              "number": 101,
+              "created_at": "not-a-timestamp"}
+        verdict, facts = uw.decide([pr], self._dash(1), [], self.now)
+        self.assertNotIn("oldest_pr_days", facts)
+        self.assertEqual(facts["prs_open"], 1)
+        self.assertEqual(verdict, uw.V_UPDATES_WAITING)
+
     def test_renovate_stale_is_determinate_and_red(self):
         self.assertIn(uw.V_RENOVATE_STALE, uw.VERDICTS)
         self.assertIn(uw.V_RENOVATE_STALE, uw.DETERMINATE)
         self.assertNotIn(uw.V_RENOVATE_STALE, uw.GREEN)
 
-    def test_the_threshold_was_armed_not_left_at_a_sentinel(self):
+    def test_the_threshold_is_a_whole_number_of_days_at_or_above_the_floor(self):
+        # RENAMED, AND THE NAME MATTERS. This was
+        # `test_the_threshold_was_armed_not_left_at_a_sentinel`, which claimed
+        # something no assertion here can check: `>= 14` cannot tell a threshold
+        # armed from observation apart from the unarmed floor, and as of
+        # 2026-08-26 the value IS the unarmed floor -- the check had logged six
+        # ping bodies, fewer than the fourteen the arming rule needs, and the
+        # only healthchecks.io API key in the vault cannot read them. The
+        # constant's own comment and monitoring.md carry that status; a test
+        # name must not contradict them. What this actually checks is the type
+        # and the floor.
         self.assertIsInstance(uw.RENOVATE_ALIVE_MAX_DAYS, int)
         self.assertGreaterEqual(uw.RENOVATE_ALIVE_MAX_DAYS, 14)
 

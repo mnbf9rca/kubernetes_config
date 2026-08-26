@@ -3,8 +3,10 @@
 #
 # Counts the open `renovate[bot]` pull requests on this repo with ONE
 # unauthenticated GitHub REST call and drives the `homelab-update-watch`
-# healthchecks.io check: red while an update is waiting, red when Renovate
-# itself is visibly broken, red through silence when this job stops running.
+# healthchecks.io check: green while updates simply wait, red when one has
+# waited long enough that an update session was plainly skipped, red when
+# Renovate itself has gone quiet or is visibly broken, red through silence when
+# this job stops running.
 # Without it, a pinned namespace's updates sit in GitHub with nothing pointing
 # at them — which is exactly what happened to `health`.
 #
