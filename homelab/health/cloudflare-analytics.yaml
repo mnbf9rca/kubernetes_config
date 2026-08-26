@@ -31,8 +31,8 @@
 # NO KEEL in this namespace (see docs/operations/homelab-health.md): the image is
 # version-pinned and Renovate proposes bumps.
 #
-# NO PROBES. This is scheduled work, so the instrument is the healthchecks.io
-# dead-man's-switch plus activeDeadlineSeconds, not a probe. See
+# NO PROBES. This is scheduled work, so the instrument is the uptime-kuma push
+# monitor's dead-man's-switch plus activeDeadlineSeconds, not a probe. See
 # docs/operations/monitoring.md.
 apiVersion: batch/v1
 kind: CronJob
@@ -57,9 +57,10 @@ spec:
       # The run is idempotent (point overwrite), so a retry cannot double-count.
       backoffLimit: 1
       # With concurrencyPolicy: Forbid, a hung run blocks every later run with
-      # nothing alerting until the healthchecks.io grace expires. A steady-state
-      # run is two GraphQL calls and one write; 20 minutes covers a full 8-chunk
-      # backfill with the per-chunk sleep and still bounds a wedged socket.
+      # nothing alerting until the monitor's own heartbeat window expires. A
+      # steady-state run is two GraphQL calls and one write; 20 minutes covers a
+      # full 8-chunk backfill with the per-chunk sleep and still bounds a wedged
+      # socket.
       activeDeadlineSeconds: 1200
       # 3 days, so a Friday failure is still forensically available on Monday.
       ttlSecondsAfterFinished: 259200
@@ -92,11 +93,16 @@ spec:
                 # here trades InfluxDB series cardinality for path detail, and
                 # karakeep-style per-asset UUID paths are unbounded. Comma-separated.
                 - { name: FULL_PATH_HOSTS, value: "" }
-                # healthchecks.io check `homelab-cloudflare-analytics`
-                # (op://Homelab/health-healthchecks/cloudflare-uuid). Substituted
-                # by envsubst at apply time; never committed.
-                - name: HC_UUID
-                  value: "${HEALTH_HC_CLOUDFLARE_UUID}"
+                # uptime-kuma push monitor `homelab-cloudflare-analytics`
+                # (op://Homelab/health-healthchecks/cloudflare-kuma-push-token).
+                # Substituted by envsubst at apply time; never committed.
+                #
+                # RENAMED AT THIS BOUNDARY. Only PUSH_URL reaches the script,
+                # because a generated script rides the same envsubst stream as
+                # this manifest and envsubst rewrites the bare `$NAME` form too.
+                # `make check-script-substitution` enforces it.
+                - name: PUSH_URL
+                  value: "https://uptime.cynexia.com/api/push/${HEALTH_KUMA_CLOUDFLARE_TOKEN}"
                 # Cloudflare API token — Zone.Analytics:Read ONLY. This job never
                 # writes to Cloudflare, so an edit scope here would be a strictly
                 # unnecessary blast radius.

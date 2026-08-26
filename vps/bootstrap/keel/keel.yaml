@@ -44,13 +44,24 @@ metadata:
   name: keel
   namespace: keel
   labels: { app: keel }
-  # keel watches its own Deployment so it self-updates too. Same annotations
-  # as every other Deployment in the cluster.
-  annotations:
-    keel.sh/policy: force
-    keel.sh/match-tag: "true"
-    keel.sh/trigger: poll
-    keel.sh/pollSchedule: "@every 6h"
+  # NO keel ANNOTATIONS HERE, DELIBERATELY. Removed 2026-08-26.
+  #
+  # keel used to watch its own Deployment with `policy: force`, so a hijacked
+  # `ghcr.io/keel-hq/keel:latest` reached this cluster within one six-hour poll
+  # holding keel's own ClusterRole. The update engine must not update itself.
+  #
+  # Two facts make re-adding them worse than useless. `match-tag: "true"` on a
+  # PINNED tag only refreshes the digest, so the annotations would look like
+  # coverage while freezing the version — the state traefik and meilisearch were
+  # in until they were de-keeled on 2026-08-26. And an incomplete set is worse
+  # still: without `match-tag`, keel silently downgrades a semver tag to
+  # `:latest`.
+  #
+  # The image below is pinned by tag AND digest. Renovate watches vps/**
+  # (renovate.json) as of 2026-08-26, so the bump arrives as a pull request and
+  # the update session takes it through the normal read-the-diff / apply flow.
+  # This directory is on the `pinDigests: false` packageRule: the digest is
+  # already here by hand, so Renovate has nothing to add by re-proposing it.
 spec:
   replicas: 1
   selector:
@@ -62,8 +73,10 @@ spec:
       serviceAccountName: keel
       containers:
         - name: keel
-          image: ghcr.io/keel-hq/keel:latest
-          imagePullPolicy: Always
+          image: ghcr.io/keel-hq/keel:0.22.1@sha256:a82382e86766794d3decb65574ff07026d91d58b1aa10da94d698dfc02636e0f
+          # A digest is immutable, so `Always` buys a registry round trip per
+          # pod start and nothing else.
+          imagePullPolicy: IfNotPresent
           command: [/bin/keel]
           env:
             - name: NAMESPACE
@@ -105,3 +118,50 @@ spec:
             limits:
               cpu: 200m
               memory: 256Mi
+---
+# In-cluster access to keel's HTTP surface on 9300: the Prometheus `/metrics`
+# endpoint, read once a day by the `keel-fresh` CronJob in the `ops` namespace.
+#
+# A Service rather than the pod IP because a pod IP changes on every restart and
+# a job that resolves one by listing pods would need RBAC this job otherwise has
+# no use for.
+#
+# WHAT IS ACTUALLY BEHIND PORT 9300, verified against the running 0.22.1 on
+# 2026-08-26 rather than assumed. keel registers its whole `/v1/*` ADMIN API
+# (`/v1/tracked`, `/v1/approvals`, `/v1/policies`, `/v1/resources`, `/v1/audit`,
+# `/v1/stats`) only when authentication is configured — `registerRoutes` wraps
+# the lot in `if s.adminEnabled()`. This Deployment sets no BASIC_AUTH_USER, so
+# that API is not merely unauthenticated, it is ABSENT: every one of those paths
+# answers 404. Only `/healthz`, `/version` and `/metrics` serve GET.
+#
+# The real exposure on this port is the WEBHOOK TRIGGER set. `registerWebhookRoutes`
+# runs unconditionally, and with authentication off it registers
+# `POST /v1/webhooks/{native,dockerhub,github,harbor,quay,jfrog,azure,registry}`
+# with no credential required (verified: a GET returns 405, not 404, so the
+# routes exist). Those are MUTATING — a POST can tell keel an image has a new
+# tag and provoke an update.
+#
+# That exposure predates this Service: the pod IP was already reachable from
+# every pod on this cluster, and this cluster runs NO NetworkPolicy at all
+# (verified — `kubectl get networkpolicies -A` is empty). So a stable DNS name is
+# a discoverability change rather than a new capability. It is still a stable
+# name for an unauthenticated mutating endpoint, and if a NetworkPolicy is ever
+# introduced this Service is one of the first things it should cover.
+#
+# It is a ClusterIP with no Ingress, so nothing outside the cluster reaches it.
+# On this public-facing cluster that claim rests on the tunnel as well: the
+# `cynexia-vps` cloudflared ingress names its six hostnames one at a time and
+# ends in `http_status:404`, so it routes nothing here and the Cloudflare edge
+# has no path to port 9300.
+apiVersion: v1
+kind: Service
+metadata:
+  name: keel
+  namespace: keel
+  labels: { app: keel }
+spec:
+  selector: { app: keel }
+  ports:
+    - name: http
+      port: 9300
+      targetPort: http

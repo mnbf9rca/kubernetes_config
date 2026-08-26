@@ -2,13 +2,15 @@ apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 
 # The `ops` tree: cluster-wide operational plumbing that belongs to no single
-# application namespace. Today that is one job — the daily Renovate-update
-# watcher (update-watch.yaml). See docs/operations/homelab.md.
+# application namespace. Two jobs today — the daily Renovate-update watcher
+# (update-watch.yaml) and the daily keel dead-man's-switch (keel-fresh.yaml).
+# See docs/operations/homelab.md.
 
 namespace: ops
 
 resources:
   - update-watch.yaml
+  - keel-fresh.yaml
 
 # The watcher script lives as a real file under scripts/ and reaches the cluster
 # through a generator, never as an inline YAML string: a real file can be
@@ -29,11 +31,18 @@ resources:
 # GENERATED SCRIPTS ARE NOT INERT TEXT. They ride the same stream as every
 # manifest, so envsubst rewrites them too — and it substitutes the bare `$NAME`
 # form as well as `${NAME}`. update-watch.py must never mention a name in
-# ENVSUBST_VAR_NAMES; that is why the CronJob renames OPS_HC_UPDATE_UUID to
-# HC_UUID at the container boundary, and `make check-script-substitution`
-# enforces it.
+# ENVSUBST_VAR_NAMES; that is why the CronJob assembles the whole push URL from
+# OPS_KUMA_UPDATE_TOKEN and hands the script only PUSH_URL, and
+# `make check-script-substitution` enforces it.
 configMapGenerator:
   - name: ops-update-watch-scripts
     namespace: ops
     files:
       - update-watch.py=scripts/update-watch.py
+  # A SECOND generator rather than a second key on the first one, deliberately:
+  # the content hash covers the whole ConfigMap, so sharing one would roll the
+  # update-watch CronJob every time keel-fresh.sh is edited and the reverse.
+  - name: ops-keel-fresh-scripts
+    namespace: ops
+    files:
+      - keel-fresh.sh=scripts/keel-fresh.sh

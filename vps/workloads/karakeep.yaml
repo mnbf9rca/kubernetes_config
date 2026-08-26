@@ -51,11 +51,15 @@ kind: Deployment
 metadata:
   name: meilisearch
   namespace: vps
-  annotations:
-    keel.sh/policy: force
-    keel.sh/match-tag: "true"
-    keel.sh/trigger: poll
-    keel.sh/pollSchedule: "@every 24h"
+  # NO keel ANNOTATIONS. Removed 2026-08-26 for the same reason as traefik:
+  # `match-tag: "true"` on the pinned v1.41.0 only refreshed the digest, so this
+  # was frozen while looking covered.
+  #
+  # meilisearch is karakeep's search backend and its index format is coupled to
+  # karakeep's client. It gets bumped when a karakeep release says so, in the
+  # update session — not on its own six-hourly poll. Renovate watches vps/**
+  # and will propose the bump; the session decides whether karakeep is ready
+  # for it.
 spec:
   replicas: 1
   selector:

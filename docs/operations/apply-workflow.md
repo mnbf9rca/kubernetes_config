@@ -201,7 +201,10 @@ Note that 1Password **document** items (e.g. `health-cloudflared`) need
 | `check-vars-consistency` | Asserts `ENVSUBST_VAR_NAMES` ⊆ `REQUIRED_VARS`. Runs in the parent shell, before the `op run` child exists. Cannot detect a var *missing* from `ENVSUBST_VAR_NAMES` |
 | `check-job-ttl` | Asserts every standalone `kind: Job` sets `ttlSecondsAfterFinished`, across both clusters. `check-job-ttl-homelab` scopes it to one cluster and runs in the `diff-homelab`/`apply-homelab` preflight |
 | `check-script-substitution` | Asserts no `configMapGenerator` script names an envsubst-allowlisted variable, across both cluster trees. `check-script-substitution-homelab` scopes the *scan* to one tree — both allowlists still apply — and runs in the `diff-homelab`/`apply-homelab` preflight |
+| `check-ping-bodies` | Asserts no healthchecks.io ping body and no uptime-kuma heartbeat message is built from a command's output, across both cluster trees — it recognises a sink by function name, never by destination host. `check-ping-bodies-homelab` scopes the scan to one tree and runs in the `diff-homelab`/`apply-homelab` preflight. Its `OK:` line's sink-call count is to be read per file, not in aggregate |
 | `check-script-lint` | Lints every script the clusters run, from the **rendered** stream rather than the source tree, plus the repo's Python. `check-script-lint-homelab` scopes the render to one cluster and runs in the `diff-homelab`/`apply-homelab` preflight. See below |
+| `check-renovate-scope` | Asserts every container is in exactly one update mode — floating means keel, pinned means Renovate, never both — from the `kustomize build` render, one container at a time, across both clusters. `check-renovate-scope-homelab` scopes it to one cluster and runs in the `diff-homelab`/`apply-homelab` preflight, joining it as the fifth per-cluster guard and the third render-based one. See below |
+| `check-keel-fresh-parity` | Asserts the two `ops/keel-fresh` copies — runner script and CronJob manifest — differ only inside a stated allowlist. **The one guard with no per-cluster half**, because it compares the two trees against each other; it runs whole on both halves of all four chains. See below |
 | `require-vars` | Re-enters under `op run` and asserts every `REQUIRED_VARS` entry is set and not still an `op://` reference |
 | `build-homelab` | `kustomize build homelab/ \| envsubst` to stdout under `op run`. **PREVIEW ONLY — secret values are masked.** No cluster contact. Never redirect this to a file and apply it |
 | `diff-homelab` | Same pipeline into `kubectl diff`, inside the `op run` child (real values, printed diff masked) |
@@ -217,7 +220,9 @@ Note that 1Password **document** items (e.g. `health-cloudflared`) need
 |---|---|
 | `check-vps-context` | Asserts `kubectl current-context == cynexia-vps` (override with `VPS_CONTEXT=`) |
 | `check-vps-vars-consistency` / `require-vps-vars` | VPS equivalents of the homelab preflights |
-| `check-job-ttl-vps` / `check-script-substitution-vps` / `check-script-lint-vps` | The per-cluster halves of the repo-wide checks, run in the `diff-vps`/`apply-vps` preflight. Scoping them per cluster is the point: a VPS-only fault must not block `apply-homelab`, and vice versa |
+| `check-job-ttl-vps` / `check-script-substitution-vps` / `check-ping-bodies-vps` / `check-script-lint-vps` | The per-cluster halves of the repo-wide checks, run in the `diff-vps`/`apply-vps` preflight. Scoping them per cluster is the point: a VPS-only fault must not block `apply-homelab`, and vice versa |
+| `check-renovate-scope-vps` | The VPS half of the update-mode guard, scoped to the `vps/` render, and the fifth per-cluster guard in the `diff-vps`/`apply-vps` preflight. It keeps its own row rather than joining the one above because it arrived later, in the commit that widened Renovate's scope far enough for it to pass. See below |
+| `check-keel-fresh-parity` | The same guard, unscoped, in the `diff-vps`/`apply-vps` preflight too. There is no `-vps` half of it — see the homelab table above |
 | `build-vps` / `diff-vps` / `apply-vps` | Same pipeline and the same masking split over `vps/` with `VPS_ENVSUBST_VARS` |
 | `route-vps-dns` | `cloudflared tunnel route dns cynexia-vps <host>` for every hostname in `vps/bootstrap/cloudflared/cloudflared.yaml` |
 | `create-cloudflared-secret` | Imperative Secret creation for the VPS tunnel creds from `op://VPS/cloudflared/credentials-json` |
@@ -238,6 +243,13 @@ generated target, and two clusters is not enough to justify the abstraction.
 | `create-health-cloudflared-secret` | Recreates the health tunnel creds Secret via `op document get health-cloudflared` |
 | `route-health-dns` | CNAMEs for every hostname in `homelab/health/cloudflared.yaml` onto the `cynexia-health` tunnel |
 | `health-influx-bootstrap` | InfluxDB buckets, v1 DBRP mapping, v1-compat auth user, and the two scoped tokens — see [homelab-health.md](homelab-health.md) |
+| `health-upgrade` | Creates a one-off Job from `cronjob/influx-backup`, waits for it, tails the log and **stops** — the pre-upgrade dump of InfluxDB *and* Grafana, and nothing else. The script's sizes and counts arrive on the log's `detail:` line, which the target tails; the one-line heartbeat sent to the `health-influx-backup` monitor carries only the verdict, `buckets=` and `grafana_kib=`. Applies nothing, merges nothing, edits no pin. See [homelab-health.md](homelab-health.md) |
+
+### Hindsight namespace
+
+| Target | What it does |
+|---|---|
+| `hindsight-upgrade` | The same shape one namespace over: a one-off Job from `cronjob/hindsight-pg-dump`, waited on, then stop. See [hindsight.md](hindsight.md) |
 
 ### `check-script-lint`: linting what the cluster actually runs
 
@@ -297,6 +309,133 @@ The Python phase is repo-wide whichever cluster is named: it needs no render
 and no cluster, so scoping it per-cluster would only leave the repo's own
 tooling scripts unguarded.
 
+### `check-renovate-scope`: one container, one update mode
+
+Two mechanisms update this estate and each is silent when it stops. keel bumps
+floating tags on a timer; Renovate proposes bumps for pinned ones. The rule is
+**floating tag means keel, pinned tag means Renovate, never both** — and every
+way of getting a container's mode wrong fails quietly. A pinned tag carrying
+keel annotations is frozen while looking covered, because `keel.sh/match-tag`
+on a pin only refreshes the digest. An incomplete keel annotation set is worse
+than none, because without `match-tag` keel silently downgrades a semver tag to
+`:latest`. A pinned tag with no keel annotations and outside Renovate's scope
+receives nothing at all, while `homelab-update-watch` counts zero open pull
+requests and stays UP over it.
+
+The version this replaced could see none of that. It asked whether a *file*
+mentioned `keel.sh/policy` anywhere and whether a *file* pinned any image, so a
+file holding one keel-managed Deployment and one pinned CronJob passed on the
+Deployment's annotations and the CronJob was never examined. Namespaces are a
+render property too: `kustomization.yaml` can set one, and a directory name is
+not a namespace.
+
+So the guard renders each cluster with its own `kustomize build` — an identical
+render to the one `check-script-lint` produces, not a shared one — and judges
+**one container at a time**.
+
+Three decisions in it are load-bearing.
+
+**keel annotations are a workload property, not a container property.** keel
+reads the workload's annotations and applies them to the images it can track,
+which are the floating ones. A Deployment whose app image floats and whose
+quiesce sidecar is `alpine:3.20` is correct and intended: keel bumps the app,
+Renovate bumps the sidecar. Smearing the workload's annotations across every
+container would read four such sidecars on the VPS cluster as frozen. The frozen
+verdict therefore needs the whole workload — keel annotations present *and*
+nothing floating anywhere in it, so the annotations can only be about a pin.
+
+**A bare major version stream is floating, not a pin.** `louislam/uptime-kuma:2`
+moves on every 2.x release and `v2` is the same thing spelled differently, as is
+a `-latest` suffix such as `ghcr.io/umami-software/umami:postgresql-latest`. A
+*dotted* tag — `alpine:3.20`, `traefik:v3.3`, `postgres:16-alpine`,
+`pgvector/pgvector:0.8.1-pg17` — is a pin that Renovate bumps, and calling any
+of those floating would hand a reviewed bump to keel.
+
+**Remote-base images are advisory, in every mode.** An image named by no file in
+the cluster's own tree came from a remote base — cert-manager, the CSI drivers,
+local-path-provisioner — so nothing here can edit the reference; it moves only
+when the base's own ref moves. That is not the same as unreachable: the VPS
+local-path base is pinned as `?ref=v0.0.31`, which the kustomize manager parses,
+so Renovate proposes that bump even though the guard still calls the image
+advisory. Failing an apply on
+somebody else's manifest produces a gate people route around, so those are
+printed as advisories and do not fail the check, exactly as `check-script-lint`
+treats upstream findings. Ownership is therefore established *before* any
+verdict, not only before the scope one: a remote base that ever shipped keel
+annotations on a pinned tag would otherwise hard-fail an apply over a manifest
+this repo cannot edit.
+
+**The ownership lookup is confined to the cluster being analysed**, and that
+confinement is load-bearing. Both trees name `restic/restic:0.17.3` and the same
+keel digest, so a repo-wide lookup lets a watched homelab file vouch for a VPS
+container nothing watches. Simulated with scope widened to `homelab/**` alone, a
+repo-wide lookup dropped the VPS render from nine findings to six — `restic-backup`,
+`restic-init` and `keel` all fell silent while `vps/backup/*.yaml` and
+`vps/bootstrap/keel/keel.yaml` were still genuinely unwatched. The lookup also
+compares extracted image values rather than searching raw file text, because a
+substring search matches prose (`restic/restic:0.17.3` appears in three comment
+sentences in `homelab/backup/restic-cronjob.yaml`) and has no right boundary
+(`alpine:3.2` would be "owned" by any file naming `alpine:3.20`).
+
+Scope is still a file question, because `managerFilePatterns` matches paths: for
+each pinned, keel-free image the guard locates the repo file(s) naming it and
+requires one of them to be matched by a `kubernetes.managerFilePatterns` entry
+and not excluded by `ignorePaths`. Both manager blocks are validated for
+patterns that match nothing, `kubernetes` and `kustomize`, because a typo in
+either is the same silent-scope failure. `enabledManagers` is validated too: it
+is a whitelist, so a `kustomize` block added without adding `kustomize` to that
+list is inert configuration that reads like coverage, and dropping `kubernetes`
+from it makes every scope verdict vacuous. Both are exit 2. Exit 1 means a
+finding; exit 2 means the check could not run.
+
+Floating tags are forbidden in `health`, `hindsight`, `ops` and `backup`.
+`jottacloud-backup` is the single written exemption on the guard's
+`FLOATING_EXEMPT` list: it is a CronJob whose pods pull `:latest` on every
+scheduled run, so the schedule already delivers what keel would, which is why it
+carries no keel annotations and needs none.
+
+The targets are `check-renovate-scope-homelab` and `check-renovate-scope-vps`,
+plus the bare `check-renovate-scope` which sweeps both. **Both per-cluster
+targets run in their cluster's `diff-*` and `apply-*` preflight**, on the public
+half, as of the 2026-08-26 commit that widened Renovate to `homelab/**` and
+`vps/**`. Each chain now reads the same way: a context assertion, a
+vars-consistency check, **five per-cluster guards** — `check-script-substitution`,
+`check-job-ttl`, `check-ping-bodies`, `check-script-lint` and `check-renovate-scope`,
+each running as its own cluster's half — and one guard that has no half,
+`check-keel-fresh-parity`.
+
+Three of the five are **render-based**: `check-job-ttl`, `check-script-lint` and
+`check-renovate-scope` each shell out to a full `kustomize build`.
+`check-script-substitution` and `check-ping-bodies` do not — they scan source files under
+the cluster trees. That subset decides wiring, not just vocabulary: the render-based
+three are on the public half of the split only, because duplicating a full build onto the
+inner half would double every apply's render cost. See the `GUARD PLACEMENT` block in the
+`Makefile` before moving any of them.
+
+`check-keel-fresh-parity` sits with the cheap two on **both** halves, and is the odd one
+out on scope rather than on cost. It compares `homelab/ops`'s `keel-fresh` copy against
+`vps/ops`'s, so "the VPS half of a homelab-versus-VPS comparison" is not a thing that
+exists; it takes no cluster argument and rejects one. The consequence is worth knowing
+before it surprises you: **a divergence introduced in the VPS copy blocks `apply-homelab`
+too.** That is a ruling rather than a side effect. A divergence means one cluster's
+dead-man's-switch may be broken, and nothing in the divergence itself says which, so
+neither cluster moves until it is resolved. A per-cluster split would not even be coherent:
+the guard compares both trees, so a homelab-only variant would fail on a VPS-only edit
+anyway. The coupling is the kind that gets routed around under time pressure, and the
+answer to that is that the guard names the offending line and the fix — finish the edit. What it allows through is a short, stated list — the copy notes, the
+image floor, the schedule, the monitor name, the two paths, the `nodeSelector` and the
+token variable — and everything else must match byte for byte. Its own header carries the
+list and the reasoning.
+
+Arming it needed that widening first, and the order is worth keeping in mind if
+the scope ever narrows again. The guard cannot pass against a `renovate.json`
+that watches only `homelab/health`, `homelab/ops` and `homelab/hindsight`: every
+pinned, keel-free container outside those three genuinely receives nothing,
+which is the estate's true state rather than a bug in the guard. Wiring a guard
+into a preflight it does not pass makes an apply impossible and teaches the next
+person to route around the gate. Widen scope, prove a clean run against both
+renders, then arm — never the reverse.
+
 ## Talos machine config patches
 
 Each file under `homelab/talos/machineconfig-patches/` is a full Omni `ConfigPatches`
@@ -333,6 +472,46 @@ unset TAILSCALE_AUTH_KEY
 multi-node rollouts. **Always clear the patch afterwards** — leaving it behind is a
 disaster-recovery tripwire: on a state-volume wipe the node would try to re-auth with an
 already-consumed key. Do not cache consumed keys in 1Password.
+
+## A new namespace has to land before the things inside it
+
+**`make diff-<cluster>` aborts entirely — not partially — when the branch adds a resource
+in a namespace the cluster does not have yet.** It fails with:
+
+```
+Error from server (NotFound): namespaces "ops" not found
+```
+
+`kubectl diff` server-side dry-runs every object, and the API server rejects a namespaced
+object whose namespace does not exist. One such object kills the whole diff, so you get no
+list at all, for any resource. Nothing in the guarded targets creates the namespace first:
+`diff-*` never writes, and `apply-*` would create it happily but reading the diff first is
+the discipline this repo runs on. Hit on 2026-08-26 adding `vps/ops`.
+
+**Split the change across two applies.** Both halves stay inside the guarded targets, so
+nothing is done by hand:
+
+1. Add only the `Namespace` to the cluster's `bootstrap/namespaces.yaml`, and leave the new
+   directory out of the cluster's top-level `kustomization.yaml`. A Namespace is
+   cluster-scoped, so it dry-runs cleanly. `diff` then `apply`.
+2. Add the directory and its workloads. The namespace now exists, so the diff reads
+   normally and you see the full resource list before applying it.
+
+The fallback, when the split is genuinely not worth it, is to apply the Namespace document
+alone straight from the render:
+
+```bash
+test "$(kubectl config current-context)" = "cynexia-vps" || exit 1
+kustomize build vps/ | <select the one Namespace document> | kubectl apply -f -
+```
+
+Two conditions before doing that, and they are not optional. **Assert the context
+explicitly**, because this bypasses `check-vps-context`, which is the guard standing
+between you and applying the VPS tree to the homelab cluster. And **confirm the object
+carries no `${VAR}`**, because it also bypasses the `PLACEHOLDER_SCAN` that stops a literal
+placeholder reaching a Secret — a bare Namespace never does, which is exactly why this is
+safe for a Namespace and for nothing larger. Take the document from the render rather than
+retyping it, so what you apply is the object `apply-*` will reconcile a minute later.
 
 ## `configured` is not drift
 

@@ -17,8 +17,8 @@ procedures live under `docs/` and are referenced from here rather than duplicate
 | `docs/operations/homelab.md` | Homelab cluster: platform stack, namespaces/workloads, NFS and storage, node network, DNS/Route53, encryption at rest, operational gotchas |
 | `docs/operations/homelab-health.md` | The `health` namespace: ingest pipeline, image-pin rationale, InfluxDB bootstrap, backups/restore, Garmin re-auth, monitoring, probe rationale |
 | `docs/operations/vps.md` | VPS cluster: shape, workloads, Cloudflare tunnel/Access, DB decisions, backups |
-| `docs/operations/monitoring.md` | How failures get noticed: the triage table, probe policy and inventory, CronJob deadlines, the backup verification gates, healthchecks.io checks and ping bodies, and what none of it catches |
-| `docs/operations/uptime-kuma.md` | Layer 3/4 runbook: creating uptime-kuma monitors by hand, per-monitor HTTP settings, the Cloudflare Access trap, the self-monitor |
+| `docs/operations/monitoring.md` | How failures get noticed: the triage table, probe policy and inventory, CronJob deadlines, the backup verification gates, the four healthchecks.io checks that remain, the ten uptime-kuma push monitors, the disclosure rules for both, and what none of it catches |
+| `docs/operations/uptime-kuma.md` | Layer 3/4 runbook: creating uptime-kuma monitors by hand, per-monitor HTTP settings, the Cloudflare Access trap, the push monitors driven from inside the clusters and the bypass they need, the self-monitor |
 | `docs/operations/hindsight.md` | The `hindsight` namespace: the self-hosted memory backend for the Hermes profiles — topology, auth, the canary, upgrade and restore runbooks, the restore drill, key rotation, and the removal path |
 | `docs/operations/agent-mail.md` | Per-agent email for Hermes agents: Purelymail mailboxes on cynexia.io, per-profile mcp-email-server config, provisioning runbook, credential scheme, limits, and the deliberate monitoring/backup gaps |
 
@@ -46,7 +46,7 @@ kubernetes_config/
 ├── .envrc                    # direnv entrypoint (loads 1Password-backed vars)
 ├── .env.tpl                  # op-template with VAR=op://... lines (committed; no real secret values)
 ├── Makefile                  # build/diff/apply per cluster + secret and bootstrap helpers
-├── renovate.json             # scoped to homelab/health/**, homelab/ops/** and homelab/hindsight/** (pinDigests)
+├── renovate.json             # scoped to homelab/** and vps/** (pinDigests, off on the keel-managed trees)
 ├── secrets-to-rotate.md      # honesty box for disclosed secret values (identifiers only)
 ├── docs/                     # operational documentation (docs/superpowers/ is gitignored)
 ├── homelab/                  # Talos homelab cluster
@@ -62,7 +62,7 @@ kubernetes_config/
 │   ├── hindsight/            # Hindsight memory backend for the Hermes profiles (no keel; pinned images)
 │   │   └── scripts/          # nightly pg_dump + the 15-minute canary; mounted via configMapGenerator
 │   └── backup/               # restic init Job + nightly CronJob (hostPath /var/mnt/ssd/local-path-provisioner)
-├── vps/                      # Hetzner Talos cluster, same sub-layout (bootstrap/secrets/workloads/backup/talos)
+├── vps/                      # Hetzner Talos cluster, same sub-layout (bootstrap/secrets/workloads/backup/ops/talos)
 ├── scripts/                  # repo-level helpers (karakeep tags, FreshRSS WebSub status, the check-* guards)
 ├── legacy-microk8s/          # frozen reference copies of the old microk8s manifests
 └── no_longer_used/           # retired manifests kept for reference
@@ -160,14 +160,53 @@ Full mechanics, target-by-target reference and failure modes:
 ## When Editing
 
 - Keep the one-file-per-service pattern; keep all of a service's resources in that file.
-- Every new Deployment must include the full keel annotation set above — **except** in
-  the `health`, `ops` and `hindsight` namespaces, which explicitly forbid keel: every
-  image there is version/digest-pinned and Renovate proposes bumps instead
+- Every new Deployment must include the full keel annotation set above — **except**
+  in the `health`, `ops`, `hindsight` and `backup` namespaces, which explicitly forbid
+  keel, and **except keel itself**, which is digest-pinned on both clusters so the
+  update engine cannot update itself (`homelab/bootstrap/keel/keel.yaml`,
+  `vps/bootstrap/keel/keel.yaml`). The rule that decides which mode a workload is in:
+  **floating tag means keel; pinned tag means Renovate; never both.**
+  `match-tag: "true"` on a pinned tag only refreshes the digest, so a semver pin
+  carrying keel annotations is frozen while looking covered.
+- **Every pinned image in both clusters is watched, and keeping it that way is a
+  standing obligation.** `renovate.json` scopes Renovate to `homelab/**` and `vps/**`
+  as of 2026-08-26, so every version- or digest-pinned image in either tree — `health`,
+  `ops`, `hindsight`, `backup`, keel itself, traefik and the VPS workloads alike —
+  gets its bump as a pull request
   (`docs/operations/homelab-health.md`, `docs/operations/homelab.md`,
-  `docs/operations/hindsight.md`). `hindsight` is the sharpest case: it runs Alembic
+  `docs/operations/hindsight.md`). Two kinds of image sit outside that, and the guard
+  treats them differently. An image from a **remote base** is named by no file here, so
+  nothing can edit the reference — it moves only when the base's own ref moves.
+  `check-renovate-scope` prints those as advisories. That is not the same as
+  unreachable: `vps/bootstrap/local-path/kustomization.yaml` pins its base as
+  `?ref=v0.0.31`, which the `kustomize` manager parses, so Renovate proposes that bump
+  even though the image itself is still reported advisory. An image **embedded inside
+  another resource** — local-path-provisioner ships its helper Pod as a block scalar in
+  a ConfigMap — the guard cannot see at all, so it says nothing about it: silence, not
+  an advisory. Everything else hard-fails, so a new pinned image that nothing watches
+  cannot reach a cluster. `hindsight` is the sharpest case: it runs Alembic
   migrations on startup against the store holding an agent's memory, and those
   migrations are forward-only, so the pre-upgrade dump is the only rollback.
-  `make hindsight-upgrade` takes it.
+  `make hindsight-upgrade` takes it. `health` is the same shape in miniature — a
+  Grafana major migrates `grafana.db` in place on first start, so a tag revert is
+  not a rollback there either; `make health-upgrade` takes that dump, and it
+  covers the InfluxDB export in the same Job.
+- **`pinDigests` is on at the top level and off on the keel-managed trees, and that
+  split is load-bearing.** `pinDigest` is an updateType that fires on any Docker
+  dependency without a digest, **floating tags included**, so top-level `pinDigests`
+  over the widened scope would have Renovate propose "Pin Docker digests" against the
+  images keel owns. Merging one recreates the pinned-tag-with-keel-annotations state
+  this whole arrangement abolishes, and leaves keel rewriting the live digest every six
+  hours against a repo holding a different one — so `make diff-homelab` reports a
+  changed Deployment forever. The first `packageRule` turns it back off for
+  `homelab/workloads/**`, `vps/workloads/**`, `vps/bootstrap/cloudflared/**` and both
+  keel trees. **Adding a keel-annotated workload outside those paths means extending
+  that rule in the same commit.**
+  The rule matches whole **file paths**, not containers, so it also suppresses digest
+  pinning for the pinned, keel-free containers that happen to share those files — the
+  four `alpine:3.20` quiesce sidecars and both `postgres:16-alpine` containers. They
+  still get version bumps, so nothing is broken; they simply arrive without a digest.
+  That is the accepted cost of a path-scoped rule, not an oversight.
 - **Probes: readiness on every long-running container that serves traffic; liveness only
   where that probe can actually detect the failure *and* a restart is a safe remedy**
   (everything here is single-replica, so an over-eager liveness probe manufactures
@@ -182,31 +221,54 @@ Full mechanics, target-by-target reference and failure modes:
 - **Scheduled work gets a dead-man's-switch, not a probe.** Every CronJob sets
   `timeZone: "UTC"` and `activeDeadlineSeconds` (with `concurrencyPolicy: Forbid`, one
   hung run silently blocks every later run), plus `startingDeadlineSeconds` where a missed
-  window must be retried rather than dropped. New jobs must ping healthchecks.io on
-  **start and exit code** — the two restic jobs, `cloudflare-analytics` and `influx-backup`
-  do; the two ingest checks and `jottacloud backup` ping on success only, so a failure
-  shows up as silence. For the ingest checks that is deliberate and must not change;
-  jottacloud's ping comes from `backup.sh` inside a third-party image. `update-watch`
-  sends **no `/start` at all**, also deliberately: it pings `/log` when it could not read
-  GitHub, and a `/start` with no success inside the grace would turn every such run into
-  a false alarm. Do not "complete" its ping set. Inventory and
-  per-job semantics: `docs/operations/monitoring.md`.
-- **A ping body is a disclosure channel.** Every ping carries a short `key=value` summary
-  (`summary=` first, printable ASCII), and **never a command's output** — the exec'd influx
-  scripts carry the operator token on argv, and a failing `wget` quotes the ping URL, which is
-  the check's write credential. The rule is blanket because a script cannot sort the tiers
-  below apart at runtime. Emit a count, an age, a size, a path built from a literal glob, or a
-  verdict from a fixed enum.
-  `make check-ping-bodies` enforces it and is the only thing that catches
-  `M=$(cmd); emit "error=$M"`. The body also travels with the alert: upstream's email,
-  webhook, Slack, Telegram, Matrix, GitHub and MS Teams transports all read it into the
-  notification, so a failure body reaches every channel this account has configured — a
-  list nobody has enumerated. Policy, the accepted residuals and that open item:
+  window must be retried rather than dropped. **New scheduled work drives an uptime-kuma
+  PUSH monitor, not a healthchecks.io check**: as of 2026-08-26 only four checks remain
+  there — the two restic jobs, whose multi-line bodies are the triage runbook,
+  `vps-uptime-kuma-alive`, and the hand-pinged `estate-update`. Everything else pushes.
+  The default contract for a new job is **`up` on exit 0 and `down` otherwise**, from an
+  EXIT trap in the shell runners — the two hindsight jobs, `influx-backup`, `hermes-pull`
+  and both `keel-fresh` jobs — or, in Python, from a module-level `try`/`except` that
+  catches every exception and pushes on the way out, which is what
+  `cloudflare-analytics` does. There is **no `/start` equivalent**
+  and none may be invented: a push is a heartbeat carrying a status, so
+  `activeDeadlineSeconds` is the whole of the hang bound and the monitor's interval plus
+  retry is the silence bound. Two jobs deliberately push **nothing** on some runs and that
+  must not change: `ingest-freshness` pushes only when both buckets are fresh, because a
+  `down` on a stale bucket would trade a 36-hour tolerance for a 6-hour one on a signal
+  that depends on the operator syncing a watch; and `update-watch` pushes nothing on an
+  indeterminate run, because "I could not read GitHub" is neither a success nor a failure.
+  `jottacloud-backup` is success-only too, but for a third reason — the request comes from
+  an image this repo does not build. Inventory and per-job semantics:
+  `docs/operations/monitoring.md` and `docs/operations/uptime-kuma.md`.
+- **A ping body and a heartbeat message are both disclosure channels, and one rule set
+  covers both.** Every one carries a short `key=value` summary (a verdict first, printable
+  ASCII), and **never a command's output** — the exec'd influx scripts carry the operator
+  token on argv, and a failing `wget` or `curl` quotes the URL it was handed, which is the
+  reporting credential either way: a healthchecks.io ping UUID, or a kuma push **token**,
+  which is the last path segment of `PUSH_URL`. The rule is blanket because a script cannot
+  sort the tiers below apart at runtime. Emit a count, an age, a size, a path built from a
+  literal glob, or a verdict from a fixed enum.
+  `make check-ping-bodies` enforces it — it recognises a sink by FUNCTION NAME (`emit`,
+  `say_err`, `fatal`; `hc_emit`, `hc_summary`) and never by the destination host, which is
+  why the sinks kept their names through the 2026-08-26 migration — and it is the only thing
+  that catches `M=$(cmd); emit "error=$M"`. What differs between the two destinations is
+  only size and storage: a healthchecks.io body is multi-line and held by a third party; a
+  kuma `msg` is **one line, cut at 200 characters**, held on the operator's own VPS. So a
+  migrated runner emits the verdict first and the values an operator acts on next, then
+  sacrifices to the cut whichever token carries least — `error=` last in `influx-backup` and
+  `hermes-pull`, but the two fixed-width threshold literals in `update-watch`, whose
+  variable-length token is the `next=` action and is protected in third place. Every runner
+  prints the full detail to the pod log, which is now where triage starts. Either one travels with the alert to every
+  notification transport its destination has configured, a list nobody has enumerated on
+  either side. Policy, the accepted residuals and that open item:
   `docs/operations/monitoring.md`.
-- **A new InfluxDB bucket in the `health` namespace means two edits, not one:** create it
-  (a `make health-influx-*-bootstrap` target) **and** add it to the explicit bucket list in
-  `homelab/health/backups.yaml`. A bucket missing from that list is silently never
-  exported; a bucket in the list that does not exist now fails the nightly job by name.
+- **A new InfluxDB bucket in the `health` namespace means three edits, not one:** create it
+  (a `make health-influx-*-bootstrap` target), add it to the explicit `for B in ...` list in
+  `homelab/health/scripts/influx-export-lp.sh`, **and** raise `LP_EXPECTED` in
+  `homelab/health/scripts/influx-backup.sh`, which is the denominator of the `buckets=n/m`
+  the heartbeat carries. A bucket missing from the export list is silently never exported;
+  a bucket in that list that does not exist fails the nightly job by name; and a stale
+  `LP_EXPECTED` shows up as a visibly wrong `buckets=` and nothing worse.
   Bootstrap before applying (`docs/operations/homelab-health.md`).
 - **One-shot `Job`s must set `ttlSecondsAfterFinished`.** A Job's `spec.template` is
   immutable, so a completed Job that is never garbage collected pins the version of
@@ -217,11 +279,48 @@ Full mechanics, target-by-target reference and failure modes:
   broke `diff-homelab` and `apply-homelab` for four months. Deleting the stale Job is the
   recovery; the TTL is the prevention. `make check-job-ttl` enforces it across both
   clusters, and `diff-*`/`apply-*` run the per-cluster variant as a preflight, so it
-  cannot be forgotten (the preflight is `check-vars-consistency`, `check-job-ttl`,
-  `check-script-substitution`, `check-ping-bodies`, `check-script-lint`, and — on the
-  homelab targets — `check-renovate-scope`). Jobs *generated by a CronJob* are exempt and the check ignores
+  cannot be forgotten. The preflight is a context assertion, a vars-consistency check,
+  **five per-cluster guards that each run as their cluster's half** —
+  `check-script-substitution`, `check-job-ttl`, `check-ping-bodies`,
+  `check-script-lint` and `check-renovate-scope` — and one guard with no half,
+  `check-keel-fresh-parity`, on all four of `diff-homelab`,
+  `apply-homelab`, `diff-vps` and `apply-vps`. `check-renovate-scope` joined them on
+  2026-08-26, in the commit that widened Renovate far enough for it to pass.
+  **Three of the five are RENDER-BASED** — `check-job-ttl`, `check-script-lint` and
+  `check-renovate-scope` each shell out to a full `kustomize build`. That subset is not
+  trivia: it decides wiring. The render-based three sit on the PUBLIC half of the split
+  only, because duplicating them would double every apply's render cost, while
+  `check-script-substitution` and `check-ping-bodies` scan source files under the cluster
+  trees and are cheap enough to run on both halves. Keep the distinction when editing
+  either list.
+  Jobs *generated by a CronJob* are exempt and the check ignores
   them: each run gets a unique name, so they never collide, and pile-up is bounded by
   `successfulJobsHistoryLimit`.
+- **A deliberate copy of a file across the two clusters must be enforced, not just
+  commented.** `homelab/ops/` and `vps/ops/` hold the same `keel-fresh` runner and
+  CronJob twice, because kustomize will not read a generator source outside its own root
+  and because the alternative puts a VPS kubeconfig inside a homelab pod. The invariant
+  that rests on is **edit them together**, and the two comments saying so — both in the
+  VPS copies; neither homelab file carries the instruction — have never stopped anybody: a
+  fix applied to one cluster and not the other is a dead-man's-switch that has quietly
+  stopped switching on the cluster nobody looked at.
+  `make check-keel-fresh-parity` enforces it by masking a short, stated list of sanctioned
+  differences — the copy notes, `IMAGE_FLOOR`, the schedule, the monitor name, the two
+  paths, the `nodeSelector`, the token variable — and requiring the rest to be identical.
+  Editing either copy means editing both; genuinely per-cluster behaviour means a new rule
+  in that guard, in the same commit, with its reason written down. Every rule's span is
+  **bounded to comment lines plus the line it names**: an earlier `IMAGE_FLOOR` rule used
+  `.*?` across newlines and silently swallowed executable shell inserted above the
+  assignment, which `check-script-lint` cannot catch either because the insertion is valid
+  `sh`. Keep that property when adding a rule.
+  **It has no per-cluster half**, so a divergence in the VPS copy blocks `apply-homelab`
+  too. That is a ruling, not an accident: a divergence means one cluster's
+  dead-man's-switch may be broken and nothing in the divergence itself says which, so
+  neither cluster moves until it is resolved — and a per-cluster split is not even
+  coherent, because the guard compares both trees and a homelab-only variant would fail on
+  a VPS-only edit anyway. The coupling is real and is the kind that gets routed around
+  under pressure; the answer is that the guard names the offending line and the fix.
+  Any future copied pair should get the same treatment rather than a third comment.
 - **Logic lives in a script file, never in an inline YAML string.** Anything with
   branching, parsing or loops goes in a real file under a `scripts/` path and reaches the
   cluster through a `configMapGenerator`, as
@@ -262,13 +361,25 @@ Full mechanics, target-by-target reference and failure modes:
   `brew install shellcheck`. Findings from upstream bases are advisory and do not fail
   the check. Rationale and the extraction rules:
   `docs/operations/apply-workflow.md`.
-- **A new version-pinned, keel-free namespace means a `renovate.json` edit too.** Scope
-  is set by `kubernetes.managerFilePatterns`; a `packageRule` only decorates the pull
-  requests Renovate already decided to open, so widening the rule alone does nothing.
-  Unwatched pins get no bumps and no alert — `homelab-update-watch` counts open Renovate
-  pull requests, so it stays green over a namespace nobody is scanning.
-  `make check-renovate-scope` enforces it and runs in the homelab diff/apply preflight;
-  a deliberate exception goes on that guard's `EXEMPT` list with a written reason.
+- **Every container is in exactly one update mode, and `make check-renovate-scope`
+  proves it.** Floating tag means keel; pinned tag means Renovate; never both. The
+  guard renders each cluster and judges one container at a time: a complete keel
+  annotation set on a floating tag is legal; the same set on a **pinned** tag is
+  the frozen state (`match-tag` only refreshes the digest) and fails; an
+  **incomplete** set fails on any tag, because a missing `match-tag` silently
+  downgrades a semver tag to `:latest`. A pinned, keel-free image must be named by
+  a repo file **in the same cluster's tree** that is inside
+  `kubernetes.managerFilePatterns` and outside `ignorePaths` — a `packageRule` alone
+  does **not** widen scope, and the per-cluster confinement is load-bearing, because
+  both trees name many of the same images and a repo-wide lookup would let a watched
+  homelab file vouch for an unwatched VPS container. keel annotations are a
+  **workload** property: a pinned sidecar beside a floating app image is
+  Renovate's, not frozen, so only a workload with nothing floating in it can be
+  frozen. Floating tags are forbidden in the `health`, `hindsight`, `ops` and
+  `backup` namespaces; `jottacloud-backup` is the one written exemption on that
+  guard's `FLOATING_EXEMPT` list, because it is a CronJob whose pods pull
+  `:latest` on every scheduled run and so needs no keel. Images from remote
+  bases are advisory.
 - For new `hostPath`/`hostNetwork` workloads: elevate their namespace to PSA
   `privileged` in the cluster's `bootstrap/namespaces.yaml`. The cluster-wide enforce
   level is `baseline`.
@@ -295,10 +406,13 @@ Full mechanics, target-by-target reference and failure modes:
   1. **Secrets grant access.** Tokens, passwords, private keys, API keys, session cookies,
      the 1Password service-account token. Disclosure means honesty box **and** rotation.
   2. **Spam-target identifiers grant no access but let a stranger cause a nuisance.**
-     healthchecks.io ping UUIDs are the case that matters here: anyone holding one can ping
-     your check and mask a genuine failure. Keep them out of this public repo (`op://`
-     reference only) — but a transcript or a pod log is **not** a disclosure, they need
-     **no rotation**, and they get **no honesty-box row**. This has been ruled three times.
+     healthchecks.io ping UUIDs and uptime-kuma push tokens are the cases that matter here:
+     anyone holding one can report a heartbeat and mask a genuine failure, and grants
+     nothing else. Keep them out of this public repo (`op://` reference only) and type them
+     `[text]` in the vault — but a transcript or a pod log is **not** a disclosure, they
+     need **no rotation**, and they get **no honesty-box row**. This has been ruled three
+     times. Note that `jottacloud-backup`'s own image prints its push URL to the pod log on
+     every run; that is the same tier and needs no action.
   3. **Ordinary identifiers are not sensitive at all.** Restic repository URIs, B2 and
      InfluxDB bucket names, Cloudflare zone IDs, PVC UUIDs, namespaces, FreshRSS usernames,
      hostnames. They grant nothing and enable nothing. They are fine in pod logs, in ping

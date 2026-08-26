@@ -13,9 +13,9 @@ Kubectl context: `cynexia-vps`. Manifests live in `vps/`.
 | Ingress | `cloudflared` tunnel only (named tunnel `cynexia-vps`). No Traefik, no cert-manager, no MetalLB, no NFS CSI |
 | TLS / auth | Terminated at the Cloudflare edge. Cloudflare Access with email-OTP in front of every hostname |
 | Domain | `*.cynexia.com` (Cloudflare-hosted zone). Homelab's `cynexia.net` is separate and unrelated |
-| Namespaces | `vps` for all workloads (PSA `baseline`), plus `backup` (PSA `privileged`, hostPath) and `keel` |
+| Namespaces | `vps` for all workloads (PSA `baseline`), plus `backup` (PSA `privileged`, hostPath), `keel`, and `ops` (PSA `baseline`, one CronJob — see below) |
 | Secrets | 1Password `VPS` vault, referenced via `VPS_*` / workload-specific vars in `.env.tpl` |
-| Image updates | keel runs here (`vps/bootstrap/keel/`) and workloads carry the standard keel annotation set |
+| Image updates | keel runs here (`vps/bootstrap/keel/`) and workloads carry the standard keel annotation set, except keel itself, which is digest-pinned and Renovate-bumped (see below) |
 | Apply | `make apply-vps`, gated by `check-vps-context` |
 
 The Talos user-volume patch (`vps/talos/machineconfig-patches/400-vps-user-volume-data.yaml`)
@@ -26,6 +26,73 @@ alone. Note there is no `make` target for VPS Talos patches — apply them with
 
 Fresh Hetzner Cloud Volumes ship pre-formatted and Talos refuses to provision over them;
 wipe first with `talosctl wipe disk <dev> --method FAST`.
+
+### The local-path storage contract
+
+**This cluster's `local-path` storage lives on one machine, and a PVC bound there is
+reachable from nowhere else.** The storage node is `ubuntu-16gb-fsn1-2`, which today is
+also the only node. Every `local-path` PersistentVolume carries `nodeAffinity` pinning it
+to that hostname, and the StorageClass binds `WaitForFirstConsumer`, so a PVC has no node
+until a pod using it is scheduled and is welded to that node from then on. Verified
+2026-08-26: every PV then in existence — eight of them — read `[ubuntu-16gb-fsn1-2]`.
+
+That is invisible while the cluster has one node and load-bearing the moment it does not.
+**A pod with a `local-path` PVC needs a `nodeSelector` naming that hostname.** Without one
+the scheduler is free to place it elsewhere, and the two outcomes are a loud one and a
+silent one:
+
+- The PVC is **already bound** to the storage node. The pod cannot reach the volume, so it
+  sits `Pending` until whatever deadline it carries. Loud, and easy to diagnose.
+- The PVC is **still unbound**. This is the bad one. `vps/bootstrap/local-path/kustomization.yaml`
+  patches in a `DEFAULT_PATH_FOR_NON_LISTED_NODES` catch-all, so local-path-provisioner does
+  not refuse an unlisted node — it creates a fresh empty directory there and binds happily.
+  The pod starts, reads and writes an empty volume that is not the Cloud Volume, and nothing
+  errors anywhere.
+
+**A `hostPath` mount of that same directory is subject to the identical rule.** The nightly
+restic CronJob in `vps/backup/restic-cronjob.yaml` mounts
+`/var/mnt/data/local-path-provisioner` by `hostPath` and carries **no `nodeSelector`**, so on
+a multi-node cluster nothing keeps it on the storage node.
+
+The mount declares `type: Directory`, which looks like it might catch a wrong-node run, and
+mostly it will not: the catch-all above provisions into **that same path**, so any second
+node that has ever provisioned a `local-path` volume already has the directory and the check
+passes. What you get is the empty-source case — restic reading a tree holding, at most, that
+node's own stray volumes and none of the ones being backed up.
+
+That is caught, but late and at a cost. The job's expected-set verification gate names each
+snapshot by path, so the missing ones fail it by name. The gate runs **after** `restic
+backup`, so a wrong-node run has already written a snapshot of nothing into the repository,
+where it counts against the 7-daily / 4-weekly / 6-monthly retention, and that night has no
+usable backup. Neither the `Directory` check nor the gate has been exercised on a second node,
+because there has never been one — this is read off the manifest and the gate script, not
+observed. Pinning that pod is outstanding work, carried with the multi-node expansion; it is
+named here because a storage contract that omitted the case would be worse than no contract.
+
+The `keel-fresh` CronJob in the `ops` namespace is already pinned — see the comment beside
+its `nodeSelector`, which is where the reasoning lives in full.
+
+### Image updates and keel
+
+keel is digest-pinned and carries no keel annotations of its own. A self-updating
+controller holding cluster-wide read **and write** across every workload kind — its
+ClusterRole grants `get, delete, watch, list, update` on Deployments, DaemonSets,
+StatefulSets, ReplicaSets, ReplicationControllers, Pods, Jobs and CronJobs — is the one
+component where an unattended upstream tag change is a security event rather than a
+convenience, so its bump belongs in a reviewed pull request rather than a six-hour poll.
+
+Renovate has reached this cluster since 2026-08-26, when `renovate.json` gained a
+`/^vps/.+\.ya?ml$/` pattern alongside the homelab one, so keel's bump here arrives as a
+pull request like every other pinned image in `vps/`. `check-renovate-scope-vps` runs in
+the `diff-vps`/`apply-vps` preflight and fails the apply if that scope is ever lost.
+`vps/bootstrap/keel/**` sits on the `pinDigests: false` packageRule: the image is
+already pinned by tag and digest by hand, so there is nothing for Renovate to add.
+
+Its RBAC was trimmed on August 26, 2026 (PR #68): no `secrets` rule, no
+`pods/portforward`. Verify keel's permissions with a SelfSubjectAccessReview issued
+with keel's own ServiceAccount token from inside the cluster — `kubectl auth can-i
+--as=` is meaningless through the Omni proxy, which ignores impersonation and answers
+as the caller.
 
 ## Workloads
 
@@ -47,19 +114,43 @@ are deliberately shallow — are in [monitoring.md](monitoring.md#vps-cluster).
 truth for hostname → Service routing) and upserts a CNAME per hostname onto the current
 tunnel UUID. Run it after adding a hostname, and after any full cluster rebuild.
 
+### The `ops` namespace
+
+`vps/ops/` is the mirror of `homelab/ops/`, and holds one CronJob: **`keel-fresh`**, at
+07:45Z daily. It makes one request to keel's own `/metrics` — a single ClusterIP endpoint,
+`keel.keel.svc.cluster.local:9300`, reached across the namespace boundary from `ops` — and
+pushes the `vps-keel-fresh` uptime-kuma monitor. It is the only thing that would notice
+this cluster's keel had stopped polling registries; keel's own probes hit `/healthz`, which
+stays green while the poll goroutine is dead. Verdict enum, the image floor and why there is
+no `/start`: [monitoring.md](monitoring.md#the-keel-dead-mans-switch).
+
+It has no hostname and no database, which is why it is not a row in the table above. It
+holds no ServiceAccount and no RBAC; its only peers are that ClusterIP and
+`uptime.cynexia.com`. Its two integers of state live on a 32Mi `local-path` PVC,
+`keel-fresh-state`, so its pod carries a `nodeSelector` for `ubuntu-16gb-fsn1-2` under the
+storage contract above.
+
+It is a deliberate **copy** of the homelab tree rather than a shared one, script file
+included: a homelab pod holding a VPS kubeconfig would be a credential crossing a cluster
+boundary to save one file, and kustomize will not read a generator source outside its own
+root in any case. The two image floors differ because the two estates do. **Edit them
+together.**
+
 ### Cloudflare Access bypasses
 
 Public endpoints serve callers that cannot authenticate: strangers' browsers running the
-umami beacon, third-party webhook senders, and WebSub hubs. They must be Access-bypassed or
-they break. Four path-scoped Access apps carry the shared `bypass` policy, covering eight
+umami beacon, third-party webhook senders, WebSub hubs, and — since August 26, 2026 — jobs
+inside either cluster driving an uptime-kuma push monitor. They must be Access-bypassed or
+they break. **Five** path-scoped Access apps carry the shared `bypass` policy, covering **ten**
 globs in total:
 
-| Access app | Destinations |
-|---|---|
-| `umami scripts` | `analytics.cynexia.com/script.js`, `/api/send`, `/api/send/*` |
-| `n8n webhooks` | `n8n.cynexia.com/webhook/*`, `/webhook-test/*` |
-| `freshrss api` | `rss.cynexia.com/api/*`, `/p/api/*` |
-| `karakeep api` | `keep.cynexia.com/api/*` |
+| Access app | Destinations | Added |
+|---|---|---|
+| `umami scripts` | `analytics.cynexia.com/script.js`, `/api/send`, `/api/send/*` | — |
+| `n8n webhooks` | `n8n.cynexia.com/webhook/*`, `/webhook-test/*` | — |
+| `freshrss api` | `rss.cynexia.com/api/*`, `/p/api/*` | — |
+| `karakeep api` | `keep.cynexia.com/api/*` | — |
+| `uptime-kuma push` | `uptime.cynexia.com/api/push/*`, `/api/push` | August 26, 2026 |
 
 `bypass` is the only Access action that admits an unauthenticated request; an `Allow` policy
 with `Everyone` still serves a login page. FreshRSS and karakeep enforce their own API
@@ -68,7 +159,16 @@ credentials behind these globs. The umami send and n8n webhook endpoints are ope
 A bypass path glob of `/foo/*` does **not** match the bare path `/foo` — add both the
 exact and the wildcard destination.
 
-These four apps are also why the `rss.cynexia.com` and `Karakeep` uptime-kuma monitors need
+The `uptime-kuma push` app is the newest and the only one serving this estate's own jobs rather
+than strangers. A push monitor is driven from inside a cluster by a CronJob holding no Access
+credential, so without the bypass the edge answers 302, `curl -f` fails, and every push monitor
+sits permanently DOWN over healthy jobs — check this app first when debugging one. Only the push
+path is opened: `/api/push/<token>` accepts a heartbeat and exposes no dashboard, no monitor
+list and no settings. It reuses the shared bypass policy rather than carrying its own. The
+verification performed at creation, and the proof commands to repeat after any Access change:
+[uptime-kuma.md](uptime-kuma.md#the-push-path-is-bypassed-at-the-edge).
+
+These apps are also why the `rss.cynexia.com` and `Karakeep` uptime-kuma monitors need
 no service-token headers: their URLs resolve to the path-scoped app, not the root one
 ([uptime-kuma.md](uptime-kuma.md#monitor-list)).
 

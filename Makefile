@@ -42,6 +42,11 @@ HOMELAB_CONTEXT ?= cynexia-homelab
 # do not strictly require these — require-vars is called from apply/diff only.
 REQUIRED_VARS := B2_ACCOUNT_ID B2_ACCOUNT_KEY RESTIC_PASSWORD RESTIC_REPOSITORY \
                  RESTIC_HC_UUID HERMES_HC_UUID OPS_HC_UPDATE_UUID \
+                 OPS_KUMA_KEEL_TOKEN OPS_KUMA_UPDATE_TOKEN HERMES_KUMA_TOKEN \
+                 JOTTACLOUD_KUMA_TOKEN \
+                 HEALTH_KUMA_BACKUP_TOKEN HEALTH_KUMA_CLOUDFLARE_TOKEN \
+                 HEALTH_KUMA_INGEST_TOKEN \
+                 HINDSIGHT_KUMA_TOKEN HINDSIGHT_CANARY_KUMA_TOKEN \
                  ROUTE53_ACCESS_KEY_ID ROUTE53_SECRET_ACCESS_KEY \
                  ACME_EMAIL HEALTHCHECK_UUID \
                  HEALTH_HC_APPLE_UUID HEALTH_HC_GARMIN_UUID HEALTH_HC_BACKUP_UUID \
@@ -71,6 +76,11 @@ REQUIRED_VARS := B2_ACCOUNT_ID B2_ACCOUNT_KEY RESTIC_PASSWORD RESTIC_REPOSITORY 
 # silently substitute an empty value into a manifest.
 ENVSUBST_VAR_NAMES := B2_ACCOUNT_ID B2_ACCOUNT_KEY RESTIC_PASSWORD RESTIC_REPOSITORY \
                      RESTIC_HC_UUID HERMES_HC_UUID OPS_HC_UPDATE_UUID \
+                     OPS_KUMA_KEEL_TOKEN OPS_KUMA_UPDATE_TOKEN HERMES_KUMA_TOKEN \
+                     JOTTACLOUD_KUMA_TOKEN \
+                     HEALTH_KUMA_BACKUP_TOKEN HEALTH_KUMA_CLOUDFLARE_TOKEN \
+                     HEALTH_KUMA_INGEST_TOKEN \
+                     HINDSIGHT_KUMA_TOKEN HINDSIGHT_CANARY_KUMA_TOKEN \
                      ROUTE53_ACCESS_KEY_ID ROUTE53_SECRET_ACCESS_KEY \
                      ACME_EMAIL \
                      HEALTHCHECK_UUID \
@@ -106,10 +116,15 @@ help:
 	@echo "  check-placeholder-coverage - assert no .env.tpl \$${VAR} survives the render (both clusters)"
 	@echo "  check-job-ttl   - assert every standalone Job sets ttlSecondsAfterFinished (both clusters)"
 	@echo "  check-script-substitution - assert no configMapGenerator script names an envsubst var"
-	@echo "  check-ping-bodies - assert no healthchecks.io ping body is built from a command's output"
+	@echo "  check-ping-bodies - assert no ping body or heartbeat message is built from a command's output"
 	@echo "  check-script-lint - shellcheck (-s sh) every script in the RENDER + compile/test the Python"
-	@echo "  check-renovate-scope - assert every pinned, keel-free homelab manifest is watched by Renovate"
-	@echo "                    (the five above also run in the diff-*/apply-* preflight; the first four per-cluster)"
+	@echo "  check-renovate-scope - assert every container is in exactly one update mode (both clusters)"
+	@echo "                    keel for floating tags, Renovate for pinned ones, never both; per container"
+	@echo "  check-renovate-scope-homelab / -vps - the per-cluster halves of that guard"
+	@echo "  check-keel-fresh-parity - assert the two ops/keel-fresh copies have not diverged"
+	@echo "                    (no per-cluster half: it compares the two trees against each other)"
+	@echo "                    (check-job-ttl through check-keel-fresh-parity — those six — also run in"
+	@echo "                     the diff-*/apply-* preflight; the first five per cluster, this one whole)"
 	@echo ""
 	@echo "VPS cluster targets:"
 	@echo "  check-vps-context - assert kubectl current-context matches VPS_CONTEXT ($(VPS_CONTEXT))"
@@ -121,6 +136,7 @@ help:
 	@echo "  route-vps-dns     - create/update CNAMEs for every hostname in the cloudflared ConfigMap"
 	@echo ""
 	@echo "Health namespace targets:"
+	@echo "  health-upgrade    - take a verified pre-upgrade dump (InfluxDB + Grafana), then STOP"
 	@echo "  create-health-cloudflared-secret - imperatively recreate the health cloudflared creds Secret from 1P"
 	@echo "  route-health-dns  - create/update CNAMEs for every hostname in the health cloudflared ConfigMap"
 	@echo "  health-influx-bootstrap - bootstrap InfluxDB buckets/DBRP mapping/tokens for the health stack"
@@ -217,17 +233,30 @@ check-script-substitution-homelab:
 check-script-substitution-vps:
 	@scripts/check-script-substitution.py vps
 
-# Third guard in the same family, and the one that keeps a ping BODY honest.
+# Third guard in the same family, and the one that keeps a REPORTED MESSAGE
+# honest — a healthchecks.io ping body or an uptime-kuma heartbeat `msg`, which
+# since 2026-08-26 are both in play and share one rule set.
 #
-# A ping body leaves the estate: healthchecks.io is a third-party SaaS, the body
-# is stored in their object storage, and it is repeated on every run until
-# somebody fixes the script. So an `emit` call is a line in a public file.
+# A healthchecks.io body leaves the estate: it is a third-party SaaS, the body is
+# stored in their object storage, and it is repeated on every run until somebody
+# fixes the script. A kuma msg stays on the operator's own VPS, but it is still
+# written to a database, still repeated, and still read verbatim into every
+# notification the monitor sends. So an `emit` call is a line in a public file
+# either way.
 #
-# The rule it enforces (spec section 9.2) is: never build a body from a
-# command's output. restic error messages quote the repository URL; the two
-# scripts influx-backup.sh execs into the influxdb pod pass the InfluxDB
-# OPERATOR token on argv, so anything echoing argv would ship it nightly; a
-# failing wget quotes the ping URL, which IS the check's write credential.
+# The rule it enforces (spec section 9.2) is: never build one from a command's
+# output. restic error messages quote the repository URL; the two scripts
+# influx-backup.sh execs into the influxdb pod pass the InfluxDB OPERATOR token
+# on argv, so anything echoing argv would ship it nightly; and a failing wget or
+# curl quotes the URL it was handed, which is the reporting credential either
+# way — a ping UUID, or a push token as the last path segment of PUSH_URL.
+#
+# It recognises a sink by FUNCTION NAME, never by destination host, which is why
+# `emit`/`hc_emit`/`hc_summary` kept their names through the migration. Its OK:
+# line reports a sink-call COUNT: read it per file, not in aggregate. The
+# aggregate fell when multi-line bodies collapsed into one-line messages; what
+# must never happen is a file losing its last sink call or dropping out of the
+# scan.
 #
 # Reads source files only — no cluster, no 1Password, no kustomize. So it is on
 # BOTH halves of diff-*/apply-*, like check-script-substitution and unlike
@@ -242,6 +271,34 @@ check-ping-bodies-homelab:
 
 check-ping-bodies-vps:
 	@scripts/check-ping-bodies.py vps
+
+# ---------------------------------------------------------------------------
+# check-keel-fresh-parity — the two ops/keel-fresh copies must stay in step
+# ---------------------------------------------------------------------------
+#
+# homelab/ops and vps/ops hold a deliberate copy-paste pair: the same runner and
+# the same CronJob, twice, because kustomize will not read a generator source
+# outside its own root and because the alternative puts a VPS kubeconfig in a
+# homelab pod. The invariant that arrangement rests on is EDIT THEM TOGETHER,
+# and until this guard existed four source comments saying so were the whole of
+# the enforcement. A fix applied to one cluster and not the other is a
+# dead-man's-switch that has quietly stopped switching on the cluster nobody
+# looked at — the very failure keel-fresh was built to remove.
+#
+# THE ONE GUARD HERE WITH NO PER-CLUSTER HALF, and that is structural rather
+# than an omission: it compares the two trees AGAINST EACH OTHER, so "the VPS
+# half of a homelab-versus-VPS comparison" does not exist. It takes no cluster
+# argument and rejects one. The consequence, stated rather than discovered: a
+# divergence introduced in the VPS copy blocks apply-homelab too. Correct —
+# while the pair is out of step neither copy is trustworthy, and the fix is to
+# finish the edit rather than route around the gate.
+#
+# Reads four files and shells out to no renderer, so it is cheap and sits on
+# BOTH halves of diff-*/apply-*, like check-script-substitution and
+# check-ping-bodies and unlike the three render-based guards.
+.PHONY: check-keel-fresh-parity
+check-keel-fresh-parity:
+	@scripts/check-keel-fresh-parity.py
 
 # ---------------------------------------------------------------------------
 # check-script-lint — shellcheck + Python syntax/tests over the RENDERED stream
@@ -286,19 +343,51 @@ check-script-lint-vps:
 # --------------------------- end check-script-lint -------------------------
 
 # Fifth guard, and the one that keeps the UPDATE path honest rather than the
-# secret path. `homelab-update-watch` counts open Renovate pull requests, so a
-# namespace Renovate does not scan produces no pull request, no count and a
-# permanently green check over an estate that has stopped receiving updates —
-# the watcher's own failure mode, wearing the watcher's colours.
+# secret path. Two mechanisms update this estate and each is silent when it
+# stops: keel for floating tags, Renovate for pinned ones. Every way of getting
+# a container's mode wrong fails quietly — a pinned tag carrying keel
+# annotations is frozen while looking covered, an incomplete keel set silently
+# downgrades a semver tag to `:latest`, and a pinned tag outside Renovate's
+# scope receives nothing at all while `homelab-update-watch` stays UP.
 #
-# It reads renovate.json and the homelab tree: no cluster, no 1Password, no
-# kustomize. Homelab-only by nature (the VPS cluster is keel-managed throughout),
-# so there is no per-cluster split and it is wired into the homelab diff/apply
-# preflight only. Same build-* exclusion as the other four — build-*'s stdout IS
-# the manifest.
-.PHONY: check-renovate-scope
+# It renders the cluster with `kustomize build` and evaluates ONE CONTAINER AT A
+# TIME, so a file holding both a keel-managed Deployment and a pinned CronJob is
+# judged twice rather than once. keel annotations are a WORKLOAD property, so a
+# pinned sidecar beside a floating app image is Renovate's and not frozen; only
+# a workload with nothing floating in it can be frozen. It reads renovate.json
+# for scope; an image named by no file in ITS OWN cluster's tree came from a
+# remote base and is advisory, like check-script-lint's upstream findings. The
+# lookup is confined per cluster on purpose — the two trees name many of the
+# same images, so a repo-wide one would let a watched homelab file vouch for an
+# unwatched VPS container.
+#
+# Per-cluster variants like the other two RENDER-BASED guards — check-job-ttl
+# and check-script-lint — so a VPS-only render fault cannot block an unrelated
+# `apply-homelab`. Those three are the whole render-based set; the preflight's
+# other two, check-script-substitution and check-ping-bodies, scan source files
+# and shell out to nothing. Both variants sit on the PUBLIC half of their
+# cluster's diff and apply chains, for the reason this block gives above: the
+# guard shells out to a full `kustomize build`, so duplicating it onto the
+# inner half would double every apply's render cost — and what it protects is
+# the update path, not a secret, so nothing it catches can leak a value.
+#
+# ARMED 2026-08-26, in the commit that widened Renovate to homelab/** and vps/**
+# and de-keeled the two frozen semver pins. Order mattered and still does: the
+# guard cannot pass against a renovate.json that watches three namespaces,
+# because every pinned, keel-free container outside them genuinely receives
+# nothing — the estate's true state, not a bug in the guard. Widen scope first,
+# prove a clean run against both renders, then arm. Never the reverse: wiring a
+# guard into a preflight it does not pass makes an apply impossible and teaches
+# the next person to route around the gate.
+.PHONY: check-renovate-scope check-renovate-scope-homelab check-renovate-scope-vps
 check-renovate-scope:
 	@scripts/check-renovate-scope.py
+
+check-renovate-scope-homelab:
+	@scripts/check-renovate-scope.py homelab
+
+check-renovate-scope-vps:
+	@scripts/check-renovate-scope.py vps
 
 .PHONY: require-vars
 require-vars:
@@ -517,13 +606,32 @@ check-context:
 # mode is likewise recoverable: a lint finding is a bug you have not shipped
 # yet, not a secret you have to rotate.
 #
-# check-renovate-scope is on the PUBLIC half of the homelab targets only, and
-# has no per-cluster split: it reads renovate.json plus the homelab tree, and
-# the VPS cluster is keel-managed throughout, so there is nothing there for it
-# to say. Public half only because what it protects is the UPDATE path, not a
-# secret: nothing it catches can leak a value, and the guard exists to stop a
-# pinned namespace going quietly unwatched, which the next diff or apply catches
-# just as well.
+# check-renovate-scope-<cluster> is on the PUBLIC half of all four chains, and
+# has been since 2026-08-26. It belongs there for the same reason as
+# check-job-ttl and check-script-lint: it shells out to a full
+# `kustomize build`, and what it protects is the UPDATE path, not a secret —
+# nothing it catches can leak a value.
+#
+# It arrived later than the other four because arming it needed a scope
+# widening first, and that ORDER is the part worth keeping. The guard renders
+# each cluster and judges one container at a time, so it has something to say
+# about both clusters and exists as a per-cluster pair. Against the
+# renovate.json that watched three namespaces it could not pass: every pinned,
+# keel-free container outside them genuinely received nothing, which was the
+# estate's true state rather than a bug in the guard. So the commit that
+# widened Renovate to homelab/** and vps/** proved a clean run against both
+# renders and armed both targets on all four chains in the same breath. If the
+# scope is ever narrowed again, widen-prove-arm is the order — never wire a
+# guard into a preflight it cannot pass, which makes an apply impossible and
+# teaches the next person to route around the gate.
+#
+# check-keel-fresh-parity is on BOTH halves of all four chains, for
+# check-script-substitution's reason rather than check-job-ttl's: it reads four
+# files, runs no renderer, and must hold however the recipe is entered. It is
+# the only guard here with NO per-cluster half — it compares the two trees
+# against each other, so there is no half of it to take. It therefore appears
+# identically on the homelab and VPS chains, and a divergence introduced in
+# either copy blocks both clusters' applies. See the block above its target.
 #
 # WHAT IS AND IS NOT PROTECTED IN THE PRINTED DIFF
 #
@@ -559,7 +667,7 @@ check-context:
 # THAT it changed, never WHAT it changed to. Use
 # `kubectl -n <ns> get secret <name> -o jsonpath=...` to confirm a value landed.
 .PHONY: diff-homelab
-diff-homelab: check-vars-consistency check-context check-script-substitution-homelab check-job-ttl-homelab check-ping-bodies-homelab check-script-lint-homelab check-renovate-scope
+diff-homelab: check-vars-consistency check-context check-script-substitution-homelab check-job-ttl-homelab check-ping-bodies-homelab check-script-lint-homelab check-renovate-scope-homelab check-keel-fresh-parity
 	@$(OP_RUN) $(MAKE) --no-print-directory _diff-homelab-inner
 
 # The old `|| true` here swallowed EVERYTHING, including a kustomize failure.
@@ -571,7 +679,7 @@ diff-homelab: check-vars-consistency check-context check-script-substitution-hom
 # >1 = kubectl itself failed. Streaming is preserved — the rendered manifest is
 # never buffered into a shell variable.
 .PHONY: _diff-homelab-inner
-_diff-homelab-inner: check-context check-script-substitution-homelab check-ping-bodies-homelab _assert-vars
+_diff-homelab-inner: check-context check-script-substitution-homelab check-ping-bodies-homelab check-keel-fresh-parity _assert-vars
 	@kustomize build homelab/ | envsubst '$(ENVSUBST_VARS)' | kubectl diff -f -; \
 	st=($${PIPESTATUS[@]}); \
 	if [ $${st[0]} -ne 0 ]; then echo "ERROR: kustomize build failed (exit $${st[0]}) — diff above is incomplete" >&2; exit 1; fi; \
@@ -580,7 +688,7 @@ _diff-homelab-inner: check-context check-script-substitution-homelab check-ping-
 	exit 0
 
 .PHONY: apply-homelab
-apply-homelab: check-vars-consistency check-context check-script-substitution-homelab check-job-ttl-homelab check-ping-bodies-homelab check-script-lint-homelab check-renovate-scope
+apply-homelab: check-vars-consistency check-context check-script-substitution-homelab check-job-ttl-homelab check-ping-bodies-homelab check-script-lint-homelab check-renovate-scope-homelab check-keel-fresh-parity
 	@$(OP_RUN) $(MAKE) --no-print-directory _apply-homelab-inner
 
 # RENDER FULLY, VERIFY, THEN APPLY — never stream straight into kubectl.
@@ -599,7 +707,7 @@ apply-homelab: check-vars-consistency check-context check-script-substitution-ho
 # crash, a stray `set -x`, or the next person with read access to /tmp. The
 # variable is local to this recipe's shell, never exported.
 .PHONY: _apply-homelab-inner
-_apply-homelab-inner: check-context check-script-substitution-homelab check-ping-bodies-homelab _assert-vars
+_apply-homelab-inner: check-context check-script-substitution-homelab check-ping-bodies-homelab check-keel-fresh-parity _assert-vars
 	@set -o pipefail; \
 	cluster=homelab; allowlist=ENVSUBST_VAR_NAMES; \
 	rendered=$$(kustomize build homelab/ | envsubst '$(ENVSUBST_VARS)') || { \
@@ -840,12 +948,14 @@ hindsight-upgrade: check-context
 	  echo "###"; \
 	  echo "### Next, by hand:"; \
 	  echo "###   1. Merge the Renovate \"hindsight stack\" PR on GitHub, then: git pull"; \
-	  echo "###      (closing it unmerged does not snooze anything - Renovate recreates it)"; \
+	  echo "###      (do NOT close it unmerged - not a supported move today, and it"; \
+	  echo "###       snoozes homelab-update-watch; docs/operations/monitoring.md)"; \
 	  echo "###   2. make diff-homelab      <- READ IT. Confirm only the image lines moved."; \
 	  echo "###   3. make apply-homelab"; \
 	  echo "###   4. kubectl -n hindsight rollout status deploy/hindsight --timeout=600s"; \
 	  echo "###   5. Verify: the startup probe settles, then \`hermes memory status\` on VM 103"; \
-	  echo "###   6. Confirm homelab-update-watch goes green after the next 06:45 run"; \
+	  echo "###   6. Confirm the homelab-update-watch monitor goes UP after the next"; \
+	  echo "###      06:45 run"; \
 	  echo "###      (or force one: kubectl -n ops create job --from=cronjob/update-watch now-$$ts)"; \
 	  echo "###"; \
 	  echo "### If it goes wrong, the restore runbook is in docs/operations/hindsight.md."; \
@@ -866,7 +976,161 @@ hindsight-upgrade: check-context
 	  fi; \
 	  echo "###"; \
 	  echo "### The Job is left in place - its TTL collects it, and until then it is"; \
-	  echo "### inspectable. Its own healthchecks.io ping has already fired."; \
+	  echo "### inspectable. The monitor goes DOWN either way: on the exit trap's"; \
+	  echo "### 'down' push, or - if the Job is still running, or was killed before"; \
+	  echo "### the trap could run - when the heartbeat interval plus retry expires."; \
+	  exit 1; \
+	fi
+
+# --- health namespace ------------------------------------------------------
+#
+# `make health-upgrade` — the pre-upgrade dump, and nothing else. Closes issue #54.
+#
+# A FLAT SIBLING OF hindsight-upgrade, copy-pasted rather than parameterised, per
+# this Makefile's stated doctrine that duplication beats abstraction at two
+# instances. Read that target first; everything structural here is the same, and
+# only the namespace, the CronJob name, the timeout and the banner differ.
+#
+# WHAT IT COVERS, WHICH IS BOTH STATEFUL COMPONENTS. The `influx-backup` CronJob
+# is misnamed by history: it takes the InfluxDB logical export AND the Grafana
+# SQLite dump (grafana-sqlite-backup.py, through a read-only mount of the
+# grafana-data PVC). Issue #54's open question — whether Grafana needed a real
+# logical backup before this target could be honest — was answered by building
+# one, so this target's banner can promise a rollback for both.
+#
+# The target performs NO verification of its own. influx-backup.sh asserts its
+# own artifacts — every expected bucket present, every prune glob matching, the
+# Grafana dump over its byte and schema-object floors — and a second, weaker copy
+# of those assertions would only create a place for the two to disagree. Note
+# what that list does NOT include: those are existence checks, so a stale dump
+# satisfies them. Artifact FRESHNESS is the restic gate's 30 h check, a different
+# Job half an hour later.
+#
+# WHERE THE 600s COMES FROM. Measured, not guessed. The retained nightly Jobs ran
+# 26s and 25s start-to-completion; a timed run of THIS target on 2026-08-26 took
+# 27s (18:17:29 -> 18:17:56), so a manual `--from=cronjob/` Job behaves like a
+# scheduled one and the nightly history is a fair guide. 600s is ~22x that, which
+# buys a cold `alpine/k8s` pull and years of data growth, and it stays well under
+# the CronJob's own activeDeadlineSeconds of 3600 — the pod is killed there
+# regardless, so a longer wait would only sit watching a Job the cluster has
+# already given up on. The failure mode of a tight timeout is the expensive one:
+# FAILED printed over a healthy dump.
+#
+# NOTE THE `$$(date …)`. Inside a Make recipe `$(date …)` is a MAKE variable
+# reference and expands to the empty string. The timestamp is captured ONCE so
+# every later step names the same Job.
+#
+# The Job is created with `--from=cronjob/…`, so it inherits the whole pod spec —
+# image, ServiceAccount, script ConfigMap, both PVC mounts, ttlSecondsAfterFinished
+# (172800, confirmed on the real run), so it self-collects. NO `kind: Job`
+# MANIFEST IS ADDED TO THE TREE: that walks straight into the
+# immutable-spec.template trap that broke apply-homelab for four months. Nothing
+# here is exempted from check-job-ttl, either — that guard reads the kustomize
+# render, and a Job created at run time never appears in it.
+#
+# THE CONCURRENCY GUARD FILTERS ON THE OWNER, NOT THE NAME. `kubectl create job
+# --from=cronjob/X` sets an ownerReferences entry naming X (controller: true) and
+# a `cronjob.kubernetes.io/instantiate: manual` annotation — verified with a
+# client-side dry run — so a manual Job is as identifiable as a scheduled one and
+# NOTHING here depends on what anyone calls it. An earlier draft matched name
+# prefixes instead, which missed the `grafana-predump` that this repo's own
+# documentation used to tell an operator to create: the one collision the guard
+# exists to catch. Names are a convention nothing enforces; the owner is set by
+# the API server. The residual is a Job someone hand-rolls with a copied pod spec
+# and no owner, which nothing here can see and no documented procedure produces.
+# One corner of that residual is worth naming because the old guard did cover it:
+# an OWNERLESS Job called exactly `influx-backup` leaves the owner field empty, so
+# awk reads the name into $$1 and prints nothing, and the guard passes. Accepted —
+# it needs someone to hand-roll a Job under the CronJob's own name.
+.PHONY: health-upgrade
+health-upgrade: check-context
+	@kubectl -n health get cronjob influx-backup >/dev/null 2>&1 || { \
+	  echo "ERROR: cronjob/influx-backup not found in namespace health."; \
+	  echo "  This target exists to take a verified pre-upgrade dump. A target that"; \
+	  echo "  silently 'succeeds' without dumping is the worst possible outcome, so"; \
+	  echo "  it refuses rather than guessing."; \
+	  exit 1; \
+	}
+	@active=$$(kubectl -n health get jobs \
+	    -o jsonpath='{range .items[?(@.status.active)]}{.metadata.ownerReferences[*].name}{" "}{.metadata.name}{"\n"}{end}' \
+	  | awk '$$1 == "influx-backup" { print $$2 }'); \
+	if [ -n "$$active" ]; then \
+	  echo "ERROR: a dump Job is already running:"; \
+	  echo "$$active" | sed 's/^/  /'; \
+	  echo "  concurrencyPolicy: Forbid governs only the Jobs the CronJob itself"; \
+	  echo "  creates, so this guard is what keeps a manual dump off the staging"; \
+	  echo "  path a running one is using. Wait for it, or watch it:"; \
+	  echo "    kubectl -n health logs -f job/<name>"; \
+	  exit 1; \
+	fi
+	@set -e; \
+	ts=$$(date -u +%Y%m%d%H%M%S); job=pre-upgrade-$$ts; \
+	kubectl -n health create job --from=cronjob/influx-backup "$$job"; \
+	if kubectl -n health wait --for=condition=complete "job/$$job" --timeout=600s; then \
+	  kubectl -n health logs "job/$$job" --tail=25 || true; \
+	  echo ""; \
+	  echo "### Pre-upgrade dump complete: $$job"; \
+	  echo "### It covers BOTH stateful components: the InfluxDB logical export and"; \
+	  echo "### the Grafana SQLite dump. The log above ends with the Grafana dump's"; \
+	  echo "### own size and schema-object count, then influx-backup.sh's own"; \
+	  echo "### 'detail:' line, which carries every artifact size and count"; \
+	  echo "### (lp_files= is one export per bucket). The one-line heartbeat sent to"; \
+	  echo "### the health-influx-backup monitor carries only the verdict, buckets="; \
+	  echo "### and grafana_kib=, so the log above is the fuller record."; \
+	  echo "###"; \
+	  echo "### Next, by hand. DEPLOY, THEN MERGE - never the other way round:"; \
+	  echo "###   1. gh pr checkout <the Renovate \"health stack\" PR>. Do NOT merge it"; \
+	  echo "###      yet: master records what has been deployed, never intent. Do NOT"; \
+	  echo "###      close it unmerged either - that is not a supported move today;"; \
+	  echo "###      docs/operations/monitoring.md carries the reasoning."; \
+	  echo "###   2. git rebase origin/master, and carry every other deployed-but-"; \
+	  echo "###      unmerged branch that touches these files. Find them with:"; \
+	  echo "###      gh pr list --state open   <- read the FILE list, not just titles"; \
+	  echo "###   3. git push --force-with-lease   <- the rebase rewrote this branch,"; \
+	  echo "###      and --force-with-lease refuses if anyone else pushed to it since."; \
+	  echo "###   4. make diff-homelab      <- READ IT IN FULL. Only the image lines"; \
+	  echo "###      may move, beyond the usual always-differs Secrets, PVs and"; \
+	  echo "###      cert-manager webhooks. Anything else is a revert until proven."; \
+	  echo "###   5. make apply-homelab"; \
+	  echo "###   6. kubectl -n health rollout status deploy/influxdb --timeout=600s"; \
+	  echo "###      kubectl -n health rollout status deploy/grafana  --timeout=600s"; \
+	  echo "###   7. Verify ingest: force one freshness run and read its POD LOG -"; \
+	  echo "###      kubectl -n health create job --from=cronjob/ingest-freshness now-$$ts"; \
+	  echo "###   8. Open a Grafana dashboard and confirm it renders against InfluxDB."; \
+	  echo "###   9. ONLY NOW, with the cluster healthy:"; \
+	  echo "###      gh pr merge --squash --delete-branch   (this repo squashes only)"; \
+	  echo "###      git checkout master && git pull"; \
+	  echo "###  10. Confirm the homelab-update-watch monitor is UP after the next 06:45 run"; \
+	  echo "###      (or force one: kubectl -n ops create job --from=cronjob/update-watch now-$$ts)"; \
+	  echo "###"; \
+	  echo "### If it goes wrong, the restore runbook is in docs/operations/homelab-health.md."; \
+	  echo "### A Grafana MAJOR migrates grafana.db in place on first start, so its"; \
+	  echo "### rollback is a restore from the dump above, never a tag revert."; \
+	else \
+	  failed=$$(kubectl -n health get "job/$$job" \
+	    -o jsonpath='{.status.conditions[?(@.type=="Failed")].status}' 2>/dev/null || true); \
+	  kubectl -n health logs "job/$$job" --tail=40 || true; \
+	  echo ""; \
+	  if [ "$$failed" = "True" ]; then \
+	    echo "### DUMP FAILED - do not upgrade."; \
+	    echo "### The log ends with whatever failed: a FATAL: line from influx-backup.sh"; \
+	    echo "### or from one of the scripts it runs, or else the underlying tool's own"; \
+	    echo "### error. The health-influx-backup heartbeat names it as failed_step="; \
+	    echo "### whenever the script exited normally - every failure except a kill"; \
+	    echo "### (OOM, eviction, the active deadline), where no exit trap runs and"; \
+	    echo "### so nothing is pushed at all."; \
+	  else \
+	    echo "### DUMP STILL RUNNING after 600s - do not upgrade; do not delete the job."; \
+	    echo "### Watch it: kubectl -n health logs -f job/$$job"; \
+	    echo "### 600s is shorter than the CronJob's own activeDeadlineSeconds (3600) on"; \
+	    echo "### purpose: this export takes about 27 seconds, so one still running after"; \
+	    echo "### 10 minutes is something to look at, not to wait out."; \
+	  fi; \
+	  echo "###"; \
+	  echo "### The Job is left in place - its TTL collects it, and until then it is"; \
+	  echo "### inspectable. The monitor goes DOWN either way: on the exit trap's"; \
+	  echo "### 'down' push, or - if the Job is still running, or was killed before"; \
+	  echo "### the trap could run - when the heartbeat interval plus retry expires."; \
 	  exit 1; \
 	fi
 
@@ -882,7 +1146,7 @@ VPS_REQUIRED_VARS := VPS_B2_ACCOUNT_ID VPS_B2_ACCOUNT_KEY VPS_RESTIC_PASSWORD \
                     VPS_RESTIC_REPOSITORY VPS_RESTIC_HC_UUID \
                     N8N_ENCRYPTION_KEY UMAMI_DB_PASSWORD UMAMI_APP_SECRET \
                     KARAKEEP_MEILI_MASTER_KEY KARAKEEP_NEXTAUTH_SECRET \
-                    KARAKEEP_OPENAI_API_KEY
+                    KARAKEEP_OPENAI_API_KEY VPS_OPS_KUMA_KEEL_TOKEN
 
 VPS_ENVSUBST_VAR_NAMES := $(VPS_REQUIRED_VARS)
 VPS_ENVSUBST_VARS := $(foreach v,$(VPS_ENVSUBST_VAR_NAMES),$${$(v)})
@@ -964,12 +1228,12 @@ _build-vps-inner:
 # closed on a wrong context no matter how it is entered. See the GUARD
 # PLACEMENT note above diff-homelab.
 .PHONY: diff-vps
-diff-vps: check-vps-context check-vps-vars-consistency check-script-substitution-vps check-job-ttl-vps check-ping-bodies-vps check-script-lint-vps
+diff-vps: check-vps-context check-vps-vars-consistency check-script-substitution-vps check-job-ttl-vps check-ping-bodies-vps check-script-lint-vps check-renovate-scope-vps check-keel-fresh-parity
 	@$(OP_RUN) $(MAKE) --no-print-directory _diff-vps-inner
 
 # See _diff-homelab-inner for why this is a PIPESTATUS check and not `|| true`.
 .PHONY: _diff-vps-inner
-_diff-vps-inner: check-vps-context check-script-substitution-vps check-ping-bodies-vps _assert-vps-vars
+_diff-vps-inner: check-vps-context check-script-substitution-vps check-ping-bodies-vps check-keel-fresh-parity _assert-vps-vars
 	@kustomize build vps/ | envsubst '$(VPS_ENVSUBST_VARS)' | kubectl diff -f -; \
 	st=($${PIPESTATUS[@]}); \
 	if [ $${st[0]} -ne 0 ]; then echo "ERROR: kustomize build failed (exit $${st[0]}) — diff above is incomplete" >&2; exit 1; fi; \
@@ -978,12 +1242,12 @@ _diff-vps-inner: check-vps-context check-script-substitution-vps check-ping-bodi
 	exit 0
 
 .PHONY: apply-vps
-apply-vps: check-vps-context check-vps-vars-consistency check-script-substitution-vps check-job-ttl-vps check-ping-bodies-vps check-script-lint-vps
+apply-vps: check-vps-context check-vps-vars-consistency check-script-substitution-vps check-job-ttl-vps check-ping-bodies-vps check-script-lint-vps check-renovate-scope-vps check-keel-fresh-parity
 	@$(OP_RUN) $(MAKE) --no-print-directory _apply-vps-inner
 
 # Same render-fully-then-apply shape as _apply-homelab-inner; see the note there.
 .PHONY: _apply-vps-inner
-_apply-vps-inner: check-vps-context check-script-substitution-vps check-ping-bodies-vps _assert-vps-vars
+_apply-vps-inner: check-vps-context check-script-substitution-vps check-ping-bodies-vps check-keel-fresh-parity _assert-vps-vars
 	@set -o pipefail; \
 	cluster=vps; allowlist=VPS_ENVSUBST_VAR_NAMES; \
 	rendered=$$(kustomize build vps/ | envsubst '$(VPS_ENVSUBST_VARS)') || { \

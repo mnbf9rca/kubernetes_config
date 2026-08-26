@@ -1,7 +1,9 @@
 #!/bin/sh
 # Nightly logical dump of the hindsight database. Runs in the `hindsight-pg-dump`
-# CronJob pod, from the SAME pinned pgvector image the server runs, so pg_dump's
-# client version matches the server's for free.
+# CronJob pod on postgres:17.6-alpine - NOT on the server's pgvector image, which
+# ships neither curl nor wget and so could never deliver a heartbeat. What matters
+# for pg_dump is that the MAJOR matches the server's (17); the manifest says so
+# beside the image and the two are bumped together.
 #
 # WHY THIS EXISTS. Both hindsight PVCs are local-path, so the 03:00 restic sweep
 # of /var/mnt/ssd/local-path-provisioner captures them with no backup-side
@@ -22,76 +24,95 @@
 # ConfigMap. The container maps the secret to a differently named variable and this
 # script only ever sees that name. `make check-script-substitution` enforces it.
 #
-# NO `set -o pipefail`. This image's /bin/sh is dash (the pgvector image is
-# Debian-based, not Alpine), and dash does not implement pipefail. So nothing here
-# hides a failure inside a pipeline: pg_dump writes a plain file with --file, and
-# the content assertion reads that file directly.
+# NO `set -o pipefail`. The verdict never comes from a pipeline: pg_dump writes a
+# plain file with --file rather than piping into gzip, and both content
+# assertions read that file directly. There are three pipelines here and it is
+# worth naming what each would do if a stage failed, rather than claiming there
+# are none:
+#
+#   emit()      printf | tr    - cannot fail the job; `|| true` swallows it and
+#                                the worst case is an empty heartbeat message.
+#   push_kuma() cut | tr | tr  - same; a failed stage yields an empty message.
+#   prune()     printf | sort  - THIS one takes a value from a pipeline, into the
+#                                positional parameters. Without pipefail a failed
+#                                `printf` would be masked by `sort` succeeding,
+#                                leaving `set --` empty and the prune a silent
+#                                no-op. Bounded rather than ignored: `printf` is
+#                                a builtin over a glob and essentially cannot
+#                                fail, and KEPT is counted afterwards by an
+#                                independent glob loop, so a prune that did
+#                                nothing shows up as a KEPT above the retention
+#                                limit rather than as a wrong number.
 set -eu
 
-# ---- healthchecks.io ping with a body ------------------------------------
-# START PLUS EXIT CODE, from an EXIT trap, so a failure can never be silence —
-# the repo rule for scheduled work, and the same shape influx-backup.sh uses.
+# ---- uptime-kuma push with a short message --------------------------------
+# EXIT CODE FROM AN EXIT TRAP, so a failure can never be silence - the repo rule
+# for scheduled work, and the same shape influx-backup.sh uses. Since 2026-08-26
+# the destination is the `hindsight-pg-dump` uptime-kuma PUSH monitor rather than
+# a healthchecks.io check, which changes two things:
 #
-# A PING MUST NEVER FAIL THE JOB, AND A BODY MUST NEVER COST A PING.
-# NEVER EMIT A COMMAND'S OUTPUT: a failing curl or wget quotes the ping URL, which
-# IS the check's write credential, and pg_dump's diagnostics quote the connection
-# string. `make check-ping-bodies` enforces it. Everything below is a count, a byte
-# size or a verdict from a fixed enum.
-# A BARE TRAILING SLASH IS AN HTTP 400, so the URL is built conditionally.
+#   NO /start PING. The push API has no such concept: a push is a heartbeat
+#   carrying a status. `activeDeadlineSeconds` on the CronJob is the WHOLE of the
+#   hang bound, and the monitor's heartbeat interval plus retry is the silence
+#   bound. A run that starts and wedges is killed by the deadline and then shows
+#   up as a missing heartbeat - the same alarm, one step later.
+#
+#   THE MESSAGE IS SHORT AND FIXED-SHAPE. kuma stores one `msg` string per
+#   heartbeat, so what travels with the alert is a verdict, a table count and a
+#   size. The rest is echoed to this pod's log by the trap.
+#
+# A PUSH MUST NEVER FAIL THE JOB, AND A MESSAGE MUST NEVER COST A PUSH.
+# NEVER EMIT A COMMAND'S OUTPUT: a failing wget quotes what it was given, a push
+# URL carries the monitor's token as its last path segment, and pg_dump's
+# diagnostics quote the connection string. `make check-ping-bodies` enforces it.
+# Everything below is a count, a byte size or a verdict from a fixed enum.
+# `emit` keeps its name: that guard recognises a body sink by FUNCTION NAME and
+# never by the ping host.
+#
+# THE TOKEN REACHES THIS SCRIPT AS `PUSH_URL`, NOT AS ITS REAL NAME, for the
+# same envsubst reason as PGPASSWORD above. `make check-script-substitution`
+# enforces the rename; the real name is in homelab/hindsight/hindsight.yaml.
+#
 # `true >`, not `: >`: a redirection error on a POSIX special built-in aborts the
-# shell even behind `|| true`.
-HC_BODY=/tmp/hc-body
-# The stderr redirection PRECEDES the body redirection in both. Redirections are
-# applied left to right, so `>> "$HC_BODY" 2>/dev/null` cannot suppress the shell's
-# own "cannot create" diagnostic — only this order can.
-hc_reset() { true 2>/dev/null > "$HC_BODY" || true; }
-emit() { { printf '%s' "$*" | LC_ALL=C tr -cd '\040-\176'; printf '\n'; } 2>/dev/null >> "$HC_BODY" || true; }
+# shell even behind `|| true`. Tokens are space-separated on ONE line, because a
+# kuma msg is one line.
+MSG_FILE=/tmp/kuma-msg
+# The stderr redirection PRECEDES the message redirection in both. Redirections are
+# applied left to right, so `>> "$MSG_FILE" 2>/dev/null` cannot suppress the shell's
+# own "cannot create" diagnostic - only this order can.
+msg_reset() { true 2>/dev/null > "$MSG_FILE" || true; }
+# shellcheck disable=SC2329 # called only from on_exit, which runs from the EXIT trap.
+emit() { { printf '%s ' "$*" | LC_ALL=C tr -cd '\040-\176'; } 2>/dev/null >> "$MSG_FILE" || true; }
 
-# WHICH HTTP CLIENT. The pgvector image is chosen for pg_dump version parity, not
-# for its tooling, and it may ship neither curl nor wget. Both are probed rather
-# than assumed. If neither exists this job still runs and still dumps; what is lost
-# is the ping, and the healthchecks.io check then goes red by silence — the correct
-# outcome, and visible on the first manual run at rollout step 5. Do not "fix" a
-# missing client by installing one at runtime: an apt-get in a backup job puts a
-# network dependency in the recovery path.
-HC_CURL=$(command -v curl 2>/dev/null || true)
-HC_WGET=$(command -v wget 2>/dev/null || true)
-
-# _hc_send URL BODYFILE — BODYFILE may be empty. Non-zero if not delivered.
-_hc_send() {
-  if [ -n "$HC_CURL" ]; then
-    if [ -n "$2" ]; then
-      curl -fsS -m 15 -o /dev/null --data-binary @"$2" "$1"
-    else
-      curl -fsS -m 15 -o /dev/null "$1"
-    fi
-  elif [ -n "$HC_WGET" ]; then
-    if [ -n "$2" ]; then
-      wget -q -T 15 -O /dev/null --post-file="$2" "$1"
-    else
-      wget -q -T 15 -O /dev/null "$1"
-    fi
-  else
-    echo "hc: neither curl nor wget in this image; the check will go red by silence" >&2
-    return 1
-  fi
-}
-
-# ping_hc [SUFFIX] — "" | start | <exit-status>. Always returns 0.
-ping_hc() {
-  _sf=${1:-}
-  _u="https://hc-ping.com/$HC_UUID"
-  [ -z "$_sf" ] || _u="$_u/$_sf"
-  if [ -s "$HC_BODY" ]; then
-    if _hc_send "$_u" "$HC_BODY"; then
-      hc_reset; return 0
-    fi
-    echo "hc: body POST failed, retrying without a body" >&2
-  fi
-  # Fixed text. No URL and no tool output: for a ping the URL IS the write
-  # credential, and a pod log is not a place to put one either.
-  _hc_send "$_u" "" || echo "hc: ping not delivered" >&2
-  hc_reset
+# GET https://uptime.cynexia.com/api/push/<token>?status=up|down&msg=<short>
+#
+# WGET, NOT curl, AND THE CHOICE IS PER-IMAGE. postgres:17.6-alpine ships busybox
+# wget and NO curl - probed in-cluster on 2026-08-26, which is also why this job
+# does not run on the server's Debian pgvector image, which has neither. Do not
+# copy the curl form from the health scripts into this file without re-probing;
+# do not "fix" a missing client by installing one at runtime either, because an
+# apk add in a backup job puts a network dependency in the recovery path. If a
+# future image drops wget the dump still runs and only the heartbeat is lost, so
+# the monitor goes DOWN by silence - the correct outcome, and visible on the
+# first manual run.
+#
+# THE MESSAGE IS MADE URL-SAFE HERE, BY TRANSLITERATION. wget has no
+# `--data-urlencode`, so every character outside the unreserved set plus `=:/.-`
+# becomes `+`, which a query parser decodes back to a space. Every message this
+# script builds is key=value pairs of digits and lower-case words, so nothing
+# legible is lost - and no value is ever interpolated into the URL as syntax.
+# Capped at 200 characters because kuma stores the msg in one column.
+#
+# stderr is discarded and a FIXED line printed instead: wget's own diagnostics
+# quote what they were handed, and a pod log is not a place for a token.
+# shellcheck disable=SC2329 # called only from on_exit, which runs from the EXIT trap.
+push_kuma() {
+  _st=$1
+  _m=$(cut -c1-200 "$MSG_FILE" 2>/dev/null | tr -d '\n' \
+       | LC_ALL=C tr -c 'A-Za-z0-9=._:/-' '+') || _m=""
+  wget -q -T 15 -O /dev/null "$PUSH_URL?status=$_st&msg=$_m" >/dev/null 2>&1 \
+    || echo "kuma: push not delivered" >&2
+  msg_reset
   return 0
 }
 
@@ -125,13 +146,16 @@ OUT="/dumps/hindsight-$TS.sql.gz"
 MIN_BYTES=4096
 KEEP=7
 
-# ---- body values ----------------------------------------------------------
+# ---- message values -------------------------------------------------------
 # `unknown` sentinels so `set -u` cannot bite inside the trap if the run dies
 # before a measurement ran, and so a missing measurement reads as missing rather
 # than as zero. VERDICT starts at the failure that is true before anything has
 # run, and is narrowed as the script gets further.
 TABLES=unknown
 DUMP_BYTES=unknown
+# KiB, not bytes, in the heartbeat: the message is one line and a size in KiB is
+# what the restic gate's floor is expressed in too. Bytes stay in the pod log.
+DUMP_KIB=unknown
 KEPT=unknown
 VERDICT=dump-failed
 
@@ -143,25 +167,25 @@ on_exit() {
   _xrc=$?
   trap - EXIT
   rm -f "$RAW" "$TMP" 2>/dev/null || true
-  hc_reset
-  if [ "$_xrc" -eq 0 ]; then
-    emit "summary=ok - hindsight dump published, $TABLES tables, $DUMP_BYTES B, $KEPT kept"
-  else
-    emit "summary=FAILED rc=$_xrc - hindsight-pg-dump"
-  fi
-  emit "rc=$_xrc"
-  emit "tables=$TABLES"
-  emit "dump_bytes=$DUMP_BYTES"
-  emit "kept=$KEPT"
+  # THE FULL DETAIL GOES TO THE POD LOG, and a verdict plus two numbers travel
+  # with the alert. This line is what the multi-line healthchecks.io body used to
+  # be; read it before ttlSecondsAfterFinished collects the pod.
+  echo "detail: rc=$_xrc verdict=$VERDICT tables=$TABLES dump_bytes=$DUMP_BYTES kept=$KEPT"
+  msg_reset
   emit "verdict=$VERDICT"
-  ping_hc "$_xrc"
+  emit "dump_kib=$DUMP_KIB"
+  emit "tables=$TABLES"
+  emit "kept=$KEPT"
+  if [ "$_xrc" -eq 0 ]; then
+    push_kuma up
+  else
+    push_kuma down
+  fi
   exit "$_xrc"
 }
 trap on_exit EXIT
 
-hc_reset
-emit "summary=starting"
-ping_hc start
+msg_reset
 
 # ---- dump -----------------------------------------------------------------
 # --clean --if-exists so the restore runbook needs no separate drop step, and
@@ -190,6 +214,9 @@ rm -f "$RAW"
 DUMP_BYTES=$(stat -c %s "$TMP") || DUMP_BYTES=0
 case "$DUMP_BYTES" in ''|*[!0-9]*) DUMP_BYTES=0 ;; esac
 # check-ping-bodies: untaint DUMP_BYTES - stat's byte count, gated to digits by the case above
+# Computed BEFORE the floor test, so a dump that fails the floor still reports
+# how big it was - which is the first thing anyone reading that alert wants.
+DUMP_KIB=$(( DUMP_BYTES / 1024 ))
 if [ "$DUMP_BYTES" -lt "$MIN_BYTES" ]; then
   VERDICT=empty-dump
   echo "ERROR: the compressed dump is below the ${MIN_BYTES} B floor - refusing to publish it" >&2

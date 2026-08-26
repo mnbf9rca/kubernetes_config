@@ -26,3 +26,25 @@ metadata:
   # (upstream keel moved to Helm-only and no longer ships flat manifests),
   # so nothing else creates the `keel` namespace for us.
   name: keel
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ops
+  labels:
+    # PSA baseline stated explicitly rather than inherited, matching the `vps`
+    # and `backup` namespaces above.
+    pod-security.kubernetes.io/enforce: baseline
+    pod-security.kubernetes.io/audit: baseline
+    pod-security.kubernetes.io/warn: baseline
+  # The VPS mirror of the homelab `ops` tree. One workload: `keel-fresh`, the
+  # dead-man's-switch over this cluster's keel. It needs no hostPath, no
+  # hostNetwork, no ServiceAccount and no RBAC — only a ClusterIP in the `keel`
+  # namespace and egress to uptime.cynexia.com.
+  #
+  # It is a SEPARATE tree from homelab/ops rather than a shared one because a
+  # homelab pod holding a VPS kubeconfig would be a credential crossing a
+  # cluster boundary to save one file.
+  #
+  # NO keel in this namespace: the image is version-pinned and Renovate watches
+  # vps/** so bumps arrive as pull requests.

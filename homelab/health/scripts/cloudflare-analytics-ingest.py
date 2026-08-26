@@ -24,8 +24,8 @@ THE FOUR RULES THIS SCRIPT EXISTS TO ENFORCE. Read them before changing anything
      retention, those hours are gone and no future run can get them. The job logs
      the exact range, writes an `ingest_gap` marker so the hole is visible in
      Grafana instead of reading as zero traffic, and exits non-zero so the
-     healthchecks.io check goes red. Quietly resuming would be the same bug as a
-     probe that stays green through an outage.
+     `homelab-cloudflare-analytics` monitor is pushed DOWN. Quietly resuming
+     would be the same bug as a probe that stays green through an outage.
 
   4. COMMIT IN ORDER, STOP AT THE FIRST FAILURE. Chunks are processed oldest
      first and a chunk is committed only when EVERY zone succeeded for it. Commit
@@ -44,6 +44,7 @@ import re
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from datetime import datetime, timedelta, timezone
 
@@ -123,11 +124,17 @@ def log(msg):
     print(msg, flush=True)
 
 
-# --- healthchecks.io ping body ----------------------------------------------
-# A short key=value summary of what this run observed, POSTed with the
-# exit-code ping so the Events log answers "what did it see?" without a pod log
-# that may have aged out. Same format as the four shell emitters; one format
-# across the estate is worth more than one job's convenience.
+# --- heartbeat message ------------------------------------------------------
+# A short key=value summary of what this run observed, sent as the `msg` of the
+# uptime-kuma heartbeat so an alert answers "what did it see?" without a pod log
+# that may have aged out. Same format as the shell emitters; one format across
+# the estate is worth more than one job's convenience.
+#
+# SINCE 2026-08-26 THIS IS ONE LINE, NOT A BODY. healthchecks.io stored an
+# arbitrary body; kuma stores a single `msg` string, so the accumulated lines are
+# joined with spaces and cut at 200 characters for the push, while the same
+# lines are printed to the pod log in full. The counters therefore come FIRST
+# and the ISO timestamps last: the cut takes the tail.
 #
 # NEVER PUT A QueryFailed MESSAGE, A RESPONSE BODY OR repr(exc) IN HERE.
 # QueryFailed is raised at ten sites below and those messages splice in
@@ -135,18 +142,25 @@ def log(msg):
 # comment says a zone ID identifies the account - plus up to 800 bytes of raw
 # Cloudflare and InfluxDB response (`text[:500]`, `json.dumps(errors)[:800]`).
 # `make check-ping-bodies` checks every hc_emit/hc_summary argument against an
-# explicit value allowlist.
+# explicit value allowlist. Both sinks keep their names on purpose: that guard
+# recognises a sink by FUNCTION NAME and never by the destination host.
 #
 # The plumbing is a module-level accumulator that main() appends to and the
-# __main__ block joins, because ping(str(rc)) is called at module scope while
-# every emittable value lives in main()'s locals - and main() must keep
-# returning an int, which the test suite asserts on. Do not refactor main() to
-# return a tuple.
+# __main__ block joins, because the push is made at module scope while every
+# emittable value lives in main()'s locals - and main() must keep returning an
+# int, which the test suite asserts on. Do not refactor main() to return a
+# tuple.
 #
-# SUMMARY is a one-element list rather than a `global` so that line 1 of the
-# body is always `summary=`, whatever order things were emitted in.
+# SUMMARY is a one-element list rather than a `global` so that the FIRST token
+# is always `verdict=`, whatever order things were emitted in - and it defaults
+# to a failure, so a run that never reaches a verdict cannot report success.
+#
+# THE VERDICT IS A FIXED ENUM: ok | incomplete | gap | failed. hc_summary is
+# called with a bare member of it and nothing else; the prose that used to live
+# in the summary line is in the log() calls beside each branch.
 _UNPRINTABLE = re.compile(r"[^\040-\176]")
-SUMMARY = ["summary=FAILED - see pod log"]
+VERDICTS = ("ok", "incomplete", "gap", "failed")
+SUMMARY = ["verdict=failed"]
 BODY_LINES = []
 
 
@@ -156,7 +170,21 @@ def _clean(text):
 
 
 def hc_summary(text):
-    SUMMARY[0] = "summary=" + _clean(text)
+    """Set the run's verdict. The argument MUST be a member of VERDICTS.
+
+    Enforced here rather than trusted, because the enum was otherwise dead in
+    this module -- only the test suite read it, and nothing bound the seven call
+    sites (covering four distinct verdicts, `failed` from four of them) to
+    membership, so one could have drifted off the enum and every test would
+    still have passed. A drifted verdict is coerced to `failed` and
+    logged: it must not raise, because a message may never cost a push, and
+    `failed` is the safe direction for a value nobody can classify.
+    """
+    verdict = _clean(text)
+    if verdict not in VERDICTS:
+        log("BUG: %r is not a member of VERDICTS; reporting failed" % verdict)
+        verdict = "failed"
+    SUMMARY[0] = "verdict=" + verdict
 
 
 def hc_emit(key_value):
@@ -164,7 +192,24 @@ def hc_emit(key_value):
 
 
 def hc_body():
+    """Every line, for the pod log."""
     return "\n".join(SUMMARY + BODY_LINES) + "\n"
+
+
+# What kuma stores in a heartbeat's `msg` column.
+MSG_LIMIT = 200
+
+
+def kuma_msg():
+    """The same lines as ONE line, cut to what kuma stores.
+
+    THE CUT LANDS ON A TOKEN BOUNDARY, NEVER MID-TOKEN, so a truncated message
+    ends with the last whole `key=value` pair rather than with half of one.
+    """
+    joined = " ".join(SUMMARY + BODY_LINES)
+    if len(joined) <= MSG_LIMIT:
+        return joined
+    return joined[:MSG_LIMIT].rsplit(" ", 1)[0]
 
 
 def env(name, default=None):
@@ -509,40 +554,58 @@ def influx_watermark(cfg):
     return newest
 
 
-# --- healthchecks.io --------------------------------------------------------
+# --- uptime-kuma push -------------------------------------------------------
 
-def make_pinger(uuid):
-    """Dead-man's-switch pinger. A ping must never be able to fail the job,
-    and a body must never cost a ping."""
-    def ping(suffix, body=None):
-        if not uuid:
+# Any non-default agent will do; what matters is that it is not urllib's own.
+# See the comment inside push() for the Cloudflare rule that makes it matter.
+PUSH_USER_AGENT = "kubernetes-config-cloudflare-analytics"
+
+
+def make_pusher(push_url):
+    """Heartbeat pusher for an uptime-kuma PUSH monitor.
+
+    A push must never be able to fail the job, and a message must never cost a
+    push - the same two properties the healthchecks.io pinger this replaces was
+    built around, and the reason neither is three lines.
+
+    THERE IS NO `start` PUSH AND NO `log` PUSH. The push API has two states and
+    no third kind, so `activeDeadlineSeconds` is the whole of the hang bound and
+    the monitor's heartbeat interval plus retry is the silence bound. Every path
+    in this job is determinate - it either ingested or it did not - so it always
+    pushes exactly one heartbeat, `up` or `down`.
+    """
+    def push(status, msg=""):
+        if not push_url:
             return
-        # This pinger is only ever called with "start" or str(rc), never with
-        # an empty suffix, so it cannot build the trailing-slash URL that
-        # hc-ping.com answers with HTTP 400. Keep it that way.
-        url = "https://hc-ping.com/%s/%s" % (uuid, suffix)
-        if body:
-            try:
-                # THE ENCODE IS INSIDE THE TRY. Evaluated on the line before
-                # urlopen, a UnicodeEncodeError would propagate out of ping()
-                # past sys.exit(rc) and the exit-code ping would never be sent
-                # - a body costing a ping, in the one emitter with an exception
-                # mechanism to do it with.
-                data = body.encode("ascii", "replace")
-                urllib.request.urlopen(url, data=data, timeout=10).close()
-                return
-            except Exception as exc:               # noqa: BLE001 - best effort
-                # THE CLASS NAME ONLY, never repr(exc). The exception in hand
-                # may be a QueryFailed whose message carries a zone tag or a
-                # response body.
-                log("healthchecks.io body POST %r failed (ignored): %s"
-                    % (suffix, type(exc).__name__))
         try:
-            urllib.request.urlopen(url, timeout=10).close()
-        except Exception as exc:                   # noqa: BLE001 - best effort
-            log("healthchecks.io ping %r failed (ignored): %s"
-                % (suffix, type(exc).__name__))
-    return ping
+            # THE ENCODE IS INSIDE THE TRY, for the same reason it was in the
+            # pinger: evaluated on the line before urlopen, an encoding error
+            # would propagate out of push() past sys.exit(rc) and the heartbeat
+            # would be lost - a message costing a push, in the one emitter with
+            # an exception mechanism to do it with.
+            query = urllib.parse.urlencode(
+                {"status": status, "msg": str(msg)[:200]})
+            # THE User-Agent IS LOAD-BEARING AND IS NOT COSMETIC. uptime-kuma
+            # sits behind Cloudflare, which answers urllib's DEFAULT
+            # `Python-urllib/3.x` agent with HTTP 403 and `error code: 1010`
+            # before the request ever reaches kuma. Measured in-cluster on
+            # 2026-08-26: the default agent got 403/1010 and a named one got
+            # kuma's own 404 for a bogus token, from the same URL in the same
+            # process. Every shell runner in the estate pushes with curl or
+            # wget and is unaffected, so this trap is Python-only - and it is
+            # SILENT, because a push failure is swallowed by design. Do not
+            # drop this header.
+            request = urllib.request.Request(
+                push_url + "?" + query, headers={"User-Agent": PUSH_USER_AGENT})
+            urllib.request.urlopen(request, timeout=10).close()
+        except Exception as exc:               # noqa: BLE001 - best effort
+            # THE CLASS NAME ONLY, never repr(exc), and never the URL: the
+            # exception in hand may be a QueryFailed whose message carries a
+            # zone tag or a response body, and the push URL carries the
+            # monitor's token as its last path segment.
+            log("uptime-kuma push %r failed (ignored): %s"
+                % (status, type(exc).__name__))
+    return push
 
 
 # --- main -------------------------------------------------------------------
@@ -587,7 +650,7 @@ def main():
                 % (iso(start), iso(retention_floor), missing_hours,
                    RETENTION_HOURS))
             log("!!! retention and can never be fetched. Writing an ingest_gap")
-            log("!!! marker and exiting non-zero so the check goes red.")
+            log("!!! marker and exiting non-zero so the monitor is pushed down.")
             log("")
             start = retention_floor
 
@@ -681,24 +744,28 @@ def main():
             "run continues from the new watermark"
             % (iso(cursor), iso(now)))
 
-    # --- ping body ----------------------------------------------------------
+    # --- heartbeat message ----------------------------------------------------
     # Counts, timestamps and classified verdicts only. Nothing derived from a
     # QueryFailed message, a response body or an exception's repr - see the
     # comment above hc_emit.
-    if watermark is not None:
-        hc_emit("watermark=%s" % iso(watermark))
-        hc_emit("rewound_to=%s" % iso(start))
+    #
+    # COUNTERS FIRST, ONE TIMESTAMP LAST. The message is cut at 200 characters
+    # for the push, so the cheapest and most-read values go first. `watermark=`
+    # and `rewound_to=` are deliberately NOT emitted any more: two more ISO
+    # timestamps would crowd out the gap fields below on the one branch that
+    # fires once and is the only record of itself, and the log() call above
+    # already prints both.
     hc_emit("chunks=%d/%d" % (chunks_done, MAX_CHUNKS))
     hc_emit("rows=%d" % rows_total)
     hc_emit("series=%d" % series_total)
     if committed_through:
         lag_minutes = int((now - committed_through).total_seconds() // 60)
-        hc_emit("committed_through=%s" % iso(committed_through))
         hc_emit("lag=%dm" % lag_minutes)
+        hc_emit("committed_through=%s" % iso(committed_through))
 
     if failure:
         log("RUN FAILED: %s" % failure)
-        hc_summary("FAILED - query or write failed; see pod log")
+        hc_summary("failed")
         hc_emit("failure=queryfailed")
         hc_emit("detail=see pod log")
         return 1
@@ -713,12 +780,13 @@ def main():
         # margin under Cloudflare's stated 8 days, and `// 24` would round that
         # to "7-day" - understating the window everything else in this repo
         # calls eight days.
-        hc_summary("GAP - job had not ingested since %s; %dh now past "
-                   "Cloudflare's %d-day retention"
-                   % (iso(g_start), missing_hours, (RETENTION_HOURS + 23) // 24))
+        log("GAP: job had not ingested since %s; %dh now past Cloudflare's "
+            "%d-day retention"
+            % (iso(g_start), missing_hours, (RETENTION_HOURS + 23) // 24))
+        hc_summary("gap")
+        hc_emit("gap_hours=%d" % missing_hours)
         hc_emit("gap_start=%s" % iso(g_start))
         hc_emit("gap_end=%s" % iso(g_end))
-        hc_emit("gap_hours=%d" % missing_hours)
         hc_emit("gap_marker=%s" % gap_marker)
         hc_emit("cause=unknown - see pod log")
         return 1
@@ -730,33 +798,33 @@ def main():
         # zone ID.
         truncated = len(warnings)
         log("RUN INCOMPLETE: %d truncated window(s)" % truncated)
-        hc_summary("INCOMPLETE - %d truncated window(s)" % truncated)
+        hc_summary("incomplete")
         hc_emit("truncated_windows=%d" % truncated)
         hc_emit("detail=see pod log")
         return 1
     if committed_through:
-        hc_summary("ok - %d chunks, %d series, committed through %s"
-                   % (chunks_done, series_total, iso(committed_through)))
+        log("RUN OK: %d chunks, %d series, committed through %s"
+            % (chunks_done, series_total, iso(committed_through)))
     else:
-        hc_summary("ok - nothing new to ingest")
+        log("RUN OK: nothing new to ingest")
+    hc_summary("ok")
     return 0
 
 
 if __name__ == "__main__":
-    ping = make_pinger(os.environ.get("HC_UUID", ""))
-    ping("start", "summary=starting\n")
+    push = make_pusher(os.environ.get("PUSH_URL", ""))
     try:
         rc = main()
     except SystemExit as exc:
         rc = exc.code if isinstance(exc.code, int) else 1
         log("FATAL: exiting %d" % rc)
-        hc_summary("FAILED - startup check failed; see pod log")
+        hc_summary("failed")
         hc_emit("failure=fatal")
         hc_emit("detail=see pod log")
     except QueryFailed as exc:
         log("FATAL: %s" % exc)
         rc = 1
-        hc_summary("FAILED - query failed; see pod log")
+        hc_summary("failed")
         hc_emit("failure=queryfailed")
         hc_emit("detail=see pod log")
     except Exception as exc:                       # noqa: BLE001 - report, then red
@@ -767,10 +835,13 @@ if __name__ == "__main__":
         # Request'>`), but because the exception in hand may be a QueryFailed
         # whose message carries a zone tag or a response body.
         log("FATAL: unhandled %s" % type(exc).__name__)
-        hc_summary("FAILED - unhandled exception; see pod log")
+        hc_summary("failed")
         hc_emit("failure=unhandled")
         hc_emit("exception=%s" % type(exc).__name__)
         hc_emit("detail=see pod log")
         rc = 1
-    ping(str(rc), hc_body())
+    # EVERY LINE TO THE POD LOG, then the cut-down one-liner to kuma. The full
+    # set is what the healthchecks.io body used to carry; read it here first.
+    log("heartbeat message (full):\n" + hc_body())
+    push("up" if rc == 0 else "down", kuma_msg())
     sys.exit(rc)

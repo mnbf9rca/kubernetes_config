@@ -80,9 +80,11 @@ spec:
       # The pull itself takes well under a minute (203 MB in ~23 s measured
       # end to end on 2026-08-24, LAN); 30 minutes bounds a hung ssh that the
       # script's ServerAlive options somehow did not catch. A deadline kill
-      # skips the script's EXIT trap, so that failure mode shows on
-      # healthchecks.io as started-but-never-finished — intended. Revisit
-      # from recorded durations per docs/operations/monitoring.md.
+      # skips the script's EXIT trap, so that failure mode pushes NOTHING and
+      # the `homelab-hermes-pull` monitor goes DOWN by silence at its interval
+      # plus retry — intended, and the whole signature for a hang now that there
+      # is no start signal to contradict. Revisit from recorded durations per
+      # docs/operations/monitoring.md.
       activeDeadlineSeconds: 1800
       backoffLimit: 1
       # A completed Job that is never collected pins its immutable template
@@ -113,17 +115,35 @@ spec:
               # failed with "No user exists for uid 1999", which is what the
               # hermes-passwd mount fixes. alpine/k8s:1.36.0 (the
               # influx-backup image) was probed first and ships no ssh.
-              # Renovate is scoped to homelab/health/** and will not touch
-              # this pin; bump it manually and re-run the probe from the
-              # design's rollout section.
+              # Renovate has watched this file since the 2026-08-26 scope
+              # widening to homelab/**, and the shape of what it proposes here
+              # is worth knowing before the first one lands. The reference
+              # carries a digest and NO TAG, so Renovate resolves it against
+              # `latest` and opens DIGEST-UPDATE pull requests whenever that
+              # tag is repointed. A digest update is not a major, so the
+              # ALL-MAJORS dashboard rule does not hold it back. renovate.json
+              # therefore carries a packageRule naming kroniak/ssh-client
+              # that holds these on the Dependency Dashboard instead, and
+              # repeats this warning in the pull request body — because THIS
+              # comment sits ~20 lines above the image line and a pull request
+              # diff shows three lines of context, so the one reader who most
+              # needs it is the one who cannot see it.
+              # Treat an approved bump as a new image, not a rubber stamp:
+              # this container handles an SSH private key and a zip full of
+              # live secrets. Re-run the probe from the design's rollout
+              # section before applying, exactly as for a manual bump.
               image: kroniak/ssh-client@sha256:cfb58718a2cfbb248214a9c33655f16438e0f1014c054e0e524d3eb232ccdb2b
               command: ["sh", "/scripts/hermes-pull.sh"]
               env:
-                # Renamed on purpose: only HC_UUID reaches the script, so the
+                # uptime-kuma push monitor `homelab-hermes-pull`
+                # (op://Homelab/hermes-backup/kuma-push-token).
+                #
+                # Renamed on purpose: only PUSH_URL reaches the script, so the
                 # generated ConfigMap cannot be rewritten by envsubst. The
-                # placeholder below is the allowlisted name.
-                - name: HC_UUID
-                  value: "${HERMES_HC_UUID}"
+                # placeholder below is the allowlisted name, and the whole URL
+                # is assembled here so the script never builds one.
+                - name: PUSH_URL
+                  value: "https://uptime.cynexia.com/api/push/${HERMES_KUMA_TOKEN}"
               securityContext:
                 allowPrivilegeEscalation: false
                 readOnlyRootFilesystem: true

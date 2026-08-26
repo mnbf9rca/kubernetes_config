@@ -49,16 +49,19 @@ apiVersion: v1
 kind: Namespace
 metadata:
   name: ops
-  # PSA baseline (cluster default). The one workload here is an outbound-HTTPS
-  # poller: no hostPath, no hostNetwork, no ServiceAccount, no RBAC.
+  # PSA baseline (cluster default). Two workloads, both outbound-only and
+  # neither needing hostPath, hostNetwork, a ServiceAccount or any RBAC:
+  #   update-watch  — polls the GitHub REST API for open Renovate pull requests
+  #   keel-fresh    — reads keel's in-cluster /metrics for its poll counter and
+  #                   tracked-image gauge, and pushes an uptime-kuma monitor
   #
   # It is deliberately NOT in `health` — its scope is the whole repo, and a
   # health-namespace object alerting about other namespaces would be a lie about
   # ownership — and deliberately NOT in `backup`, which runs at PSA privileged
-  # for restic's hostPaths that this job has no business inheriting.
+  # for restic's hostPaths that these jobs have no business inheriting.
   #
-  # NO keel in this namespace: the image is version-pinned and Renovate watches
-  # homelab/ops/** so bumps arrive as pull requests.
+  # NO keel in this namespace: every image is version-pinned and Renovate
+  # watches this tree, so bumps arrive as pull requests.
 ---
 apiVersion: v1
 kind: Namespace

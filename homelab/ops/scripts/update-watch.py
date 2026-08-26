@@ -1,28 +1,34 @@
 #!/usr/bin/env python3
-"""Turn a healthchecks.io check red while a Renovate update is waiting.
+"""Drive one uptime-kuma push monitor from this repo's Renovate state.
 
 WHY THIS EXISTS
 ---------------
 Every image in the `health` namespace is version- or digest-pinned and keel is
 forbidden there, so updates arrive as Renovate pull requests and nothing was
 pointing at them. This job counts the open `renovate[bot]` pull requests on this
-repo once a day and drives one check: red while an update is waiting, red when
-Renovate itself is visibly broken, red (through silence) when this job stops
-running.
+repo once a day and drives one monitor: UP while updates simply wait, DOWN when
+one has waited long enough that an update session was plainly skipped, DOWN when
+Renovate itself has gone quiet or is visibly broken, DOWN (through silence) when
+this job stops running.
 
 THE FOUR RULES THIS SCRIPT EXISTS TO ENFORCE. Read them before changing anything.
 
   1. "I COULD NOT LOOK" IS NEVER "EVERYTHING IS FINE". A rate limit, a 404, a
      server error, a timeout, a paginated response or an HTTP 200 carrying a
-     JSON *object* are all INDETERMINATE: they ping `/log`, which records an
-     event and cannot change the check's status. Counting zero pull requests out
-     of any of them would be a confident green over an unread repo.
+     JSON *object* are all INDETERMINATE: they push NOTHING AT ALL, which
+     records no state change and cannot flip the monitor. Counting zero pull
+     requests out of any of them would be a confident green over an unread repo.
+     This replaced a healthchecks.io `/log` ping on 2026-08-26 and is
+     behaviourally the same thing minus the event line in the history: if the
+     condition persists, the monitor goes DOWN at its own interval, exactly as
+     the check went red by silence.
 
-  2. NOR IS IT "IT FAILED". There is deliberately NO `/start` ping. Upstream
-     marks a check down when a start signal is not followed by a success within
-     the grace time, and a `/log` ping does not clear `last_start` -- so a
-     `/start` plus a single transient GitHub 503 would alert six hours later.
-     Dropping `/start` is what makes rule 1 true. Do not "complete" the ping set.
+  2. NOR IS IT "IT FAILED". There is deliberately no start signal, and the push
+     API has no such concept to reintroduce: a push is a heartbeat carrying a
+     status. Under healthchecks.io a `/start` plus a single transient GitHub 503
+     would have alerted one grace period later, because `/log` did not clear
+     `last_start`; having no start signal is what makes rule 1 true. Do not
+     invent a synthetic one.
 
   3. THE DASHBOARD IS IDENTIFIED POSITIVELY, BY TITLE. Renovate opens other
      non-pull-request issues from the same account -- most importantly "Action
@@ -30,26 +36,29 @@ THE FOUR RULES THIS SCRIPT EXISTS TO ENFORCE. Read them before changing anything
      requests entirely. "The renovate[bot] issue that is not a PR" would read
      that as a healthy dashboard and report green while Renovate is halted.
 
-  4. NO REMOTE STRING EVER REACHES THE PING BODY. Every emitted value is the
-     result of `int()` on something this script derived, or a member of the
-     VERDICTS enum below. A pull-request title is unvalidated remote text and the
-     body is read verbatim into every notification transport this account has
-     configured. `make check-ping-bodies` enforces it against an explicit
-     allowlist of the names below.
+  4. NO REMOTE STRING EVER REACHES THE HEARTBEAT MESSAGE. Every emitted value
+     is the result of `int()` on something this script derived, or a member of
+     the VERDICTS enum below. A pull-request title is unvalidated remote text and
+     the message is read verbatim into every notification transport the monitor
+     has configured. `make check-ping-bodies` enforces it against an explicit
+     allowlist of the names below, and recognises the two sinks by FUNCTION NAME
+     rather than by destination host - which is why `hc_emit` and `hc_summary`
+     keep their names after the move to kuma.
 
 Exit status is ALWAYS 0. The exit code would conflate "the job worked" with
 "there is nothing to do", and a non-zero exit would trigger a `backoffLimit`
-re-run that double-pings for no benefit. Retries live in-script; "the job did not
-run at all" is covered by period-plus-grace silence.
+re-run that double-pushes for no benefit. The verdict, not the exit code, is what
+decides the heartbeat. Retries live in-script; "the job did not run at all" is
+covered by the monitor's own interval-plus-retry silence.
 
-ENVIRONMENT VARIABLES ARE RENAMED ON PURPOSE. The CronJob manifest sets
-`HC_UUID` from the allowlisted placeholder, and this file names only `HC_UUID`.
-Generator files ride the same envsubst stream as every manifest and envsubst
-rewrites the bare `$NAME` form too, so naming an `ENVSUBST_VAR_NAMES` entry here
--- even in a comment -- would publish its value inside a ConfigMap. `make
-check-script-substitution` enforces the rename; do not "simplify" it away. The
-placeholder's real name is in homelab/ops/update-watch.yaml, where substitution
-is what is meant to happen.
+ENVIRONMENT VARIABLES ARE RENAMED ON PURPOSE. The CronJob manifest assembles
+the whole push URL from the allowlisted placeholder and passes it as `PUSH_URL`,
+and this file names only `PUSH_URL`. Generator files ride the same envsubst
+stream as every manifest and envsubst rewrites the bare `$NAME` form too, so
+naming an `ENVSUBST_VAR_NAMES` entry here -- even in a comment -- would publish
+its value inside a ConfigMap. `make check-script-substitution` enforces the
+rename; do not "simplify" it away. The placeholder's real name is in
+homelab/ops/update-watch.yaml, where substitution is what is meant to happen.
 """
 
 import json
@@ -58,6 +67,7 @@ import re
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
 
@@ -79,37 +89,75 @@ RENOVATE_LOGIN = "renovate[bot]"
 
 # The `config:recommended` default. This repo deliberately does not set
 # `dependencyDashboardTitle`, so this literal is the whole identification (rule
-# 3). If it ever changes, the check goes red as `dashboard-missing` -- loud, not
-# silent, which is the safe failure direction.
+# 3). If it ever changes, the monitor is pushed DOWN as `dashboard-missing` --
+# loud, not silent, which is the safe failure direction.
 DASHBOARD_TITLE = "Dependency Dashboard"
 
-# Dashboard-age heuristic: informational only until tuned against observed
-# values (spec assumption A3). `dash_age_days` is emitted from day one; None
-# means the `renovate-stale` branch is not armed. Set an integer to arm it.
-RENOVATE_STALE_DAYS = None
+# RED ONLY WHEN A SESSION HAS PLAINLY BEEN SKIPPED. The estate updates in a
+# session every 4 to 6 weeks, so an open Renovate pull request is the NORMAL
+# state for weeks at a time. The original rule -- red on any open pull request --
+# makes red the steady state under that cadence, and an alarm that is normally
+# red is not an alarm: it trains the operator to ignore the one time it means
+# something. 45 days is a session and a half.
+PR_AGE_RED_DAYS = 45
 
-# Every verdict this script can emit. A ping body may carry a member of this set
-# and nothing else that is not an int.
+# THE LIVENESS THRESHOLD, ON THIS SAME MONITOR. The verdict becomes
+# `renovate-stale` when the Dependency Dashboard issue has not been touched in
+# this many days. The dashboard's `updated_at` is a stable API field; nothing
+# here parses its markdown.
+#
+# THIS USED TO BE A SECOND CHECK WITH ITS OWN UUID. The argument for splitting
+# was that an alerting backend notifies on status FLIPS and this signal was
+# permanently red under the old any-open-pull-request rule, so a folded-in
+# signal could never fire. `updates-waiting` removes the permanent red, so the
+# one monitor flips on a Renovate death exactly as a second one would have. One
+# destination, one enum. (Ruled 2026-08-26, when the healthchecks.io account was
+# capped at 20 checks; this job has since moved to a kuma push monitor, and the
+# argument holds unchanged there.)
+#
+# NOT ARMED FROM OBSERVATION YET -- THIS IS THE FLOOR, AND THAT IS DELIBERATE.
+# The arming rule is twice the maximum `dash_age_days` seen across the last 30
+# heartbeats, floored at 14 days. Read 2026-08-26: this job shipped 2026-08-24
+# and had logged 6 pings in total, fewer than the 14 the rule needs, so there is
+# no observed maximum to double and the floor stands. Those six were
+# healthchecks.io pings whose bodies the read-only API key in the vault could
+# not fetch; the history now lives in the `homelab-update-watch` monitor in
+# uptime-kuma, where each heartbeat's message is readable in the UI. Re-read it
+# after a month of data and re-arm this: a threshold tighter than the quiet
+# periods is DOWN every fortnight, and one looser than a month lets Renovate die
+# unnoticed.
+RENOVATE_ALIVE_MAX_DAYS = 14
+
+# Every verdict this watcher can emit. A heartbeat message may carry a member of
+# this set and nothing else that is not an int.
 V_OK = "ok"
+V_UPDATES_WAITING = "updates-waiting"
 V_UPDATES_PENDING = "updates-pending"
+V_RENOVATE_STALE = "renovate-stale"
 V_DASHBOARD_MISSING = "dashboard-missing"
 V_CONFIG_ERROR = "renovate-config-error"
-V_STALE = "renovate-stale"
 V_RATE_LIMITED = "rate-limited"
 V_SECONDARY_LIMIT = "secondary-limit"
 V_REPO_UNREACHABLE = "repo-unreachable"
 V_API_ERROR = "api-error"
 
 VERDICTS = frozenset({
-    V_OK, V_UPDATES_PENDING, V_DASHBOARD_MISSING, V_CONFIG_ERROR, V_STALE,
-    V_RATE_LIMITED, V_SECONDARY_LIMIT, V_REPO_UNREACHABLE, V_API_ERROR,
+    V_OK, V_UPDATES_WAITING, V_UPDATES_PENDING, V_RENOVATE_STALE,
+    V_DASHBOARD_MISSING, V_CONFIG_ERROR, V_RATE_LIMITED, V_SECONDARY_LIMIT,
+    V_REPO_UNREACHABLE, V_API_ERROR,
 })
 
 # The verdicts that mean "the repo was read successfully". Everything else is
 # indeterminate and pings /log (rule 1).
 DETERMINATE = frozenset({
-    V_OK, V_UPDATES_PENDING, V_DASHBOARD_MISSING, V_CONFIG_ERROR, V_STALE,
+    V_OK, V_UPDATES_WAITING, V_UPDATES_PENDING, V_RENOVATE_STALE,
+    V_DASHBOARD_MISSING, V_CONFIG_ERROR,
 })
+
+# The determinate verdicts that are GREEN. `updates-waiting` is green on
+# purpose: an update sitting in a pull request is this estate working as
+# designed, not a fault. `renovate-stale` is deliberately NOT here.
+GREEN = frozenset({V_OK, V_UPDATES_WAITING})
 
 # What to DO about each verdict, emitted as the body's `next=` line.
 #
@@ -121,24 +169,39 @@ DETERMINATE = frozenset({
 # numbers already have their own `key=int` lines, and an interpolated `next=`
 # would be the first body line that is not literal-or-int.
 #
-# Keep them one line, printable ASCII, and short: the body travels verbatim into
-# every notification transport this account has configured, and an alert email
-# that needs scrolling is an alert nobody reads. The substring `confirm` is
-# banned estate-wide (it drives a healthchecks.io UI nag) -- say "check" instead.
+# Keep them one line, printable ASCII, and short: the message travels verbatim
+# into every notification transport the monitor has configured, and an alert
+# that needs scrolling is an alert nobody reads. Shortness matters more since
+# the move to kuma, because the whole message is now cut at 200 characters. The
+# substring `confirm` is avoided here as house style -- it drives a
+# healthchecks.io UI nag, which now applies only to the two restic checks that
+# stayed there, and one spelling across the estate is worth keeping.
 NEXT_ACTIONS = {
     V_OK: "none",
+    V_UPDATES_WAITING:
+        "none - an open pull request is normal between update sessions;"
+        " this line is informational",
+    # 105 characters, and it must stay under 120: the existing
+    # test_every_action_is_one_line_of_short_printable_ascii caps every entry
+    # in this map. It keeps BOTH substrings
+    # test_the_four_red_verdicts_name_a_command_or_a_place_to_look asserts on,
+    # `gh pr list` and `apply-homelab`.
     V_UPDATES_PENDING:
-        "gh pr list -R mnbf9rca/kubernetes_config --author app/renovate"
-        " - then make apply-homelab and merge",
+        "run the update session: gh pr list -R mnbf9rca/kubernetes_config"
+        " -A app/renovate, then make apply-homelab",
+    # 111 characters. Carried over from the superseded two-check design, in
+    # which Renovate's liveness had a UUID of its own; that design never
+    # shipped, so searching history for its identifiers finds nothing. The
+    # sentence is unchanged and it now lives in the one map, one contract.
+    V_RENOVATE_STALE:
+        "Renovate has gone quiet - read the Mend job log, then check"
+        " renovate.json managerFilePatterns still match files",
     V_DASHBOARD_MISSING:
         "check the Mend Renovate app is still installed on the repo:"
         " github.com/settings/installations",
     V_CONFIG_ERROR:
         "gh issue list -R mnbf9rca/kubernetes_config --author app/renovate"
         " - read it and fix renovate.json",
-    V_STALE:
-        "open the Dependency Dashboard issue and check renovate.json"
-        " managerFilePatterns still cover the pinned namespaces",
     V_RATE_LIMITED:
         "no action for one run - the unauthenticated quota is per IP;"
         " look at the Events log if it repeats",
@@ -168,15 +231,22 @@ def log(msg):
     print(msg, flush=True)
 
 
-# --- healthchecks.io ping body ----------------------------------------------
+# --- heartbeat message ------------------------------------------------------
 # Same accumulator shape as the health namespace's ingest job: a module-level
-# summary slot plus a list of key=value lines, so line 1 of the body is always
-# `summary=` whatever order things were emitted in.
+# summary slot plus a list of key=value lines, so the FIRST token is always
+# `verdict=` whatever order things were emitted in.
+#
+# ONE LINE, NOT A BODY, SINCE 2026-08-26. healthchecks.io stored an arbitrary
+# body; kuma stores a single `msg` string. So the same lines are printed to the
+# pod log in full and joined with spaces, cut at 200 characters, for the push -
+# which is why `next=` is emitted EARLY now rather than last. Under a body it
+# was last so the eye landed on it; under a one-line message the tail is what
+# the cut takes, so last would be the first thing lost.
 #
 # NEVER EMIT A PULL-REQUEST TITLE, A RESPONSE BODY OR repr(exc) HERE. See rule 4.
 
 _UNPRINTABLE = re.compile(r"[^\040-\176]")
-SUMMARY = ["summary=update-watch FAILED - see pod log"]
+SUMMARY = ["verdict=api-error"]
 BODY_LINES = []
 
 
@@ -186,7 +256,7 @@ def _clean(text):
 
 
 def hc_summary(text):
-    SUMMARY[0] = "summary=" + _clean(text)
+    SUMMARY[0] = "verdict=" + _clean(text)
 
 
 def hc_emit(key_value):
@@ -194,7 +264,28 @@ def hc_emit(key_value):
 
 
 def hc_body():
+    """Every line, for the pod log."""
     return "\n".join(SUMMARY + BODY_LINES) + "\n"
+
+
+# What kuma stores in a heartbeat's `msg` column. The cut is applied here rather
+# than at the push, so the same bound is visible to the tests.
+MSG_LIMIT = 200
+
+
+def kuma_msg():
+    """The same lines as ONE line, cut to what kuma stores.
+
+    THE CUT LANDS ON A TOKEN BOUNDARY, NEVER MID-TOKEN. A plain `[:200]` left
+    fragments like `oldes` and `ht` at the end of the message -- a key with no
+    value, or half a key, which reads as data rather than as truncation. Trimming
+    back to the last whole token drops the partial pair instead, so every
+    `key=value` an operator sees is one this run actually emitted.
+    """
+    joined = " ".join(SUMMARY + BODY_LINES)
+    if len(joined) <= MSG_LIMIT:
+        return joined
+    return joined[:MSG_LIMIT].rsplit(" ", 1)[0]
 
 
 # --- the single request -----------------------------------------------------
@@ -348,8 +439,12 @@ def decide(pull_requests, dashboard, config_issues, now):
     PRECEDENCE, and why: a configuration error means Renovate has stopped
     proposing pull requests, so a pull-request count taken during one is not
     trustworthy -- it is reported first. A missing dashboard means the same
-    class of doubt. Only then does a pull-request count mean what it says. All
-    three are red, so precedence changes the verdict label, never the colour.
+    class of doubt. Renovate's own liveness comes next, and here precedence
+    changes the COLOUR rather than just the label: a young pull request alone is
+    the green `updates-waiting`, so a dead Renovate with one still open must be
+    judged stale before the pull-request rules ever run. Only under a dashboard
+    that exists and has moved recently does a pull-request count mean what it
+    says.
     """
     facts = {"prs_open": len(pull_requests), "config_issues": len(config_issues)}
 
@@ -364,7 +459,6 @@ def decide(pull_requests, dashboard, config_issues, now):
         if ages:
             facts["oldest_pr_days"] = max(ages)
 
-    dash_age = None
     if dashboard is not None:
         dash_age = age_days(parse_github_time(dashboard.get("updated_at")), now)
         if dash_age is not None:
@@ -374,53 +468,112 @@ def decide(pull_requests, dashboard, config_issues, now):
         return V_CONFIG_ERROR, facts
     if dashboard is None:
         return V_DASHBOARD_MISSING, facts
-    if (RENOVATE_STALE_DAYS is not None and dash_age is not None
-            and dash_age > RENOVATE_STALE_DAYS):
-        return V_STALE, facts
+
+    # RENOVATE'S OWN LIVENESS, ABOVE THE PULL-REQUEST RULES. A configuration
+    # error and a missing dashboard already outrank it and are more specific,
+    # so they are handled first; everything below this point assumes a
+    # dashboard that exists.
+    dash_age = facts.get("dash_age_days")
+    if dash_age is None:
+        # The dashboard exists but its timestamp did not parse. That is a read
+        # failure about this one field, never evidence that Renovate is alive,
+        # so it must not fall through to a GREEN pull-request verdict.
+        # Indeterminate: pings /log and changes nothing.
+        return V_API_ERROR, facts
+    if int(dash_age) > RENOVATE_ALIVE_MAX_DAYS:
+        return V_RENOVATE_STALE, facts
+
     if pull_requests:
-        return V_UPDATES_PENDING, facts
+        # An open pull request is normal; an OLD one means a session was
+        # skipped. `oldest_pr_days` is absent only when EVERY pull request had
+        # an unparseable timestamp.
+        #
+        # THE ASYMMETRY WITH THE DASHBOARD CLAUSE ABOVE IS DELIBERATE. There, an
+        # unparseable timestamp is `api-error`, because the field IS the
+        # evidence: with no readable `updated_at` there is nothing left saying
+        # Renovate is alive, and defaulting to green would invent that. Here the
+        # field is not the evidence -- the pull requests were still counted, so
+        # "updates are waiting" is known to be true either way and only their
+        # AGE is unreadable. Defaulting to the green `updates-waiting` therefore
+        # states something true and merely declines to escalate, where the same
+        # default above would state something unknown. Both are tested.
+        if facts.get("oldest_pr_days", 0) > PR_AGE_RED_DAYS:
+            return V_UPDATES_PENDING, facts
+        return V_UPDATES_WAITING, facts
     return V_OK, facts
 
 
 def ping_suffix(verdict):
-    """`0` on a clean read, `fail` on a determinate red, `log` otherwise.
+    """`0` on a green read, `fail` on a determinate red, `log` otherwise.
 
-    `log` records an event and changes nothing: it cannot postpone, suppress or
-    trigger an alert, and with no `/start` ping in play it cannot arm a failure
-    timer either (rules 1 and 2).
+    THE THREE-WAY CONTRACT, KEPT AFTER THE MOVE TO kuma. This function no longer
+    builds a URL; it is the canonical spelling of the decision, and
+    `push_status` below is the same decision in kuma's two-state vocabulary. The
+    unit tests assert the two agree, because if they ever disagree the check's
+    meaning has quietly forked.
+
+    `log` meant "record an event and change nothing": it could not postpone,
+    suppress or trigger an alert, and with no start ping in play it could not arm
+    a failure timer either (rules 1 and 2).
     """
-    if verdict == V_OK:
+    if verdict in GREEN:
         return "0"
     if verdict in DETERMINATE:
         return "fail"
     return "log"
 
 
-# --- healthchecks.io --------------------------------------------------------
+def push_status(verdict):
+    """`up`, `down`, or None meaning SEND NOTHING.
 
-def make_pinger(uuid):
-    """Dead-man's-switch pinger. A ping must never be able to fail the job, and
-    a body must never cost a ping."""
-    def ping(suffix, body=None):
-        if not uuid:
+    None is the whole migration risk, so it is spelled out. healthchecks.io had
+    a third ping kind that recorded an event and changed no state. The kuma push
+    API has two states and no third kind, so an indeterminate run must push
+    NOTHING: pushing `up` would report a successful read that did not happen, and
+    pushing `down` would turn every transient GitHub 503 into an alert. Sending
+    nothing records no state change and, if the condition persists, lets the
+    monitor go DOWN at its own interval - which is what silence did before.
+    """
+    if verdict in GREEN:
+        return "up"
+    if verdict in DETERMINATE:
+        return "down"
+    return None
+
+
+# --- uptime-kuma push -------------------------------------------------------
+
+def make_pusher(push_url):
+    """Dead-man's-switch pusher. A push must never be able to fail the job, and
+    a message must never cost a push."""
+    def push(status, msg=""):
+        if not push_url or status is None:
             return
-        url = "https://hc-ping.com/%s/%s" % (uuid, suffix)
-        if body:
-            try:
-                data = body.encode("ascii", "replace")
-                urllib.request.urlopen(url, data=data, timeout=10).close()
-                return
-            except Exception as exc:               # noqa: BLE001 - best effort
-                # FIXED TEXT PLUS A CLASS NAME. Never the URL: the ping URL is
-                # the check's own write credential.
-                log("healthchecks.io body POST failed (ignored): %s"
-                    % type(exc).__name__)
         try:
-            urllib.request.urlopen(url, timeout=10).close()
+            # THE ENCODE IS INSIDE THE TRY. Evaluated on the line before
+            # urlopen, an encoding error would propagate out of push() and the
+            # heartbeat would be lost - a message costing a push.
+            query = urllib.parse.urlencode(
+                {"status": status, "msg": str(msg)[:200]})
+            # THE User-Agent IS LOAD-BEARING AND IS NOT COSMETIC. uptime-kuma
+            # sits behind Cloudflare, which answers urllib's DEFAULT
+            # `Python-urllib/3.x` agent with HTTP 403 and `error code: 1010`
+            # before the request ever reaches kuma. Measured in-cluster on
+            # 2026-08-26: the default agent got 403/1010 and this one got
+            # kuma's own 404 for a bogus token, from the same URL in the same
+            # process. Every shell runner in the estate pushes with curl or
+            # wget and is unaffected, so this trap is Python-only - and it is
+            # SILENT, because a push failure is swallowed by design. Do not
+            # drop this header.
+            request = urllib.request.Request(
+                push_url + "?" + query, headers={"User-Agent": USER_AGENT})
+            urllib.request.urlopen(request, timeout=10).close()
         except Exception as exc:                   # noqa: BLE001 - best effort
-            log("healthchecks.io ping failed (ignored): %s"
+            # FIXED TEXT PLUS A CLASS NAME. Never the URL: a push URL carries
+            # the monitor's token as its last path segment.
+            log("uptime-kuma push failed (ignored): %s"
                 % type(exc).__name__)
-    return ping
+    return push
 
 
 # --- main -------------------------------------------------------------------
@@ -444,11 +597,86 @@ def main():
     return verdict, facts, len(items)
 
 
+def build_message(verdict, facts, run_epoch):
+    """Assemble this run's heartbeat message, in order, and return it.
+
+    A FUNCTION RATHER THAN A BLOCK INSIDE `__main__`, so the ORDER below is
+    reachable from the test suite. While it lived in `__main__` the budget test
+    had to re-implement the order to exercise it, which meant it asserted on its
+    own copy and would have stayed green through a reordering of the real thing.
+
+    `-1` is the "not observed on this run" sentinel. An indeterminate run omits
+    the count fields entirely rather than emitting a placeholder string like
+    `unknown`, which would break the integer-or-enum-literal rule the ping-body
+    guard enforces.
+
+    THE ORDER IS A BUDGET, NOT A PREFERENCE, and it is asserted by
+    test_run_epoch_and_next_survive_the_cut_for_every_verdict.
+
+    A kuma msg is cut at MSG_LIMIT, and `next=` alone is 89 to 111 characters --
+    over half of it. So not everything fits, and what survives has to be decided
+    here rather than discovered later. Measured across all ten verdicts on
+    2026-08-26, the assembled message ran 130 to 289 characters.
+    """
+    # Every value below is the result of `int()` on something this script
+    # derived, or a member of VERDICTS. Nothing from GitHub reaches here (rule 4).
+    prs_open = int(facts.get("prs_open", -1))
+    oldest_pr = int(facts.get("oldest_pr", -1))
+    oldest_pr_days = int(facts.get("oldest_pr_days", -1))
+    dash_age_days = int(facts.get("dash_age_days", -1))
+    config_issues = int(facts.get("config_issues", -1))
+    http = int(facts.get("http", -1))
+
+    hc_summary(verdict)
+    # `run_epoch=` goes FIRST, ahead even of `next=`, and that is the fix for a
+    # real defect rather than a style choice. It sat last, on the reasoning that
+    # kuma timestamps every heartbeat anyway -- but a silence-triggered alert
+    # carries the PREVIOUS run's message, and `run_epoch=` is how the reader
+    # tells "this message is about this alert" from "the watcher went quiet a
+    # day ago". Placed last it was cut from every verdict except `ok`: all four
+    # reds and `updates-waiting` ran 259 to 289 characters and lost it, so the
+    # field was absent from exactly the cases it exists for, while
+    # docs/operations/monitoring.md told the operator to read it. It is 21
+    # characters of fixed width, and you must know a message is current before
+    # you trust its advice -- so it precedes the advice.
+    hc_emit("run_epoch=%d" % run_epoch)
+    # SECOND: the command to run next, a fixed literal selected by the verdict
+    # (see NEXT_ACTIONS). It sat last under a multi-line body, where the eye
+    # landed on it; in a one-line message the tail is what the cut takes.
+    #
+    # BOUND TO A NAME FIRST, NEVER INLINED. `next_action` is on
+    # check-ping-bodies.py's PY_VALUE_ALLOWLIST with a written reason;
+    # `next_action_for(...)` inside the sink argument is a CALL, which that
+    # guard refuses outright — correctly, since allowing calls there is how a
+    # formatted string would get in. Inlining this is exactly the edit the
+    # guard caught on 2026-08-26.
+    next_action = next_action_for(verdict)
+    hc_emit("next=" + next_action)
+    # Then the counters, most-acted-on first. On the three longest `next=`
+    # strings the cut reaches the tail of this group; every one of them is in
+    # the pod log's full body, which is where triage starts.
+    if prs_open >= 0:
+        hc_emit("prs_open=%d" % prs_open)
+    if oldest_pr_days >= 0:
+        hc_emit("oldest_pr_days=%d" % oldest_pr_days)
+    if dash_age_days >= 0:
+        hc_emit("dash_age_days=%d" % dash_age_days)
+    if config_issues >= 0:
+        hc_emit("config_issues=%d" % config_issues)
+    if oldest_pr >= 0:
+        hc_emit("oldest_pr=%d" % oldest_pr)
+    if http >= 0:
+        hc_emit("http=%d" % http)
+    # LAST, and the tokens the cut is meant to take first if anything has to go:
+    # the two thresholds this run was judged against, which an alert quotes back
+    # so the reader need not open the source -- but which are literals in that
+    # source and unchanged between runs, so losing them costs the least.
+    hc_emit("pr_age_red_days=%d" % PR_AGE_RED_DAYS)
+    hc_emit("renovate_alive_max_days=%d" % RENOVATE_ALIVE_MAX_DAYS)
+    return kuma_msg()
+
+
 if __name__ == "__main__":
-    # `-1` is the "not observed on this run" sentinel throughout this block. An
-    # indeterminate run omits the count fields entirely rather than emitting a
-    # placeholder string like `unknown`, which would break the
-    # integer-or-enum-literal rule the ping-body guard enforces.
     run_epoch = int(time.time())
     facts = {}
     try:
@@ -462,36 +690,14 @@ if __name__ == "__main__":
     if verdict not in VERDICTS:
         verdict = V_API_ERROR
 
-    # Every value below is the result of `int()` on something this script
-    # derived, or a member of VERDICTS. Nothing from GitHub reaches here (rule 4).
-    prs_open = int(facts.get("prs_open", -1))
-    oldest_pr = int(facts.get("oldest_pr", -1))
-    oldest_pr_days = int(facts.get("oldest_pr_days", -1))
-    dash_age_days = int(facts.get("dash_age_days", -1))
-    config_issues = int(facts.get("config_issues", -1))
-    http = int(facts.get("http", -1))
+    msg = build_message(verdict, facts, run_epoch)
 
-    hc_summary("update-watch rc=0 verdict=%s" % verdict)
-    if prs_open >= 0:
-        hc_emit("prs_open=%d" % prs_open)
-    if oldest_pr >= 0:
-        hc_emit("oldest_pr=%d" % oldest_pr)
-    if oldest_pr_days >= 0:
-        hc_emit("oldest_pr_days=%d" % oldest_pr_days)
-    if dash_age_days >= 0:
-        hc_emit("dash_age_days=%d" % dash_age_days)
-    if config_issues >= 0:
-        hc_emit("config_issues=%d" % config_issues)
-    if http >= 0:
-        hc_emit("http=%d" % http)
-    # A silence-triggered alert carries the PREVIOUS run's body, so every body
-    # carries its own run timestamp: an old `run_epoch=` in an alert means "this
-    # body is not about this alert; the watcher has gone quiet".
-    hc_emit("run_epoch=%d" % run_epoch)
-    # Last, so it is the line the eye lands on: the command to run next. A fixed
-    # literal selected by the verdict -- see NEXT_ACTIONS.
-    next_action = next_action_for(verdict)
-    hc_emit("next=" + next_action)
-
-    make_pinger(os.environ.get("HC_UUID", ""))(ping_suffix(verdict), hc_body())
+    # EVERY LINE TO THE POD LOG, then the cut-down one-liner to kuma. An
+    # indeterminate verdict pushes NOTHING (rule 1), and push() returns without
+    # a request when push_status gives None.
+    log("heartbeat message (full):\n" + hc_body())
+    status = push_status(verdict)
+    if status is None:
+        log("indeterminate verdict %s: pushing nothing" % verdict)
+    make_pusher(os.environ.get("PUSH_URL", ""))(status, msg)
     sys.exit(0)
