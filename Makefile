@@ -126,6 +126,9 @@ help:
 	@echo "                    (check-job-ttl through check-keel-fresh-parity — those six — also run in"
 	@echo "                     the diff-*/apply-* preflight; the first five per cluster, this one whole)"
 	@echo ""
+	@echo "Hermes VM targets (not cluster-applied):"
+	@echo "  check-vm-scripts - shellcheck + unit-test + ping-body scan the hermes VM scripts"
+	@echo ""
 	@echo "VPS cluster targets:"
 	@echo "  check-vps-context - assert kubectl current-context matches VPS_CONTEXT ($(VPS_CONTEXT))"
 	@echo "  build-vps         - render manifests to stdout (PREVIEW ONLY — secrets masked)"
@@ -388,6 +391,30 @@ check-renovate-scope-homelab:
 
 check-renovate-scope-vps:
 	@scripts/check-renovate-scope.py vps
+
+# ---- check-vm-scripts ------------------------------------------------------
+# The hermes VM's files are not rendered by kustomize, so check-script-lint
+# cannot see them: it extracts shell from the RENDER. They still ship real
+# logic, and they still post a healthchecks.io body and an uptime-kuma push
+# message, so they get the same two guarantees through their own target —
+# shellcheck as POSIX sh, the helper unit tests, and the ping-body leak guard
+# pointed at the hermes-vm root.
+#
+# -x is required: the test script sources hermes-update.sh, and without -x
+# shellcheck raises SC1091 at info level, which exits 1 under the default
+# `style` severity floor.
+#
+# Not wired into diff-*/apply-*: nothing here is applied to a cluster, so
+# gating a cluster apply on it would be noise. That is a real cost — nothing
+# runs it on a schedule and this repo has no CI (there is no .github/workflows
+# directory), so it can rot unnoticed. Two things keep it honest: it is the
+# first step of the install runbook (docs/operations/hermes-vm-updates.md),
+# and the 4-to-6-week update session runs it.
+.PHONY: check-vm-scripts
+check-vm-scripts:
+	@shellcheck -x -s sh hermes-vm/scripts/*.sh
+	@sh hermes-vm/scripts/test-hermes-update.sh
+	@scripts/check-ping-bodies.py hermes-vm
 
 .PHONY: require-vars
 require-vars:
