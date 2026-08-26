@@ -20,8 +20,11 @@ exactly like a healthy estate.
   * `partition` must identify the Dependency Dashboard POSITIVELY by title. The
     regression this guards is a "Fix Renovate Configuration" issue being read as
     the dashboard -- confident green while Renovate is halted.
-  * `decide` must return red for a pending update, a missing dashboard and a
-    configuration error, and must ignore human issues and human pull requests.
+  * `decide` must return red for an update that has waited past
+    `PR_AGE_RED_DAYS`, a Dependency Dashboard that has not moved in
+    `RENOVATE_ALIVE_MAX_DAYS`, a missing dashboard and a configuration error --
+    and must ignore human issues and human pull requests. A young pull request
+    is GREEN, which is the point of the relaxed threshold.
 
 No network and no ping: these exercise return values only and never call the
 `hc_emit`/`hc_summary` sinks, so no test-local name can teach the ping-body
@@ -130,9 +133,10 @@ class TestClassify(unittest.TestCase):
             self.assertEqual(uw.ping_suffix(verdict), "log", verdict)
 
     def test_determinate_verdicts_ping_zero_or_fail(self):
-        self.assertEqual(uw.ping_suffix(uw.V_OK), "0")
+        for verdict in (uw.V_OK, uw.V_UPDATES_WAITING):
+            self.assertEqual(uw.ping_suffix(verdict), "0", verdict)
         for verdict in (uw.V_UPDATES_PENDING, uw.V_DASHBOARD_MISSING,
-                        uw.V_CONFIG_ERROR, uw.V_STALE):
+                        uw.V_CONFIG_ERROR):
             self.assertEqual(uw.ping_suffix(verdict), "fail", verdict)
 
 
@@ -176,10 +180,12 @@ class TestDecide(unittest.TestCase):
         self.assertEqual(facts["prs_open"], 0)
         self.assertEqual(facts["dash_age_days"], 6)
 
-    def test_open_pull_requests_are_red_with_the_oldest_named(self):
+    def test_open_pull_requests_are_green_with_the_oldest_named(self):
+        # Renamed: an open pull request is the NORMAL state under session
+        # cadence. The facts it carries are unchanged and still asserted.
         items = [dashboard(), bot_pr(57, days_ago=11), bot_pr(61, days_ago=2)]
         verdict, facts = self.decide(items)
-        self.assertEqual(verdict, uw.V_UPDATES_PENDING)
+        self.assertEqual(verdict, uw.V_UPDATES_WAITING)
         self.assertEqual(facts["prs_open"], 2)
         self.assertEqual(facts["oldest_pr"], 57)
         self.assertEqual(facts["oldest_pr_days"], 11)
@@ -195,15 +201,6 @@ class TestDecide(unittest.TestCase):
         verdict, facts = self.decide([dashboard(), bot_pr(57), config_error()])
         self.assertEqual(verdict, uw.V_CONFIG_ERROR)
         self.assertEqual(facts["config_issues"], 1)
-
-    def test_stale_branch_is_not_armed(self):
-        # Informational until tuned against observed values: `dash_age_days` is
-        # emitted from day one, but a stale dashboard must not turn the check
-        # red on a guessed threshold.
-        self.assertIsNone(uw.RENOVATE_STALE_DAYS)
-        verdict, facts = self.decide([dashboard(days_ago=900)])
-        self.assertEqual(verdict, uw.V_OK)
-        self.assertEqual(facts["dash_age_days"], 900)
 
     def test_every_verdict_decide_can_return_is_in_the_enum(self):
         for items in ([], [dashboard()], [dashboard(), bot_pr(1)],
@@ -314,6 +311,151 @@ class TestFetch(unittest.TestCase):
             uw.issues_url("mnbf9rca/kubernetes_config"),
             "https://api.github.com/repos/mnbf9rca/kubernetes_config"
             "/issues?state=open&per_page=100")
+
+
+class TestRelaxedPullRequestThreshold(unittest.TestCase):
+    """An open pull request is the NORMAL state under session cadence.
+
+    The old rule went red on any open pull request, which under a 4-to-6-week
+    session makes red the steady state -- and an alarm that is normally red is
+    not an alarm. Red now means "this has been waiting long enough that a
+    session was skipped".
+    """
+
+    def setUp(self):
+        self.now = datetime(2026, 8, 26, 12, 0, tzinfo=timezone.utc)
+        self.dash = {"user": {"login": uw.RENOVATE_LOGIN},
+                     "title": uw.DASHBOARD_TITLE,
+                     "updated_at": "2026-08-25T12:00:00Z"}
+
+    def _pr(self, days_old):
+        created = self.now - timedelta(days=days_old)
+        return {"user": {"login": uw.RENOVATE_LOGIN},
+                "pull_request": {"url": "x"},
+                "number": 101,
+                "created_at": created.strftime("%Y-%m-%dT%H:%M:%SZ")}
+
+    def test_a_young_pull_request_is_green(self):
+        verdict, facts = uw.decide([self._pr(3)], self.dash, [], self.now)
+        self.assertEqual(verdict, uw.V_UPDATES_WAITING)
+        self.assertEqual(facts["prs_open"], 1)
+        self.assertEqual(uw.ping_suffix(verdict), "0")
+
+    def test_a_pull_request_just_under_the_threshold_is_still_green(self):
+        verdict, _ = uw.decide([self._pr(uw.PR_AGE_RED_DAYS - 1)],
+                               self.dash, [], self.now)
+        self.assertEqual(verdict, uw.V_UPDATES_WAITING)
+
+    def test_a_pull_request_past_the_threshold_is_red(self):
+        verdict, facts = uw.decide([self._pr(uw.PR_AGE_RED_DAYS + 1)],
+                                   self.dash, [], self.now)
+        self.assertEqual(verdict, uw.V_UPDATES_PENDING)
+        self.assertEqual(facts["oldest_pr_days"], uw.PR_AGE_RED_DAYS + 1)
+        self.assertEqual(uw.ping_suffix(verdict), "fail")
+
+    def test_the_threshold_is_about_a_session_and_a_half(self):
+        self.assertGreaterEqual(uw.PR_AGE_RED_DAYS, 42)
+        self.assertLessEqual(uw.PR_AGE_RED_DAYS, 60)
+
+    def test_a_config_error_still_outranks_any_pull_request_age(self):
+        config = [{"user": {"login": uw.RENOVATE_LOGIN}, "title": "Action Required"}]
+        verdict, _ = uw.decide([self._pr(1)], self.dash, config, self.now)
+        self.assertEqual(verdict, uw.V_CONFIG_ERROR)
+
+
+class TestRenovateLiveness(unittest.TestCase):
+    """Renovate's own liveness, as a RED VERDICT ON THE SAME CHECK.
+
+    An earlier design gave this a second UUID, on the argument that
+    healthchecks.io notifies on status FLIPS and the first check was
+    permanently red. This task removes the permanent red, so the one check
+    flips on a Renovate death exactly as a second one would have -- and the
+    account is capped at 20 checks. One check, one enum.
+
+    What these lock down is that liveness OUTRANKS the pull-request rules.
+    A dead Renovate with a young pull request still open must not read as
+    `updates-waiting`, which is green: that is the failure the split was
+    invented to prevent, and precedence is what actually prevents it.
+    """
+
+    def setUp(self):
+        self.now = datetime(2026, 8, 26, 12, 0, tzinfo=timezone.utc)
+
+    def _dash(self, days_old):
+        moved = self.now - timedelta(days=days_old)
+        return {"user": {"login": uw.RENOVATE_LOGIN},
+                "title": uw.DASHBOARD_TITLE,
+                "updated_at": moved.strftime("%Y-%m-%dT%H:%M:%SZ")}
+
+    def _pr(self, days_old):
+        created = self.now - timedelta(days=days_old)
+        return {"user": {"login": uw.RENOVATE_LOGIN},
+                "pull_request": {"url": "x"},
+                "number": 101,
+                "created_at": created.strftime("%Y-%m-%dT%H:%M:%SZ")}
+
+    def test_a_fresh_dashboard_and_no_pull_requests_is_ok(self):
+        verdict, _ = uw.decide([], self._dash(1), [], self.now)
+        self.assertEqual(verdict, uw.V_OK)
+
+    def test_a_dashboard_at_the_threshold_is_still_ok(self):
+        verdict, _ = uw.decide(
+            [], self._dash(uw.RENOVATE_ALIVE_MAX_DAYS), [], self.now)
+        self.assertEqual(verdict, uw.V_OK)
+
+    def test_a_dashboard_past_the_threshold_is_red(self):
+        verdict, _ = uw.decide(
+            [], self._dash(uw.RENOVATE_ALIVE_MAX_DAYS + 1), [], self.now)
+        self.assertEqual(verdict, uw.V_RENOVATE_STALE)
+        self.assertEqual(uw.ping_suffix(uw.V_RENOVATE_STALE), "fail")
+
+    def test_staleness_outranks_a_young_pull_request(self):
+        # THE WHOLE POINT. A young pull request alone is green. Renovate can
+        # die with one still open, and the check must go red anyway.
+        verdict, _ = uw.decide([self._pr(2)],
+                               self._dash(uw.RENOVATE_ALIVE_MAX_DAYS + 1),
+                               [], self.now)
+        self.assertEqual(verdict, uw.V_RENOVATE_STALE)
+
+    def test_a_config_error_still_outranks_staleness(self):
+        config = [{"user": {"login": uw.RENOVATE_LOGIN}, "title": "Action Required"}]
+        verdict, _ = uw.decide(
+            [], self._dash(uw.RENOVATE_ALIVE_MAX_DAYS + 1), config, self.now)
+        self.assertEqual(verdict, uw.V_CONFIG_ERROR)
+
+    def test_a_missing_dashboard_keeps_its_own_more_specific_verdict(self):
+        verdict, _ = uw.decide([], None, [], self.now)
+        self.assertEqual(verdict, uw.V_DASHBOARD_MISSING)
+
+    def test_an_unparseable_dashboard_timestamp_is_not_evidence_of_life(self):
+        # A dashboard whose timestamp did not parse yields no dash_age_days.
+        # That is a read failure about one field, never proof Renovate is
+        # alive, so it must NOT silently pass the liveness rule as `ok`.
+        dash = {"user": {"login": uw.RENOVATE_LOGIN},
+                "title": uw.DASHBOARD_TITLE,
+                "updated_at": "not-a-timestamp"}
+        verdict, facts = uw.decide([], dash, [], self.now)
+        self.assertNotIn("dash_age_days", facts)
+        self.assertEqual(verdict, uw.V_API_ERROR)
+        self.assertEqual(uw.ping_suffix(verdict), "log")
+
+    def test_renovate_stale_is_determinate_and_red(self):
+        self.assertIn(uw.V_RENOVATE_STALE, uw.VERDICTS)
+        self.assertIn(uw.V_RENOVATE_STALE, uw.DETERMINATE)
+        self.assertNotIn(uw.V_RENOVATE_STALE, uw.GREEN)
+
+    def test_the_threshold_was_armed_not_left_at_a_sentinel(self):
+        self.assertIsInstance(uw.RENOVATE_ALIVE_MAX_DAYS, int)
+        self.assertGreaterEqual(uw.RENOVATE_ALIVE_MAX_DAYS, 14)
+
+    def test_there_is_no_second_check_left_behind(self):
+        # A removal test. The second UUID, its enum and its action map are
+        # gone; a half-removal that leaves `alive_decide` importable but
+        # unpinged is the shape this asserts against.
+        for name in ("alive_decide", "alive_ping_suffix", "ALIVE_VERDICTS",
+                     "ALIVE_NEXT_ACTIONS", "alive_next_action_for",
+                     "A_OK", "A_STALE", "A_UNKNOWN"):
+            self.assertFalse(hasattr(uw, name), name)
 
 
 if __name__ == "__main__":

@@ -6,9 +6,10 @@ WHY THIS EXISTS
 Every image in the `health` namespace is version- or digest-pinned and keel is
 forbidden there, so updates arrive as Renovate pull requests and nothing was
 pointing at them. This job counts the open `renovate[bot]` pull requests on this
-repo once a day and drives one check: red while an update is waiting, red when
-Renovate itself is visibly broken, red (through silence) when this job stops
-running.
+repo once a day and drives one check: green while updates simply wait, red when
+one has waited long enough that an update session was plainly skipped, red when
+Renovate itself has gone quiet or is visibly broken, red (through silence) when
+this job stops running.
 
 THE FOUR RULES THIS SCRIPT EXISTS TO ENFORCE. Read them before changing anything.
 
@@ -83,33 +84,68 @@ RENOVATE_LOGIN = "renovate[bot]"
 # silent, which is the safe failure direction.
 DASHBOARD_TITLE = "Dependency Dashboard"
 
-# Dashboard-age heuristic: informational only until tuned against observed
-# values (spec assumption A3). `dash_age_days` is emitted from day one; None
-# means the `renovate-stale` branch is not armed. Set an integer to arm it.
-RENOVATE_STALE_DAYS = None
+# RED ONLY WHEN A SESSION HAS PLAINLY BEEN SKIPPED. The estate updates in a
+# session every 4 to 6 weeks, so an open Renovate pull request is the NORMAL
+# state for weeks at a time. The original rule -- red on any open pull request --
+# makes red the steady state under that cadence, and an alarm that is normally
+# red is not an alarm: it trains the operator to ignore the one time it means
+# something. 45 days is a session and a half.
+PR_AGE_RED_DAYS = 45
 
-# Every verdict this script can emit. A ping body may carry a member of this set
+# THE LIVENESS THRESHOLD, ON THIS SAME CHECK. The verdict becomes
+# `renovate-stale` when the Dependency Dashboard issue has not been touched in
+# this many days. The dashboard's `updated_at` is a stable API field; nothing
+# here parses its markdown.
+#
+# THIS USED TO BE A SECOND CHECK WITH ITS OWN UUID. The argument for splitting
+# was that healthchecks.io notifies on status FLIPS and this check was
+# permanently red under the old any-open-pull-request rule, so a folded-in
+# signal could never fire. `updates-waiting` removes the permanent red, so the
+# one check flips on a Renovate death exactly as a second one would have. One
+# UUID, one enum. (Ruled 2026-08-26; the account is capped at 20 checks.)
+#
+# NOT ARMED FROM OBSERVATION YET -- THIS IS THE FLOOR, AND THAT IS DELIBERATE.
+# The arming rule is twice the maximum `dash_age_days` seen across the last 30
+# ping bodies, floored at 14 days. Read 2026-08-26: this job shipped 2026-08-24
+# and its check had logged 6 pings in total, fewer than the 14 bodies the rule
+# needs, so there is no observed maximum to double and the floor stands. The
+# bodies could not be read individually either -- the only healthchecks.io API
+# key in the vault is read-only, and `/api/v3/checks/<uuid>/pings/` refuses it.
+# Re-read the ping log after a month of data and re-arm this: a threshold
+# tighter than the quiet periods is red every fortnight, and one looser than a
+# month lets Renovate die unnoticed.
+RENOVATE_ALIVE_MAX_DAYS = 14
+
+# Every verdict this check can emit. A ping body may carry a member of this set
 # and nothing else that is not an int.
 V_OK = "ok"
+V_UPDATES_WAITING = "updates-waiting"
 V_UPDATES_PENDING = "updates-pending"
+V_RENOVATE_STALE = "renovate-stale"
 V_DASHBOARD_MISSING = "dashboard-missing"
 V_CONFIG_ERROR = "renovate-config-error"
-V_STALE = "renovate-stale"
 V_RATE_LIMITED = "rate-limited"
 V_SECONDARY_LIMIT = "secondary-limit"
 V_REPO_UNREACHABLE = "repo-unreachable"
 V_API_ERROR = "api-error"
 
 VERDICTS = frozenset({
-    V_OK, V_UPDATES_PENDING, V_DASHBOARD_MISSING, V_CONFIG_ERROR, V_STALE,
-    V_RATE_LIMITED, V_SECONDARY_LIMIT, V_REPO_UNREACHABLE, V_API_ERROR,
+    V_OK, V_UPDATES_WAITING, V_UPDATES_PENDING, V_RENOVATE_STALE,
+    V_DASHBOARD_MISSING, V_CONFIG_ERROR, V_RATE_LIMITED, V_SECONDARY_LIMIT,
+    V_REPO_UNREACHABLE, V_API_ERROR,
 })
 
 # The verdicts that mean "the repo was read successfully". Everything else is
 # indeterminate and pings /log (rule 1).
 DETERMINATE = frozenset({
-    V_OK, V_UPDATES_PENDING, V_DASHBOARD_MISSING, V_CONFIG_ERROR, V_STALE,
+    V_OK, V_UPDATES_WAITING, V_UPDATES_PENDING, V_RENOVATE_STALE,
+    V_DASHBOARD_MISSING, V_CONFIG_ERROR,
 })
+
+# The determinate verdicts that are GREEN. `updates-waiting` is green on
+# purpose: an update sitting in a pull request is this estate working as
+# designed, not a fault. `renovate-stale` is deliberately NOT here.
+GREEN = frozenset({V_OK, V_UPDATES_WAITING})
 
 # What to DO about each verdict, emitted as the body's `next=` line.
 #
@@ -127,18 +163,29 @@ DETERMINATE = frozenset({
 # banned estate-wide (it drives a healthchecks.io UI nag) -- say "check" instead.
 NEXT_ACTIONS = {
     V_OK: "none",
+    V_UPDATES_WAITING:
+        "none - an open pull request is normal between update sessions;"
+        " this line is informational",
+    # 105 characters, and it must stay under 120: the existing
+    # test_every_action_is_one_line_of_short_printable_ascii caps every entry
+    # in this map. It keeps BOTH substrings
+    # test_the_three_red_verdicts_name_a_command_or_a_place_to_look asserts on,
+    # `gh pr list` and `apply-homelab`.
     V_UPDATES_PENDING:
-        "gh pr list -R mnbf9rca/kubernetes_config --author app/renovate"
-        " - then make apply-homelab and merge",
+        "run the update session: gh pr list -R mnbf9rca/kubernetes_config"
+        " -A app/renovate, then make apply-homelab",
+    # 111 characters. This was ALIVE_NEXT_ACTIONS[A_STALE] when Renovate's
+    # liveness had a check of its own; the sentence is unchanged and it now
+    # lives in the one map, held to the one contract.
+    V_RENOVATE_STALE:
+        "Renovate has gone quiet - read the Mend job log, then check"
+        " renovate.json managerFilePatterns still match files",
     V_DASHBOARD_MISSING:
         "check the Mend Renovate app is still installed on the repo:"
         " github.com/settings/installations",
     V_CONFIG_ERROR:
         "gh issue list -R mnbf9rca/kubernetes_config --author app/renovate"
         " - read it and fix renovate.json",
-    V_STALE:
-        "open the Dependency Dashboard issue and check renovate.json"
-        " managerFilePatterns still cover the pinned namespaces",
     V_RATE_LIMITED:
         "no action for one run - the unauthenticated quota is per IP;"
         " look at the Events log if it repeats",
@@ -348,8 +395,12 @@ def decide(pull_requests, dashboard, config_issues, now):
     PRECEDENCE, and why: a configuration error means Renovate has stopped
     proposing pull requests, so a pull-request count taken during one is not
     trustworthy -- it is reported first. A missing dashboard means the same
-    class of doubt. Only then does a pull-request count mean what it says. All
-    three are red, so precedence changes the verdict label, never the colour.
+    class of doubt. Renovate's own liveness comes next, and here precedence
+    changes the COLOUR rather than just the label: a young pull request alone is
+    the green `updates-waiting`, so a dead Renovate with one still open must be
+    judged stale before the pull-request rules ever run. Only under a dashboard
+    that exists and has moved recently does a pull-request count mean what it
+    says.
     """
     facts = {"prs_open": len(pull_requests), "config_issues": len(config_issues)}
 
@@ -374,22 +425,39 @@ def decide(pull_requests, dashboard, config_issues, now):
         return V_CONFIG_ERROR, facts
     if dashboard is None:
         return V_DASHBOARD_MISSING, facts
-    if (RENOVATE_STALE_DAYS is not None and dash_age is not None
-            and dash_age > RENOVATE_STALE_DAYS):
-        return V_STALE, facts
+
+    # RENOVATE'S OWN LIVENESS, ABOVE THE PULL-REQUEST RULES. A configuration
+    # error and a missing dashboard already outrank it and are more specific,
+    # so they are handled first; everything below this point assumes a
+    # dashboard that exists.
+    dash_age = facts.get("dash_age_days")
+    if dash_age is None:
+        # The dashboard exists but its timestamp did not parse. That is a read
+        # failure about this one field, never evidence that Renovate is alive,
+        # so it must not fall through to a GREEN pull-request verdict.
+        # Indeterminate: pings /log and changes nothing.
+        return V_API_ERROR, facts
+    if int(dash_age) > RENOVATE_ALIVE_MAX_DAYS:
+        return V_RENOVATE_STALE, facts
+
     if pull_requests:
-        return V_UPDATES_PENDING, facts
+        # An open pull request is normal; an OLD one means a session was
+        # skipped. `oldest_pr_days` is absent only when every pull request had
+        # an unparseable timestamp, which is not evidence of age either way.
+        if facts.get("oldest_pr_days", 0) > PR_AGE_RED_DAYS:
+            return V_UPDATES_PENDING, facts
+        return V_UPDATES_WAITING, facts
     return V_OK, facts
 
 
 def ping_suffix(verdict):
-    """`0` on a clean read, `fail` on a determinate red, `log` otherwise.
+    """`0` on a green read, `fail` on a determinate red, `log` otherwise.
 
     `log` records an event and changes nothing: it cannot postpone, suppress or
     trigger an alert, and with no `/start` ping in play it cannot arm a failure
     timer either (rules 1 and 2).
     """
-    if verdict == V_OK:
+    if verdict in GREEN:
         return "0"
     if verdict in DETERMINATE:
         return "fail"
@@ -484,6 +552,11 @@ if __name__ == "__main__":
         hc_emit("config_issues=%d" % config_issues)
     if http >= 0:
         hc_emit("http=%d" % http)
+    hc_emit("pr_age_red_days=%d" % PR_AGE_RED_DAYS)
+    # The liveness threshold this run was judged against, so an alert says what
+    # `renovate-stale` was measured with rather than making the reader look it
+    # up in the source.
+    hc_emit("renovate_alive_max_days=%d" % RENOVATE_ALIVE_MAX_DAYS)
     # A silence-triggered alert carries the PREVIOUS run's body, so every body
     # carries its own run timestamp: an old `run_epoch=` in an alert means "this
     # body is not about this alert; the watcher has gone quiet".

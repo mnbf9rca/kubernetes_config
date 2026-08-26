@@ -149,6 +149,14 @@ PY_VALUE_ALLOWLIST = frozenset({
     "config_issues",    # int(): count of renovate[bot] config-error issues
     "http",             # int(): the HTTP status code of the one GitHub call
     "run_epoch",        # int(): this run's own Unix timestamp
+    # The two module-level int constants the body quotes back, so an alert says
+    # which threshold it was judged against. Both are literals in the source,
+    # decided at edit time; neither is derived from anything GitHub sent.
+    # Emitted as `renovate_alive_max_days=` and `pr_age_red_days=` respectively
+    # -- the BODY KEY differs from the name, and it is the NAME that must be
+    # listed.
+    "RENOVATE_ALIVE_MAX_DAYS",
+    "PR_AGE_RED_DAYS",
     # Bound to `next_action_for(verdict)`, which returns a value from that
     # script's NEXT_ACTIONS map: a fixed literal per verdict, chosen at edit
     # time, with a literal fallback. A verdict is itself a member of a fixed

@@ -339,6 +339,7 @@ newest match, because their glob is one PVC directory expected to match one path
 | `homelab-update-watch` | `op://Homelab/update-watch/healthcheck-uuid` | 1d / 6h | `update-watch` CronJob in `ops`, exit code or `/log` — **never `/start`** |
 | `hindsight-pg-dump` | `op://Homelab/hindsight/healthcheck-uuid` | 1d / 2h | `hindsight-pg-dump` CronJob, `/start` and exit code, from an EXIT trap |
 | `hindsight-canary` | `op://Homelab/hindsight/canary-healthcheck-uuid` | 1h / 30m | `hindsight-canary` CronJob, `/start` and exit code, from an EXIT trap |
+| `estate-update` | `op://Homelab/estate-update/healthcheck-uuid` | 45d / 7d | Pinged by hand at the end of each update session. No job pings it |
 
 **Seven of the jobs this repo pings send `/start` and an exit code** — both restic jobs,
 `cloudflare-analytics`, `influx-backup`, `hermes-pull` and both hindsight jobs. Follow that
@@ -414,18 +415,27 @@ Events log settles that. The read-only API key is
 images are pinned, Renovate proposes the bumps, and until this check existed nothing pointed at
 the waiting pull requests. Detection for `health` came free on day one.
 
-**Red means one of seven things.** Three arrive as a `/fail` ping and name themselves in the
-body's `verdict=` field:
+**Red means one of eight things.** Four arrive as a `/fail` ping and name themselves in the
+body's `verdict=` field. The other four turn the check red through **silence** past the 30-hour
+window: the job did not run, it ran and hung, its ping UUID is well-formed but wrong, or GitHub
+has been unreachable for a day.
 
-| `verdict=` | Means |
-|---|---|
-| `updates-pending` | One or more open Renovate pull requests. The intended signal |
-| `dashboard-missing` | Renovate's Dependency Dashboard is gone or closed, so Renovate is probably uninstalled |
-| `renovate-config-error` | Renovate opened a configuration-error issue and has stopped proposing pull requests |
+**Every verdict the check can emit, and the ping each one sends.** `/0` is green, `/fail` is red,
+and `/log` records an event and changes nothing — it cannot postpone, suppress or trigger an
+alert:
 
-The other four turn the check red through **silence** past the 30-hour window: the job did not
-run, it ran and hung, its ping UUID is well-formed but wrong, or GitHub has been unreachable for
-a day.
+| `verdict=` | Ping | Means |
+|---|---|---|
+| `ok` | `/0` | The Dependency Dashboard is fresh and no Renovate pull request is open |
+| `updates-waiting` | `/0` | Open Renovate pull requests, none older than `pr_age_red_days=`. **Green on purpose** — see below |
+| `updates-pending` | `/fail` | A Renovate pull request has been open longer than `pr_age_red_days=`, so an update session was plainly skipped |
+| `renovate-stale` | `/fail` | The Dependency Dashboard has not moved in `renovate_alive_max_days=`. Renovate itself has gone quiet |
+| `dashboard-missing` | `/fail` | Renovate's Dependency Dashboard is gone or closed, so Renovate is probably uninstalled |
+| `renovate-config-error` | `/fail` | Renovate opened a configuration-error issue and has stopped proposing pull requests |
+| `rate-limited` | `/log` | GitHub's unauthenticated quota is exhausted for this IP |
+| `secondary-limit` | `/log` | A GitHub secondary rate limit |
+| `repo-unreachable` | `/log` | HTTP 404 — the repo was renamed, deleted or made private |
+| `api-error` | `/log` | Anything else unreadable: a 5xx, a timeout, a paginated response, an HTTP 200 carrying a JSON object, or a Dependency Dashboard whose timestamp did not parse |
 
 **A silence-triggered alert carries the previous run's body**, because upstream sends the last
 body it received whatever the ping kind. That is why every body carries `run_epoch=`, an
@@ -434,10 +444,12 @@ watcher has gone quiet". Telling the four silence causes apart means opening the
 log. The check has one bit; red means "go and look".
 
 **`next=` is the last line of every body and names what to do about that verdict** — the
-`gh pr list` command for `updates-pending`, the `gh issue list` command for
-`renovate-config-error`, the app-installations page for `dashboard-missing`, and the pod-log
-command for the indeterminate verdicts. Each string is a fixed literal in the script's
-`NEXT_ACTIONS` map, keyed by verdict, so the alert is self-contained and nothing derived at run
+`gh pr list` command for `updates-pending`, the Mend job log and a `managerFilePatterns` check
+for `renovate-stale`, the `gh issue list` command for `renovate-config-error`, the
+app-installations page for `dashboard-missing`, the pod-log command for the indeterminate
+verdicts, and `none` for both green verdicts (`updates-waiting`'s line says so explicitly, so a
+green body is not mistaken for one whose `next=` went missing). Each string is a fixed literal
+in the script's `NEXT_ACTIONS` map, keyed by verdict, so the alert is self-contained and nothing derived at run
 time is formatted into it. Read `next=` together with `run_epoch=`: a stale body's advice is
 about the last run that completed, not about the silence that raised the alert.
 
@@ -456,23 +468,98 @@ alert; if the outage persists no success ping arrives either and the check goes 
 30 hours.
 
 **Why `/fail` here when `ingest-freshness` was refused it.** That refusal rested on tolerance: a
-stale bucket self-heals and was routinely, legitimately stale. Neither half transfers. An
-available update never self-heals — it waits until a human merges and applies — so there is no
-tolerance to trade away, and red on that condition is the whole requirement.
+stale bucket self-heals and was routinely, legitimately stale. Neither half transfers. An update
+never self-heals — it waits until a human merges and applies — so there is no tolerance to trade
+away once it has waited past `pr_age_red_days=`, and red on *that* condition is the whole
+requirement. The tolerance an available update does have is the session cadence itself, and that
+is exactly what the 45-day threshold spends before going red.
 
 **One alert, then silence.** Notifications come from status *flips*, so a repeated `/fail`
 against an already-down check sends nothing further: one email on the day an update appears, then
 quiet until it is merged and the next run flips the check green. The supported fix is an
 account-level nag (Profile → reports, Hourly or Daily); it is account-wide, so every down check
-nags. **Decision at rollout, recorded here:** _(pending — set to Daily or record the acceptance of
-one-alert-only)_. Manufacturing a re-flip by pinging up-then-down is rejected outright: it writes
-a false "everything is fine" event into the check's own history.
+nags. **Decision, taken August 26, 2026: Daily.** It was
+deferred while `homelab-update-watch` went red on any open pull request, because a nag over
+a permanently-red check is noise that trains the operator to ignore it. Under the 45-day
+threshold red means a session was skipped or Renovate broke — both worth a daily reminder
+until fixed. Manufacturing a re-flip by pinging up-then-down stays rejected outright: it
+writes a false "everything is fine" event into the check's own history.
 
-**Quarterly Renovate liveness drill.** The watcher's blind spot is an installed, error-free but
-*idle* Renovate: no pull requests and no error issue reads as green. Once a quarter, confirm
-Renovate is alive — check the Mend Developer Portal job log, or bump a pin backwards and confirm
-a pull request appears within a cycle. If that drill ever fails, the first thing to build is a
-registry canary.
+**An open pull request is green.** The estate updates in a session every 4 to 6 weeks, so a
+pending Renovate pull request is this design working, not a fault. `verdict=updates-waiting`
+is the green form and `verdict=updates-pending` is the red one; the boundary is
+`pr_age_red_days=` in the body, currently 45 days — a session and a half. The rule this
+replaced went red on any open pull request, which under session cadence made red the steady
+state, and an alarm that is normally red is not an alarm.
+
+**Renovate's own liveness is a red verdict on this same check**, `verdict=renovate-stale`.
+It fires when the Dependency Dashboard's `updated_at` (a stable API field; nothing parses its
+markdown) exceeds `renovate_alive_max_days=` in the body, and it is evaluated **above** the
+pull-request rules, so a dead Renovate with a young pull request still open cannot read as the
+green `updates-waiting`. A missing dashboard and a configuration error keep their own, more
+specific verdicts — both are already red and both name their own `next=`. A dashboard whose
+timestamp does not parse is `api-error`, which pings `/log` and changes nothing: an unreadable
+field is never evidence that Renovate is alive.
+
+**The liveness threshold is the unarmed floor, 14 days, and it is due a re-arming.** The rule is
+twice the maximum `dash_age_days` this job has emitted across its last 30 ping bodies, floored at
+14. Read August 26, 2026: the job had shipped two days earlier and its check had logged six pings
+in total, fewer than the 14 bodies the rule needs, so there was no observed maximum to double.
+The bodies could not be read individually either — the only healthchecks.io API key in the vault
+is read-only, and `/api/v3/checks/<uuid>/pings/` refuses it. Re-read the ping log after a month of
+data and re-arm `RENOVATE_ALIVE_MAX_DAYS` in `homelab/ops/scripts/update-watch.py`: a threshold
+tighter than the quiet periods is red every fortnight, and one looser than a month lets Renovate
+die unnoticed.
+
+**Why this is not a second check.** It was one, in the design that preceded this. The argument
+was that healthchecks.io notifies on status *flips*, so a liveness signal folded into a
+permanently-red check could never fire — and under the old rule, red on any open pull request,
+`homelab-update-watch` was permanently red. The 45-day threshold removes the permanent red, so
+the one check flips on a Renovate death exactly as a second UUID would have, and the account is
+capped at 20 checks with six of them already outside this repo. Decided August 26, 2026. The
+residual: while the check is already red for `updates-pending`, a Renovate death changes
+`verdict=` in the body but raises no second alert. Read `verdict=` before assuming you know why
+a red check is red.
+
+**The watcher counts OPEN pull requests, so anything held on the Dependency Dashboard is
+invisible to it.** Renovate lists an update as a dashboard checkbox rather than opening a pull
+request whenever a rule says to: `dependencyDashboardApproval` on all major bumps, and — since
+August 26, 2026 — on `kroniak/ssh-client` digest bumps, because that container carries an SSH
+private key and an archive of live secrets. Such an update waits for a human tick indefinitely
+while this check reports `ok` with zero open pull requests, and `renovate-stale` does not catch
+it either: Renovate is alive and touching the dashboard the whole time. **Read the Dependency
+Dashboard, not just the pull-request list, at the start of every update session.** Making the
+watcher count dashboard-held items instead would mean parsing the dashboard's markdown, which
+rule 3 in `update-watch.py` deliberately refuses — the issue's `updated_at` is a stable API
+field, its body is not.
+
+**`estate-update` is the session's own dead-man's-switch**, at roughly 45 days with a 7-day
+grace, pinged by hand at the end of each session. It exists because `recreateWhen: "always"`
+resets pull-request ages every cycle, so no pull-request-age threshold can see a skipped
+session. Ping it with:
+
+    curl -fsS -m 15 -o /dev/null --data-binary 'summary=estate-update session complete' \
+      "https://hc-ping.com/$(op read 'op://Homelab/estate-update/healthcheck-uuid')"
+
+**Two operator actions are still outstanding on this, as of August 26, 2026**, because both are
+account writes that no credential in the vault can make — the only healthchecks.io API key stored
+is read-only, and the account report setting is not in the API at all. Create the `estate-update`
+check by hand (period 45 days, grace 7 days) and store its UUID as
+`op://Homelab/estate-update/healthcheck-uuid`, typed `[text]`: a ping UUID grants no access, it
+only lets a stranger mask a failure, so it stays out of this public repository but is not
+concealed in the vault. Then set Profile → reports to **Daily**, per the decision above, and
+reload the page to confirm it took. Until the check exists, the table row above and the `op read`
+in the command are a specification, not a description. Note the budget while you are there: the
+account held 19 checks on that date against a cap of 20, so `estate-update` is the last free slot
+until the heartbeat migration to uptime-kuma frees more.
+
+**The quarterly liveness drill, narrowed.** `renovate-stale` now covers the *idle-Renovate* case
+this drill was invented for, so what is left of it is the residual: a Renovate that keeps
+updating its dashboard while proposing nothing — `managerFilePatterns` that stopped matching, a
+registry lookup failing silently. Once a quarter, bump a pin backwards and confirm a pull request
+appears within a cycle. `make check-renovate-scope` closes the commonest variant, a pinned image
+no file in scope names. If the drill ever fails for a reason that guard cannot see, the first
+thing to build is a registry canary.
 
 **Closing a Renovate pull request is not a snooze** — `renovate.json` sets
 `recreateWhen: "always"`, so a closed pull request is recreated and the check goes red again.
@@ -672,7 +759,8 @@ Probes fix hung request paths, not silently stopped background work — often th
 | **the hindsight dump** | The gate proves the dump exists, is fresh, is above a size floor and contains at least one `CREATE TABLE`. It does not prove the dump *restores*. The periodic restore drill in [hindsight.md](hindsight.md) is the only thing that does |
 | **the homelab gate** | It proves the SSD is mounted and the tree is the right *shape*: right number of PVC directories, right order of magnitude, the listed files present and non-trivial. It says nothing about *content*. Every homelab PVC is copied live, with no quiesce step: a sqlite database mid-write is captured torn, `sonarr.db` at 14 MiB of corruption passes the size floor exactly as 14 MiB of working database does, and a PVC that stopped being written to weeks ago looks identical to one written a minute ago. Grafana is the one exception, and only in its dump: `grafana-dump` is taken with SQLite's online backup API and read back before it is published, so that artifact is consistent and verified even though the live `grafana.db` beside it is not. The hindsight dump is verified the same way, at the shape level. Only the two influx dumps, that Grafana dump, the hindsight dump and the hermes zip are age-checked. A retained orphan directory from a recreated PVC can satisfy an expected-set entry the live PVC no longer can — the resolved paths are printed so it is visible, but nothing fails on it. The rest surfaces at restore time |
 | **cloudflare-analytics** | It proves the hours it fetched were fetched. It cannot prove Cloudflare's own numbers are right, and it does not alert on *content* — a hostname that stops receiving traffic entirely, or a spike, produces a perfectly green check. That is Phase 3 (Grafana alert rules), deliberately deferred until a baseline exists |
-| **update-watch (Renovate silence)** | Renovate is installed, has opened no error issue, and is proposing nothing. No pull requests and no error issue read as green, and the check cannot tell that from a genuinely up-to-date estate. This is the accepted price of counting pull requests instead of polling registries. The cover is the quarterly liveness drill above; `make check-renovate-scope` closes the commonest *partial* variant, a pinned namespace nobody added to `managerFilePatterns` |
+| **update-watch (Renovate silence)** | Renovate is installed, has opened no error issue, and is proposing nothing. Since August 26, 2026 the *idle* form is a determinate verdict on this same check: a Dependency Dashboard that has not moved in `renovate_alive_max_days=` is `verdict=renovate-stale`, red. What is left uncovered is a Renovate that keeps touching its dashboard while proposing nothing — a `managerFilePatterns` that stopped matching, or a registry lookup failing silently. `make check-renovate-scope` closes the commonest variant, a pinned image no in-scope file names; the rest is the narrowed quarterly drill above |
+| **update-watch (held on the dashboard)** | The watcher counts OPEN pull requests, and an update held for `dependencyDashboardApproval` — every major bump, and `kroniak/ssh-client` digest bumps — is a dashboard checkbox, not a pull request. It can wait for a human tick indefinitely while the check reads `ok`, and `renovate-stale` will not fire because Renovate is alive and updating the dashboard throughout. The cover is procedural: read the Dependency Dashboard at the start of every update session |
 | **update-watch (merged but not applied)** | It watches the **repository**, not the cluster. Merging a Renovate pull request closes it, so the next run reports zero and the check goes green while the cluster still runs the old image. Merge and apply are one runbook operation for that reason; the independent noticer is drift in `make diff-homelab` |
 
 Queued, not configured: a changedetection `overdue_watches` json-query monitor and a karakeep
