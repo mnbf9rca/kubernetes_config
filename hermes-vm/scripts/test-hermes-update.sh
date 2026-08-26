@@ -156,6 +156,27 @@ rc=$?
 set -e
 assert_rc 1 "$rc" "lg_get fails when the file does not exist"
 
+# ---- parse_mode ------------------------------------------------------------
+assert_eq "run"  "$(parse_mode)"        "parse_mode defaults to run"
+assert_eq "seed" "$(parse_mode --seed)" "parse_mode understands --seed"
+# In a SUBSHELL, and with errexit off. `exit` inside a shell function exits the
+# SHELL, not the function, so a bare `parse_mode --wat` kills this test run
+# mid-suite: no verdict, `make check-vm-scripts` red. The parentheses contain
+# the exit; `set +e` stops errexit from killing the script on the subshell's own
+# non-zero status. Both are required — verified under sh, dash and bash.
+set +e
+( parse_mode --wat ) >/dev/null 2>&1
+rc=$?
+set -e
+assert_rc 64 "$rc" "parse_mode rejects an unknown argument with EX_USAGE"
+
+# ---- classify_chat ---------------------------------------------------------
+assert_eq "ok"  "$(classify_chat 200)" "classify_chat accepts 2xx"
+assert_eq "ok"  "$(classify_chat 204)" "classify_chat accepts any 2xx"
+assert_eq "bad" "$(classify_chat 401)" "classify_chat rejects 401"
+assert_eq "bad" "$(classify_chat 000)" "classify_chat rejects a connection failure"
+assert_eq "bad" "$(classify_chat '')"  "classify_chat rejects an empty status"
+
 if [ "$FAILED" -ne 0 ]; then
   printf '\nFAILED\n'; exit 1
 fi

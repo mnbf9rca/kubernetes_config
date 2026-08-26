@@ -74,7 +74,7 @@ import sys
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MAKEFILE = os.path.join(REPO_ROOT, "Makefile")
 
-SCAN_ROOTS = ("homelab", "vps")
+SCAN_ROOTS = ("homelab", "vps", "hermes-vm")
 TEXT_SUFFIXES = (".sh", ".yaml", ".yml")
 PY_SUFFIXES = (".py",)
 
@@ -93,6 +93,7 @@ REQUIRED_TARGETS = (
     "homelab/hindsight/scripts/hindsight-pg-dump.sh",
     "homelab/hindsight/scripts/hindsight-canary.sh",
     "vps/backup/scripts/restic-backup.sh",
+    "hermes-vm/scripts/hermes-update.sh",
     "vps/ops/scripts/keel-fresh.sh",
 )
 
