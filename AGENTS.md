@@ -277,17 +277,27 @@ Full mechanics, target-by-target reference and failure modes:
   commented.** `homelab/ops/` and `vps/ops/` hold the same `keel-fresh` runner and
   CronJob twice, because kustomize will not read a generator source outside its own root
   and because the alternative puts a VPS kubeconfig inside a homelab pod. The invariant
-  that rests on is **edit them together**, and a comment saying so has never stopped
-  anybody: a fix applied to one cluster and not the other is a dead-man's-switch that has
-  quietly stopped switching on the cluster nobody looked at.
+  that rests on is **edit them together**, and the two comments saying so — both in the
+  VPS copies; neither homelab file carries the instruction — have never stopped anybody: a
+  fix applied to one cluster and not the other is a dead-man's-switch that has quietly
+  stopped switching on the cluster nobody looked at.
   `make check-keel-fresh-parity` enforces it by masking a short, stated list of sanctioned
   differences — the copy notes, `IMAGE_FLOOR`, the schedule, the monitor name, the two
   paths, the `nodeSelector`, the token variable — and requiring the rest to be identical.
   Editing either copy means editing both; genuinely per-cluster behaviour means a new rule
-  in that guard, in the same commit, with its reason written down. **It has no per-cluster
-  half** — it compares the two trees against each other — so a divergence in the VPS copy
-  blocks `apply-homelab` too, deliberately. Any future copied pair should get the same
-  treatment rather than a fifth comment.
+  in that guard, in the same commit, with its reason written down. Every rule's span is
+  **bounded to comment lines plus the line it names**: an earlier `IMAGE_FLOOR` rule used
+  `.*?` across newlines and silently swallowed executable shell inserted above the
+  assignment, which `check-script-lint` cannot catch either because the insertion is valid
+  `sh`. Keep that property when adding a rule.
+  **It has no per-cluster half**, so a divergence in the VPS copy blocks `apply-homelab`
+  too. That is a ruling, not an accident: a divergence means one cluster's
+  dead-man's-switch may be broken and nothing in the divergence itself says which, so
+  neither cluster moves until it is resolved — and a per-cluster split is not even
+  coherent, because the guard compares both trees and a homelab-only variant would fail on
+  a VPS-only edit anyway. The coupling is real and is the kind that gets routed around
+  under pressure; the answer is that the guard names the offending line and the fix.
+  Any future copied pair should get the same treatment rather than a third comment.
 - **Logic lives in a script file, never in an inline YAML string.** Anything with
   branching, parsing or loops goes in a real file under a `scripts/` path and reaches the
   cluster through a `configMapGenerator`, as

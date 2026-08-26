@@ -52,16 +52,22 @@ silent one:
 **A `hostPath` mount of that same directory is subject to the identical rule.** The nightly
 restic CronJob in `vps/backup/restic-cronjob.yaml` mounts
 `/var/mnt/data/local-path-provisioner` by `hostPath` and carries **no `nodeSelector`**, so on
-a multi-node cluster nothing keeps it on the storage node. Two things limit the damage, and
-both are worth knowing before assuming this is the silent case the PVC bullet above
-describes. The mount declares `type: Directory`, so a node where the path does not exist
-fails the pod at mount time rather than serving an empty tree. And the job's expected-set
-verification gate names each snapshot by path, so a `/data` that mounted but was empty fails
-the gate by name. Neither has been tested on a second node — there has never been one — and
-the gate runs **after** `restic backup`, so a wrong-node run would still write a snapshot of
-nothing into the repository before failing, where it counts against the retention policy.
-Pinning that pod is outstanding work, carried with the multi-node expansion; it is named here
-because a storage contract that omitted the case would be worse than no contract.
+a multi-node cluster nothing keeps it on the storage node.
+
+The mount declares `type: Directory`, which looks like it might catch a wrong-node run, and
+mostly it will not: the catch-all above provisions into **that same path**, so any second
+node that has ever provisioned a `local-path` volume already has the directory and the check
+passes. What you get is the empty-source case — restic reading a tree holding, at most, that
+node's own stray volumes and none of the ones being backed up.
+
+That is caught, but late and at a cost. The job's expected-set verification gate names each
+snapshot by path, so the missing ones fail it by name. The gate runs **after** `restic
+backup`, so a wrong-node run has already written a snapshot of nothing into the repository,
+where it counts against the 7-daily / 4-weekly / 6-monthly retention, and that night has no
+usable backup. Neither the `Directory` check nor the gate has been exercised on a second node,
+because there has never been one — this is read off the manifest and the gate script, not
+observed. Pinning that pod is outstanding work, carried with the multi-node expansion; it is
+named here because a storage contract that omitted the case would be worse than no contract.
 
 The `keel-fresh` CronJob in the `ops` namespace is already pinned — see the comment beside
 its `nodeSelector`, which is where the reasoning lives in full.

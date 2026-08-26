@@ -12,8 +12,8 @@ The cost of that choice is an invariant nothing enforced until this guard
 existed: EDIT THEM TOGETHER. A fix applied to one cluster and not the other is a
 dead-man's-switch that has quietly stopped switching on the cluster nobody
 looked at -- the precise failure the `keel-fresh` job was built to remove, now
-reintroduced one level up. Four source comments say "edit them together"; a
-comment has never stopped anybody.
+reintroduced one level up. Two source comments say "edit them together", both of
+them in the VPS copies; a comment has never stopped anybody.
 
 HOW IT WORKS, AND WHY IT IS A MASK-THEN-COMPARE RATHER THAN A DIFF CLASSIFIER.
 Each sanctioned difference is a rule below. Every rule rewrites its region to a
@@ -22,6 +22,12 @@ texts must be BYTE-IDENTICAL. So the allowlist is closed by construction: a line
 this file does not name cannot differ, and there is no "small enough to ignore"
 hunk size for a real edit to hide under. A hunk-classifying diff would have the
 opposite default -- unrecognised means unjudged.
+
+NO RULE MAY SPAN A LINE IT DOES NOT NAME. Every multi-line pattern below is
+built from a run of comment lines plus the specific line or two it exists to
+mask, so an inserted statement ends the run rather than disappearing into it.
+That is the property to preserve when adding an eleventh rule: a `.*?` across
+newlines is a hole the size of whatever anyone puts there, and it will pass.
 
 Each rule also declares how many times it must fire in each file. That matters
 more than it looks: if somebody rewords a sanctioned region so a pattern stops
@@ -106,9 +112,21 @@ SCRIPT_RULES = (
      "# is in <CLUSTER>/ops/keel-fresh.yaml,", 1, 1),
     # The floor and the whole comment deriving it. The estates differ, so the
     # arithmetic differs; what must not differ is anything below it.
+    #
+    # EVERY LINE OF THE SPAN MUST BE A COMMENT, and the `(?:\n#.*)*` is what
+    # says so. An earlier version wrote this as `.*?` under `re.S`, which
+    # swallowed whatever lay between the comment's first line and the
+    # assignment -- nineteen lines on homelab, thirty-one on the VPS --
+    # regardless of content. Real shell inserted into that window in one copy
+    # only passed at exit 0, which is precisely the divergence this guard
+    # exists to catch, sitting directly above the one constant a future editor
+    # is most likely to touch. `check-script-lint` would not have caught it
+    # either: the insertion is valid `sh` on both sides. Constrained here, an
+    # inserted code line simply ends the comment run, the assignment no longer
+    # follows, the rule matches zero times and the guard fails at exit 2.
     ("IMAGE_FLOOR block",
-     re.compile(r"^# The literal floor for tracked images\..*?^IMAGE_FLOOR=\d+$",
-                re.M | re.S),
+     re.compile(r"^# The literal floor for tracked images\..*(?:\n#.*)*"
+                r"\nIMAGE_FLOOR=\d+$", re.M),
      "<IMAGE_FLOOR BLOCK>", 1, 1),
 )
 
@@ -134,9 +152,13 @@ MANIFEST_RULES = (
      re.compile(r"(?:homelab|vps)/ops/scripts/keel-fresh\.sh"),
      "<CLUSTER>/ops/scripts/keel-fresh.sh", 1, 1),
     # The comment is inside the region because it explains the offset, and the
-    # offset is the thing that differs.
+    # offset is the thing that differs. `[^"\n]*` rather than `[^"]*`: a
+    # negated class matches newlines, so the looser form could in principle
+    # run the value on to some later line ending in a quote and mask
+    # everything between. It does not today -- checked against both files --
+    # and excluding the newline means it never can.
     ("schedule and its comment",
-     re.compile(r"^(?:  #.*\n)+  schedule: \"[^\"]*\"$", re.M),
+     re.compile(r"^(?:  #.*\n)+  schedule: \"[^\"\n]*\"$", re.M),
      "<SCHEDULE BLOCK>", 1, 1),
     ("1Password vault path",
      re.compile(r"op://(?:Homelab|VPS)/keel-fresh/kuma-push-token"),

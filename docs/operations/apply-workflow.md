@@ -417,9 +417,12 @@ out on scope rather than on cost. It compares `homelab/ops`'s `keel-fresh` copy 
 `vps/ops`'s, so "the VPS half of a homelab-versus-VPS comparison" is not a thing that
 exists; it takes no cluster argument and rejects one. The consequence is worth knowing
 before it surprises you: **a divergence introduced in the VPS copy blocks `apply-homelab`
-too.** That is intended. While the pair is out of step, neither cluster's
-dead-man's-switch is trustworthy, and the fix is to finish the edit rather than route
-around the gate. What it allows through is a short, stated list — the copy notes, the
+too.** That is a ruling rather than a side effect. A divergence means one cluster's
+dead-man's-switch may be broken, and nothing in the divergence itself says which, so
+neither cluster moves until it is resolved. A per-cluster split would not even be coherent:
+the guard compares both trees, so a homelab-only variant would fail on a VPS-only edit
+anyway. The coupling is the kind that gets routed around under time pressure, and the
+answer to that is that the guard names the offending line and the fix — finish the edit. What it allows through is a short, stated list — the copy notes, the
 image floor, the schedule, the monitor name, the two paths, the `nodeSelector` and the
 token variable — and everything else must match byte for byte. Its own header carries the
 list and the reasoning.

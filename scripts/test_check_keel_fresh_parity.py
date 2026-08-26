@@ -87,6 +87,102 @@ class TestDivergenceIsCaught(unittest.TestCase):
             self.original.replace("IMAGE_FLOOR=7", "IMAGE_FLOOR=6")))
 
 
+class TestNoRuleSwallowsCode(unittest.TestCase):
+    """The boundary that a suite of otherwise sound cases still missed.
+
+    A masking rule is only as safe as its span. The first version of the
+    `IMAGE_FLOOR` rule used `.*?` under `re.S` and therefore swallowed every
+    line between the comment's first line and the assignment -- nineteen on
+    homelab, thirty-one on the VPS -- whatever those lines held. Real shell
+    inserted into that window in ONE copy passed at exit 0, and
+    `check-script-lint` could not have helped: the insertion is valid `sh` on
+    both sides. The window sits directly above the one constant a future editor
+    is most likely to touch.
+
+    These assert the property rather than that one regex: no rule may span a
+    line it does not name. The outcome is CheckUnrunnable (exit 2) rather than a
+    reported divergence (exit 1), and that is the better of the two -- it names
+    the rule, the observed count and the expected one, instead of printing a
+    diff and leaving the reader to work out which rule stopped fitting.
+    """
+
+    def _insert_above(self, text, marker, injected):
+        return text.replace(marker, injected + "\n" + marker)
+
+    def test_code_above_IMAGE_FLOOR_is_not_swallowed(self):
+        label, _, vps, rules = kfp.PAIRS[0]
+        mutated = self._insert_above(
+            kfp.read(vps), "IMAGE_FLOOR=7",
+            "IMAGE_FLOOR_OVERRIDE_HACK=1\n"
+            "curl -fsS -m 5 http://evil.example/ >/dev/null || true")
+        with self.assertRaises(kfp.CheckUnrunnable):
+            kfp.mask(mutated, rules, "vps", label)
+
+    def test_code_above_IMAGE_FLOOR_on_the_homelab_side_is_not_swallowed(self):
+        # The rule is symmetric; a hole on one side is a hole on the other.
+        label, homelab, _, rules = kfp.PAIRS[0]
+        mutated = self._insert_above(
+            kfp.read(homelab), "IMAGE_FLOOR=4", "rm -rf /state")
+        with self.assertRaises(kfp.CheckUnrunnable):
+            kfp.mask(mutated, rules, "homelab", label)
+
+    def test_yaml_above_the_schedule_is_not_swallowed(self):
+        label, homelab, _, rules = kfp.PAIRS[1]
+        mutated = self._insert_above(
+            kfp.read(homelab), '  schedule: "15 7 * * *"', "  suspend: true")
+        with self.assertRaises(kfp.CheckUnrunnable):
+            kfp.mask(mutated, rules, "homelab", label)
+
+    def test_yaml_above_the_nodeSelector_is_not_swallowed(self):
+        label, _, vps, rules = kfp.PAIRS[1]
+        mutated = self._insert_above(
+            kfp.read(vps), "          nodeSelector:",
+            "          hostNetwork: true")
+        with self.assertRaises(kfp.CheckUnrunnable):
+            kfp.mask(mutated, rules, "vps", label)
+
+    def test_no_rule_swallows_an_injected_line_anywhere(self):
+        """The general property, applied to every multi-line rule mechanically.
+
+        The four cases above name their insertion points, so they cannot cover
+        an eleventh rule nobody has written yet. This one derives the point:
+        for each rule that spans more than one line, drop a sentinel
+        immediately after the first line of its match and assert NO match
+        contains the sentinel afterwards. A comment-bounded span breaks; a
+        `.*`-across-newlines span absorbs it and keeps matching, which is the
+        whole failure.
+
+        Written this way after the first attempt at a general test turned out
+        to be vacuous: asserting a shape over the CLEAN files passes against a
+        loose rule too, because clean files have nothing in the window for a
+        loose rule to swallow. A span test has to inject something.
+        """
+        sentinel = "SENTINEL_INJECTED_LINE=1"
+        checked = 0
+        for label, homelab, vps, rules in kfp.PAIRS:
+            for which, relative in (("homelab", homelab), ("vps", vps)):
+                text = kfp.read(relative)
+                index = 3 if which == "homelab" else 4
+                for rule in rules:
+                    name, pattern = rule[0], rule[1]
+                    if rule[index] is None:
+                        continue
+                    for match in pattern.finditer(text):
+                        body = match.group(0)
+                        if "\n" not in body.rstrip("\n"):
+                            continue          # single line: nothing to swallow
+                        first, rest = body.split("\n", 1)
+                        mutated = text.replace(
+                            body, first + "\n" + sentinel + "\n" + rest, 1)
+                        checked += 1
+                        for after in pattern.finditer(mutated):
+                            self.assertNotIn(
+                                sentinel, after.group(0),
+                                "rule %r in %s swallowed an unnamed line"
+                                % (name, relative))
+        self.assertGreater(checked, 0, "no multi-line rule was exercised")
+
+
 class TestStaleAllowlistIsAnError(unittest.TestCase):
     """A rule that stops matching must report itself, never mask nothing quietly."""
 
