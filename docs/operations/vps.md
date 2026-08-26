@@ -70,18 +70,18 @@ tunnel UUID. Run it after adding a hostname, and after any full cluster rebuild.
 ### Cloudflare Access bypasses
 
 Public endpoints serve callers that cannot authenticate: strangers' browsers running the
-umami beacon, third-party webhook senders, and WebSub hubs. They must be Access-bypassed or
-they break. **Four** path-scoped Access apps carry the shared `bypass` policy today, covering
-**eight** globs in total. A fifth is required and does not yet exist — it is listed here so an
-edge audit sees the gap rather than missing it:
+umami beacon, third-party webhook senders, WebSub hubs, and — since August 26, 2026 — jobs
+inside either cluster driving an uptime-kuma push monitor. They must be Access-bypassed or
+they break. **Five** path-scoped Access apps carry the shared `bypass` policy, covering **ten**
+globs in total:
 
-| Access app | Destinations | Status |
+| Access app | Destinations | Added |
 |---|---|---|
-| `umami scripts` | `analytics.cynexia.com/script.js`, `/api/send`, `/api/send/*` | in place |
-| `n8n webhooks` | `n8n.cynexia.com/webhook/*`, `/webhook-test/*` | in place |
-| `freshrss api` | `rss.cynexia.com/api/*`, `/p/api/*` | in place |
-| `karakeep api` | `keep.cynexia.com/api/*` | in place |
-| `uptime-kuma push` | `uptime.cynexia.com/api/push/*`, `/api/push` | **PENDING — not yet created.** Required before any uptime-kuma push monitor can report UP; until it exists the edge answers 302 and every push monitor sits permanently DOWN over healthy jobs. If you are debugging a down push monitor, check this first |
+| `umami scripts` | `analytics.cynexia.com/script.js`, `/api/send`, `/api/send/*` | — |
+| `n8n webhooks` | `n8n.cynexia.com/webhook/*`, `/webhook-test/*` | — |
+| `freshrss api` | `rss.cynexia.com/api/*`, `/p/api/*` | — |
+| `karakeep api` | `keep.cynexia.com/api/*` | — |
+| `uptime-kuma push` | `uptime.cynexia.com/api/push/*`, `/api/push` | August 26, 2026 |
 
 `bypass` is the only Access action that admits an unauthenticated request; an `Allow` policy
 with `Everyone` still serves a login page. FreshRSS and karakeep enforce their own API
@@ -90,13 +90,14 @@ credentials behind these globs. The umami send and n8n webhook endpoints are ope
 A bypass path glob of `/foo/*` does **not** match the bare path `/foo` — add both the
 exact and the wildcard destination.
 
-The `uptime-kuma push` app will be the newest and the only one serving this estate's own jobs
-rather than strangers. A push monitor is driven from inside a cluster by a CronJob holding no
-Access credential, so without the bypass the edge answers 302, `curl -f` fails, and every push
-monitor sits permanently DOWN over healthy jobs. Only the push path is to be opened:
-`/api/push/<token>` accepts a heartbeat and exposes no dashboard, no monitor list and no
-settings. Details and the proof commands: [uptime-kuma.md](uptime-kuma.md#push-monitors).
-Move its row to `in place` once created and verified.
+The `uptime-kuma push` app is the newest and the only one serving this estate's own jobs rather
+than strangers. A push monitor is driven from inside a cluster by a CronJob holding no Access
+credential, so without the bypass the edge answers 302, `curl -f` fails, and every push monitor
+sits permanently DOWN over healthy jobs — check this app first when debugging one. Only the push
+path is opened: `/api/push/<token>` accepts a heartbeat and exposes no dashboard, no monitor
+list and no settings. It reuses the shared bypass policy rather than carrying its own. The
+verification performed at creation, and the proof commands to repeat after any Access change:
+[uptime-kuma.md](uptime-kuma.md#the-push-path-is-bypassed-at-the-edge).
 
 These apps are also why the `rss.cynexia.com` and `Karakeep` uptime-kuma monitors need
 no service-token headers: their URLs resolve to the path-scoped app, not the root one

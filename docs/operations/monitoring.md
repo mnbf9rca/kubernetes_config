@@ -585,11 +585,10 @@ live in **[uptime-kuma.md](uptime-kuma.md)** — monitor list, per-monitor HTTP 
 Cloudflare Access trap and the self-monitor. One consequence bites from this side: a monitor that
 follows redirects reports UP off the Cloudflare login page while the origin is dead.
 
-Layer 3 is no longer only outbound HTTP checks in design, though as of this writing it still is
-in fact: **push monitors** are the agreed shape for new scheduled work — driven from inside the
-clusters by jobs that send a heartbeat rather than answering a request, the dead-man's-switch
-shape that used to mean a healthchecks.io check — but **none has been created yet**. The first,
-`homelab-keel-fresh`, is committed and waiting on its monitor, its token and the edge bypass. The healthchecks.io
+Layer 3 is no longer only outbound HTTP checks. It also holds **push monitors**, driven from
+inside the clusters by jobs that send a heartbeat rather than answering a request — the
+dead-man's-switch shape that used to mean a healthchecks.io check. The first is
+`homelab-keel-fresh`, created August 26, 2026. The healthchecks.io
 account is capped at 20 checks, so only the checks that genuinely need it stay there and new
 scheduled work takes a push monitor instead. Both the roster and the Cloudflare Access bypass
 that lets an in-cluster job reach the push endpoint are in
@@ -625,7 +624,7 @@ no second failure mode.
 | `metric-missing` | `/metrics` answered but did not carry all three expected metrics. An upstream rename; re-verify the names and update `keel-fresh.sh` |
 | `metrics-unreachable` | keel did not answer on 9300. It is down, or the `keel` Service lost its selector |
 | `first-run` | No stored state, so nothing to compare. Green, because reaching this verdict already proves all three metrics are present, the counter is non-zero and the image floor is met |
-| `restarted` | keel restarted, so the counter legitimately reset. Green for the same reason, and it is deliberately checked before the zero-counter test so a keel that started seconds ago — counter still zero, first scan not yet run — reads as `restarted` rather than a red `polls-stalled`. **Accepted residual: a crashlooping keel is permanently green here.** If keel restarts between every daily run the start epoch differs every time, so the job returns `restarted` at exit 0 forever and never reaches the delta comparison. It is not vacuous — the at-least-one-poll check and the image floor still carry every run — but nothing in the estate alerts on restart counts, so this compound failure has no detector anywhere. Repeated `restarted` verdicts on consecutive days are the only signal; treat them as a fault to investigate, not as noise |
+| `restarted` | keel restarted, so the counter legitimately reset. Green for the same reason, and it is deliberately checked before the zero-counter test so a keel that started seconds ago — counter still zero, first scan not yet run — reads as `restarted` rather than a red `polls-stalled`. **Accepted residual: a crashlooping keel is permanently green here.** If keel restarts between every daily run the start epoch differs every time, so the job returns `restarted` at exit 0 forever and never reaches the delta comparison. It is not wholly vacuous — the metric-presence assertion and the image floor still carry every run — but note what does **not**: the at-least-one-poll check sits *below* the restart branch, so it is skipped on exactly this path, and the delta comparison is never reached either. Nothing in the estate alerts on restart counts, so this compound failure has no detector anywhere. Repeated `restarted` verdicts on consecutive days are the only signal; treat them as a fault to investigate, not as noise |
 
 There is no `tracked-unreachable`: with one endpoint there is no second request that could fail
 on its own, so `metrics-unreachable` covers it.

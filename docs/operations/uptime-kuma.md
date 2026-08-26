@@ -80,27 +80,37 @@ glob `/foo/*` does not match bare `/foo`, so a bypassed health path needs both d
 ### The push path is bypassed at the edge
 
 Every push monitor in this estate is driven from inside a cluster, by a job that holds no
-Access credential, so `uptime.cynexia.com` needs a **bypass** policy scoped to the push path
-before the first such monitor can ever report UP. Two destinations, written together:
-`uptime.cynexia.com/api/push/*` and `uptime.cynexia.com/api/push`. The wildcard is the
-load-bearing one — a push URL always carries its token as a path segment, so every real
-request matches it — and the bare form is present only because `/foo/*` does not match bare
-`/foo`, so the pair is written together and neither is "tidied" away later. Nothing else on
-this host is bypassed: `/api/push/<token>` accepts a heartbeat and exposes no dashboard, no
-monitor list and no settings. The authoritative bypass inventory is the Access-bypass table in
+Access credential, so without a bypass the edge answers 302 and no push monitor could ever
+report UP. An Access application named **`uptime-kuma push`** carries that bypass, created
+**August 26, 2026**. It covers two destinations: `uptime.cynexia.com/api/push/*` and the bare
+`uptime.cynexia.com/api/push`. The wildcard is the load-bearing one — a push URL always carries
+its token as a path segment, so every real request matches it — and the bare form is present
+only because `/foo/*` does not match bare `/foo`, so the pair is written together and neither is
+"tidied" away later.
+
+It is attached to the **existing reusable bypass policy**
+(`b8dbe397-8b45-44ca-a57a-4131e82cb3a1`) rather than a new one, matching the four apps already
+there, with a 24h session, App Launcher hidden and no IdPs. Application id
+`ff3b2581-1975-48d1-866c-e02e8d2e0593`. Nothing else on this host is bypassed:
+`/api/push/<token>` accepts a heartbeat and exposes no dashboard, no monitor list and no
+settings. The authoritative bypass inventory is the Access-bypass table in
 [vps.md](vps.md#cloudflare-access-bypasses); this section is the operational note.
 
-Prove it after any Access change, from a network with no Access session:
+Verified at creation from outside both clusters, and worth repeating after any Access change
+from a network with no Access session:
 
 ```bash
 # A bogus token: the bypass must let the request REACH kuma, which then rejects it.
 curl -s -o /dev/null -w '%{http_code}\n' 'https://uptime.cynexia.com/api/push/notarealtoken'
+curl -s -o /dev/null -w '%{http_code}\n' 'https://uptime.cynexia.com/api/push'
 curl -s -o /dev/null -w '%{http_code}\n' 'https://uptime.cynexia.com/dashboard'
 ```
 
-The first must print a kuma status — anything that is not `302`. The second must print `302`,
-proving the rest of the host is still gated. A `302` on the first means the bypass is missing,
-scoped to the wrong destination, or written as the bare path only.
+Observed on August 26, 2026: the bogus token returned **404** — the request reached kuma and
+kuma rejected the token, which is the proof the bypass works — and the bare path returned
+**200**. `/dashboard`, `/` and `/api/status-page/heartbeat/x` all returned **302**, proving the
+rest of the host is still gated. A `302` on the push path means the bypass is missing, scoped to
+the wrong destination, or written as the bare path only.
 
 `mcp.cynexia.com` (homelab) is also Access-protected but deliberately carries no
 service token and no bypass policy — its monitor expects the edge's 401 itself
@@ -256,14 +266,7 @@ assuming up-on-success everywhere.
 
 | Monitor | Token | Interval / retries | Pushed by, and on what |
 |---|---|---|---|
-| `homelab-keel-fresh` *(PENDING)* | `op://Homelab/keel-fresh/kuma-push-token` *(item not yet created)* | 86400s, 1 retry at 21600s | `keel-fresh` CronJob in `ops`, from an EXIT trap: `up` on exit 0, `down` on any failure. Never silent on a failure it can observe |
-
-**Nothing in this table exists yet.** The `homelab-keel-fresh` monitor has not been created and
-`op://Homelab/keel-fresh/kuma-push-token` resolves to nothing, so the row states the intended
-configuration rather than deployed fact. The `keel-fresh` manifest is committed but unapplied,
-and because `OPS_KUMA_KEEL_TOKEN` is in `REQUIRED_VARS`, no homelab apply can run until the
-1Password item exists. Drop the two *(PENDING)* markers and this paragraph once the monitor and
-the item are both in place.
+| `homelab-keel-fresh` | `op://Homelab/keel-fresh/kuma-push-token` | 86400s, 1 retry at 21600s | `keel-fresh` CronJob in `ops`, from an EXIT trap: `up` on exit 0, `down` on any failure. Never silent on a failure it can observe |
 
 ## Reviewing who used the token
 
