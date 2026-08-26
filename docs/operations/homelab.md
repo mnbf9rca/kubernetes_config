@@ -14,7 +14,7 @@ remote access is through Tailscale. Kubectl context: `cynexia-homelab`.
 | cert-manager | Let's Encrypt, Route53 DNS-01 solver, single wildcard `*.cynexia.net` cert |
 | local-path-provisioner | Backed by the node's SSD user volume (`/var/mnt/ssd`) |
 | NFS CSI driver | Static PV/PVCs against the Proxmox host's ZFS pool |
-| keel | Image auto-updates — **except** the `health` namespace, which forbids it |
+| keel | Image auto-updates from floating tags — **except** the `health`, `ops`, `hindsight` and `backup` namespaces, which forbid keel outright, and except keel itself, which is digest-pinned (see [keel](#keel) below) |
 | restic | Nightly CronJob (03:00 UTC) → Backblaze B2 `b2:homelab-restic-d5e15f22`, 7 daily / 4 weekly / 6 monthly. Pings healthchecks.io on start and exit code — see [monitoring.md](monitoring.md#the-restic-ping-wrapper) |
 | jottacloud-backup | Own namespace; rclone Jottacloud → NFS, then kopia → B2 `cloud-files-backup`; reports to healthchecks.io |
 
@@ -31,9 +31,18 @@ Helm-only distribution and `homelab/bootstrap/keel/keel.yaml` is hand-written.
 ### keel
 
 keel is digest-pinned and carries no keel annotations of its own. A self-updating
-controller holding cluster-wide read on Deployments is the one component where an
-unattended upstream tag change is a security event rather than a convenience, so its
-bump arrives as a Renovate pull request and goes in through the update session.
+controller holding cluster-wide read **and write** across every workload kind — its
+ClusterRole grants `get, delete, watch, list, update` on Deployments, DaemonSets,
+StatefulSets, ReplicaSets, ReplicationControllers, Pods, Jobs and CronJobs — is the one
+component where an unattended upstream tag change is a security event rather than a
+convenience, so its bump belongs in a reviewed pull request rather than a six-hour poll.
+
+Renovate does not watch `homelab/bootstrap/**` yet: `renovate.json` is scoped to
+`homelab/health/**`, `homelab/ops/**` and `homelab/hindsight/**`, and
+`scripts/check-renovate-scope.py` exempts `homelab/bootstrap` by name. So the pin is
+unwatched today and is bumped **by hand**; widening that scope is what makes the pull
+request arrive on its own.
+
 Its RBAC was trimmed on August 26, 2026 (PR #68): no `secrets` rule, no
 `pods/portforward`. Verify keel's permissions with a SelfSubjectAccessReview issued
 with keel's own ServiceAccount token from inside the cluster — `kubectl auth can-i

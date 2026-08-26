@@ -167,10 +167,17 @@ Full mechanics, target-by-target reference and failure modes:
   `vps/bootstrap/keel/keel.yaml`). The rule that decides which mode a workload is in:
   **floating tag means keel; pinned tag means Renovate; never both.**
   `match-tag: "true"` on a pinned tag only refreshes the digest, so a semver pin
-  carrying keel annotations is frozen while looking covered. Every image in those
-  namespaces is version/digest-pinned and Renovate proposes bumps instead
+  carrying keel annotations is frozen while looking covered.
+- **Pinned does not mean watched, and the difference is per-path.** Every image in
+  `health`, `ops` and `hindsight` is version/digest-pinned **and** inside Renovate's
+  scope, so bumps arrive as pull requests
   (`docs/operations/homelab-health.md`, `docs/operations/homelab.md`,
-  `docs/operations/hindsight.md`). `hindsight` is the sharpest case: it runs Alembic
+  `docs/operations/hindsight.md`). `backup` and keel itself are pinned but
+  deliberately **unwatched**: `renovate.json` scopes Renovate to `homelab/health/**`,
+  `homelab/ops/**` and `homelab/hindsight/**` only, and `scripts/check-renovate-scope.py`
+  exempts `homelab/backup` and `homelab/bootstrap` by name, so those pins get no bump
+  pull request and are moved by hand until something widens that scope. Nothing under
+  `vps/` is watched at all. `hindsight` is the sharpest case: it runs Alembic
   migrations on startup against the store holding an agent's memory, and those
   migrations are forward-only, so the pre-upgrade dump is the only rollback.
   `make hindsight-upgrade` takes it.

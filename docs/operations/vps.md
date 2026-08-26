@@ -30,9 +30,17 @@ wipe first with `talosctl wipe disk <dev> --method FAST`.
 ### Image updates and keel
 
 keel is digest-pinned and carries no keel annotations of its own. A self-updating
-controller holding cluster-wide read on Deployments is the one component where an
-unattended upstream tag change is a security event rather than a convenience, so its
-bump arrives as a Renovate pull request and goes in through the update session.
+controller holding cluster-wide read **and write** across every workload kind — its
+ClusterRole grants `get, delete, watch, list, update` on Deployments, DaemonSets,
+StatefulSets, ReplicaSets, ReplicationControllers, Pods, Jobs and CronJobs — is the one
+component where an unattended upstream tag change is a security event rather than a
+convenience, so its bump belongs in a reviewed pull request rather than a six-hour poll.
+
+Renovate does not reach this cluster at all yet: every pattern in `renovate.json` is
+scoped under `homelab/`, so nothing in `vps/` is watched. The pin is unwatched today and
+is bumped **by hand**; widening that scope is what makes the pull request arrive on its
+own.
+
 Its RBAC was trimmed on August 26, 2026 (PR #68): no `secrets` rule, no
 `pods/portforward`. Verify keel's permissions with a SelfSubjectAccessReview issued
 with keel's own ServiceAccount token from inside the cluster — `kubectl auth can-i
