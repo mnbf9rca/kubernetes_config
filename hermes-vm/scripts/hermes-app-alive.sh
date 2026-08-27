@@ -7,7 +7,7 @@
 #
 # Canonical copy: hermes-vm/scripts/hermes-app-alive.sh in
 # github.com/mnbf9rca/kubernetes_config. Runbook:
-# docs/operations/hermes-vm-updates.md. Installed on VM 103 at
+# docs/operations/hermes-vm.md. Installed on VM 103 at
 # /home/hermes/bin/hermes-app-alive.sh and run by hermes-app-alive.timer at
 # 05:45 UTC daily.
 set -eu

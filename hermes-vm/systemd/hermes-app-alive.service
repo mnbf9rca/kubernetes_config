@@ -1,6 +1,6 @@
 [Unit]
 Description=Hermes VM daily liveness check (agent import, WebUI health, unit count)
-Documentation=https://github.com/mnbf9rca/kubernetes_config/blob/master/docs/operations/hermes-vm-updates.md
+Documentation=https://github.com/mnbf9rca/kubernetes_config/blob/master/docs/operations/hermes-vm.md
 # NO network-online.target ORDERING IS POSSIBLE HERE, and its absence is
 # deliberate rather than an omission. This runs under the USER manager, and
 # Debian ships no network-online.target for the user manager - confirmed by
