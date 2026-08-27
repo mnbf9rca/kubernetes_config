@@ -84,7 +84,7 @@ spec:
             - { name: data, mountPath: /var/www/FreshRSS/data }
             - { name: extensions, mountPath: /var/www/FreshRSS/extensions }
         - name: sqlite-snapshot
-          image: alpine:3.20
+          image: alpine:3.24
           # The script is vps/workloads/scripts/sqlite-snapshot-freshrss.sh,
           # mounted at /scripts by the configMapGenerator in this directory's
           # kustomization.yaml. FreshRSS keeps one DB per user, so it iterates a
