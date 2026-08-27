@@ -72,7 +72,7 @@ spec:
     spec:
       containers:
         - name: meilisearch
-          image: getmeili/meilisearch:v1.41.0
+          image: getmeili/meilisearch:v1.53.1
           imagePullPolicy: Always
           env:
             - { name: MEILI_NO_ANALYTICS, value: "true" }
