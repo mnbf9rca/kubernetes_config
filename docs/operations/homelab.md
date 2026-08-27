@@ -285,6 +285,16 @@ hard way while wiring hindsight (2026-08-24) and binding on any future integrati
   the profile's `config.yaml` and resolves it at start ("1Password: applied N
   secrets"), so no secret value rests on disk, and the nightly backup zip carries
   references rather than values for these.
+  **`secrets op` and `secrets onepassword` are aliases**, not a contradiction:
+  `hermes secrets` accepts `bitwarden`, `bw`, `onepassword`, `op` and `1password`, and its
+  own help line reads `onepassword (op, 1password)`. Every spelling committed across
+  `docs/` is correct as it stands. This was flagged once as a live contradiction and was a
+  false alarm; do not "fix" it.
+  **The VM's 1Password service account can read only the `hermes` vault.** That is the
+  rule any new integration has to design around: **a reference the VM itself resolves must
+  live in `hermes`; a reference the operator's laptop resolves and pipes over ssh may live
+  anywhere.** An `op://Homelab/...` reference handed to the VM resolves to nothing, and
+  hermes reports that as a config value that quietly stayed unresolved.
 - **Do not trust the dashboard GUI as the writer of record — it fails in both
   directions.** It silently drops some writes: at least one field (the hindsight API
   server URL) reports saved and is not. It also silently persists too much, writing an
@@ -527,41 +537,55 @@ iOS app answers every message with `AIAgent not available`. Upstream reaches the
 conclusion in `bootstrap.py`, where `ensure_python_has_webui_deps` prefers the agent venv
 and creates a local `.venv` only when no agent venv can run both.
 
+**This section is why the update wrapper installs both passengers into the agent venv**, and
+why `hindsight-client` is now a third resident of it, pinned to the version the deployed
+Hindsight server reports. It is also why `hermes-app-alive.sh` imports `run_agent` every
+day at 05:45 UTC: that import is the cheapest assertion that catches the failure documented
+above, and no HTTP check on any of the three services can catch it. See
+[hermes-vm-updates.md](hermes-vm-updates.md#what-the-health-assertion-asserts).
+
 #### Update — tracks upstream, not pinned
 
-Run alongside the weekly hermes-agent update. This is a manual runbook; there is no timer
-(see [monitoring.md](monitoring.md#what-this-does-not-catch)).
+The title is still accurate, and that is the point of the ruling of August 26, 2026: the
+checkout tracks `origin/master` rather than a pinned tag.
+
+**The manual runbook that used to be here is now a script.** `hermes-update.sh` on the VM
+updates the agent and both venv passengers in one run, asserts that the result still
+serves, and rolls back to last-good when it does not. Run it, and read
+[hermes-vm-updates.md](hermes-vm-updates.md):
 
 ```sh
-git -C /home/hermes/hermes-webui pull --ff-only
-# Install under a constraint of what the venv already has. This venv is what
-# hermes-gateway, hermes-gateway-emh, hermes-gateway-hal and hermes-dashboard all
-# execute from; without -c, an upstream requirements.txt that raises a floor past one
-# of hermes-agent's pyproject pins would silently mutate their runtime and pip would
-# report success. With it, pip fails loudly and a human decides.
-V=/home/hermes/.hermes/hermes-agent/venv/bin
-"$V/pip" freeze --local | grep -E '^[A-Za-z0-9._-]+==' > /tmp/webui-constraints.txt
-"$V/pip" install -q -r /home/hermes/hermes-webui/requirements.txt -c /tmp/webui-constraints.txt
-rm -f /tmp/webui-constraints.txt
-systemctl --user restart hermes-webui
-sleep 5
-curl -fsS http://127.0.0.1:8787/health
-# The venv is shared: prove the agent still imports and its four units still run.
-"$V/python" -c 'import hermes_cli.main'
-systemctl --user is-active hermes-gateway hermes-gateway-emh hermes-gateway-hal hermes-dashboard
-# Only once all of the above passed: record this revision as the local known-good.
-git -C /home/hermes/hermes-webui rev-parse HEAD > /home/hermes/.hermes/webui.last-good
+ssh hermes@hermes.cynexia.net 'hermes-update'
 ```
 
-The `pip` line is not optional and the constraint file is not decoration. `pyyaml` and
-`cryptography` are already hermes-agent dependencies (`pyproject.toml` pins `pyyaml==6.0.3`
-and `cryptography==50.0.0`), so today the install is a no-op — the risk is not that the
-deps go missing, it is that an unpinned weekly install eventually moves one of them under
-four production services.
+One behavioral change to know. **The constrained `pip install` this runbook introduced now
+runs on every update**, from inside the wrapper, rather than whenever an operator
+remembered it. The constraint file is not decoration: `pyyaml` and `cryptography` are
+already hermes-agent dependencies (`pyproject.toml` pins `pyyaml==6.0.3` and
+`cryptography==50.0.0`), so today the install is a no-op. The risk is not that the
+dependencies go missing; it is that an unpinned install eventually moves one of them under
+four production services. With `-c`, pip fails loudly and a human decides.
+
+The wrapper moves the checkout with `git checkout -B master <sha>` against `origin/master`,
+which has two consequences:
+
+- **`git checkout master && git pull --ff-only` now agrees with it.** The command an
+  operator already has in their fingers leaves the checkout in the same shape the wrapper
+  maintains: local `master`, HEAD attached, tracking upstream.
+- **It force-sets the branch, so uncommitted changes in `/home/hermes/hermes-webui` are
+  discarded.** Do not keep work there.
 
 #### Rollback when an update breaks the app
 
-Roll back to the revision that last worked **here**, which the update runbook records:
+**The wrapper does this automatically.** When its health assertion fails, `hermes-update.sh`
+restores all three revisions from `~/.hermes/hermes-update.last-good`, which carries
+`agent_sha`, `webui_sha` and `client_version`, and it keeps `~/.hermes/webui.last-good` in
+step so the manual path below still works. Read
+[hermes-vm-updates.md](hermes-vm-updates.md#manual-rollback) before doing this by hand, and
+read the caveat there first: **the rollback restores code and cannot restore state**,
+because `hermes update`'s config and `state.db` migrations are forward-only.
+
+To roll back the webui alone, by hand, to the revision that last worked **here**:
 
 ```sh
 SHA=$(cat /home/hermes/.hermes/webui.last-good)
@@ -608,6 +632,26 @@ signal to open a Hermex issue, not a new steady state.
   nothing bounding its size. **Treat `/home/hermes/workspace` as expendable**: anything
   worth keeping goes into a git remote or into the profile.
 
+The update and liveness machinery adds more VM-side state, and **only the last two entries
+are inside the nightly zip**:
+
+| Path | In the zip? |
+|---|---|
+| `/home/hermes/bin/hermes-update.sh` | No |
+| `/home/hermes/bin/hermes-app-alive.sh` | No |
+| `/usr/local/bin/hermes-update` (root-owned, mode 0755) | No |
+| `/home/hermes/.config/systemd/user/hermes-update.service` | No |
+| `/home/hermes/.config/systemd/user/hermes-app-alive.service` | No |
+| `/home/hermes/.config/systemd/user/hermes-app-alive.timer` | No |
+| `/etc/apt/apt.conf.d/{20auto-upgrades,52unattended-upgrades-local}` | No |
+| `/etc/systemd/system/apt-daily{,-upgrade}.timer.d/override.conf` | No |
+| `/home/hermes/.hermes/hermes-update.env` (mode 0600) | Yes |
+| `/home/hermes/.hermes/hermes-app-alive.env` (mode 0600) | Yes |
+
+The canonical copies live in `hermes-vm/` in this repository, not inline in this document.
+**Everything outside `~/.hermes` must be reinstalled by hand after a rebuild** — the
+install runbook is [hermes-vm-updates.md](hermes-vm-updates.md#installing-or-reinstalling).
+
 #### Rebuild step
 
 A VM rebuild does not restore this service. After `hermes import` (step 6 of the restore
@@ -619,9 +663,19 @@ V=/home/hermes/.hermes/hermes-agent/venv/bin
 "$V/pip" freeze --local | grep -E '^[A-Za-z0-9._-]+==' > /tmp/webui-constraints.txt
 "$V/pip" install -q -r /home/hermes/hermes-webui/requirements.txt -c /tmp/webui-constraints.txt
 # unit file: copy from this document
+loginctl enable-linger hermes
 systemctl --user daemon-reload
 systemctl --user enable --now hermes-webui
 ```
+
+**`loginctl enable-linger hermes` is not optional and is easy to miss.** Without it the
+`hermes` user manager stops when the last session ends, so all five user units — and
+`hermes-app-alive.timer` — die at the next reboot, which is now automatic and can happen
+any night at 04:45 UTC. Part of the failure hides itself: the timer that would push a
+`down` is down too, so uptime-kuma sees silence and that monitor stays green until its
+heartbeat lapses about 30 hours later. The existing `hermes` HTTP monitor does catch it
+sooner, because the dashboard it probes is one of the units that died. Confirm lingering
+with `loginctl show-user hermes -p Linger`, which must print `Linger=yes`.
 
 `webui.env` comes back with the restored `~/.hermes`, so no password step is needed on a
 restore — only on a first install.
@@ -708,9 +762,12 @@ the OS; restore the state.
 
 5. Restart the five services and confirm the dashboard at hermes.cynexia.com.
 6. On a fresh VM rebuild: install hermes first, then run steps 2–5, then
-   `hermes setup`. `hermes-webui` is a separate install that the zip does not carry —
-   re-clone it and re-create its unit from [Hermes WebUI on the
-   VM](#rebuild-step) before step 5 restarts it.
+   `hermes setup`. Run `loginctl enable-linger hermes` before enabling any user unit, or
+   every one of them dies at the next reboot. `hermes-webui` is a separate install that the
+   zip does not carry — re-clone it and re-create its unit from [Hermes WebUI on the
+   VM](#rebuild-step) before step 5 restarts it. The update wrapper, the daily liveness
+   check and `unattended-upgrades` are a separate install as well —
+   [hermes-vm-updates.md](hermes-vm-updates.md#installing-or-reinstalling).
 7. Delete every operator-side copy: `./hermes-restore.zip`, the `./restore/` tree if
    step 1 used B2, and `~/hermes-restore.zip` on the VM.
 

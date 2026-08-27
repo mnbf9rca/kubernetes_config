@@ -77,6 +77,16 @@ Then, by hand:
 3. `make apply-homelab`.
 4. `kubectl -n hindsight rollout status deploy/hindsight --timeout=600s`.
 5. Watch the startup probe settle, then run `hermes memory status` on VM 103.
+6. **Move the VM's client.** Bumping the server pin also moves `hindsight-client` on the
+   hermes VM, but only the next time `hermes-update.sh` runs — and that script is
+   deliberately unscheduled. Run it when convenient:
+   `ssh hermes@hermes.cynexia.net 'hermes-update'`
+   ([hermes-vm-updates.md](hermes-vm-updates.md)).
+
+Between a server bump and the next update run, the VM talks to the new server with the
+previous client. That skew is what this design bounds rather than eliminates: the client is
+pinned to the version the server *reports*, so it converges on the next run instead of
+drifting indefinitely.
 
 Keep the API and control-plane images on the **same** version tag: Renovate groups them,
 and a skewed pair is a combination nobody has tested. Keep the API pin at or above
@@ -164,7 +174,7 @@ kubectl -n hindsight exec deploy/hindsight-postgres -- \
 
 A table count in double figures is the pass. Zero, or a `psql` that stopped on an error,
 means the artifact the gate has been calling healthy is not a recovery point. Record the
-date of each drill in the pull request that notes it, so "when did we last check" has an
+date of each drill in the pull request that notes it, so "when was this last checked" has an
 answer.
 
 ## Rotating the tenant API key
@@ -374,6 +384,13 @@ and the monitor's interval plus retry is the silence bound. The roster is in
 [uptime-kuma.md](uptime-kuma.md#push-monitors) and the reasoning behind the canary is in
 [monitoring.md](monitoring.md#healthchecksio-checks).
 
+**`/health/live` has a second consumer outside the cluster.** The hermes VM reads its
+`version` field to decide which `hindsight-client` to install, because the VM holds no
+kubeconfig and the repository pin is intent rather than state. Removing that field, or
+putting the endpoint behind auth, breaks the VM's update path — see
+[hermes-vm-updates.md](hermes-vm-updates.md#the-passenger-design). The endpoint is
+unauthenticated today because the cluster's own probes call it with no credential.
+
 An uptime-kuma **HTTP** monitor still could not do the canary's job: kuma runs on the VPS,
 which has no route to any `*.cynexia.net` address. A **push** monitor reverses the
 direction — the canary pod calls outward to `uptime.cynexia.com` through the Access
@@ -400,6 +417,17 @@ dead-man's-switch: a cluster that is down runs no CronJob, so it pushes nothing 
 the monitor goes DOWN at its interval plus retry. The full detail behind each verdict — the
 table counts, the byte sizes, the two HTTP statuses — is on the pod log's `detail:` line;
 the one-line heartbeat carries the verdict and one or two numbers.
+
+**A known auth fault, open as of August 26, 2026.** The hermes agent's memory writes to
+this backend are failing with HTTP 401, "Invalid API key". Every occurrence in two months of
+gateway journal is that same failure, with no successes at all. Nothing here detects it:
+the canary authenticates with the tenant key and passes, the chat turn returns success
+because the write happens on a background path the response does not wait for, and
+`/health` checks database connectivity rather than auth validity. Investigate from this
+side — the key the profile presents against the key the server accepts — starting with
+[Rotating the tenant API key](#rotating-the-tenant-api-key) and
+[Trap 3](#trap-3-the-dashboard-gui-writes-secrets-to-disk-in-cleartext), because a key the
+GUI wrote into `config.json` shadows the 1Password-backed variable until it is removed.
 
 **What none of this catches:** whether the extraction model is producing *good*
 memories. The canary proves writes are accepted, not that they were understood. If

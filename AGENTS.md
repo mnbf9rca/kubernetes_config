@@ -17,10 +17,11 @@ procedures live under `docs/` and are referenced from here rather than duplicate
 | `docs/operations/homelab.md` | Homelab cluster: platform stack, namespaces/workloads, NFS and storage, node network, DNS/Route53, encryption at rest, operational gotchas |
 | `docs/operations/homelab-health.md` | The `health` namespace: ingest pipeline, image-pin rationale, InfluxDB bootstrap, backups/restore, Garmin re-auth, monitoring, probe rationale |
 | `docs/operations/vps.md` | VPS cluster: shape, workloads, Cloudflare tunnel/Access, DB decisions, backups |
-| `docs/operations/monitoring.md` | How failures get noticed: the triage table, probe policy and inventory, CronJob deadlines, the backup verification gates, the four healthchecks.io checks that remain, the ten uptime-kuma push monitors, the disclosure rules for both, and what none of it catches |
-| `docs/operations/uptime-kuma.md` | Layer 3/4 runbook: creating uptime-kuma monitors by hand, per-monitor HTTP settings, the Cloudflare Access trap, the push monitors driven from inside the clusters and the bypass they need, the self-monitor |
+| `docs/operations/monitoring.md` | How failures get noticed: the triage table, probe policy and inventory, CronJob deadlines, the backup verification gates, the five healthchecks.io checks that remain, the eleven uptime-kuma push monitors, the disclosure rules for both, and what none of it catches |
+| `docs/operations/uptime-kuma.md` | Layer 3/4 runbook: creating uptime-kuma monitors by hand, per-monitor HTTP settings, the Cloudflare Access trap, the push monitors driven from inside the clusters (and the one driven from the hermes VM) and the bypass they need, the self-monitor |
 | `docs/operations/hindsight.md` | The `hindsight` namespace: the self-hosted memory backend for the Hermes profiles — topology, auth, the canary, upgrade and restore runbooks, the restore drill, key rotation, and the removal path |
 | `docs/operations/agent-mail.md` | Per-agent email for Hermes agents: Purelymail mailboxes on cynexia.io, per-profile mcp-email-server config, provisioning runbook, credential scheme, limits, and the deliberate monitoring/backup gaps |
+| `docs/operations/hermes-vm-updates.md` | Updating the Hermes VM: the on-demand `hermes update` wrapper with its health assertion and last-good rollback, what that rollback cannot restore, why it is deliberately unscheduled, `unattended-upgrades` with automatic reboot, and the daily `hermes-app-alive` liveness check |
 
 Design documents and implementation plans are local-only under the gitignored
 `docs/superpowers/` tree (`specs/2026-04-11-talos-homelab-rebuild-design.md`,
@@ -63,6 +64,11 @@ kubernetes_config/
 │   │   └── scripts/          # nightly pg_dump + the 15-minute canary; mounted via configMapGenerator
 │   └── backup/               # restic init Job + nightly CronJob (hostPath /var/mnt/ssd/local-path-provisioner)
 ├── vps/                      # Hetzner Talos cluster, same sub-layout (bootstrap/secrets/workloads/backup/ops/talos)
+├── hermes-vm/                # files that live on the hermes VM, not in a cluster
+│   ├── scripts/              # the on-demand update wrapper + tests, and the daily alive check
+│   ├── bin/                  # the root-owned /usr/local/bin entry point
+│   ├── systemd/              # the update oneshot (NO timer) + the alive service and its timer
+│   └── etc/                  # unattended-upgrades config + the two apt timer drop-ins
 ├── scripts/                  # repo-level helpers (karakeep tags, FreshRSS WebSub status, the check-* guards)
 ├── legacy-microk8s/          # frozen reference copies of the old microk8s manifests
 └── no_longer_used/           # retired manifests kept for reference
@@ -205,7 +211,7 @@ Full mechanics, target-by-target reference and failure modes:
   The rule matches whole **file paths**, not containers, so it also suppresses digest
   pinning for the pinned, keel-free containers that happen to share those files — the
   four `alpine:3.20` quiesce sidecars and both `postgres:16-alpine` containers. They
-  still get version bumps, so nothing is broken; they simply arrive without a digest.
+  still get version bumps, so nothing is broken; they arrive without a digest.
   That is the accepted cost of a path-scoped rule, not an oversight.
 - **Probes: readiness on every long-running container that serves traffic; liveness only
   where that probe can actually detect the failure *and* a restart is a safe remedy**
@@ -262,6 +268,16 @@ Full mechanics, target-by-target reference and failure modes:
   notification transport its destination has configured, a list nobody has enumerated on
   either side. Policy, the accepted residuals and that open item:
   `docs/operations/monitoring.md`.
+- **The hermes VM's update wrapper is deliberately not scheduled.** `hermes update`
+  sometimes carries manual steps, so `hermes-vm/systemd/` holds a oneshot service and no
+  `.timer` **for it**. Adding one is a design change and needs the operator, not a
+  tidy-up. The one timer in that directory, `hermes-app-alive.timer`, drives a read-only
+  daily liveness check and is not a precedent for scheduling updates.
+  These files are not rendered by kustomize, so `make check-script-lint` cannot see them —
+  `make check-vm-scripts` is their guard. It runs in **no** preflight and there is no CI,
+  so nothing runs it automatically: it is the first step of the install runbook
+  (`docs/operations/hermes-vm-updates.md`) and of the 4-to-6-week update session. Run it
+  after touching anything under `hermes-vm/`.
 - **A new InfluxDB bucket in the `health` namespace means three edits, not one:** create it
   (a `make health-influx-*-bootstrap` target), add it to the explicit `for B in ...` list in
   `homelab/health/scripts/influx-export-lp.sh`, **and** raise `LP_EXPECTED` in

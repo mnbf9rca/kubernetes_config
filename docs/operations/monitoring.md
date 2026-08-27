@@ -14,6 +14,7 @@ catches. Manifests carry per-probe rationale in comments. Read
 | `homelab-update-watch` is DOWN | In a fresh heartbeat, `verdict=` names the cause and `next=` names the command to run; a stale `run_epoch=` means the watcher itself went quiet — [The update watcher](#the-update-watcher) |
 | A sidecar shows `RESTARTS: 0` but its snapshot is missing | Expected; they log rather than exit. Read the sidecar's stderr — [Why the sidecars have no probes](#why-the-sidecars-have-no-probes) |
 | `hindsight-canary` is DOWN | Read `verdict=`: `retain-failed` is the API, the database or the tenant key; `recall-miss` is the retrieval side. An agent is losing memories right now — [hindsight.md](hindsight.md) |
+| `hermes-app-alive` is DOWN | Read `verdict=`: `units-down` is the user manager or lingering, `import-failed` is the shared venv, `webui-unreachable` is the WebUI itself. No beat at all means the VM, the timer or the Access bypass — [hermes-vm-updates.md](hermes-vm-updates.md#reading-a-down-hermes-app-alive) |
 | `disk_pct` is climbing on homelab restic | `local-path` has no quota, so this is the node SSD every workload shares — [the gates](#the-backup-verification-gates) |
 | An uptime-kuma monitor is UP but the service is down | Suspect an Access redirect — [uptime-kuma.md](uptime-kuma.md#the-cloudflare-access-trap) |
 | Everything is green and the data is still wrong | Expected; several probes are shallow by design — [What this does not catch](#what-this-does-not-catch) |
@@ -326,14 +327,14 @@ newest match, because their glob is one PVC directory expected to match one path
 
 ## healthchecks.io checks
 
-**Four checks live here, and everything else pushes to uptime-kuma.** The account is capped at
+**Five checks live here, and everything else pushes to uptime-kuma.** The account is capped at
 20 checks and six of them are pinged from outside this repo, so a check on healthchecks.io has to
-earn its slot. These four do: the two restic checks because their multi-line ping bodies *are* the
+earn its slot. These five do: the two restic checks because their multi-line ping bodies *are* the
 triage runbook and a one-line push message cannot carry them; `vps-uptime-kuma-alive` because it
-watches kuma and cannot live inside it; and `estate-update`, because it is pinged by hand from a
-laptop at the close of a session, with no job and no cluster behind it. A fifth of the same shape,
-`hermes-update`, is a slot the sibling hermes plan will fill from an off-cluster VM; it does not
-exist yet. Every other job in this estate drives a **push monitor** — inventory in
+watches kuma and cannot live inside it; `estate-update`, because it is pinged by hand from a
+laptop at the close of a session, with no job and no cluster behind it; and `hermes-update`,
+because it is pinged from the off-cluster hermes VM on a 45-day period, which no in-cluster push
+monitor can do. Every other job in this estate drives a **push monitor** — inventory in
 [uptime-kuma.md](uptime-kuma.md#push-monitors). Migrated August 26, 2026.
 
 | Check | 1Password reference | Period / grace | Pinged by |
@@ -342,10 +343,17 @@ exist yet. Every other job in this estate drives a **push monitor** — inventor
 | `vps-restic` | `op://VPS/b2-restic/healthcheck-uuid` | 1d / 2h | restic CronJob, `/start` and exit code |
 | `vps-uptime-kuma-alive` | `op://VPS/uptime-kuma/healthcheck-uuid` | 5m / 15m | An uptime-kuma monitor — [uptime-kuma.md](uptime-kuma.md#the-self-monitor-layer-4) |
 | `estate-update` | `op://Homelab/estate-update/healthcheck-uuid` | 45d / 7d | Pinged by hand at the end of each update session. No job pings it |
+| `hermes-update` | `op://Homelab/hermes-update/healthcheck-uuid` | 45d / 7d | The VM's `hermes-update.sh`, `/start` and exit code, from an EXIT trap plus TERM/INT/HUP traps. **Not scheduled** — run by the operator, by `hermes-update` over ssh, or by the update session |
 
-**Two of the jobs this repo pings send `/start` and an exit code** — the two restic jobs, and
-after the migration they are the only jobs that ping healthchecks.io at all. Nothing replaced that
-pattern for everyone else, because the kuma push API has nothing to replace it with: a push is a
+`hermes-update` is the only row here that no manifest in this repository creates. The check, its
+1Password field and the VM-side environment file that carries the UUID are all made by hand during
+the install in [hermes-vm-updates.md](hermes-vm-updates.md#installing-or-reinstalling).
+
+**Three of the jobs this repo pings send `/start` and an exit code** — the two restic CronJobs and
+the hermes VM's `hermes-update.sh`, which is the first pinger here that is not a Kubernetes
+CronJob. After the migration they are the only three that ping healthchecks.io at all. Nothing
+replaced that pattern for everyone else, because the kuma push API has nothing to replace it with:
+a push is a
 heartbeat carrying a status, so there is no start signal to send. For a push monitor the hang
 bound is the CronJob's own `activeDeadlineSeconds` and the silence bound is the monitor's
 heartbeat interval plus its retry. A run that starts and wedges is killed by the deadline and then
@@ -365,7 +373,7 @@ way out.
 
 `hindsight-canary` is the only signal here that watches a *request path* rather than an artifact,
 and it exists because nothing else could. Hermes fails open at four layers: with the memory server
-down, a turn simply proceeds with no memories injected and a retain is dropped with a
+down, a turn proceeds with no memories injected and a retain is dropped with a
 `logger.warning`, so the client-side symptom of a dead memory backend is an agent that has
 forgotten things — indistinguishable from an agent that was never told them. Worse, `/health`
 checks database connectivity and not auth validity, so a rotated or mistyped tenant key leaves
@@ -659,8 +667,8 @@ the same day nine more routine heartbeats moved to push monitors, leaving this r
 **four** checks. The nine retired checks are **not deleted yet**: they are left in place and
 un-pinged so that a red check at healthchecks.io beside a green monitor in kuma is the migration
 visibly working, and the operator deletes each one after seeing that pair. Until they go the
-account holds 19 of 20; once they go it holds **10**, with `hermes-update` still to come from the
-hermes plan. New scheduled work takes a push monitor, per the policy in
+account holds 19 of 20; once they go it holds **10**, and **11** once `hermes-update` is created
+during the hermes VM install. New scheduled work takes a push monitor, per the policy in
 [Layers 3 and 4](#layers-3-and-4-uptime-kuma) — that is what keeps this from happening again.
 
 **The quarterly liveness drill, narrowed.** `renovate-stale` now covers the *idle-Renovate* case
@@ -872,16 +880,19 @@ live in **[uptime-kuma.md](uptime-kuma.md)** — monitor list, per-monitor HTTP 
 Cloudflare Access trap and the self-monitor. One consequence bites from this side: a monitor that
 follows redirects reports UP off the Cloudflare login page while the origin is dead.
 
-Layer 3 is no longer only outbound HTTP checks. It also holds **push monitors**, driven from
-inside the clusters by jobs that send a heartbeat rather than answering a request — the
-dead-man's-switch shape that used to mean a healthchecks.io check. There are ten, all created
-August 26, 2026: `homelab-keel-fresh` and `vps-keel-fresh`, and the eight that took over the
-routine heartbeats — `health-influx-backup`, `health-ingest`, `homelab-cloudflare-analytics`,
-`homelab-hermes-pull`, `hindsight-pg-dump`, `hindsight-canary`, `homelab-update-watch` and
-`jottacloud-backup`. The healthchecks.io account is capped at 20 checks, so only the checks that
-genuinely need it stay there and new scheduled work takes a push monitor instead. Both the roster
-and the Cloudflare Access bypass that lets an in-cluster job reach the push endpoint are in
-**[uptime-kuma.md](uptime-kuma.md#push-monitors)**.
+Layer 3 is no longer only outbound HTTP checks. It also holds **push monitors**, driven by jobs
+that send a heartbeat rather than answering a request — the dead-man's-switch shape that used to
+mean a healthchecks.io check. Ten were created on August 26, 2026: `homelab-keel-fresh` and
+`vps-keel-fresh`, and the eight that took over the routine heartbeats — `health-influx-backup`,
+`health-ingest`, `homelab-cloudflare-analytics`, `homelab-hermes-pull`, `hindsight-pg-dump`,
+`hindsight-canary`, `homelab-update-watch` and `jottacloud-backup`. An eleventh,
+**`hermes-app-alive`**, is the one driven from **outside** both clusters: a systemd user timer on
+the off-cluster hermes VM at 05:45 UTC, `up` on exit 0 and `down` otherwise
+([hermes-vm-updates.md](hermes-vm-updates.md#reading-a-down-hermes-app-alive)). That widens the
+`/api/push/*` Access bypass's blast radius past "the clusters". The healthchecks.io account is
+capped at 20 checks, so only the checks that genuinely need it stay there and new scheduled work
+takes a push monitor instead. Both the roster and the Cloudflare Access bypass that lets a job
+reach the push endpoint are in **[uptime-kuma.md](uptime-kuma.md#push-monitors)**.
 
 **The monitors deliberately kept the retired checks' names**, so the estate reads as one inventory
 across the change: `health-influx-backup` names the same job it always did, in a different place.
@@ -985,8 +996,9 @@ Probes fix hung request paths, not silently stopped background work — often th
 | **influxdb-mcp** | Its probes are `tcpSocket`. A wedged HTTP handler with a live listener passes them. The MCP server exposes no health endpoint |
 | **homelab services** | The external layer runs on the VPS, which has no route to `*.cynexia.net`, so no kuma **HTTP** monitor can reach them. Only the three health-tunnel hostnames get that coverage. sonarr, radarr, sabnzbd, emby, hydra2 and grafana have probes and nothing external. `hindsight` is the one exception, and it got there by giving up on an inbound prober entirely: its noticer is an **in-cluster** authenticated canary CronJob that pushes *outward* to a kuma push monitor, which needs no route in and no public exposure. Every migrated homelab job now reports the same way — outbound, through the Access bypass — which is what makes a private cluster visible to a monitor it cannot be reached from |
 | **the VPS gate** | It proves each snapshot exists and is recent, and — through the sidecar's own refusal to publish a schema-less snapshot — that it holds at least one schema object. It does not prove the contents are complete or uncorrupted. A snapshot missing rows, or with a corrupt page below the `sqlite_master` read, passes everything here and surfaces at restore time |
-| **hermes-webui (hermes VM)** | Nothing monitors it either — no uptime-kuma monitor of any kind, no healthchecks.io check. A wedged or stopped WebUI surfaces when the operator opens the Hermex app and it will not connect. Deliberate, on the same reasoning as agent mail: it is an interactive client, so a human notices within one use. Two consequences to know before adding one. The unit is the only detector today — it sets `StartLimitIntervalSec=60`/`StartLimitBurst=5` rather than the gateways' `StartLimitIntervalSec=0`, so a start that keeps failing parks in `failed` where `systemctl --user is-failed` reports it, instead of looping invisibly every 5s. And the weekly upstream update is a **manual runbook with no timer or cron entry** ([homelab.md](homelab.md#update--tracks-upstream-not-pinned)), so a skipped week is invisible too. A future monitor on `hermes-app.cynexia.com` must carry the service-token headers and `maxredirects: 0` — see the Cloudflare Access trap in [uptime-kuma.md](uptime-kuma.md) |
+| **hermes-webui (hermes VM)** | `hermes-app-alive` checks it, but **once a day at 05:45 UTC**, from inside the VM. That check curls the WebUI's own `/health` on `127.0.0.1:8787` and deep-imports `run_agent` from the shared venv — the only cheap assertion that catches the documented silent failure, where a venv missing `dotenv`, `httpx` or `openai` leaves the unit `active` and `/health` answering `status: ok` while every chat turn returns `AIAgent not available`. What that costs: **detection latency is up to about a day**, plus the monitor's 24-hour heartbeat and 6-hour retry before a missing beat alarms. **Accepted by the operator on August 26, 2026 — "homelab not NASA."** The 15-minute external chat-turn monitor the spec called for was deleted as overengineering, along with the published hostname, the Access app, the dedicated service token and the probe profile it needed. So **no chat turn is monitored at all**: the daily check makes none by design, the update wrapper's is the only one, and update runs are unscheduled, so a fault that lets the WebUI import, serve `/health` and keep its units up while failing every chat turn surfaces at the next update session. A fault confined to the `emh`, `hal` or `default` profile *state* — as opposed to the shared venv — stays invisible. Two older consequences still hold. The unit sets `StartLimitIntervalSec=60`/`StartLimitBurst=5` rather than the gateways' `StartLimitIntervalSec=0`, so a start that keeps failing parks in `failed` where `systemctl --user is-failed` reports it, instead of looping invisibly every 5s. And a future **HTTP** monitor on `hermes-app.cynexia.com` must carry the service-token headers and `maxredirects: 0` — see the Cloudflare Access trap in [uptime-kuma.md](uptime-kuma.md). The update path is no longer a manual runbook: it is the wrapper in [hermes-vm-updates.md](hermes-vm-updates.md) |
 | **agent mail (hermes VM)** | Nothing monitors it at all — no probe, no check, no canary. A Purelymail outage, expired credential, DNS drift or send-cap exhaustion surfaces only as tool errors inside agent sessions. Deliberate for now; the planned round-trip canary is in [agent-mail.md](agent-mail.md#monitoring-and-backup-none-deliberately-for-now) |
+| **the hermes VM's OS updates** | `unattended-upgrades` runs on a schedule and nothing watches it directly. The cover is indirect and deliberate: `hermes-update.sh` exits non-zero when `/var/lib/apt/periodic/unattended-upgrades-stamp` is over 14 days old — but that script is unscheduled, so a dead apt timer surfaces only at the next update session, up to six weeks later. The stamp is weaker still than it looks: `unattended-upgrade` writes it on a run that found nothing to do just as readily as on one that installed everything, so it proves the timer fired and not that anything was patched. Accepted: the 04:45 reboot window and the daily `hermes-app-alive` check bound the damage, the latter by proving the VM came back — [hermes-vm-updates.md](hermes-vm-updates.md#unattended-upgrades) |
 | **hindsight extraction** | Retain hands the content to an external LLM for extraction. A provider outage or a revoked key fails the retain task — the server retries three times and then logs, and nothing else notices. Recall is unaffected, because the full image runs embeddings and reranking locally, so a dead LLM account degrades to read-only memory rather than no memory. The canary proves the retain *pipeline* accepts writes; it does not judge whether what was extracted is any good |
 | **hindsight memory content** | Poisoning cannot be prevented — writing memories is the product. What limits it is that only Hermes holds the tenant key and only the operator holds the control-plane access key; what recovers from it is seven days of nightly dumps plus the control plane's per-memory delete |
 | **the hindsight dump** | The gate proves the dump exists, is fresh, is above a size floor and contains at least one `CREATE TABLE`. It does not prove the dump *restores*. The periodic restore drill in [hindsight.md](hindsight.md) is the only thing that does |
