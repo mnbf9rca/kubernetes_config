@@ -12,18 +12,39 @@
 // Automatic-Reboot-Time) the last assignment wins, so 52 overrides 50. For a
 // LIST - and Origins-Pattern is a list - a later block APPENDS to whatever 50
 // already declared; it does not replace it. APT provides #clear for exactly
-// this, and the block below uses it. Today the practical difference is nil,
-// because Debian's shipped 50unattended-upgrades leaves only the same two
-// Debian-Security patterns uncommented and the result would be a harmless
-// duplicate. The reason to clear anyway is the future: a 50 file (or an
-// operator edit) that enables -updates would NOT be overridden by this file,
-// and automatic upgrades would silently stop being security-only while this
-// comment insisted otherwise.
+// this, and the block below uses it. THE #clear IS LOAD-BEARING TODAY. It is
+// not future-proofing and must not be deleted as redundant. Verified against a
+// debian:trixie container on 2026-08-27: the shipped 50unattended-upgrades
+// leaves THREE patterns uncommented, and the first of them is the MAIN STABLE
+// ARCHIVE, not security -
+//
+//     "origin=Debian,codename=${distro_codename},label=Debian";
+//     "origin=Debian,codename=${distro_codename},label=Debian-Security";
+//     "origin=Debian,codename=${distro_codename}-security,label=Debian-Security";
+//
+// - and that first line matches l=Debian, which is every package in stable.
+// Drop the clear and apt reports FIVE patterns, that one among them, so
+// unattended-upgrades would install the whole stable archive and then reboot
+// the machine at 04:45 unattended. Keep it and apt reports exactly the two
+// below. The clear is the single thing making this policy security-only. To
+// re-check after any edit here:
+//   apt-config -c <this file> dump Unattended-Upgrade::Origins-Pattern
 #clear Unattended-Upgrade::Origins-Pattern;
 
 // Debian's security-only default, stated explicitly rather than inherited.
 // The estate's other update surfaces (keel, Renovate, the update session) cover
 // feature upgrades; this one exists for kernel and library CVEs.
+//
+// ONLY THE SECOND PATTERN MATCHES ANYTHING ON DEBIAN 13, so the two lines are
+// not interchangeable spares. Since bullseye the security archive's Release
+// file carries its own codename: verified 2026-08-27, security is
+// o=Debian, n=trixie-security, l=Debian-Security, while the main archive is
+// o=Debian, n=trixie, l=Debian. No repository publishes codename=trixie WITH
+// label=Debian-Security, so the first line matches nothing. It is the vendor
+// idiom, kept deliberately for archive migration - but it means a typo
+// confined to the SECOND line alone leaves ZERO security patching behind a
+// stamp file that still looks fresh. Edit the two together, and check the
+// result with the apt-config command quoted above.
 Unattended-Upgrade::Origins-Pattern {
         "origin=Debian,codename=${distro_codename},label=Debian-Security";
         "origin=Debian,codename=${distro_codename}-security,label=Debian-Security";
@@ -45,8 +66,10 @@ Unattended-Upgrade::Automatic-Reboot-WithUsers "true";
 // 04:45 local time, and the VM's local time is UTC. The window is chosen to sit
 // clear of everything the cluster does to this VM: the hermes-pull backup SSHes
 // in at 02:00 UTC and the restic sweep runs at 03:00 UTC. The apt-daily-upgrade
-// timer is moved to 04:00 (+/- 20 min) by the drop-in beside this file, so the
-// upgrade has finished before the reboot fires.
+// timer is moved to 04:00 (+ up to 10 min) by the drop-in beside this file, so
+// the upgrade has finished before the reboot fires. The jitter is deliberately
+// narrow: unattended-upgrade hands "04:45" to shutdown, and systemd rolls a
+// time already past to TOMORROW, so an overrun slips the reboot a full day.
 Unattended-Upgrade::Automatic-Reboot-Time "04:45";
 
 // Keep /boot from filling, which is the commonest way automatic kernel updates
