@@ -62,7 +62,7 @@ make check-vm-scripts
 
 This is the **only** thing that ever lints these files.
 It runs in no preflight, this repository has no CI, and nothing runs it on a schedule.
-Its callers are this procedure and the weekly update session.
+This procedure is its only caller; the update runbook never invokes it.
 
 ### 2. Install the script and its units
 
