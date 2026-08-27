@@ -15,8 +15,10 @@ Two things that will not announce themselves: **`hermes update` restarts only th
 **[VM]**
 
 ```sh
-# Both trees clean, or stop: a dirty agent tree is stashed and never restored, and a dirty
-# webui tree aborts this procedure AFTER the agent has already migrated.
+# Both trees clean, or stop. On 2026-08-27 the installed updater refused a dirty parked
+# branch outright (exit 1, no stash, snapshot already taken); the stash-and-never-restore
+# path may still exist for other shapes of dirt. A dirty webui tree aborts this procedure
+# AFTER the agent has already migrated.
 git -C ~/.hermes/hermes-agent status --porcelain
 git -C ~/hermes-webui status --porcelain
 # The estate's only alarm on a dead apt timer, and it fires only here. Two commands, not
@@ -105,6 +107,15 @@ systemctl --user restart hermes-gateway hermes-gateway-emh hermes-gateway-hal \
   hermes-dashboard hermes-webui
 ```
 
+**[VM]** Until the IMAP ID capability gate lands upstream, re-apply it: the update resets `main` and silently drops the local commit carrying it, and without it Purelymail kills every agent-mail connection with a misleading `[Email] IMAP connection failed: command: SELECT => Unknown command.` that names neither ID nor the cause.
+Skip this step only when `_send_imap_id` in `plugins/platforms/email/adapter.py` already checks `imap.capabilities` after the update.
+
+```sh
+grep -n 'capabilities' ~/.hermes/hermes-agent/plugins/platforms/email/adapter.py  # empty = gate missing
+git -C ~/.hermes/hermes-agent cherry-pick e04d498bad  # branch test/imap-id-capability-gating; patch copy at ~/purelymail-imap-id.patch
+systemctl --user restart hermes-gateway hermes-gateway-emh hermes-gateway-hal
+```
+
 ## Verify
 
 **[VM]** Any failure sends you to [Rollback](#rollback).
@@ -122,18 +133,28 @@ printf 'header = "Authorization: Bearer %s"\n' "$KEY" | curl -sS -m 60 -K - \
   -H 'Content-Type: application/json' \
   -d '{"model":"default","messages":[{"role":"user","content":"Reply with one sentence."}]}' \
   http://127.0.0.1:8642/v1/chat/completions
-# One memory write must appear: the turn above returns 200 whether or not the write behind it
-# succeeded, so this grep is the only thing that checks it.
+# The turn above returns 200 whether or not the memory write behind it succeeded. Hindsight
+# success is DEBUG-silent and failures WARN loudly (verified live 2026-08-27), so pass on the
+# first grep is EMPTY output — any line it prints is a failure to read.
 journalctl --user -u hermes-gateway --since '10 min ago' | grep -i hindsight
 journalctl --user -u hermes-gateway --since '10 min ago' | grep '1Password: applied'
 ```
 
 The `applied N secrets` line is fail-open: after a restart, a drop from its previous value means the secrets provider failed silently.
 
+**[laptop]** Positive evidence of the memory write, from the server side — `max(created_at)` must postdate the chat turn:
+
+```sh
+kubectl --context cynexia-homelab -n hindsight exec deploy/hindsight-postgres -- \
+  psql -U hindsight -d hindsight -Atc \
+  "select max(created_at) from memory_units where bank_id = 'hermes-default'"
+```
+
 ## Report
 
 **[laptop]** On success only; on failure send nothing and diagnose with the session still open.
-Read the two shas from the record and type them into the body — never interpolate a command's output into it, and never echo the URL, whose last path segment is the ping identifier:
+Read the two shas from the record and type them into the body — never interpolate a command's output into it, and never echo the URL, whose last path segment is the ping identifier.
+The update's own fetch can move past the recorded `target_sha` (it did on 2026-08-27); when the update log's `Code updated!` line names a different sha, report that one — it is what is installed.
 
 ```sh
 curl -fsS -m 15 --data-binary 'summary=hermes update ok agent=<target_sha> webui=<webui_target_sha>' \
