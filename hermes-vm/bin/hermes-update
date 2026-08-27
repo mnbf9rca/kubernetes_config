@@ -1,0 +1,22 @@
+#!/bin/sh
+# Entry point for the Hermes VM update runner.
+#
+# Installed to /usr/local/bin/hermes-update, mode 0755, owner root:root.
+# Canonical copy: hermes-vm/bin/hermes-update in
+# github.com/mnbf9rca/kubernetes_config.
+#
+# WHY IT EXISTS. /usr/local/bin is on the default non-login PATH, so
+# `ssh hermes@hermes.cynexia.net 'command -v hermes-update'` finds this — which
+# is the contract the /update-estate skill is written against. It runs the work
+# through the systemd unit rather than exec'ing the script directly, so the run
+# keeps its EnvironmentFile (the healthchecks.io ping UUID, mode 0600, never on
+# this shell's environment), its TimeoutStartSec bound, and systemd's refusal of
+# a second concurrent start. The journal dump puts the run's output back on
+# stdout, where the calling session reads it.
+#
+# NO `set -eu`: the journal must be dumped even when the start failed, and the
+# exit status this returns is the unit's, not this wrapper's.
+systemctl --user start hermes-update
+rc=$?
+journalctl --user -u hermes-update -n 500 --no-pager
+exit "$rc"

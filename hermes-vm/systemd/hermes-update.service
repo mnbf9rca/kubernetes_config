@@ -1,0 +1,129 @@
+[Unit]
+Description=Hermes agent, WebUI and hindsight-client update with health assertion and rollback
+Documentation=https://github.com/mnbf9rca/kubernetes_config/blob/master/docs/operations/hermes-vm-updates.md
+After=network-online.target
+Wants=network-online.target
+
+# THERE IS NO .timer UNIT FOR THIS SERVICE AND THERE MUST NOT BE ONE. `hermes
+# update` sometimes carries manual steps - a config schema migration prompts,
+# and a run that stashes local edits needs a human to look at what it stashed -
+# so this is started on demand: by the operator, by /usr/local/bin/hermes-update,
+# or by the 4-to-6-week update session. Its healthchecks.io check runs a ~45-day
+# period with a 7-day grace to match that cadence. Arming a timer here would
+# change the failure model, not just the schedule.
+#
+# hermes-app-alive.timer beside this file is NOT a counter-example: it drives a
+# read-only heartbeat that mutates nothing and prompts for nothing. The rule is
+# "updates are not scheduled", not "this directory holds no timers".
+
+[Service]
+Type=oneshot
+ExecStart=/home/hermes/bin/hermes-update.sh
+
+# MUST MATCH $HERMES_USER_HOME IN hermes-update.sh, which pins the same path
+# around the `import run_agent` health assertion. Python puts the current
+# working directory on sys.path, so an import asserted from an unpinned
+# directory is not the same assertion twice. Setting it here is not redundancy
+# with the pin in the script: it makes the two AGREE BY CONSTRUCTION rather
+# than by the coincidence that an unset WorkingDirectory= in a systemd USER
+# unit happens to default to the user's home. Change one and change the other.
+#
+# For the record, so this is not "tidied away" on the strength of a survey
+# note: the import does not actually depend on the working directory. The agent
+# is installed in editable mode under PEP 660 and its import finder holds an
+# ABSOLUTE path, so the module resolves from anywhere - verified on the VM from
+# the filesystem root. The pin and this setting are belt and braces. Keep both.
+WorkingDirectory=/home/hermes
+
+# HERMES_HOME is the load-bearing one. `hermes update` installs dependencies
+# with uv, and hermes resolves uv from $HERMES_HOME/bin/uv by ABSOLUTE PATH -
+# managed_uv.py:53-63, whose module docstring says "no PATH probing, no conda
+# guards, no multi-location resolution chains". Task 0 Step 10 confirmed there
+# is no uv anywhere else on this VM: not on the ssh PATH, not on the user
+# manager's PATH, not in ~/.local/bin. So a wrong-or-absent HERMES_HOME, not a
+# short PATH, is what would make `hermes update` fail to find its own tooling.
+# (An earlier draft, following the adversarial review's M12, put ~/.local/bin on
+# PATH "so hermes update can find uv". That reasoning was wrong; the line below
+# is kept only for git and the ordinary system tools.)
+Environment=HERMES_HOME=/home/hermes/.hermes
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+# ONE value: the healthchecks.io ping UUID, which must never be carried in the
+# repo. Mode 0600, written at install by `op read` piped over ssh. No leading
+# '-': the unit must refuse to start when the file is absent, because a missing
+# UUID would make a failed run indistinguishable from no run.
+#
+# The chat turn's credential is NOT here. The script reads the default profile's
+# API_SERVER_KEY from ~/.hermes/.env at run time - the same file the gateway
+# itself reads - so nothing is copied and there is one value to rotate, not two.
+# An earlier draft carried HERMES_PROBE_API_KEY in this file for a probe profile
+# that no longer exists; do not reinstate it.
+EnvironmentFile=/home/hermes/.hermes/hermes-update.env
+
+# DO NOT LOWER THIS. 10800 is a DERIVED number, not a round one.
+#
+# hermes-update.sh bounds every child that can block on a network, and the sum
+# of those bounds along its longest route - the update succeeds, the health
+# assertion fails, the full rollback runs, health is re-asserted - is 9040
+# seconds, a little over 2h30m. Each figure in that sum is LIMIT + grace,
+# because `timeout -k` sends SIGTERM at the limit and SIGKILL that much later
+# again. It is the longest of the five routes through the script; the other
+# four come to 8740, 8285, 7355 and 5945 seconds, and a run that simply
+# succeeds is 5305. The script's own "the time budget" block carries the
+# derivation.
+#
+# The remaining 1760 seconds are deliberate headroom, and they are headroom for
+# a specific thing: 9040 bounds only the children the script wraps in
+# `timeout`. The local git operations, the `sed` over the agent's environment
+# file and the `python3` parse of the chat response sit outside that sum
+# because none of them can block on a network, so none of them is bounded - but
+# they are not free either.
+#
+# An earlier draft of this task said 3600. That would kill a legitimately long
+# run part way through, quite possibly mid-rollback, which is the worst moment
+# this system has. The point of the bound is that a WEDGED run fails rather
+# than sitting in `activating` where nothing sees it - not to second-guess a
+# run that is still working. On expiry systemd sends SIGTERM, which the script
+# traps and converts to exit 143 so the EXIT trap still pings; without that
+# trap a timeout would be pure silence.
+#
+# systemd already refuses a second concurrent start, which is this unit's
+# `concurrencyPolicy: Forbid`.
+TimeoutStartSec=10800
+
+# THE STOP BOUND EXISTS TO LET THE EXIT TRAP RUN, and it is long on purpose.
+#
+# In POSIX sh a trap cannot run while a foreground child is blocked; the shell
+# runs it only once that child returns. hermes-update.sh sends its entire
+# report - the healthchecks.io ping and its body - from an EXIT trap. So when
+# systemd stops this unit, the SIGTERM is not acted on until the child the
+# script is currently inside has finished. If TimeoutStopSec expired before
+# then, systemd would follow with SIGKILL, which no shell can trap, and the run
+# would report NOTHING - which is precisely the failure the traps exist to
+# prevent.
+#
+# The longest single foreground child is `hermes update`, bounded at 1800
+# seconds with a 300-second kill grace: 2100 seconds. After it returns the trap
+# needs only seconds - a few `rm`s, the body, and one `curl` bounded at 15s
+# (twice, worst case). 2400 gives the trap the full 2100-second wait plus 300
+# seconds of margin, so a stop lands as a reported failure rather than silence.
+#
+# THE COST, stated plainly because it is real: `systemctl --user stop
+# hermes-update` on a run that is inside `hermes update` can take up to 40
+# minutes to return. That is a long time to sit at a prompt, and it is the
+# right trade. The alternative is a fast stop that SIGKILLs the shell during a
+# forward-only config and state.db migration - the single worst interruption
+# point in this system, per the --backup comment in the script's phase 1 - and
+# reports nothing about it. An operator who genuinely needs the run gone now,
+# and accepts both of those, can still say
+# `systemctl --user kill -s SIGKILL hermes-update`.
+
+TimeoutStopSec=2400
+
+# No Restart=. A failed run must stay failed: the script has already rolled
+# back and pinged, and re-running it automatically would re-attempt the same
+# broken update against a freshly restored venv.
+StandardOutput=journal
+StandardError=journal
+
+# No [Install] section. Nothing enables this unit; it is started by hand.

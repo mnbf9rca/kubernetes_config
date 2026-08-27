@@ -127,7 +127,7 @@ help:
 	@echo "                     the diff-*/apply-* preflight; the first five per cluster, this one whole)"
 	@echo ""
 	@echo "Hermes VM targets (not cluster-applied):"
-	@echo "  check-vm-scripts - shellcheck + unit-test + ping-body scan the hermes VM scripts"
+	@echo "  check-vm-scripts - shellcheck + unit-test + failure-path harness + ping-body scan the hermes VM scripts"
 	@echo ""
 	@echo "VPS cluster targets:"
 	@echo "  check-vps-context - assert kubectl current-context matches VPS_CONTEXT ($(VPS_CONTEXT))"
@@ -404,6 +404,23 @@ check-renovate-scope-vps:
 # shellcheck raises SC1091 at info level, which exits 1 under the default
 # `style` severity floor.
 #
+# THREE THINGS RUN HERE, and the second and third are different tests.
+# test-hermes-update.sh covers the pure helpers. test-hermes-update-paths.sh
+# drives the WHOLE of hermes-update.sh against stubs - `curl`, `systemctl`,
+# `pip`, the venv python and the `hermes` entry point - inside one `mktemp -d`
+# root, and asserts the ping body on every route through it: the happy path,
+# both halves of the "did the tree move?" split, a rollback that completes, one
+# that stops part way, one whose result is still unhealthy, and the degraded
+# chat turn. Nothing in it touches a network or the VM. It exists because every
+# failure the review round found lives in `main`, which the helper tests never
+# execute, and because the live rollback drill exercises exactly one of those
+# routes. It costs about 14 seconds, almost all of it real `git`.
+#
+# hermes-vm/bin/hermes-update is linted here too. It has no `.sh` suffix - the
+# name IS its interface, since `command -v hermes-update` is what the
+# /update-estate skill asserts - so it has to be named explicitly rather than
+# picked up by the glob.
+#
 # Not wired into diff-*/apply-*: nothing here is applied to a cluster, so
 # gating a cluster apply on it would be noise. That is a real cost — nothing
 # runs it on a schedule and this repo has no CI (there is no .github/workflows
@@ -412,8 +429,9 @@ check-renovate-scope-vps:
 # and the 4-to-6-week update session runs it.
 .PHONY: check-vm-scripts
 check-vm-scripts:
-	@shellcheck -x -s sh hermes-vm/scripts/*.sh
+	@shellcheck -x -s sh hermes-vm/scripts/*.sh hermes-vm/bin/hermes-update
 	@sh hermes-vm/scripts/test-hermes-update.sh
+	@sh hermes-vm/scripts/test-hermes-update-paths.sh
 	@scripts/check-ping-bodies.py hermes-vm
 
 .PHONY: require-vars
