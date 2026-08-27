@@ -129,7 +129,7 @@ spec:
               # runs a `sh` script with curl, awk, sed and tr on this exact pin.
               # Renovate watches this tree (renovate.json), so the bump arrives
               # as a pull request rather than as an unattended tag move.
-              image: curlimages/curl:8.14.1
+              image: curlimages/curl:8.21.0@sha256:7c12af72ceb38b7432ab85e1a265cff6ae58e06f95539d539b654f2cfa64bb13
               command: ["sh", "/scripts/keel-fresh.sh"]
               env:
                 # uptime-kuma push monitor `vps-keel-fresh`
