@@ -16,7 +16,7 @@ And **a health check in a fresh interpreter does not prove the running WebUI loa
 ## Preconditions
 
 **[VM]** Run all of these before anything mutates; any failure stops the session.
-A missing stamp file, or any output from the `find`, means `unattended-upgrades` has not run in over 14 days: fix the apt timers before updating anything ([hermes-vm.md](hermes-vm.md#unattended-upgrades)).
+Pass is silence from **both** stamp commands; a `STAMP MISSING` line or a path from the `find` means `unattended-upgrades` has not run in over 14 days, so fix the apt timers before updating anything ([hermes-vm.md](hermes-vm.md#unattended-upgrades)).
 
 ```sh
 # A dirty agent tree is stashed and switched off its parked branch and never restored;
@@ -24,10 +24,10 @@ A missing stamp file, or any output from the `find`, means `unattended-upgrades`
 git -C ~/.hermes/hermes-agent status --porcelain   # empty, or commit/discard first
 git -C ~/hermes-webui status --porcelain           # empty, or commit/discard first
 # The estate's ONLY alarm on a dead apt timer, and it fires only when you run it.
-# PASS is: the file EXISTS and find prints nothing. A missing stamp would leave find's
-# stdout empty too, so the test -f is what stops that reading as a pass.
-test -f /var/lib/apt/periodic/unattended-upgrades-stamp &&
-  find /var/lib/apt/periodic/unattended-upgrades-stamp -mtime +14
+# TWO CHANNELS, and PASS is both of them quiet. They are separate commands on purpose:
+# chained with &&, a missing stamp short-circuits and the step says nothing at all.
+test -f /var/lib/apt/periodic/unattended-upgrades-stamp || echo 'STAMP MISSING - STOP'
+find /var/lib/apt/periodic/unattended-upgrades-stamp -mtime +14 2>/dev/null
 df -h /home     # 1 GiB free; the snapshot alone is ~200 MiB
 date -u         # not within 90 minutes of 04:45 UTC: the reboot ignores who is logged in
 ```
@@ -42,8 +42,11 @@ printf 'agent_sha=%s\nagent_branch=%s\nwebui_sha=%s\nclient_version=%s\n' \
   "$(git -C ~/hermes-webui rev-parse HEAD)" \
   "$(~/.hermes/hermes-agent/venv/bin/pip show hindsight-client | sed -n 's/^Version: //p')" \
   > ~/.hermes/hermes-update.pre-run    # the venv's own pip, never a system one
+# NEVER let a gateway contribute a blank field: the comparison in Verify is positional,
+# so three gateways must always yield three values. A rotated journal gives 'none'.
 printf 'secrets_applied=%s\n' "$(for U in hermes-gateway hermes-gateway-emh hermes-gateway-hal; do
-  journalctl --user -u "$U" | sed -n 's/.*applied \([0-9]*\) secrets.*/\1/p' | tail -1
+  N=$(journalctl --user -u "$U" | sed -n 's/.*applied \([0-9]*\) secrets.*/\1/p' | tail -1)
+  printf '%s\n' "${N:-none}"
   done | paste -sd, -)" >> ~/.hermes/hermes-update.pre-run
 cat ~/.hermes/hermes-update.pre-run
 ```
@@ -99,7 +102,8 @@ systemctl --user reset-failed hermes-update-manual 2>/dev/null; true
 `ActiveState` is in that list because the wait loop is what makes the other two mean anything: read on a unit that is still running, `Result` reports the `success` it was initialised with.
 Do not take the next step's snapshot check as the completion signal: the snapshot is written at the START of the run, so it exists whatever happened afterwards.
 A transient **service** survives because the user manager forks it, so no `&` is wanted; a `--scope` backgrounded with `&` does **not**, because that client stays a child of the session's shell and takes its `SIGHUP`.
-`--collect` is deliberately absent: it garbage-collects the unit on exit and takes `Result` with it, which is the only completion signal there is, so `reset-failed` clears the unit by hand instead.
+`--collect` is deliberately absent, and the mechanism is worth stating exactly, because the obvious version of it is wrong: a *successful* transient unit is garbage-collected either way, so `--collect` changes nothing there. What it destroys is the **failed** unit — the case that matters — and `systemctl show` on a unit that no longer exists answers with defaults, which read `ActiveState=inactive`, `Result=success`, `ExecMainStatus=0`: the exact pass triple, reported for a run that failed. Without `--collect` the failed unit stays loaded and readable, and `reset-failed` clears it by hand afterwards.
+The honest limit of that triple, then: it proves failure, but it cannot tell "succeeded" from "the unit vanished" — which is why the journal read sits beside it rather than after it.
 The wait loop blocks; to watch the run as it goes, open a second ssh shell and `journalctl --user -u hermes-update-manual -f`.
 `--setenv=HERMES_HOME` replaces what the deleted unit pinned: `hermes` resolves `uv` at `$HERMES_HOME/bin/uv` by absolute path, so an absent `HERMES_HOME`, not a short PATH, is what would stop the update finding its own tooling.
 **Unverified:** that `uv` resolves inside the transient unit, and whether this update prompts for the config migration; the first supervised run settles both.
@@ -154,7 +158,8 @@ journalctl --user -u hermes-gateway --since '10 min ago' | grep -i hindsight
 
 `is-active` prints one `active` per unit and exits non-zero if any of the five is not, so its exit status alone is the pass condition.
 
-**A DROP in the applied-secrets count is the cheapest post-update check there is; the absolute number is not a gate.** The count is per profile home, so the three gateways legitimately differ, and any one of them rises when a reference is added to that home's `config.yaml` — on 2026-08-27 all three logged six. Compare each gateway's line against that same gateway's figure in the record's `secrets_applied=`, and alarm only on a **decrease**: the application path is fail-open and swallows errors, so an expired `OP_SERVICE_ACCOUNT_TOKEN` or an unreachable `op` shows up as a smaller number and never as a failure.
+**A DROP in the applied-secrets count is the cheapest post-update check there is; the absolute number is not a gate.** The count is per profile home, so the three gateways legitimately differ, and any one of them rises when a reference is added to that home's `config.yaml` — on 2026-08-27 all three logged six. Compare each gateway's line against that same gateway's figure in the record's `secrets_applied=`, position by position, and alarm only on a **decrease**: the application path is fail-open and swallows errors, so an expired `OP_SERVICE_ACCOUNT_TOKEN` or an unreachable `op` shows up as a smaller number and never as a failure.
+A field reading `none` means that gateway's startup line had already rotated out of the journal, so it has no baseline this run — compare nothing for it, and say so in the report rather than reading it as a zero.
 `status` confirms the references survived the migration; whether it preserves the `secrets:` block is **unverified**, and this settles it.
 
 The import catches the documented broken-venv failure: a venv missing `dotenv`, `httpx` or `openai` leaves every unit active and `/health` answering `status: ok` while the iOS app answers `AIAgent not available`.
@@ -231,7 +236,7 @@ Take it supervised, and expect a 04:45 reboot the first night after install: a k
 **The Hindsight 401 is confined to the default profile, and the cause is a gateway older than its own configuration.** `hermes-gateway` has run since 2026-08-23; `~/.hermes/config.yaml` gained its `HINDSIGHT_API_KEY` reference on 2026-08-24 and nothing restarted the process, so the plugin initialised with an empty key and every write since has returned `401 Invalid API key`.
 The observable is that the `hermes` bank is **empty — not one write has ever landed** — while `emh` and `hal`, whose gateways started after the reference did, hold 237 and 40 memories; those two are the controls, and they prove the configuration, the vault copies and the server are all fine.
 **The fix is `systemctl --user restart hermes-gateway` alone**, the operator's to run, and it has worked when a write appears in the `hermes` bank and in that gateway's journal.
-Note that [hindsight.md](hindsight.md#rotating-the-tenant-api-key) names `op://Homelab/hermes/tenant-api-key` for the VM and **no such item exists** — a typo in that page, not a third copy.
+Note that [hindsight.md](hindsight.md#rotating-the-tenant-api-key) names `op://Homelab/hermes/tenant-api-key` for the VM and **no such item exists** (verified 2026-08-27; `op read` returns not-found) — a typo in that page, not a third copy.
 
 The key is in no file on the VM: hermes's 1Password provider resolves `secrets.onepassword.env.HINDSIGHT_API_KEY: op://hermes/hindsight/tenant-api-key` at startup, from each home's own `config.yaml`, into that gateway process's environment alone — which is why a restart, and only a restart, applies a newly added reference.
 
