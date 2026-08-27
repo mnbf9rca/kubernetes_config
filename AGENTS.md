@@ -85,6 +85,11 @@ Full mechanics, target-by-target reference and failure modes:
   target runs its guards in the parent shell then re-enters make under it, so values exist
   inside one child process only. **The old `set -a` + `op inject` block in `.envrc` is
   gone deliberately — do not restore it.**
+  Because `OP_SERVICE_ACCOUNT_TOKEN` lives in the shell environment once direnv has
+  exported it, `op run` — and therefore every build/diff/apply target — works from **any
+  directory in that shell, git worktrees included**; there is no need to re-run `direnv
+  allow` in a worktree or to avoid worktrees for `op`-dependent work (operator ruling,
+  2026-08-27).
 - **Never commit plaintext secret values.** `${VAR}` placeholders only.
 - **`op run` masks stdout, not env vars** — corrected 2026-08-20; the previous claim in
   this file was a misdiagnosis. `op run` passes the **real** values in the child
