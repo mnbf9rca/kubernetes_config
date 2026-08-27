@@ -1,0 +1,37 @@
+# Talos user volume for the second Hetzner Cloud Volume ("media", 150 GiB),
+# holding PinePods episode audio. Deliberately a SEPARATE volume from `data`:
+# bulk re-downloadable audio must not share a filesystem with the databases
+# (no quota exists in local-path), and the restic job must never sweep it.
+#
+# Disk selector: model, not size bracket. The boot disk reports model
+# "QEMU HARDDISK"; both Cloud Volumes report "Volume". The >100GB floor
+# separates the two Cloud Volumes (data=80GB, media=161GB; margin 81GB).
+# DO NOT add a size ceiling: Talos reports this volume as 161 GB, ABOVE the
+# boot disk's nominal 160 GB, so a "< 160GB" clause would exclude the disk
+# it means to select. A future third Cloud Volume over 100GB would collide
+# with this selector (Talos takes the first match, silently) — reselect
+# with the disks in front of you if that day comes.
+# Cross-checked with `talosctl get disks` on 2026-08-27:
+#   sda  164 GB  virtio  QEMU HARDDISK   <-- boot (excluded by model)
+#   sdb   80 GB  virtio  Volume          <-- data volume (excluded by size)
+#   sdc  161 GB  virtio  Volume          <-- selected
+metadata:
+  namespace: default
+  type: ConfigPatches.omni.sidero.dev
+  id: 410-vps-user-volume-media
+  labels:
+    omni.sidero.dev/cluster: vps
+  annotations:
+    name: user-volume-media
+spec:
+  data: |-
+    apiVersion: v1alpha1
+    kind: UserVolumeConfig
+    name: media
+    provisioning:
+      diskSelector:
+        match: disk.model == "Volume" && disk.size > 100u * GB
+      grow: true
+      minSize: 100GiB
+    filesystem:
+      type: xfs
