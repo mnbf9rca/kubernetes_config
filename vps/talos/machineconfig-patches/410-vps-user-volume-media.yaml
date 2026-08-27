@@ -11,6 +11,11 @@
 # it means to select. A future third Cloud Volume over 100GB would collide
 # with this selector (Talos takes the first match, silently) — reselect
 # with the disks in front of you if that day comes.
+# The nearer hazard is resizing the EXISTING `data` volume: taking it above
+# 100GB breaks the 70-100GB bracket in 400, whose selector then matches
+# nothing, so the data volume stops provisioning — and it makes this selector
+# match both Cloud Volumes. Talos keeps the already-provisioned u-media
+# partition, so the practical failure is the data volume, not a media rebind.
 # Cross-checked with `talosctl get disks` on 2026-08-27:
 #   sda  164 GB  virtio  QEMU HARDDISK   <-- boot (excluded by model)
 #   sdb   80 GB  virtio  Volume          <-- data volume (excluded by size)

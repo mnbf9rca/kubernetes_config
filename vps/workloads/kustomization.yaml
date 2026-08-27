@@ -15,14 +15,16 @@ resources:
   - pinepods.yaml
 
 # Backup sidecar scripts as real files, mounted at /scripts. One ConfigMap for
-# all five sidecars: four of them share sqlite-snapshot-lib.sh, and splitting
-# the set per workload would mean five copies of that library to keep in step.
+# all six sidecars: four of them share sqlite-snapshot-lib.sh, umami-postgres
+# and pinepods-postgres share pg-dump-snapshot.sh (the dump user is
+# parameterized by PGDUMP_USER), and splitting the set per workload would mean
+# six copies of those shared files to keep in step.
 #
 # The content-hash suffix is left ON, so editing a script rolls the Deployments
 # that mount it. That is the intended behaviour and it has a cost worth knowing
-# about: ALL FIVE of these Deployments use `strategy: Recreate` (n8n, karakeep,
-# uptime-kuma, freshrss and umami-postgres), so a script edit means a brief
-# hard-down window for every one of them, not a rolling update.
+# about: ALL SIX of these Deployments use `strategy: Recreate` (n8n, karakeep,
+# uptime-kuma, freshrss, umami-postgres and pinepods-postgres), so a script edit
+# means a brief hard-down window for every one of them, not a rolling update.
 #
 # `namespace:` is REQUIRED on this entry, and it is NOT the same thing as a
 # top-level `namespace:` — do not "simplify" it into one. A top-level namespace
@@ -32,7 +34,7 @@ resources:
 # other hand, inherits a namespace from nowhere, and kustomize only rewrites a
 # name reference when referrer and referent agree on namespace. Omit it here
 # and you get a silent DOUBLE failure: the ConfigMap is created in `default`
-# AND all five Deployments keep pointing at the unsuffixed name, so every mount
+# AND all six Deployments keep pointing at the unsuffixed name, so every mount
 # dangles and every sidecar dies at container start.
 #
 # GENERATED SCRIPTS ARE NOT INERT TEXT. They pass through envsubst, which
