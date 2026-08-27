@@ -169,5 +169,8 @@ KARAKEEP_OPENAI_API_KEY=op://VPS/karakeep/openai_secret_key
 # VPS credential, and a shared monitor could not tell the two clusters apart.
 VPS_OPS_KUMA_KEEL_TOKEN=op://VPS/keel-fresh/kuma-push-token
 
+# pinepods postgres password (server + app + dump sidecar)
+PINEPODS_DB_PASSWORD=op://VPS/pinepods/db-password
+
 # karakeep admin API key for scripts/karakeep-tag-*.py (NOT used in any manifest — shell env only)
 KARAKEEP_CLEANUP_API_KEY=op://VPS/karakeep/cleanup_api_key
