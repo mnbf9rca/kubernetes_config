@@ -66,10 +66,15 @@ Unattended-Upgrade::Automatic-Reboot-WithUsers "true";
 // 04:45 local time, and the VM's local time is UTC. The window is chosen to sit
 // clear of everything the cluster does to this VM: the hermes-pull backup SSHes
 // in at 02:00 UTC and the restic sweep runs at 03:00 UTC. The apt-daily-upgrade
-// timer is moved to 04:00 (+ up to 10 min) by the drop-in beside this file, so
-// the upgrade has finished before the reboot fires. The jitter is deliberately
-// narrow: unattended-upgrade hands "04:45" to shutdown, and systemd rolls a
-// time already past to TOMORROW, so an overrun slips the reboot a full day.
+// timer is moved to 04:00 (+ up to 10 min) so the upgrade has finished before
+// the reboot fires. TWO systemd drop-ins do that, and are two halves of
+// one pipeline: apt-daily.timer.d/override.conf refreshes the package lists at
+// 03:30, and apt-daily-upgrade.timer.d/override.conf installs from them at
+// 04:00. unattended-upgrade only ever installs from the cache, so without the
+// 03:30 half this file would be patching against stale lists. The jitter is
+// deliberately narrow: unattended-upgrade does not reboot directly, it runs
+// /sbin/shutdown -r with this literal time, and systemd rolls a time already
+// past to TOMORROW - so an overrun slips the reboot a full day.
 Unattended-Upgrade::Automatic-Reboot-Time "04:45";
 
 // Keep /boot from filling, which is the commonest way automatic kernel updates
