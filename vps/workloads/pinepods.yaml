@@ -1,0 +1,266 @@
+# PinePods — self-hosted podcast server (https://github.com/madeofpendletonwool/PinePods)
+# Design: docs/superpowers/specs/2026-08-27-pinepods-vps-design.md (local-only).
+#
+# Episode audio lives on the dedicated `media` Talos user volume via the
+# static local PV below — NOT on /var/mnt/data — so it cannot starve the
+# databases and the nightly restic job never sees it. The PG data is an
+# ordinary local-path PVC and IS swept and gate-verified nightly.
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: pinepods-media
+spec:
+  capacity:
+    storage: 140Gi
+  accessModes: [ReadWriteOnce]
+  persistentVolumeReclaimPolicy: Retain
+  # Its own storageClassName so no dynamic provisioner ever matches it; the
+  # PVC below binds statically on this string. No StorageClass object exists
+  # or is needed.
+  storageClassName: media
+  local:
+    # The mount root, not a subdirectory: a `local` PV path must pre-exist,
+    # Talos offers no shell to mkdir with, and the freshly formatted xfs
+    # root is clean. Restructure only if the volume gains a second consumer.
+    path: /var/mnt/media
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: kubernetes.io/hostname
+              operator: In
+              values: [ubuntu-16gb-fsn1-2]
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: pinepods-media
+  namespace: vps
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: media
+  resources:
+    requests:
+      storage: 140Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: pinepods-pg-data
+  namespace: vps
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 10Gi
+  storageClassName: local-path
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: pinepods-postgres
+  namespace: vps
+spec:
+  selector:
+    app: pinepods-postgres
+  ports:
+    - port: 5432
+      targetPort: 5432
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: pinepods
+  namespace: vps
+spec:
+  selector:
+    app: pinepods
+  ports:
+    - port: 8040
+      targetPort: 8040
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pinepods-postgres
+  namespace: vps
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: pinepods-postgres
+  template:
+    metadata:
+      labels:
+        app: pinepods-postgres
+    spec:
+      # local-path PVC → pinned to the storage node per the contract in
+      # docs/operations/vps.md.
+      nodeSelector:
+        kubernetes.io/hostname: ubuntu-16gb-fsn1-2
+      containers:
+        # NOT postgres:18 — the bare major is a floating stream to
+        # check-renovate-scope and would hard-fail the preflight. No
+        # postgres:19 PR will ever arrive either: renovate.json disables
+        # postgres majors by name (a dump-and-restore, not a tag edit).
+        # Upgrading majors is a deliberate manual migration; the nightly
+        # dump below is the rollback.
+        - name: postgres
+          image: postgres:18-alpine
+          env:
+            - { name: POSTGRES_DB, value: pinepods_database }
+            - { name: POSTGRES_USER, value: postgres }
+            - name: POSTGRES_PASSWORD
+              valueFrom: { secretKeyRef: { name: pinepods, key: DB_PASSWORD } }
+            # postgres:18 moved its data dir and VOLUME; mounting at
+            # /var/lib/pgdata with PGDATA one level down is upstream
+            # PinePods' own documented pattern for this image.
+            - { name: PGDATA, value: /var/lib/pgdata/pgdata }
+          ports:
+            - containerPort: 5432
+          volumeMounts:
+            - { name: data, mountPath: /var/lib/pgdata }
+          # Probe trio copied from umami's postgres, where the reasoning
+          # lives in full. Short form: startup and liveness MUST accept
+          # pg_isready exit 1 (rejecting connections, e.g. WAL replay) as
+          # alive, or kubelet SIGKILLs the postmaster mid-recovery and a
+          # single-replica Recreate Deployment never converges. Readiness
+          # alone uses the strict form — a recovering postgres carries no
+          # traffic. -h 127.0.0.1 probes TCP, the only path the app uses.
+          startupProbe:
+            exec:
+              command: ["sh", "-c", "pg_isready -q -U postgres -d pinepods_database -h 127.0.0.1; test $? -lt 2"]
+            periodSeconds: 10
+            failureThreshold: 30
+            timeoutSeconds: 5
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "postgres", "-d", "pinepods_database", "-h", "127.0.0.1"]
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            timeoutSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            exec:
+              command: ["sh", "-c", "pg_isready -q -U postgres -d pinepods_database -h 127.0.0.1; test $? -lt 2"]
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 6
+        - name: pg-dump-sidecar
+          # Same major as the server — required for a trustworthy pg_dumpall.
+          image: postgres:18-alpine
+          # Shared script vps/workloads/scripts/pg-dump-snapshot.sh, mounted
+          # by the configMapGenerator in this directory's kustomization.
+          # PGDUMP_USER parameterizes the dump user (default: umami).
+          # The PVC is mounted HERE at the path the script's hardcoded DUMP
+          # points to — independent of the server container's mount path —
+          # so dump.sql.restic lands at the PVC root, where the restic
+          # gate's pinepods glob expects it.
+          #
+          # NO PROBE OF ANY KIND ON THIS SIDECAR — a failing probe would
+          # take postgres, and therefore pinepods, offline for a backup
+          # fault. Detection belongs to the restic verification gate. Same
+          # ruling as every other quiesce sidecar in this cluster.
+          command: ["sh", "/scripts/pg-dump-snapshot.sh"]
+          env:
+            - { name: PGDUMP_USER, value: postgres }
+            - name: PGPASSWORD
+              valueFrom: { secretKeyRef: { name: pinepods, key: DB_PASSWORD } }
+          volumeMounts:
+            - { name: data, mountPath: /var/lib/postgresql/data }
+            - { name: scripts, mountPath: /scripts, readOnly: true }
+      volumes:
+        - name: data
+          persistentVolumeClaim: { claimName: pinepods-pg-data }
+        - name: scripts
+          configMap: { name: sqlite-snapshot-scripts }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pinepods
+  namespace: vps
+  annotations:
+    keel.sh/policy: force
+    keel.sh/match-tag: "true"
+    keel.sh/trigger: poll
+    keel.sh/pollSchedule: "@every 6h"
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: pinepods
+  template:
+    metadata:
+      labels:
+        app: pinepods
+    spec:
+      containers:
+        - name: pinepods
+          image: madeofpendletonwool/pinepods:latest
+          imagePullPolicy: Always
+          env:
+            # Hosted search + PodPeople services (operator ruling
+            # 2026-08-27): search terms leave the VPS; subscriptions and
+            # history never do.
+            - { name: SEARCH_API_URL, value: "https://search.pinepods.online/api/search" }
+            - { name: PEOPLE_API_URL, value: "https://people.pinepods.online" }
+            - { name: HOSTNAME, value: "https://podcasts.cynexia.com" }
+            - { name: DB_TYPE, value: postgresql }
+            - { name: DB_HOST, value: pinepods-postgres.vps.svc.cluster.local }
+            - { name: DB_PORT, value: "5432" }
+            - { name: DB_USER, value: postgres }
+            - { name: DB_NAME, value: pinepods_database }
+            - name: DB_PASSWORD
+              valueFrom: { secretKeyRef: { name: pinepods, key: DB_PASSWORD } }
+            # Valkey is the sidecar below.
+            - { name: VALKEY_HOST, value: "localhost" }
+            - { name: VALKEY_PORT, value: "6379" }
+            - { name: TZ, value: UTC }
+          ports:
+            # The gpodder sync API on 8042 is DELIBERATELY not exposed: no
+            # containerPort, no Service port, no tunnel route. The Garmin
+            # design consumes it later.
+            - containerPort: 8040
+          volumeMounts:
+            - { name: media, mountPath: /opt/pinepods/downloads, subPath: downloads }
+            - { name: media, mountPath: /opt/pinepods/backups, subPath: backups }
+          # /api/health checks DB and Valkey but returns HTTP 200
+          # UNCONDITIONALLY — the verdict is only in the JSON body
+          # (verified from rust-api/src/handlers/health.rs, 2026-08-27).
+          # So these probes are process-wedge detection only.
+          # NO LIVENESS PROBE, deliberately: the endpoint cannot detect
+          # anything a restart fixes, and a timeout during a DB incident
+          # would manufacture a restart of the single replica. If a real
+          # wedge ever occurs, upstream's own manifests use the static
+          # /api/pinepods_check for liveness — start there.
+          startupProbe:
+            httpGet: { path: /api/health, port: 8040 }
+            periodSeconds: 10
+            failureThreshold: 30 # 5 min budget for first-boot migrations
+            timeoutSeconds: 5
+          readinessProbe:
+            httpGet: { path: /api/health, port: 8040 }
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 3
+        # Valkey as a sidecar, not a Deployment+Service: an emptyDir cache
+        # with exactly one consumer, sharing the app's lifecycle. Pinned
+        # tag in a keel-annotated workload = Renovate's, per AGENTS.md
+        # ("a pinned sidecar beside a floating app image").
+        # NO PROBES — a wedged cache must not mark the whole pod NotReady.
+        - name: valkey
+          image: valkey/valkey:8-alpine
+          ports:
+            - containerPort: 6379
+          volumeMounts:
+            - { name: valkey-data, mountPath: /data }
+      volumes:
+        - name: media
+          persistentVolumeClaim: { claimName: pinepods-media }
+        - name: valkey-data
+          emptyDir: {}

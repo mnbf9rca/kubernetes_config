@@ -57,7 +57,7 @@ dump_has_schema() {
 }
 
 while true; do
-  if pg_dumpall -U umami -h 127.0.0.1 > "$DUMP.restic.tmp"; then
+  if pg_dumpall -U "${PGDUMP_USER:-umami}" -h 127.0.0.1 > "$DUMP.restic.tmp"; then
     if dump_has_schema "$DUMP.restic.tmp"; then
       mv "$DUMP.restic.tmp" "$DUMP.restic"
       sleep 43200

@@ -24,6 +24,8 @@ data:
         service: http://n8n.vps.svc.cluster.local:5678
       - hostname: keep.cynexia.com
         service: http://karakeep.vps.svc.cluster.local:3000
+      - hostname: podcasts.cynexia.com
+        service: http://pinepods.vps.svc.cluster.local:8040
       - service: http_status:404
 ---
 apiVersion: apps/v1

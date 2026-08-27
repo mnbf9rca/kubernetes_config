@@ -12,6 +12,7 @@ resources:
   - umami.yaml
   - n8n.yaml
   - karakeep.yaml
+  - pinepods.yaml
 
 # Backup sidecar scripts as real files, mounted at /scripts. One ConfigMap for
 # all five sidecars: four of them share sqlite-snapshot-lib.sh, and splitting

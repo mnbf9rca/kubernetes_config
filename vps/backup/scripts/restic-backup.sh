@@ -177,6 +177,7 @@ n8n:/data/*_vps_n8n-data/database.sqlite.restic
 karakeep:/data/*_vps_karakeep-data/db.db.restic
 uptime-kuma:/data/*_vps_uptime-kuma-data/kuma.db.restic
 umami:/data/*_vps_umami-pg-data/dump.sql.restic
+pinepods:/data/*_vps_pinepods-pg-data/dump.sql.restic
 "
 # shellcheck disable=SC2125 # storing the glob UNEXPANDED is the whole
 # point: newest_match expands it later, under a controlled `set +f`,
