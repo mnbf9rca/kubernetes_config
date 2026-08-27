@@ -10,13 +10,33 @@
 # is the contract the /update-estate skill is written against. It runs the work
 # through the systemd unit rather than exec'ing the script directly, so the run
 # keeps its EnvironmentFile (the healthchecks.io ping UUID, mode 0600, never on
-# this shell's environment), its TimeoutStartSec bound, and systemd's refusal of
-# a second concurrent start. The journal dump puts the run's output back on
-# stdout, where the calling session reads it.
+# this shell's environment), its TimeoutStartSec bound and its TimeoutStopSec
+# bound, and the journal. The journal dump puts the run's output back on stdout,
+# where the calling session reads it.
+#
+# WHAT STOPS TWO RUNS AT ONCE IS THE SCRIPT'S OWN flock, NOT SYSTEMD. An earlier
+# draft of this comment said systemd "refuses a second concurrent start"; it does
+# not. A `systemctl start` against a unit with a start job already in flight
+# MERGES into that job and returns its result — so a second invocation while a
+# run is in progress does not start a second run (correct), but it does report
+# the FIRST run's exit status as its own, and the journal dump below will show
+# that first run. The guarantee that two `hermes-update.sh` processes never
+# overlap comes from the `flock` in the script, which covers the direct-over-ssh
+# invocation too, where systemd is not involved at all.
 #
 # NO `set -eu`: the journal must be dumped even when the start failed, and the
 # exit status this returns is the unit's, not this wrapper's.
+
+# --since bounds the dump to THIS invocation. `-n 500` alone is the last 500
+# lines of the UNIT, so a short run carries earlier runs' output onto the ssh
+# channel where the /update-estate skill reads it, and a stale `verdict=` or
+# `ERROR:` line gets attributed to the run that just finished. Captured BEFORE
+# the start, in local time, which is what journalctl parses. Second granularity,
+# so a line written in the same second just before the start can still appear —
+# far better than 500 lines of a previous run. The line cap stays as a backstop
+# against a pathologically chatty run flooding the channel.
+since=$(date '+%Y-%m-%d %H:%M:%S')
 systemctl --user start hermes-update
 rc=$?
-journalctl --user -u hermes-update -n 500 --no-pager
+journalctl --user -u hermes-update --since "$since" -n 500 --no-pager
 exit "$rc"

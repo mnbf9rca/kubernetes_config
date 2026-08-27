@@ -107,8 +107,10 @@ WEBUI_DIR=/home/hermes/hermes-webui
 # a systemd unit with no WorkingDirectory=, or an operator sitting in /tmp. This
 # is the home directory because that is both what the survey verified the import
 # under and what a systemd USER unit uses when WorkingDirectory= is unset, so
-# the check asserts the condition the five units actually run in. Task 3's unit
-# should set WorkingDirectory= to the same path rather than rely on that default.
+# the check asserts the condition the five units actually run in.
+# hermes-update.service sets WorkingDirectory= to this same path rather than
+# relying on that default, so the two agree by construction. CHANGE ONE AND
+# CHANGE THE OTHER; test-hermes-update-paths.sh asserts they match.
 HERMES_USER_HOME=/home/hermes
 # The passenger tracks origin/master. The newest-tag policy was RETIRED on
 # 2026-08-26 against observed upstream practice: upstream stopped tagging five
@@ -796,6 +798,44 @@ rollback() {
   return 0
 }
 
+# Route a post-update failure on WHETHER THE AGENT CHECKOUT MOVED, and do it
+# from ONE place so that every caller answers the question the same way. $1 is a
+# phrase naming what failed, used only in the log.
+#
+# WHY THIS IS SHARED RATHER THAN COPIED. It began as phase 1's own `case`. Phase
+# 2's two early exits did not have it, so a webui fetch that failed after a
+# SUCCESSFUL `hermes update` exited with `rollback_source=none` - whose meaning
+# in the runbook table is "the failure happened before anything moved" - having
+# moved the agent checkout, restarted three of the five units onto new code,
+# applied forward-only migrations and installed into the SHARED venv all five
+# units execute from. The headline triage field said nothing had happened.
+#
+# TWO FIXES THAT SUGGEST THEMSELVES AND ARE BOTH WRONG, recorded so they are not
+# reintroduced. Asserting health before those exits is the weaker one: `hermes
+# update` restarts the three gateways but NOT hermes-webui, so the webui keeps
+# serving the module already resident in memory and the assertion would usually
+# PASS - certifying the latent state that breaks at the next restart or the
+# 04:45 reboot, which is verbatim what phase 2's comment claims to prevent.
+# Redefining "pre-mutation" to mean "before the WEBUI moved" is the other: it
+# makes the body technically true and leaves the machine skewed. The field was
+# never the problem; nothing acting on it was.
+#
+# The rollback works on every route that reaches here, the webui fetch failure
+# included: it re-checkouts the webui to a LOCAL recorded object name, so it
+# needs no fetch and is unaffected by the failure that got us here.
+rollback_if_agent_moved() {
+  case "$AGENT_CHANGED" in
+    yes|unknown)
+      echo "==> $1 after the agent tree moved" >&2
+      rollback
+      if ! post_rollback_assert; then
+        echo "==> rolled back, but the result is still unhealthy" >&2
+      fi ;;
+    *)
+      echo "==> $1 before the agent tree moved - nothing to roll back" >&2 ;;
+  esac
+}
+
 # Re-assert health after a rollback and record the answer. EVERY rollback path
 # calls this: a rollback that restores a state which is itself broken used to
 # exit looking green on three of the four paths, because only the health-failure
@@ -1095,42 +1135,47 @@ main() {
 
   if [ "$UPDATE_RC" -ne 0 ]; then
     echo "ERROR: hermes update exited $UPDATE_RC" >&2
-    case "$AGENT_CHANGED" in
-      yes|unknown)
-        # Post-mutation, so it routes into the rollback like every other
-        # post-mutation failure. Note what the rollback can and cannot undo: the
-        # code goes back, the migrated config.yaml and state.db do not. If
-        # update_rc is 124 this script killed it mid-flight, and the --backup
-        # snapshot named above is the only route back for that state.
-        echo "==> hermes update failed after the agent tree moved" >&2
-        rollback
-        if ! post_rollback_assert; then
-          echo "==> rolled back, but the result is still unhealthy" >&2
-        fi ;;
-      *)
-        echo "==> hermes update failed before the agent tree moved - nothing to roll back" >&2 ;;
-    esac
+    # Routed on whether the tree moved, by the shared helper. Note what the
+    # rollback can and cannot undo on this route: the code goes back, the
+    # migrated config.yaml and state.db do not. If update_rc is 124 this script
+    # killed it mid-flight, and the --backup snapshot named above is the only
+    # route back for that state.
+    rollback_if_agent_moved "hermes update failed"
     exit 1
   fi
 
   # ---- 2. passenger one: the webui checkout ---------------------------------
   VERDICT=webui-failed
   echo "==> hermes-webui"
-  # FAIL CLOSED BEFORE THE TREE MOVES. Everything from the checkout below
+  # FAIL CLOSED BEFORE THE WEBUI TREE MOVES. Everything from the checkout below
   # onwards must be restorable: an aborted run that leaves the checkout at a new
   # revision with a partial dependency set looks perfectly healthy — the units
   # are still serving the old code from memory — until the next restart or the
-  # 04:45 automatic reboot. Up to that point, a failure exits with
-  # rollback_source=none, which is what distinguishes the two webui-failed
-  # cases in the runbook table.
+  # 04:45 automatic reboot.
+  #
+  # BOTH EXITS BELOW ARE ROUTED ON THE AGENT, NOT ON THE WEBUI. "Before the
+  # webui moved" is not the same as "before anything moved": by this point
+  # `hermes update` has already succeeded, which moves the agent checkout,
+  # restarts three of the five units onto new code, applies forward-only
+  # migrations and installs into the shared venv. These two used to exit here
+  # unconditionally, reporting `rollback_source=none` over exactly that state.
+  # rollback_if_agent_moved is the same routing phase 1 uses, in one place so
+  # the two cannot drift; see its comment for the two weaker fixes that were
+  # considered and rejected.
   if ! run_bounded "$TO_GIT_FETCH" git -C "$WEBUI_DIR" fetch --quiet --prune "$WEBUI_REMOTE"; then
     echo "ERROR: could not fetch $WEBUI_REMOTE for hermes-webui - refusing to move the checkout" >&2
+    rollback_if_agent_moved "the hermes-webui fetch failed"
     exit 1
   fi
   WEBUI_SHA=$(git -C "$WEBUI_DIR" rev-parse "$WEBUI_REMOTE/$WEBUI_BRANCH") || WEBUI_SHA=""
   if ! valid_sha40 "$WEBUI_SHA"; then
     WEBUI_SHA=unreadable
     echo "ERROR: $WEBUI_REMOTE/$WEBUI_BRANCH did not resolve to a 40-hex object name - refusing to guess" >&2
+    # A rollback that runs here calls refresh_reported_state, which overwrites
+    # the `unreadable` above with the object name the checkout actually sits at
+    # afterwards. That is correct: the body reports the machine as it IS, and
+    # what could not be read was the REMOTE's revision, not the local one.
+    rollback_if_agent_moved "the hermes-webui revision could not be resolved"
     exit 1
   fi
   # check-ping-bodies: untaint WEBUI_SHA - a git object name, gated to 40 hex characters by valid_sha40 above; a commit SHA is a tier-3 identifier

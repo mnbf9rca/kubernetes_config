@@ -87,8 +87,17 @@ EnvironmentFile=/home/hermes/.hermes/hermes-update.env
 # traps and converts to exit 143 so the EXIT trap still pings; without that
 # trap a timeout would be pure silence.
 #
-# systemd already refuses a second concurrent start, which is this unit's
-# `concurrencyPolicy: Forbid`.
+# WHAT KEEPS TWO RUNS FROM OVERLAPPING IS THE SCRIPT'S OWN flock, NOT THIS UNIT.
+# An earlier draft said systemd "already refuses a second concurrent start" and
+# called that this unit's `concurrencyPolicy: Forbid`. It does not refuse: a
+# `systemctl start` issued while a start job is in flight MERGES into that job
+# and returns its result. The outcome is still right - systemd never runs a
+# second ExecStart - but the mechanism matters twice over. First, the second
+# caller is handed the FIRST run's exit status as though it were its own, which
+# is a real triage trap for the entry point in ../bin/hermes-update. Second,
+# systemd is not involved at all when the script is run directly over ssh, which
+# the runbook allows; only the `flock` covers that. Read the analogy as being to
+# the script, not to this file.
 TimeoutStartSec=10800
 
 # THE STOP BOUND EXISTS TO LET THE EXIT TRAP RUN, and it is long on purpose.
@@ -110,7 +119,12 @@ TimeoutStartSec=10800
 #
 # THE COST, stated plainly because it is real: `systemctl --user stop
 # hermes-update` on a run that is inside `hermes update` can take up to 40
-# minutes to return. That is a long time to sit at a prompt, and it is the
+# minutes to return. Expect far less in practice - the default KillMode is
+# `control-group`, so the stop's SIGTERM goes to EVERY process in the cgroup,
+# the `timeout` wrapper and the update command included; the child normally dies
+# at once and the trap then runs in seconds. The 40 minutes is the pathological
+# case of a child that ignores SIGTERM for its whole limit, and it is that case
+# the number has to cover. That is a long time to sit at a prompt, and it is the
 # right trade. The alternative is a fast stop that SIGKILLs the shell during a
 # forward-only config and state.db migration - the single worst interruption
 # point in this system, per the --backup comment in the script's phase 1 - and

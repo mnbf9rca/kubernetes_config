@@ -59,7 +59,18 @@ GIT_AUTHOR_NAME=harness
 GIT_AUTHOR_EMAIL=harness@invalid
 GIT_COMMITTER_NAME=harness
 GIT_COMMITTER_EMAIL=harness@invalid
+# AND THE CONFIGURATION ITSELF IS NEUTRALISED, not just the identity. Setting
+# only the four variables above left this harness reading the operator's global
+# and system git config, which can carry settings that make a commit BLOCK
+# rather than fail: `commit.gpgsign = true` with a gpg agent that wants a
+# passphrase hangs indefinitely, and `make check-vm-scripts` has no timeout, so
+# the repository's own gate wedges with no output and no explanation of why.
+# Demonstrated, not theorised. /dev/null is an empty, readable, unwritable
+# config file, which is exactly the "no configuration at all" this wants.
+GIT_CONFIG_GLOBAL=/dev/null
+GIT_CONFIG_SYSTEM=/dev/null
 export GIT_AUTHOR_NAME GIT_AUTHOR_EMAIL GIT_COMMITTER_NAME GIT_COMMITTER_EMAIL
+export GIT_CONFIG_GLOBAL GIT_CONFIG_SYSTEM
 
 # ---- the stubs -------------------------------------------------------------
 # Written once into $WORK/stubs, which goes on the front of PATH. Each one reads
@@ -79,7 +90,10 @@ STUB
 
 cat > "$STUBS/flock" <<'STUB'
 #!/bin/sh
-# The single-instance guard always succeeds here: no scenario runs two at once.
+# The single-instance guard. It succeeds unless a scenario says the lock is
+# already held, which is how the "another run is in progress" route is reached
+# without actually starting two runs.
+if [ -n "${HUT_STATE:-}" ] && [ -f "$HUT_STATE/lock-held" ]; then exit 1; fi
 exit 0
 STUB
 
@@ -323,9 +337,21 @@ rewrite_script() {
       exit 2
     fi
   done
-  if grep -q '^[A-Z_][A-Z_]*=/home/hermes' "$ROOT/hermes-update.sh"; then
-    printf 'FATAL: a constant still names the real /home/hermes after the\n' >&2
-    printf 'rewrite. Add it to the sed in rewrite_script() before running.\n' >&2
+  # Every constant whose value is an ABSOLUTE PATH must now be under $ROOT.
+  # This used to grep only for /home/hermes, which would have missed a new
+  # constant naming any other real root - $APT_STAMP is in the rewrite list
+  # above only because somebody remembered it, and the next one might not be
+  # remembered. Checking "absolute and not under the scratch root" needs nobody
+  # to enumerate anything. The URL constants are unaffected: they start `http`,
+  # not `/`.
+  _stray=$(grep '^[A-Z_][A-Z_]*=/' "$ROOT/hermes-update.sh" | grep -Fv -- "=$ROOT/") || _stray=''
+  if [ -n "$_stray" ]; then
+    printf 'FATAL: a constant still names an absolute path outside the scratch\n' >&2
+    printf 'root after the rewrite:\n%s\n' "$_stray" >&2
+    printf 'Add it to the sed in rewrite_script() in the same commit - or, if it\n' >&2
+    printf 'genuinely must stay absolute, to a stated exemption here. Do NOT\n' >&2
+    printf 'delete this check: without it this harness mutates the real\n' >&2
+    printf 'installation.\n' >&2
     exit 2
   fi
 }
@@ -479,23 +505,59 @@ expect units_active not-counted
 expect_started
 
 # ===========================================================================
-# 5. Pre-mutation: the webui remote cannot be fetched.
-# Fail closed before the checkout moves - a checkout left at a new revision
-# with a partial dependency set looks healthy until the next restart.
+# 5. The webui remote cannot be fetched AND the agent did not move.
+# `hermes update` found nothing to do, so genuinely nothing has moved and the
+# body must say so. This is the benign half of the pair; scenario 6 is the
+# other, and the two together are what the shared routing helper decides
+# between.
 # ===========================================================================
-SCEN='webui fetch fails'
+SCEN='webui fetch fails, agent did not move'
 new_root pre-mutation-webui
 rm -rf "$UP"
 run_script
 expect_rc 1
 expect verdict webui-failed
+expect agent_changed no
 expect webui_changed no
 expect rollback_source none
 expect rollback_state none
 expect post_rollback not-attempted
+expect_file_has "$ROOT/out.log" 'nothing to roll back' \
+  'the log says nothing was rolled back'
 
 # ===========================================================================
-# 6. The units do not come back after a good update.
+# 6. The webui remote cannot be fetched AND the agent DID move.
+# THE COMMON CASE, and the one that was broken. `hermes update` succeeded,
+# which moves the agent checkout, restarts three of the five units onto new
+# code, applies forward-only migrations and installs into the shared venv -
+# and then the fetch fails. This used to exit with `rollback_source=none`,
+# whose meaning in the runbook table is "nothing moved", over exactly that
+# state. It must roll back and the body must say it did.
+#
+# The rollback needs no remote: it re-checkouts the webui to a LOCAL recorded
+# object name, so the failure that got here cannot also break the recovery.
+# That is why the remote is still absent for the whole scenario.
+# ===========================================================================
+SCEN='webui fetch fails, agent moved'
+new_root post-mutation-webui
+seed_last_good
+touch "$STATE/hermes-moves"
+rm -rf "$UP"
+run_script
+expect_rc 1
+expect verdict webui-failed
+expect update_rc 0
+expect rollback_source last-good
+expect rollback_state complete
+expect post_rollback healthy
+expect agent_changed no
+expect webui_changed no
+expect units_active 5
+expect_file_has "$ROOT/out.log" 'the hermes-webui fetch failed after the agent tree moved' \
+  'the log names the post-mutation branch of the shared router'
+
+# ===========================================================================
+# 7. The units do not come back after a good update.
 # Post-mutation. The rollback's own restart succeeds, so this ends rolled back
 # and healthy - but the verdict stays `restart-failed`, because "they would not
 # come back" and "they came back broken" want different first moves.
@@ -516,7 +578,7 @@ expect post_rollback healthy
 expect units_active 5
 
 # ===========================================================================
-# 7. Health fails after a good update; the rollback completes and the result
+# 8. Health fails after a good update; the rollback completes and the result
 # is healthy. The chat turn fails once, so the post-rollback re-assertion
 # passes on the second call.
 # ===========================================================================
@@ -545,7 +607,7 @@ expect chat_mode chat
 expect chat_http 200
 
 # ===========================================================================
-# 8. The rollback stops part way through.
+# 9. The rollback stops part way through.
 # The agent's editable reinstall fails. Every later step must STILL run - a
 # rollback that aborted at its first command used to leave the machine half
 # restored while the body said `rollback_source=last-good`, which reads as
@@ -573,7 +635,7 @@ expect webui_sha "$(git -C "$WEBUI" rev-parse HEAD)"
 expect client_version 1.0.0
 
 # ===========================================================================
-# 9. The rollback completes and the restored state is STILL unhealthy.
+# 10. The rollback completes and the restored state is STILL unhealthy.
 # Driven through HERMES_UPDATE_FORCE_HEALTH_FAIL, which is the hook the live
 # rollback drill uses - so this also proves the drill's hook still works
 # without touching the VM. The hook stays set through the re-assertion on
@@ -595,7 +657,7 @@ expect chat_mode forced-fail
 expect chat_http 000
 
 # ===========================================================================
-# 10. No last-good on disk: the rollback target falls back to the pre-run
+# 11. No last-good on disk: the rollback target falls back to the pre-run
 # capture. This is the first-ever-run case, and it must not silently do
 # nothing.
 # ===========================================================================
@@ -613,7 +675,7 @@ expect post_rollback healthy
 expect client_version 1.0.0
 
 # ===========================================================================
-# 11. The chat turn degrades because the API server is switched off.
+# 12. The chat turn degrades because the API server is switched off.
 # A green run that skipped the turn is weaker than one that made it, and the
 # body has to say which happened rather than looking identical.
 # ===========================================================================
@@ -629,7 +691,25 @@ expect chat_mode skipped-api-disabled
 expect chat_http 000
 
 # ===========================================================================
-# 12. The unit file's own contract, asserted from here because nothing else
+# 13. Another run already holds the lock.
+# The one route that pings NOTHING, deliberately: a duplicate invocation that
+# pinged would either reset the check's timer with a /start or mark it red,
+# both describing a run that never happened while the real one is still
+# working. The traps are up by this point, so the EXIT trap is REMOVED to get
+# that silence rather than never registered - which is a thing that can be
+# broken by an edit, and until now nothing tested it.
+# ===========================================================================
+SCEN='another run holds the lock'
+new_root lock-held
+touch "$STATE/lock-held"
+run_script
+expect_rc 75
+expect_no_ping
+expect_file_has "$ROOT/out.log" 'already-running' \
+  'the log names the already-running verdict'
+
+# ===========================================================================
+# 14. The unit file's own contract, asserted from here because nothing else
 # reads it: the wrapper's longest single foreground child must fit inside
 # TimeoutStopSec, or a `systemctl stop` becomes a SIGKILL and the EXIT trap
 # never reports. A POSIX sh trap cannot run while a foreground child is

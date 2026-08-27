@@ -408,13 +408,17 @@ check-renovate-scope-vps:
 # test-hermes-update.sh covers the pure helpers. test-hermes-update-paths.sh
 # drives the WHOLE of hermes-update.sh against stubs - `curl`, `systemctl`,
 # `pip`, the venv python and the `hermes` entry point - inside one `mktemp -d`
-# root, and asserts the ping body on every route through it: the happy path,
-# both halves of the "did the tree move?" split, a rollback that completes, one
-# that stops part way, one whose result is still unhealthy, and the degraded
-# chat turn. Nothing in it touches a network or the VM. It exists because every
-# failure the review round found lives in `main`, which the helper tests never
-# execute, and because the live rollback drill exercises exactly one of those
-# routes. It costs about 14 seconds, almost all of it real `git`.
+# root, and asserts the ping body on all fourteen routes through it: the happy
+# path, both halves of the "did the tree move?" split at each of its two sites,
+# a rollback that completes, one that stops part way, one whose result is still
+# unhealthy, the deliberate silence when another run holds the lock, and the
+# degraded chat turn. Nothing in it touches a network or the VM, and it
+# neutralises the operator's git configuration as well as their identity - a
+# global `commit.gpgsign` was demonstrated to WEDGE it, and this target has no
+# timeout. It exists because every failure the review round found lives in
+# `main`, which the helper tests never execute, and because the live rollback
+# drill exercises exactly one of those routes. It costs about 10 seconds,
+# almost all of it real `git`.
 #
 # hermes-vm/bin/hermes-update is linted here too. It has no `.sh` suffix - the
 # name IS its interface, since `command -v hermes-update` is what the
