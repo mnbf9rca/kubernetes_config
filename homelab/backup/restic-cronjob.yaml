@@ -40,7 +40,7 @@ spec:
           # `restic unlock` at the head of the next run (below).
           containers:
             - name: restic
-              image: restic/restic:0.17.3
+              image: restic/restic:0.19.1@sha256:136600b6ff6843d61d355f7f71f460a166429f35de6fd11b568fece3c9a4d510
               command: ["sh", "-c"]
               args:
                 - |
