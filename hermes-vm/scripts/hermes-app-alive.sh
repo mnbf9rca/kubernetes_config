@@ -17,7 +17,14 @@ AGENT_DIR=$HERMES_HOME/hermes-agent
 VENV=$AGENT_DIR/venv/bin
 WEBUI_HEALTH=http://127.0.0.1:8787/health
 UNITS="hermes-gateway hermes-gateway-emh hermes-gateway-hal hermes-dashboard hermes-webui"
-UNIT_COUNT=5
+# DERIVED from UNITS, never written beside it. The count cannot pass with the
+# WRONG five - the names are distinct - but one desync direction is silent: add
+# a sixth unit to the list above and leave a hand-written 5 here, and a
+# five-of-six machine reports a healthy `ok`. That is the single failure this
+# check exists to catch. hermes-update.sh derives its copy the same way.
+# shellcheck disable=SC2086 # the word split IS the measurement
+UNIT_COUNT=$(set -- $UNITS; printf '%s\n' "$#")
+# check-ping-bodies: untaint UNIT_COUNT - the word count of the literal UNITS list two lines above, computed by this script with `set --`; no external command runs and nothing outside this file reaches it
 
 # Scratch under $HERMES_HOME at mode 0700, never /tmp: every agent session on
 # this VM runs as this same user, and a symlink planted at a fixed /tmp path
@@ -74,10 +81,10 @@ on_exit() {
 }
 
 main() {
+  # This one assertion stays ABOVE the traps, because it is the one failure an
+  # exit trap could not report anyway: with no PUSH_URL there is nowhere to
+  # push. It fails loudly in the journal and the unit goes `failed`.
   : "${PUSH_URL:?set PUSH_URL (see /home/hermes/.hermes/hermes-app-alive.env)}"
-
-  (umask 077; mkdir -p "$RUNDIR")
-  chmod 0700 "$RUNDIR"
 
   # Signal traps before the EXIT trap: in POSIX sh an untrapped signal ends the
   # shell WITHOUT running the EXIT trap, so a TimeoutStartSec expiry would push
@@ -86,6 +93,16 @@ main() {
   trap 'exit 130' INT
   trap 'exit 129' HUP
   trap on_exit EXIT
+
+  # The scratch setup sits BELOW the traps deliberately. It used to sit above
+  # them, so an unwritable or un-chmod-able $RUNDIR exited under `set -e` with
+  # no EXIT trap installed and pushed NOTHING - silence, when a `down` was
+  # available and was the right answer. Nothing is lost by moving it: msg_reset
+  # and emit both end in `|| true` and tolerate a missing $RUNDIR, so a run that
+  # dies here still pushes, with an empty message. hermes-update.sh orders its
+  # prepare_rundir the same way and for the same reason.
+  (umask 077; mkdir -p "$RUNDIR")
+  chmod 0700 "$RUNDIR"
   msg_reset
 
   for _u in $UNITS; do
@@ -106,7 +123,14 @@ main() {
   # it a venv of its own"). Importing hermes_cli.main instead would NOT catch
   # that: it is the CLI entry point, not the WebUI's dependency path.
   VERDICT=import-failed
-  if ! "$VENV/python" -c 'import run_agent' >/dev/null 2>&1; then
+  # STDOUT is discarded because it is only a sentinel - a successful import
+  # prints nothing. STDERR IS DELIBERATELY NOT DISCARDED: python writes the
+  # traceback there, and WHICH import failed is the whole answer to "what
+  # broke". It used to be thrown away, leaving the journal with only the
+  # generic line below. There is no disclosure question - the traceback goes to
+  # the journal and never near the pushed message, which carries the fixed
+  # `verdict=import-failed` and nothing else.
+  if ! "$VENV/python" -c 'import run_agent' >/dev/null; then
     echo "ERROR: the agent venv cannot import run_agent" >&2
     exit 1
   fi

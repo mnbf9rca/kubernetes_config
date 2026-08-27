@@ -1,8 +1,20 @@
 [Unit]
 Description=Hermes VM daily liveness check (agent import, WebUI health, unit count)
 Documentation=https://github.com/mnbf9rca/kubernetes_config/blob/master/docs/operations/hermes-vm-updates.md
-After=network-online.target
-Wants=network-online.target
+# NO network-online.target ORDERING IS POSSIBLE HERE, and its absence is
+# deliberate rather than an omission. This runs under the USER manager, and
+# Debian ships no network-online.target for the user manager - confirmed by
+# listing the directory. `Wants=` on a unit that cannot be loaded is tolerated
+# in silence and `After=` on one imposes no ordering at all, so the two lines
+# that used to sit here were dead, while reading to the next person as an
+# ordering guarantee that never existed. They were removed on 2026-08-27.
+# DO NOT RE-ADD THEM.
+#
+# The cost is specific and lands on the Persistent=true catch-up path: a run
+# that fires as the VM comes back can beat the network up, the push then fails,
+# push_kuma swallows that failure and still returns 0, and so the monitor sees
+# SILENCE rather than a `down`. It therefore stays GREEN until the 24-hour
+# heartbeat interval and its 6-hour retry expire, instead of going red at once.
 
 [Service]
 Type=oneshot

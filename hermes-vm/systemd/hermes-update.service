@@ -1,8 +1,23 @@
 [Unit]
 Description=Hermes agent, WebUI and hindsight-client update with health assertion and rollback
 Documentation=https://github.com/mnbf9rca/kubernetes_config/blob/master/docs/operations/hermes-vm-updates.md
-After=network-online.target
-Wants=network-online.target
+# NO network-online.target ORDERING IS POSSIBLE HERE, and its absence is
+# deliberate rather than an omission. This runs under the USER manager, and
+# Debian ships no network-online.target for the user manager - confirmed by
+# listing the directory. `Wants=` on a unit that cannot be loaded is tolerated
+# in silence and `After=` on one imposes no ordering at all, so the two lines
+# that used to sit here were dead, while reading to the next person as an
+# ordering guarantee that never existed. They were removed on 2026-08-27,
+# together with the identical pair on hermes-app-alive.service, because fixing
+# one and leaving the other is worse than either state. DO NOT RE-ADD THEM.
+#
+# The cost is smaller here than on hermes-app-alive.service, and only because
+# this unit has no timer: it is started on demand, on a machine that has been
+# up for a while. Start it into a network that is not up yet and the run fails
+# on its first fetch - but the healthchecks.io ping cannot leave either, so the
+# report is silence rather than a red check. What absorbs that is the cadence:
+# this check runs a ~45-day period with a 7-day grace, so one silent run was
+# never going to be the alarm.
 
 # THERE IS NO .timer UNIT FOR THIS SERVICE AND THERE MUST NOT BE ONE. `hermes
 # update` sometimes carries manual steps - a config schema migration prompts,
