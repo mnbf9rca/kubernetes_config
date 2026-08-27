@@ -14,7 +14,7 @@ catches. Manifests carry per-probe rationale in comments. Read
 | `homelab-update-watch` is DOWN | In a fresh heartbeat, `verdict=` names the cause and `next=` names the command to run; a stale `run_epoch=` means the watcher itself went quiet — [The update watcher](#the-update-watcher) |
 | A sidecar shows `RESTARTS: 0` but its snapshot is missing | Expected; they log rather than exit. Read the sidecar's stderr — [Why the sidecars have no probes](#why-the-sidecars-have-no-probes) |
 | `hindsight-canary` is DOWN | Read `verdict=`: `retain-failed` is the API, the database or the tenant key; `recall-miss` is the retrieval side. An agent is losing memories right now — [hindsight.md](hindsight.md) |
-| `hermes-update` is red | Nobody pinged it, which is the only way it goes red: the runbook reports on success and sends nothing on failure. Either no update session ran inside the period, or one ran and stopped before its report step. `~/.hermes/hermes-update.pre-run` on the VM tells the two apart: no file, or one with no `target_sha`, means no session got past change analysis; a `webui_target_sha` in it means the update itself ran — [the runbook](hermes-vm-updates.md#report) |
+| `hermes-update` is red | Nobody pinged it, which is the only way it goes red: the runbook reports on success and sends nothing on failure. Either no update session ran inside the period, or one ran and stopped before its report step. **Read the mtime of `~/.hermes/hermes-update.pre-run` before you read its contents** — the runbook's preconditions truncate that file at the start of every session, so a record older than the alarm period is the last *successful* session's and its keys describe that run, not a stalled one. Only in a record written since the alarm do the keys say how far the session got: no `target_sha` means it stopped in change analysis, a `webui_target_sha` means the update itself ran — [the runbook](hermes-vm-updates.md#report) |
 | `hermes-app-alive` is DOWN | Read `verdict=`: `units-down` is the user manager or lingering, `import-failed` is the shared venv, `webui-unreachable` is the WebUI itself. No beat at all means the VM, the timer or the Access bypass — [Reading a DOWN `hermes-app-alive`](hermes-vm.md#reading-a-down-hermes-app-alive) |
 | `disk_pct` is climbing on homelab restic | `local-path` has no quota, so this is the node SSD every workload shares — [the gates](#the-backup-verification-gates) |
 | An uptime-kuma monitor is UP but the service is down | Suspect an Access redirect — [uptime-kuma.md](uptime-kuma.md#the-cloudflare-access-trap) |
@@ -357,7 +357,8 @@ before it alarms. It is pinged from the laptop rather than the VM because the UU
 the `hermes` vault — the same constraint that puts `estate-update` on the laptop.
 
 `hermes-update` is also the only row here that no manifest in this repository creates: the check
-and its 1Password field are made by hand.
+and its 1Password field are made by hand, as step 4 of
+[the VM install](hermes-vm.md#installing-or-reinstalling).
 
 **Two of the jobs this repo pings send `/start` and an exit code** — the two restic CronJobs, and
 after the migration they are the only ones that do. Nothing replaced that pattern for everyone

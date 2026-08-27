@@ -96,7 +96,16 @@ systemctl --user daemon-reload
 systemctl --user enable --now hermes-app-alive.timer
 ```
 
-### 4. Install `unattended-upgrades`
+### 4. Create the `hermes-update` check
+
+Create a healthchecks.io check named `hermes-update` by hand in the UI — period **10 days**, grace **4 days** — and store its ping UUID at `op://Homelab/hermes-update/healthcheck-uuid`, typed `[text]`.
+Nothing in this estate creates that check, that item or that field, and the update runbook's [Report step](hermes-vm-updates.md#report) reads the reference directly, so an absent field fails the `op read` at the end of an otherwise successful update.
+
+**The vault is `Homelab`, not `hermes`.** Nothing on the VM ever needs this reference: the ping is sent from the operator's laptop, whose credential reads either vault, so it sits beside `estate-update` in `Homelab` rather than with the VM's own secrets.
+The cadence allows one skipped week against a roughly weekly runbook before it alarms.
+A ping UUID is a tier-2 spam-target identifier rather than a secret, which is why the field is `[text]` — but it belongs in 1Password and never in this repository.
+
+### 5. Install `unattended-upgrades`
 
 Four files, and **two of them do not install where they live in the repository**:
 
@@ -113,7 +122,7 @@ Four files, and **two of them do not install where they live in the repository**
 sudo systemctl daemon-reload
 ```
 
-### 5. Verify the install
+### 6. Verify the install
 
 Check each of these once.
 Every one of them fails silently if it is wrong.
