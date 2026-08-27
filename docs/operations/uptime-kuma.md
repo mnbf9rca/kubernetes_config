@@ -81,7 +81,8 @@ glob `/foo/*` does not match bare `/foo`, so a bypassed health path needs both d
 
 Every push monitor in this estate is driven by something that holds no Access credential — a
 CronJob inside a cluster, or, for `hermes-app-alive`, a systemd timer on the off-cluster hermes
-VM — so without a bypass the edge answers 302 and no push monitor could ever report UP. An Access application named **`uptime-kuma push`** carries that bypass, created
+VM — so without a bypass the edge answers 302 and no push monitor could ever report UP. An
+Access application named **`uptime-kuma push`** carries that bypass, created
 **August 26, 2026**. It covers two destinations: `uptime.cynexia.com/api/push/*` and the bare
 `uptime.cynexia.com/api/push`. The wildcard is the load-bearing one — a push URL always carries
 its token as a path segment, so every real request matches it — and the bare form is present
@@ -271,11 +272,12 @@ is a heartbeat carrying a status. The hang bound is the job's own `activeDeadlin
 silence bound is the interval plus retries below.
 
 **Almost every push in this estate is made from inside a cluster, outbound, through the Cloudflare
-Access bypass described above.** That outbound direction is what lets the private homelab cluster —
-which uptime-kuma cannot reach, because it probes from a Hetzner IP and every `*.cynexia.net` name
-resolves to a LAN address — report to a monitor at all. The one exception, `hermes-app-alive`, is
-described below the table. It is also why the bypass is load-bearing rather than a
-convenience: without it every push monitor here would be permanently DOWN.
+Access bypass described above.** That outbound direction is what lets the private homelab
+cluster — which uptime-kuma cannot reach, because it probes from a Hetzner IP and every
+`*.cynexia.net` name resolves to a LAN address — report to a monitor at all. It is also why the
+bypass is load-bearing rather than a convenience: without it every push monitor here would be
+permanently DOWN. The one exception to "from inside a cluster", `hermes-app-alive`, is described
+below the table — and it needs the same bypass, from further away.
 
 **Some monitors deliberately receive nothing on some runs, so silence is not always a fault.**
 `health-ingest` pushes only when both its buckets are fresh, and `homelab-update-watch` pushes

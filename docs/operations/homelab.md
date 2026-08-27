@@ -558,7 +558,7 @@ serves, and rolls back to last-good when it does not. Run it, and read
 ssh hermes@hermes.cynexia.net 'hermes-update'
 ```
 
-One behavioral change to know. **The constrained `pip install` this runbook introduced now
+One behavioural change to know. **The constrained `pip install` this runbook introduced now
 runs on every update**, from inside the wrapper, rather than whenever an operator
 remembered it. The constraint file is not decoration: `pyyaml` and `cryptography` are
 already hermes-agent dependencies (`pyproject.toml` pins `pyyaml==6.0.3` and
@@ -647,10 +647,15 @@ are inside the nightly zip**:
 | `/etc/systemd/system/apt-daily{,-upgrade}.timer.d/override.conf` | No |
 | `/home/hermes/.hermes/hermes-update.env` (mode 0600) | Yes |
 | `/home/hermes/.hermes/hermes-app-alive.env` (mode 0600) | Yes |
+| `/home/hermes/.hermes/hermes-update.last-good` | Yes |
+| `/home/hermes/.hermes/webui.last-good` | Yes |
 
 The canonical copies live in `hermes-vm/` in this repository, not inline in this document.
 **Everything outside `~/.hermes` must be reinstalled by hand after a rebuild** — the
 install runbook is [hermes-vm-updates.md](hermes-vm-updates.md#installing-or-reinstalling).
+The four entries that are inside `~/.hermes` come back with the restored archive, so a
+rebuilt VM inherits a rollback target rather than starting without one — but confirm the
+revisions it names still exist in both checkouts before trusting it.
 
 #### Rebuild step
 
@@ -707,7 +712,7 @@ restore — only on a first install.
   the Cloudflare Access service token as the only gate an agent cannot forge.** The
   hardening path is to set the password through the WebUI's own Settings page, which
   writes a `password_hash` into `settings.json`, and then drop the env var; the env var is
-  what makes the *first* start safe on a `0.0.0.0` bind, so it cannot simply be omitted.
+  what makes the *first* start safe on a `0.0.0.0` bind, so it cannot be omitted.
 - **Not every path is behind the password.** `/share`, `/share/*`, `/api/share/*`,
   `/static/*`, the manifests and the auth endpoints are in the WebUI's public set, and
   `GET /api/share/<token>` returns a full shared conversation on token possession alone.
@@ -771,7 +776,7 @@ the OS; restore the state.
 7. Delete every operator-side copy: `./hermes-restore.zip`, the `./restore/` tree if
    step 1 used B2, and `~/hermes-restore.zip` on the VM.
 
-**Cross-version caveat:** upstream does not document restore behavior across hermes
+**Cross-version caveat:** upstream does not document restore behaviour across hermes
 versions. Restore onto the same or a newer version, never an older one. After any
 version gap, run `hermes config check` and, if it complains, `hermes migrate` before
 starting the services. If migration fails, install the version that took the backup

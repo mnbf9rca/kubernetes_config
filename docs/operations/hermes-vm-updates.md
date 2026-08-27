@@ -232,6 +232,12 @@ accepted; it was untenable only at monitor frequency.
 
 ## Reading a red `hermes-update`
 
+**"Restored" in the table below means code and pinned versions only.** `hermes update`'s
+configuration and `state.db` migrations are forward-only, so a `Yes` in the last column
+says the agent checkout, the webui checkout and the `hindsight-client` pin went back — not
+that the agent's configuration or database did. Recovering those is a separate, manual
+step: [Recovering the agent's state by hand](#recovering-the-agents-state-by-hand).
+
 **Read `verdict=` and `rollback_state=` together.** A verdict of `rolled-back` is
 reachable alongside a `rollback_state=` naming a step that failed, so reading the verdict
 alone is optimistic. `verdict` says what the run concluded; `rollback_state` says whether
@@ -247,7 +253,7 @@ the restore actually finished.
 | `webui-failed` with `rollback_source=last-good` or `pre-run` | Either the same two failures after `hermes update` had already moved the agent, or the checkout or its constrained `pip install` failed | Yes — all three revisions restored and the units restarted |
 | `client-failed` with a rollback source | Pinning `hindsight-client` failed. The webui had already moved, so the rollback ran | Yes |
 | `restart-failed` | The five units did not come back after the update, or did not become ready within 180 seconds. Reported separately from `health-failed` because "would not come back" and "came back broken" want different first moves | Yes — the rollback ran |
-| `health-failed` | Rare as a final verdict: the assertion failed and the run ended before the rollback branch could set its own verdict, which in practice means it was signalled. Read `rc=` and the journal | Partially — read `rollback_state=` and `post_rollback=` |
+| `health-failed` | **Two different runs report this, and `rc=` tells them apart.** `rc=143` (or 130, 129) is a signalled run: the assertion failed and the run ended before the rollback branch could set its own verdict. **`rc=1` is the opposite — the assertion PASSED and recording last-good failed**, because `write_last_good` is a bare command under errexit and returns non-zero on an unreadable revision, a revision that fails the shape gate, or a failed rename. The tell is `rollback_state=none` with `post_rollback=not-attempted`: no rollback was ever attempted, because nothing needed one. The journal names which step failed | `rc=1`: nothing to restore — the update succeeded and only the rollback target went unrecorded. `rc=143`: partially — read `rollback_state=` and `post_rollback=` |
 | `rollback-failed` | The update broke the app and the rollback did not fix it. **Look now** | No |
 | `rolled-back` | The update broke the app and the restored state passed the assertion. The app works; the update needs a human | Yes — but confirm `rollback_state=complete` |
 | `apt-stale` | Every hermes component is fine, and `unattended-upgrades` has not written its stamp in over 14 days | Not applicable |
@@ -297,7 +303,7 @@ hours after the last good one**.
 |---|---|---|
 | `units-down` | Fewer than five hermes user units are active. `units=N/5` says how many | `systemctl --user status` the five. If none are up, check `loginctl show-user hermes -p Linger` first |
 | `import-failed` | The shared venv cannot import `run_agent`. **This is the silent failure the whole design exists for**: every unit is still active and `/health` still answers `status: ok`, while the iOS app answers `AIAgent not available` | Read [homelab.md, "Do not give it a venv of its own"](homelab.md#hermes-webui-on-the-vm), then roll the webui back with `~/.hermes/hermes-update.last-good`. The Python traceback in the journal names which import failed |
-| `webui-unreachable` | The WebUI's own `/health` did not answer 2xx. `webui_http=` carries the status; `000` means no connection | `journalctl --user -u hermes-webui`. Note the unit's `StartLimitIntervalSec=60`/`StartLimitBurst=5` parking behavior — a repeatedly failing start parks in `failed` rather than looping invisibly |
+| `webui-unreachable` | The WebUI's own `/health` did not answer 2xx. `webui_http=` carries the status; `000` means no connection | `journalctl --user -u hermes-webui`. Note the unit's `StartLimitIntervalSec=60`/`StartLimitBurst=5` parking behaviour — a repeatedly failing start parks in `failed` rather than looping invisibly |
 | **No beat at all** | The VM is off, the user manager is not running, lingering was lost, the timer was disabled, or the Cloudflare Access bypass on `/api/push/*` was removed | Check the VM is up, then check the bypass. **A bypass regression turns every push monitor in the estate red at once, which is the tell** |
 
 **A daily line of Python import noise in the journal is normal, not a fault.** The check
@@ -432,7 +438,8 @@ on the non-login PATH:
 ```sh
 scp hermes-vm/bin/hermes-update hermes@hermes.cynexia.net:/tmp/hermes-update
 ssh hermes@hermes.cynexia.net \
-  'sudo install -o root -g root -m 0755 /tmp/hermes-update /usr/local/bin/hermes-update && rm /tmp/hermes-update'
+  'sudo install -o root -g root -m 0755 /tmp/hermes-update /usr/local/bin/ && \
+   rm /tmp/hermes-update'
 ```
 
 ### 3. Install the user units and their environment files
@@ -465,7 +472,7 @@ it but a human.
 
 ### 4. Install `unattended-upgrades`
 
-Three files, and **two of them do not install where they live in the repository**:
+Four files, and **two of them do not install where they live in the repository**:
 
 | Repository path | Installs to |
 |---|---|
@@ -565,7 +572,7 @@ Check each of these once. Every one of them fails silently if it is wrong.
 a pending kernel reboot — an uptime over four days and a kernel image in the
 reboot-required list — and nothing has been arming an automatic reboot, because the
 drop-in that arms it is part of this install. So the first 04:45 window clears that
-backlog. That is correct behavior, not a fault.
+backlog. That is correct behaviour, not a fault.
 
 ## `unattended-upgrades`
 
@@ -612,7 +619,7 @@ slips it by 24 hours, and the kernel sits installed-but-not-running for a day.
 
 **The two apt jobs share a lock, and the waiter blocks for up to an hour.** A 03:30
 refresh that overruns past 04:00 makes the upgrade **block** rather than fail. That is the
-safe behavior — nothing installs against half-refreshed lists — but the block eats into
+safe behaviour — nothing installs against half-refreshed lists — but the block eats into
 the 35-minute margin before the reboot. If `systemctl list-timers` shows the upgrade
 starting late, look at the refresh run's duration first.
 
@@ -661,10 +668,14 @@ Be specific here, because a deleted design covered a different set.
   repaired without restarting `hermes-webui` reports `verdict=ok` while the live process
   still cannot serve — which is the very failure that check exists to catch. After any venv
   repair, restart the unit.
-- **Three of the five units are only counted, never exercised.** The daily check asserts
-  something real about `hermes-webui` (its `/health`) and about the shared venv (the
-  import); the three gateways contribute nothing but a `systemctl --user is-active` result.
-  A wedged-but-running gateway reports healthy.
+- **Four of the five units are only counted, never exercised.** The daily check asserts
+  something real about exactly one unit, `hermes-webui`, through its `/health`, and about
+  the shared venv through the import. The three gateways **and `hermes-dashboard`**
+  contribute nothing but a `systemctl --user is-active` result, so a wedged-but-running
+  gateway or dashboard reports healthy. The gap is smaller for the dashboard than for the
+  gateways: the existing `hermes` uptime-kuma monitor probes it externally on
+  `hermes.cynexia.com/api/health`, so a wedged dashboard is caught there. **Nothing
+  external probes the three gateways.**
 - **Per-profile state.** Both checks exercise the shared venv and the default profile. A
   fault confined to `emh` or `hal` profile state is invisible to both.
 - **A dead apt timer.** The 14-day gate that would catch it lives in an unscheduled
@@ -736,7 +747,7 @@ that same failure, with no successes at all.
 
 Nothing on this page detects it, and nothing on this page caused it. The chat turn returns
 success regardless, because the memory write happens on a background path the response does
-not wait for — which is the same fail-open behavior
+not wait for — which is the same fail-open behaviour
 [monitoring.md](monitoring.md#what-this-does-not-catch) records for the memory backend
 generally. The health assertion is therefore green over a VM that has not written a memory
 in two months.

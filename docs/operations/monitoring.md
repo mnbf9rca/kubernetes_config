@@ -571,7 +571,8 @@ event into the monitor's own history.
 **An open pull request is UP.** The estate updates in a session every 4 to 6 weeks, so a
 pending Renovate pull request is this design working, not a fault. `verdict=updates-waiting`
 is the green form and `verdict=updates-pending` is the red one; the boundary is
-`pr_age_red_days=` in the heartbeat, currently 45 days — a session and a half. The rule this
+`pr_age_red_days=` in the heartbeat, 45 days at the time of writing — a session and a half.
+Read the value the heartbeat carries, not this number. The rule this
 replaced went red on any open pull request, which under session cadence made red the steady
 state, and an alarm that is normally red is not an alarm.
 
