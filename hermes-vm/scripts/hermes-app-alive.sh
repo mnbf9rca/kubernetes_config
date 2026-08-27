@@ -17,14 +17,45 @@ AGENT_DIR=$HERMES_HOME/hermes-agent
 VENV=$AGENT_DIR/venv/bin
 WEBUI_HEALTH=http://127.0.0.1:8787/health
 UNITS="hermes-gateway hermes-gateway-emh hermes-gateway-hal hermes-dashboard hermes-webui"
-# DERIVED from UNITS, never written beside it. The count cannot pass with the
-# WRONG five - the names are distinct - but one desync direction is silent: add
-# a sixth unit to the list above and leave a hand-written 5 here, and a
-# five-of-six machine reports a healthy `ok`. That is the single failure this
-# check exists to catch. hermes-update.sh derives its copy the same way.
+# DERIVED from UNITS, never written beside it. hermes-update.sh derives its copy
+# the same way.
+#
+# WHAT DERIVING BUYS is the one direction a hand-written count gets wrong in
+# silence: add a sixth unit to the list above, leave a literal 5 here, and a
+# machine with five of six units up reports a healthy `ok`. A derived count
+# cannot go stale that way.
+#
+# WHAT IT DOES NOT BUY, and what the floor below is for: deriving from the list
+# means an EMPTY list derives 0, and 0 active out of 0 expected compares equal.
+# The check would then push `verdict=ok units=0/0` from a machine on which
+# nothing whatsoever was verified. A literal 5 failed that loudly; a derived
+# count does not, so the derivation traded one silent desync for another. A
+# monitor reporting `ok` having checked nothing is the worst answer it can give.
 # shellcheck disable=SC2086 # the word split IS the measurement
 UNIT_COUNT=$(set -- $UNITS; printf '%s\n' "$#")
-# check-ping-bodies: untaint UNIT_COUNT - the word count of the literal UNITS list two lines above, computed by this script with `set --`; no external command runs and nothing outside this file reaches it
+# check-ping-bodies: untaint UNIT_COUNT - the word count of the literal UNITS list above, computed by this script with `set --`; no external command runs and nothing outside this file reaches it
+
+# The floor is 1, not 5: the invariant is "there is something to check", not
+# "there are exactly five things", so adding or removing a unit needs no edit
+# here.
+#
+# THIS DOES NOT PUSH, and that is correct. It sits at top level, above main and
+# above the traps, because an empty UNITS is a defect in this file rather than a
+# condition of the machine - it cannot arise without somebody editing the line
+# above and committing it. The journal line plus a `failed` unit is the right
+# report for a broken check; a `down` push would say the VM is unhealthy, which
+# would be a lie.
+#
+# It does NOT re-arm the pathname-expansion half of the SC2086 disable above,
+# and it was measured rather than assumed: with `hermes-*` in UNITS and three
+# matching files in the working directory the count derives 3 and this floor
+# passes. Glob inflation stays inert for the reasons it always was - no unit
+# name holds a metacharacter, and the `for _u in $UNITS` loop below expands
+# identically, so the count and the loop cannot disagree.
+if [ "$UNIT_COUNT" -lt 1 ]; then
+  echo "ERROR: UNITS is empty, so this check would verify nothing and report ok" >&2
+  exit 1
+fi
 
 # Scratch under $HERMES_HOME at mode 0700, never /tmp: every agent session on
 # this VM runs as this same user, and a symlink planted at a fixed /tmp path
