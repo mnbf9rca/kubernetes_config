@@ -1,0 +1,37 @@
+[Unit]
+Description=Hermes VM daily liveness check (agent import, WebUI health, unit count)
+Documentation=https://github.com/mnbf9rca/kubernetes_config/blob/master/docs/operations/hermes-vm-updates.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/home/hermes/bin/hermes-app-alive.sh
+
+# HERMES_HOME for the same reason the update unit sets it: everything hermes
+# resolves under $HERMES_HOME is resolved by absolute path from that variable.
+# This script only reads paths it hard-codes, so the line is defensive rather
+# than load-bearing - but a unit that disagrees with its sibling about where
+# HERMES_HOME is would be a trap for the next person.
+Environment=HERMES_HOME=/home/hermes/.hermes
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+# The push URL, which carries the monitor's token as its last path segment.
+# Mode 0600, written at install by `op read` piped over ssh. No leading '-':
+# the unit must refuse to start when the file is absent, because a check that
+# cannot push is indistinguishable from a check that never ran.
+EnvironmentFile=/home/hermes/.hermes/hermes-app-alive.env
+
+# Three local assertions and one HTTPS push. Two minutes is generous; the point
+# of the bound is that a wedged run FAILS rather than sitting in `activating`.
+# On expiry systemd sends SIGTERM, which the script traps and converts to exit
+# 143 so the EXIT trap still pushes `down` - without that trap a timeout would
+# be silence, and silence here reads as a healthy day until the heartbeat
+# lapses.
+TimeoutStartSec=120
+
+# No Restart=. A `down` push is the report; retrying would just overwrite it.
+StandardOutput=journal
+StandardError=journal
+
+# No [Install] section: the TIMER is what gets enabled, not the service.

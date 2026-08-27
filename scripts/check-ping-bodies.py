@@ -94,6 +94,7 @@ REQUIRED_TARGETS = (
     "homelab/hindsight/scripts/hindsight-canary.sh",
     "vps/backup/scripts/restic-backup.sh",
     "hermes-vm/scripts/hermes-update.sh",
+    "hermes-vm/scripts/hermes-app-alive.sh",
     "vps/ops/scripts/keel-fresh.sh",
 )
 

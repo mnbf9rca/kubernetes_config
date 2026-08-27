@@ -1,0 +1,23 @@
+[Unit]
+Description=Run the Hermes VM daily liveness check at 05:45 UTC
+Documentation=https://github.com/mnbf9rca/kubernetes_config/blob/master/docs/operations/hermes-vm-updates.md
+
+[Timer]
+# 05:45, and the VM's local time is UTC (Task 0 Step 11). ONE HOUR after the
+# 04:45 unattended-upgrades automatic-reboot window, so the reboot has finished
+# and the lingering user units have come back before this looks at them. Moving
+# this earlier would turn a normal reboot into a nightly false alarm; moving the
+# reboot later without moving this would do the same.
+OnCalendar=*-*-* 05:45:00
+
+# A short spread so this is not exactly on the minute, kept well inside the hour
+# of headroom above.
+RandomizedDelaySec=5m
+
+# Catch up after a missed window rather than skipping a day. A VM that was off
+# at 05:45 runs the check when it comes back, which is precisely when the answer
+# matters most.
+Persistent=true
+
+[Install]
+WantedBy=timers.target
