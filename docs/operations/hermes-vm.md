@@ -59,7 +59,9 @@ The traceback goes to the journal and never near the pushed message, which carri
 
 A VM rebuild must repeat all of this.
 The nightly `hermes backup` zip covers `~/.hermes`, so it carries the profile config — the token injection in step 4 — and the cron store from step 5.
-The script itself, at `/home/hermes/bin`, and the four apt files are outside it and are rebuild territory.
+The script lives at `~/.hermes/scripts/`, so it rides that zip too, and script and cron store are backed up and restored together.
+That coupling is the right one: the store names the script by bare filename, so a restore bringing back one without the other would leave a job pointing at nothing.
+Only the four apt files sit outside the zip, and they are rebuild territory.
 **Do not trust the restored cron store without looking**: `hermes cron list` after a rebuild, because a check that quietly failed to come back looks exactly like a healthy day until the heartbeat lapses.
 
 ### 1. Lint first
@@ -77,9 +79,14 @@ This procedure is its only caller; the update runbook never invokes it.
 One file, and it is the only thing this install copies to the VM.
 
 ```sh
-scp hermes-vm/scripts/hermes-app-alive.sh hermes@hermes.cynexia.net:/home/hermes/bin/
-ssh hermes@hermes.cynexia.net 'chmod 0755 /home/hermes/bin/hermes-app-alive.sh'
+scp hermes-vm/scripts/hermes-app-alive.sh \
+  hermes@hermes.cynexia.net:/home/hermes/.hermes/scripts/hermes-app-alive.sh
+ssh hermes@hermes.cynexia.net 'chmod 0755 /home/hermes/.hermes/scripts/hermes-app-alive.sh'
 ```
+
+**The directory is not a preference.** `hermes cron create --script` takes a bare filename resolved under `$HERMES_HOME/scripts/` and rejects an absolute path outright, so a copy installed anywhere else can be run by hand but cannot be scheduled at all.
+Step 5 depends on this.
+**Keep exactly one copy.** An earlier draft of this page installed to `/home/hermes/bin`; two copies is a parity trap in which the file the scheduler runs and the file an operator edits are different files, and nothing says so.
 
 There is no systemd unit and no environment file.
 Lingering still has to be on, because the gateway that runs the check is a user unit:
@@ -126,14 +133,20 @@ Renaming it into any of those shapes removes it silently, and the check then fai
 The check runs as a **`no_agent`** cron job: the scheduler runs the script on schedule and delivers its stdout directly, skipping the agent entirely, so it costs **zero model tokens**.
 
 ```sh
-hermes cron create --name hermes-app-alive \
-  --schedule '45 5 * * *' \
+/home/hermes/.local/bin/hermes cron create --name hermes-app-alive \
   --no-agent \
-  --command /home/hermes/bin/hermes-app-alive.sh
+  --script hermes-app-alive.sh \
+  --deliver local \
+  '45 5 * * *'
 ```
 
-**Confirm the exact flag spelling before running this — `hermes cron create --help`.** The mechanism is verified (`no_agent=True` at creation time; cron expressions parsed by croniter); the flag names above are the shape, not a transcript, and no session has run this command yet.
-Fix this block to whatever the help output says, in the same session.
+Run against the live CLI on August 27, 2026, so this is a transcript rather than a shape.
+Four details are easy to get wrong, and only the last of them fails quietly:
+
+- **The schedule is positional.** There is no `--schedule`.
+- **`--script` takes a bare filename**, resolved under `~/.hermes/scripts/`. An absolute path is rejected at the API boundary by `_validate_cron_script_path` (`tools/cronjob_tools.py`), which exists to stop prompt injection aiming a job at an arbitrary file. There is no `--command`.
+- **`--no-agent`** is spelled as it looks.
+- **`--deliver local` is set deliberately, not left to the default.** `local` resolves to **zero delivery targets** (`_resolve_delivery_targets` in `cron/scheduler.py` returns `[]` for it), so the script's stdout is recorded against the job and sent to no messaging platform. That is what this job wants: it pushes its own verdict to uptime-kuma, so any delivery target would put a duplicate into a chat every morning. `local` is already the default, so the flag changes no behaviour today — it is written down so the intent survives a change of default, and because an omitted `deliver` makes the CLI print a "will NOT be delivered back into this session" notice that reads like a fault and is not one.
 
 Two things follow from the job living inside the agent rather than in systemd:
 
@@ -200,6 +213,10 @@ Every one of them fails silently if it is wrong.
    stat -c '%y' /var/lib/apt/periodic/unattended-upgrades-stamp
    ```
 
+   **Never reach for `unattended-upgrade --dry-run` to check on the stamp, because a dry run writes it.** Verified August 27, 2026: a dry run completes through the same `write_stamp_file()` as a real one. The diagnostic an operator reaches for when the stamp looks stale is therefore the one thing that makes it look fresh, and it hides a dead timer from the update runbook's 14-day precondition for another fortnight.
+
+   **The check also resists being run twice in a day**, which is not a fault. `apt.systemd.daily` guards its `unattended-upgrade` call with a **day-granular** interval — midnight today against midnight of the stamp's day — so once the stamp carries today's date a forced run is skipped and the mtime stays put. On a machine whose stamp is already fresh, confirm the mechanism tomorrow instead, by checking that its date has advanced.
+
 5. **The VM's timezone is still UTC.** Every schedule on this page is UTC, and a drift moves the 05:45 daily check into the 04:45 reboot window:
 
    ```sh
@@ -212,9 +229,15 @@ Every one of them fails silently if it is wrong.
    hermes cron list
    ```
 
-7. **The token actually reaches the script.** This is the one step that catches a sanitiser name collision, a typo in the `op://` reference and a gateway that was never restarted, and none of the three is visible any other way. Run the job once and confirm the `hermes-app-alive` monitor turns green in uptime-kuma. **`hermes cron --help` for the run-now spelling** — as with the create command above, the mechanism is verified and the flag names are not.
+7. **The token actually reaches the script.** This is the one step that catches a sanitiser name collision, a typo in the `op://` reference and a gateway that was never restarted, and none of the three is visible any other way. Run the job once with `hermes cron run <job_id>`, taking the id from `hermes cron list`, and confirm the `hermes-app-alive` monitor turns green in uptime-kuma.
 
-   A run that fails on its first line prints `HERMES_APP_ALIVE_PUSH_TOKEN: not injected …` to the gateway's journal, which is the tell for all three.
+   **A passing `cron run` does not prove the scheduled run will pass**, and on the day you create the vault item it usually does not. `cron run` executes in the CLI's process, and the CLI resolves `secrets.onepassword.env` at its own startup — so it picks up a token created moments ago. The **gateway** resolved its copy when it last started, and holds whatever existed then. Until the gateway is restarted the two disagree, the manual run succeeds, and the 05:45 scheduled run still fails its first line. Confirm the gateway's own view instead: `journalctl --user -u hermes-gateway` should show `applied N secrets` with **no** `op read failed` line beside it, and N should have risen by one. This trap was walked into on August 27, 2026.
+
+   **A hand-triggered run does not reach the gateway's journal.** `cron run` executes the script in the CLI's own process — the run record calls it `source=direct` — so its exit code and stderr land in `hermes cron runs <job_id>` and nowhere else. Read that when triaging a manual trigger. A *scheduled* run is the gateway's subprocess and does go to the journal, which is what the table at the top of this page assumes.
+
+   Note too that the scheduler runs a `.sh` file through **bash**, while `make check-vm-scripts` lints it as POSIX `sh`. The lint is the stricter of the two, which is the safe direction, but it means one failure reports two exit codes: 2 by hand under dash, 1 under the scheduler.
+
+   A **scheduled** run that fails on its first line prints `HERMES_APP_ALIVE_PUSH_TOKEN: not injected …` to the gateway's journal, which is the tell for all three; the same failure from `cron run` prints it into the run record instead.
 
 **Expect a reboot the first night after installing.** Before the first install the VM has a pending kernel reboot — an uptime over four days and a kernel image in the reboot-required list — and nothing has been arming an automatic reboot, because the drop-in that arms it is part of this install.
 So the first 04:45 window clears that backlog.
@@ -262,6 +285,7 @@ If `systemctl list-timers` shows the upgrade starting late, look at the refresh 
 
 There is no `-success` file and nothing creates one.
 `unattended-upgrade` writes `/var/lib/apt/periodic/unattended-upgrades-stamp` for itself in `write_stamp_file()`, and it writes it on a run that found **nothing to do** just as readily as on one that installed everything.
+It writes it on a `--dry-run` too, so a dry run is never a way to inspect the stamp — see step 8 of the install.
 The other files in that directory belong to `apt.systemd.daily` and are not this.
 
 So the stamp proves the timer fired, not that anything was patched.
@@ -277,6 +301,8 @@ The VM has no MTA, so `unattended-upgrades` mail would be a silent failure; the 
 - **Three of the five units are only counted, never exercised.** The daily check asserts something real about `hermes-webui` through its `/health`, about the shared venv through the import, and — since the check became a cron job inside it — about **`hermes-gateway`**, the default gateway, simply by running at all: a beat arriving means its scheduler executed a subprocess, so the old wedged-but-running-gateway blind spot is closed for that one unit. `hermes-gateway-emh`, `hermes-gateway-hal` and `hermes-dashboard` still contribute nothing but a `systemctl --user is-active` result. The gap is smaller for the dashboard: the `hermes` uptime-kuma monitor probes it externally on `hermes.cynexia.com/api/health`. **Nothing external probes the two remaining gateways.**
 - **Per-profile state.** The check exercises the shared venv and the default profile. A fault confined to `emh` or `hal` profile state is invisible to it.
 - **Memory writes.** Nothing here detects a Hindsight write that fails: the write is on a background path a chat response does not wait for, so a profile can retain nothing while every check on this page passes. That is not hypothetical — from August 23 to August 27, 2026 the `default` profile's writes all returned `401 Invalid API key` and no check in this estate noticed ([hindsight.md](hindsight.md#monitoring)). The journal grep that would have caught it is a step of [the update runbook's Verify](hermes-vm-updates.md#verify).
+
+  **Read that grep as a failure detector only, because a healthy retain is silent.** The provider logs `Hindsight retain succeeded` at DEBUG, which this gateway does not emit, while a failure is a WARNING carrying the full traceback. So an empty grep after a turn means "no failure", never "a write landed" — and an empty grep after *no* turn means nothing at all. Retention is per turn (`retain_every_n_turns` defaults to 1) and `auto_retain` defaults to on, so one chat turn is enough to produce the WARNING if the write path is broken. That asymmetry is what made the August 2026 401s findable at all.
 - **A dead apt timer.** The 14-day gate that catches it is a precondition of the update runbook, so it surfaces at the next update session rather than on its own.
 - **Its own cron job going missing.** The job is agent state rather than a file this repository installs, so a rebuild, a restore or a hand edit can drop it. Nothing notices until the monitor's heartbeat lapses about 30 hours later, and the report then reads as "no beat at all" — indistinguishable from a VM that is off. `hermes cron list` is the only positive proof it is still there.
 
@@ -293,7 +319,7 @@ That is hygiene rather than incident response.
 The token is a **tier-2 spam-target identifier**, not a secret: holding it lets a stranger report a heartbeat and mask a genuine failure, and grants nothing else, so it needs no rotation and earns no honesty-box row.
 
 **Cost: the hang bound is weaker.** The service unit set `TimeoutStartSec=120`, so a wedged run failed rather than sitting there.
-What bounds a cron subprocess is whatever the hermes scheduler imposes, which nobody has read out of the code and this page does not record.
+A no-agent cron subprocess is bounded instead by the scheduler's `script_timeout_seconds`, which defaults to **3600** (`hermes_cli/config_defaults.py`, overridable through `cron.script_timeout_seconds` or `HERMES_CRON_SCRIPT_TIMEOUT`) — an hour rather than two minutes, but bounded, and far inside the monitor's 24-hour heartbeat.
 Every command in the script that reaches the network carries its own `-m 15`, so the residual exposure is a wedged `systemctl` or a wedged Python import rather than an unbounded wait.
 
 **Cost: the schedule is agent state.** A systemd timer is a file this repository owns and an install copies.

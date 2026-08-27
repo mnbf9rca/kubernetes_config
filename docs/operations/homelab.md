@@ -623,12 +623,15 @@ The liveness and OS-patching machinery adds more VM-side state, and **only the e
 
 | Path | In the zip? |
 |---|---|
-| `/home/hermes/bin/hermes-app-alive.sh` | No |
+| `~/.hermes/scripts/hermes-app-alive.sh` | Yes |
 | `/etc/apt/apt.conf.d/{20auto-upgrades,52unattended-upgrades-local}` | No |
 | `/etc/systemd/system/apt-daily{,-upgrade}.timer.d/override.conf` | No |
 | `~/.hermes/config.yaml` — the `HERMES_APP_ALIVE_PUSH_TOKEN` injection | Yes |
 | The agent's cron store — the `hermes-app-alive` job itself | Yes |
 | `/home/hermes/.hermes/hermes-update.pre-run` (mode 0644) | Yes |
+
+The script moved into `~/.hermes/scripts/` on August 27, 2026, and so moved **into** the zip: `hermes cron create --script` takes a bare filename resolved under that directory and rejects an absolute path, so the old `/home/hermes/bin` copy could not be scheduled at all.
+It now restores alongside the cron store that names it, which is the pairing that matters — the store references the script by filename, so recovering one without the other leaves a job pointing at nothing.
 
 The canonical copy of the script lives in `hermes-vm/` in this repository, not inline in this document.
 The liveness check has no systemd unit and no environment file: it runs as a `no_agent` cron job inside `hermes-gateway`, and its push token is injected from 1Password at gateway start.

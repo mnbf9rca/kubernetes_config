@@ -8,11 +8,24 @@
 # Canonical copy: hermes-vm/scripts/hermes-app-alive.sh in
 # github.com/mnbf9rca/kubernetes_config. Runbook:
 # docs/operations/hermes-vm.md. Installed on VM 103 at
-# /home/hermes/bin/hermes-app-alive.sh and run at 05:45 UTC daily by a hermes
-# `no_agent` cron job, which runs the script as a subprocess of the default
-# gateway and delivers its stdout without involving the model. It used to be a
-# systemd user timer reading its token from an installed environment file; both
-# were deleted on 2026-08-27.
+# /home/hermes/.hermes/scripts/hermes-app-alive.sh and run at 05:45 UTC daily
+# by a hermes `no_agent` cron job, which runs the script as a subprocess of the
+# default gateway and delivers its stdout without involving the model. It used
+# to be a systemd user timer reading its token from an installed environment
+# file; both were deleted on 2026-08-27.
+#
+# THE INSTALL PATH IS NOT A CHOICE, and /home/hermes/bin - where an earlier
+# draft of the runbook put this - cannot work. `hermes cron create --script`
+# takes a BARE FILENAME resolved under $HERMES_HOME/scripts/ and rejects an
+# absolute path at the API boundary (_validate_cron_script_path in
+# tools/cronjob_tools.py), a guard that exists to stop prompt injection aiming a
+# job at an arbitrary file. Installing anywhere else leaves a script that runs
+# by hand and a job that cannot be created at all.
+#
+# Living here also puts the script INSIDE the nightly `hermes backup` zip, which
+# inverts the old reasoning favourably: the script and the cron store that names
+# it are now backed up and restored together, rather than the store surviving a
+# rebuild while the file it points at does not.
 set -eu
 
 HERMES_HOME=/home/hermes/.hermes
