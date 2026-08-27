@@ -14,7 +14,8 @@ catches. Manifests carry per-probe rationale in comments. Read
 | `homelab-update-watch` is DOWN | In a fresh heartbeat, `verdict=` names the cause and `next=` names the command to run; a stale `run_epoch=` means the watcher itself went quiet — [The update watcher](#the-update-watcher) |
 | A sidecar shows `RESTARTS: 0` but its snapshot is missing | Expected; they log rather than exit. Read the sidecar's stderr — [Why the sidecars have no probes](#why-the-sidecars-have-no-probes) |
 | `hindsight-canary` is DOWN | Read `verdict=`: `retain-failed` is the API, the database or the tenant key; `recall-miss` is the retrieval side. An agent is losing memories right now — [hindsight.md](hindsight.md) |
-| `hermes-app-alive` is DOWN | Read `verdict=`: `units-down` is the user manager or lingering, `import-failed` is the shared venv, `webui-unreachable` is the WebUI itself. No beat at all means the VM, the timer or the Access bypass — [hermes-vm-updates.md](hermes-vm-updates.md#reading-a-down-hermes-app-alive) |
+| `hermes-update` is red | Read `verdict=` and `rollback_state=` **together** — a `rolled-back` verdict can sit over a rollback that stopped part way, and "restored" means the checkouts and pins, never the agent's migrated configuration or database — [Reading a red `hermes-update`](hermes-vm-updates.md#reading-a-red-hermes-update) |
+| `hermes-app-alive` is DOWN | Read `verdict=`: `units-down` is the user manager or lingering, `import-failed` is the shared venv, `webui-unreachable` is the WebUI itself. No beat at all means the VM, the timer or the Access bypass — [Reading a DOWN `hermes-app-alive`](hermes-vm-updates.md#reading-a-down-hermes-app-alive) |
 | `disk_pct` is climbing on homelab restic | `local-path` has no quota, so this is the node SSD every workload shares — [the gates](#the-backup-verification-gates) |
 | An uptime-kuma monitor is UP but the service is down | Suspect an Access redirect — [uptime-kuma.md](uptime-kuma.md#the-cloudflare-access-trap) |
 | Everything is green and the data is still wrong | Expected; several probes are shallow by design — [What this does not catch](#what-this-does-not-catch) |
@@ -343,7 +344,7 @@ monitor can do. Every other job in this estate drives a **push monitor** — inv
 | `vps-restic` | `op://VPS/b2-restic/healthcheck-uuid` | 1d / 2h | restic CronJob, `/start` and exit code |
 | `vps-uptime-kuma-alive` | `op://VPS/uptime-kuma/healthcheck-uuid` | 5m / 15m | An uptime-kuma monitor — [uptime-kuma.md](uptime-kuma.md#the-self-monitor-layer-4) |
 | `estate-update` | `op://Homelab/estate-update/healthcheck-uuid` | 45d / 7d | Pinged by hand at the end of each update session. No job pings it |
-| `hermes-update` | `op://Homelab/hermes-update/healthcheck-uuid` | 45d / 7d | The VM's `hermes-update.sh`, `/start` and exit code, from an EXIT trap plus TERM/INT/HUP traps. **Not scheduled** — run by the operator, by `hermes-update` over ssh, or by the update session |
+| `hermes-update` | `op://Homelab/hermes-update/healthcheck-uuid` | 45d / 7d | The VM's `hermes-update.sh`, `/start` and exit code, from an EXIT trap plus TERM/INT/HUP traps. **Not scheduled** — run by the operator, by `hermes-update` over ssh, or by the update session. Triage a red one with [Reading a red `hermes-update`](hermes-vm-updates.md#reading-a-red-hermes-update) |
 
 `hermes-update` is the only row here that no manifest in this repository creates. The check, its
 1Password field and the VM-side environment file that carries the UUID are all made by hand during
@@ -353,9 +354,8 @@ the install in [hermes-vm-updates.md](hermes-vm-updates.md#installing-or-reinsta
 the hermes VM's `hermes-update.sh`, which is the first pinger here that is not a Kubernetes
 CronJob. After the migration they are the only three that ping healthchecks.io at all. Nothing
 replaced that pattern for everyone else, because the kuma push API has nothing to replace it with:
-a push is a
-heartbeat carrying a status, so there is no start signal to send. For a push monitor the hang
-bound is the CronJob's own `activeDeadlineSeconds` and the silence bound is the monitor's
+a push is a heartbeat carrying a status, so there is no start signal to send. For a push monitor
+the hang bound is the CronJob's own `activeDeadlineSeconds` and the silence bound is the monitor's
 heartbeat interval plus its retry. A run that starts and wedges is killed by the deadline and then
 shows up as a missing heartbeat — the same alarm, one step later.
 
