@@ -1,0 +1,61 @@
+// Installed to /etc/apt/apt.conf.d/52unattended-upgrades-local on VM 103.
+// Canonical copy: hermes-vm/etc/apt.conf.d/52unattended-upgrades-local in
+// github.com/mnbf9rca/kubernetes_config
+//
+// A SEPARATE FILE, NOT AN EDIT TO 50unattended-upgrades. apt reads conf.d in
+// lexical order, so 52 is read after 50 - and a `unattended-upgrades` package
+// upgrade can then replace its own 50 file without a conffile prompt and
+// without silently reverting any of this.
+//
+// SCALARS AND LISTS BEHAVE DIFFERENTLY, and getting this wrong is how a
+// "security-only" policy quietly widens. For a SCALAR (Automatic-Reboot,
+// Automatic-Reboot-Time) the last assignment wins, so 52 overrides 50. For a
+// LIST - and Origins-Pattern is a list - a later block APPENDS to whatever 50
+// already declared; it does not replace it. APT provides #clear for exactly
+// this, and the block below uses it. Today the practical difference is nil,
+// because Debian's shipped 50unattended-upgrades leaves only the same two
+// Debian-Security patterns uncommented and the result would be a harmless
+// duplicate. The reason to clear anyway is the future: a 50 file (or an
+// operator edit) that enables -updates would NOT be overridden by this file,
+// and automatic upgrades would silently stop being security-only while this
+// comment insisted otherwise.
+#clear Unattended-Upgrade::Origins-Pattern;
+
+// Debian's security-only default, stated explicitly rather than inherited.
+// The estate's other update surfaces (keel, Renovate, the update session) cover
+// feature upgrades; this one exists for kernel and library CVEs.
+Unattended-Upgrade::Origins-Pattern {
+        "origin=Debian,codename=${distro_codename},label=Debian-Security";
+        "origin=Debian,codename=${distro_codename}-security,label=Debian-Security";
+};
+
+// REBOOT IS ON, by operator decision, August 26, 2026. Revision 1 of the
+// estate update strategy deferred the reboot to the session; the operator
+// overruled. A kernel patch waiting weeks is the worse trade, and a bad
+// comeback is caught twice - by hermes-app-alive, which runs at 05:45, ONE
+// HOUR after this window, and by the hermes-update script's health assertion
+// the next time it runs. The one-hour gap is the point: the reboot must have
+// finished and the lingering user units must have come back before the check
+// looks. (The continuous 15-minute monitor an earlier draft relied on here was
+// deleted on 2026-08-26 as overengineering; detection latency is now up to
+// about a day, accepted by the operator - "homelab not NASA".)
+Unattended-Upgrade::Automatic-Reboot "true";
+Unattended-Upgrade::Automatic-Reboot-WithUsers "true";
+
+// 04:45 local time, and the VM's local time is UTC. The window is chosen to sit
+// clear of everything the cluster does to this VM: the hermes-pull backup SSHes
+// in at 02:00 UTC and the restic sweep runs at 03:00 UTC. The apt-daily-upgrade
+// timer is moved to 04:00 (+/- 20 min) by the drop-in beside this file, so the
+// upgrade has finished before the reboot fires.
+Unattended-Upgrade::Automatic-Reboot-Time "04:45";
+
+// Keep /boot from filling, which is the commonest way automatic kernel updates
+// stop working silently.
+Unattended-Upgrade::Remove-Unused-Kernel-Packages "true";
+Unattended-Upgrade::Remove-New-Unused-Dependencies "true";
+
+// The VM has no MTA, so mail would be a silent failure. The journal is the
+// record, and the alarm is the hermes-update script's 14-day staleness gate on
+// the /var/lib/apt/periodic/unattended-upgrades-stamp file that
+// `unattended-upgrade` writes for itself in write_stamp_file().
+Unattended-Upgrade::SyslogEnable "true";

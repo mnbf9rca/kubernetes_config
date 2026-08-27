@@ -1,0 +1,8 @@
+// Installed to /etc/apt/apt.conf.d/20auto-upgrades on VM 103.
+// Canonical copy: hermes-vm/etc/apt.conf.d/20auto-upgrades in
+// github.com/mnbf9rca/kubernetes_config
+
+APT::Periodic::Update-Package-Lists "1";
+APT::Periodic::Download-Upgradeable-Packages "1";
+APT::Periodic::Unattended-Upgrade "1";
+APT::Periodic::AutocleanInterval "7";
