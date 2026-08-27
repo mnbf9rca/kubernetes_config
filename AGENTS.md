@@ -21,7 +21,7 @@ procedures live under `docs/` and are referenced from here rather than duplicate
 | `docs/operations/uptime-kuma.md` | Layer 3/4 runbook: creating uptime-kuma monitors by hand, per-monitor HTTP settings, the Cloudflare Access trap, the push monitors driven from inside the clusters (and the one driven from the hermes VM) and the bypass they need, the self-monitor |
 | `docs/operations/hindsight.md` | The `hindsight` namespace: the self-hosted memory backend for the Hermes profiles — topology, auth, the canary, upgrade and restore runbooks, the restore drill, key rotation, and the removal path |
 | `docs/operations/agent-mail.md` | Per-agent email for Hermes agents: Purelymail mailboxes on cynexia.io, per-profile mcp-email-server config, provisioning runbook, credential scheme, limits, and the deliberate monitoring/backup gaps |
-| `docs/operations/hermes-vm.md` | The Hermes VM itself: lingering, triaging a DOWN `hermes-app-alive`, installing the kept components, `unattended-upgrades` with its automatic reboot, what the daily check does not watch, the accepted exposures, and the VM's own facts |
+| `docs/operations/hermes-vm.md` | The Hermes VM itself: lingering, triaging a DOWN `hermes-app-alive`, installing the kept components, `unattended-upgrades` with its automatic reboot, what the daily check does not watch, the trade the in-gateway cron job makes, and the VM's own facts |
 | `docs/operations/hermes-vm-updates.md` | The update runbook for the Hermes application stack, run by an agent or the operator roughly weekly: preconditions, change analysis, the detached update, verification, the report ping, and manual rollback. Steps and latent hazards only — everything observable at failure time is left to the agent running it |
 
 Design documents and implementation plans are local-only under the gitignored
@@ -66,8 +66,7 @@ kubernetes_config/
 │   └── backup/               # restic init Job + nightly CronJob (hostPath /var/mnt/ssd/local-path-provisioner)
 ├── vps/                      # Hetzner Talos cluster, same sub-layout (bootstrap/secrets/workloads/backup/ops/talos)
 ├── hermes-vm/                # files that live on the hermes VM, not in a cluster
-│   ├── scripts/              # the daily alive check — the tree's one script
-│   ├── systemd/              # the alive service and its timer
+│   ├── scripts/              # the daily alive check — the tree's one script, run by a hermes cron job
 │   └── etc/                  # unattended-upgrades config + the two apt timer drop-ins
 ├── scripts/                  # repo-level helpers (karakeep tags, FreshRSS WebSub status, the check-* guards)
 ├── legacy-microk8s/          # frozen reference copies of the old microk8s manifests
@@ -276,9 +275,11 @@ Full mechanics, target-by-target reference and failure modes:
   daily liveness check, the install, `unattended-upgrades` — is in
   `docs/operations/hermes-vm.md`. The wrapper that used to automate updates, with its two
   test harnesses, its systemd unit and its root-owned entry point, was deleted on
-  2026-08-27. Building it back is a design change and needs the operator, not a tidy-up;
-  the one timer under `hermes-vm/systemd/`, `hermes-app-alive.timer`, drives a read-only
-  daily liveness check and is not a precedent for scheduling updates.
+  2026-08-27. Building it back is a design change and needs the operator, not a tidy-up.
+  **Nothing under `hermes-vm/` is scheduled by systemd any more**: the `systemd/` directory
+  was deleted on 2026-08-27 and the daily liveness check now runs as a hermes `no_agent`
+  cron job inside the default gateway. That job is a read-only check and is not a precedent
+  for scheduling updates.
   **Nothing mechanical guards runbook prose**, which is why its disclosure rules are
   written into the steps they govern rather than referenced.
   The files that remain under `hermes-vm/` are not rendered by kustomize, so

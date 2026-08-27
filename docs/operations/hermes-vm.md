@@ -11,8 +11,9 @@ The canonical copy of every file named here is in `hermes-vm/`.
 The VM holds installed copies.
 Edit the repository, then reinstall.
 
-**Only two things run on a schedule here.** `unattended-upgrades` patches Debian security-only overnight and reboots at 04:45 UTC; `hermes-app-alive.timer` pushes a liveness verdict at 05:45 UTC.
-Application updates never run on a timer.
+**Only two things run on a schedule here, and only one of them is systemd's.** `unattended-upgrades` patches Debian security-only overnight and reboots at 04:45 UTC; the `hermes-app-alive` **cron job inside the default gateway** pushes a liveness verdict at 05:45 UTC.
+Nothing under `hermes-vm/` is scheduled by systemd any more — the `systemd/` directory and its two units were deleted on August 27, 2026.
+Application updates never run on a schedule at all.
 
 ## Lingering is a precondition
 
@@ -22,9 +23,10 @@ loginctl show-user hermes -p Linger        # must print Linger=yes
 ```
 
 Without lingering, the `hermes` user manager stops when the last session ends.
-All five hermes user units die at the next reboot — **and so does `hermes-app-alive.timer`.**
+All five hermes user units die at the next reboot — **and the daily check dies with them**, because it now runs as a cron job inside `hermes-gateway` rather than on a timer of its own.
 
 That is the nastiest failure mode here: **the monitor that would report the outage is itself down.** Nothing pushes, so uptime-kuma sees silence rather than a `down`, and `hermes-app-alive` stays green until its 24-hour heartbeat and 6-hour retry expire, about 30 hours after the last good beat.
+Moving the check inside the gateway did not create that coupling — a user timer died with lingering too — but it did tighten it: there is now one process whose death stops both the thing being watched and the watching.
 
 One thing catches it sooner.
 The `hermes` HTTP monitor probes the dashboard on `hermes.cynexia.com`, and `hermes-dashboard` is one of the units that died, so that monitor goes red at its own interval.
@@ -35,7 +37,8 @@ It is a problem the first night.
 
 ## Reading a DOWN hermes-app-alive
 
-The daily check runs at **05:45 UTC**, one hour after the 04:45 automatic-reboot window, with `Persistent=true` so a missed window is caught up rather than skipped.
+The daily check runs at **05:45 UTC**, one hour after the 04:45 automatic-reboot window, as a `no_agent` cron job inside the default gateway.
+The scheduler's ticker picks up a past-due job, so a run missed while the VM was rebooting is caught up rather than skipped.
 The monitor's heartbeat is 24 hours with one retry at 6 hours, so **a missing heartbeat alarms about 30 hours after the last good one**.
 
 | `verdict=` | What it means | First thing to do |
@@ -43,7 +46,11 @@ The monitor's heartbeat is 24 hours with one retry at 6 hours, so **a missing he
 | `units-down` | Not every hermes user unit is active. `units=<active>/<expected>` carries both counts, and the expected one is derived from the `UNITS` list in the script, so it follows the list rather than a number written down here | `systemctl --user status` each unit in that list. If none are up, check `loginctl show-user hermes -p Linger` first |
 | `import-failed` | The shared venv cannot import `run_agent`. **This is the silent failure the whole design exists for**: every unit is still active and `/health` still answers `status: ok`, while the iOS app answers `AIAgent not available` | Read [homelab.md, "Do not give it a venv of its own"](homelab.md#hermes-webui-on-the-vm), then follow [the update runbook's rollback](hermes-vm-updates.md#rollback). The Python traceback in the journal names which import failed |
 | `webui-unreachable` | The WebUI's own `/health` did not answer 2xx. `webui_http=` carries the status; `000` means no connection | `journalctl --user -u hermes-webui`. Note the unit's `StartLimitIntervalSec=60`/`StartLimitBurst=5` parking behaviour — a repeatedly failing start parks in `failed` rather than looping invisibly |
-| **No beat at all** | The VM is off, the user manager is not running, lingering was lost, the timer was disabled, or the Cloudflare Access bypass on `/api/push/*` was removed | Check the VM is up, then check the bypass. **A bypass regression turns every push monitor in the estate red at once, which is the tell** |
+| **No beat at all** | The VM is off, the user manager is not running, lingering was lost, `hermes-gateway` is down, the cron job was deleted from the agent's store, the push token stopped being injected, or the Cloudflare Access bypass on `/api/push/*` was removed | `journalctl --user -u hermes-gateway` carries the run and its stderr — every one of those fails loudly there. Then `hermes cron list`, then the bypass. **A bypass regression turns every push monitor in the estate red at once, which is the tell** |
+
+**The push token is injected, never stored on this VM.** hermes's own 1Password secrets provider resolves `HERMES_APP_ALIVE_PUSH_TOKEN` from the default profile's `secrets.onepassword.env` at gateway start, the cron subprocess inherits it, and the script assembles the push URL from it in memory.
+A missing or empty variable fails the run at its first line — loudly, on stderr, before anything else happens.
+**That cannot push a false `down`**: with no token there is nowhere to push at all, so uptime-kuma sees silence and reports it on its own heartbeat.
 
 **A daily line of Python import noise in the journal is normal, not a fault.** The check deliberately does not discard the interpreter's stderr, because the traceback names which import failed and that is the whole answer to "what broke".
 The traceback goes to the journal and never near the pushed message, which carries only `verdict=`, `units=` and `webui_http=`.
@@ -51,8 +58,9 @@ The traceback goes to the journal and never near the pushed message, which carri
 ## Installing or reinstalling
 
 A VM rebuild must repeat all of this.
-The nightly `hermes backup` zip covers `~/.hermes`, so it carries the environment file and nothing else installed here.
-Everything under `/home/hermes/bin` and `~/.config/systemd/user` is rebuild territory.
+The nightly `hermes backup` zip covers `~/.hermes`, so it carries the profile config — the token injection in step 4 — and the cron store from step 5.
+The script itself, at `/home/hermes/bin`, and the four apt files are outside it and are rebuild territory.
+**Do not trust the restored cron store without looking**: `hermes cron list` after a rebuild, because a check that quietly failed to come back looks exactly like a healthy day until the heartbeat lapses.
 
 ### 1. Lint first
 
@@ -64,39 +72,75 @@ This is the **only** thing that ever lints these files.
 It runs in no preflight, this repository has no CI, and nothing runs it on a schedule.
 This procedure is its only caller; the update runbook never invokes it.
 
-### 2. Install the script and its units
+### 2. Install the script
+
+One file, and it is the only thing this install copies to the VM.
 
 ```sh
 scp hermes-vm/scripts/hermes-app-alive.sh hermes@hermes.cynexia.net:/home/hermes/bin/
 ssh hermes@hermes.cynexia.net 'chmod 0755 /home/hermes/bin/hermes-app-alive.sh'
-scp hermes-vm/systemd/hermes-app-alive.service hermes-vm/systemd/hermes-app-alive.timer \
-  hermes@hermes.cynexia.net:/home/hermes/.config/systemd/user/
 ```
 
-### 3. Create the monitor, then its environment file
-
-Create the `hermes-app-alive` push monitor in uptime-kuma by hand — a 24-hour heartbeat with one 6-hour retry — and store its push URL in 1Password.
-The monitor, the vault field and this file are all created by hand; no manifest in this estate assembles the URL.
-See [uptime-kuma.md](uptime-kuma.md#push-monitors).
-
-| File | Holds | Source |
-|---|---|---|
-| `/home/hermes/.hermes/hermes-app-alive.env` | `PUSH_URL`, whose last path segment is the monitor's push token | `op://hermes/hermes-app-alive/kuma-push-token` |
-
-Write it mode 0600, by piping `op read` over ssh from the operator's laptop.
-**Placement rule, from the August 26, 2026 ruling:** any reference the VM itself resolves must live in the `hermes` vault, because the VM's 1Password service account can see only that vault; a reference the operator's laptop resolves and pipes over ssh may live anywhere.
-The VM does resolve `op://` references — hermes's own 1Password secrets provider resolves each home's references at gateway startup — so the vault choice here is load-bearing.
-
-The service uses no leading `-` on its `EnvironmentFile=`.
-A check that cannot report is worse than one that refuses to start.
+There is no systemd unit and no environment file.
+Lingering still has to be on, because the gateway that runs the check is a user unit:
 
 ```sh
 loginctl enable-linger hermes
-systemctl --user daemon-reload
-systemctl --user enable --now hermes-app-alive.timer
 ```
 
-### 4. Create the `hermes-update` check
+### 3. Create the monitor and store its token
+
+Create the `hermes-app-alive` push monitor in uptime-kuma by hand — a 24-hour heartbeat with one 6-hour retry — and store its push **token** at `op://hermes/hermes-app-alive/kuma-push-token`, typed `[text]`.
+The monitor and the vault field are both created by hand; no manifest in this estate assembles the URL.
+See [uptime-kuma.md](uptime-kuma.md#push-monitors).
+
+**The vault is `hermes`, and that is what makes step 4 work.** The VM's 1Password service account can see only that vault, so any reference the VM itself resolves has to live there; a reference the operator's laptop resolves may live anywhere.
+The placement was chosen for this on August 26, 2026, before anything on the VM read it.
+
+### 4. Inject the token into the default profile
+
+Add **one** entry to the default profile's `secrets.onepassword.env`:
+
+```yaml
+secrets:
+  onepassword:
+    env:
+      HERMES_APP_ALIVE_PUSH_TOKEN: op://hermes/hermes-app-alive/kuma-push-token
+```
+
+Edit `~/.hermes/config.yaml` directly, or drive it through the `hermes secrets onepassword` command group — its help line reads `onepassword (op, 1password)`, so all three spellings of the group work, but **check `hermes secrets onepassword --help` for the subcommand that sets an entry**; no session has run one.
+Then restart the gateway, because the provider resolves these references at start:
+
+```sh
+systemctl --user restart hermes-gateway
+```
+
+This is the same mechanism `HINDSIGHT_API_KEY` already uses on all three homes.
+
+**The variable name is load-bearing and must not be "tidied".** The cron subprocess sanitiser in `tools/environments/local.py` (`_sanitize_subprocess_env`) strips by **name**: every provider-registry name, anything matching `AUXILIARY_*` or `GATEWAY_RELAY_*`, and a fixed always-strip list.
+`HERMES_APP_ALIVE_PUSH_TOKEN` belongs to no registry, so it passes through to the script.
+Renaming it into any of those shapes removes it silently, and the check then fails its first line every day.
+
+### 5. Create the cron job
+
+The check runs as a **`no_agent`** cron job: the scheduler runs the script on schedule and delivers its stdout directly, skipping the agent entirely, so it costs **zero model tokens**.
+
+```sh
+hermes cron create --name hermes-app-alive \
+  --schedule '45 5 * * *' \
+  --no-agent \
+  --command /home/hermes/bin/hermes-app-alive.sh
+```
+
+**Confirm the exact flag spelling before running this — `hermes cron create --help`.** The mechanism is verified (`no_agent=True` at creation time; cron expressions parsed by croniter); the flag names above are the shape, not a transcript, and no session has run this command yet.
+Fix this block to whatever the help output says, in the same session.
+
+Two things follow from the job living inside the agent rather than in systemd:
+
+- **The push now proves the default gateway executes.** A wedged-but-running `hermes-gateway` used to be invisible to every check on this page; a beat arriving at all means its scheduler ran a subprocess. The `emh` and `hal` gateways gain nothing from this.
+- **The cron store is agent state, not a file this repository owns.** A job lost to a rebuild, a restore or a hand edit produces silence, and silence is not reported until the monitor's 24-hour heartbeat and 6-hour retry lapse. `hermes cron list` is the check; run it after any restore.
+
+### 6. Create the `hermes-update` check
 
 Create a healthchecks.io check named `hermes-update` by hand in the UI — period **10 days**, grace **4 days** — and store its ping UUID at `op://Homelab/hermes-update/healthcheck-uuid`, typed `[text]`.
 Nothing in this estate creates that check, that item or that field, and the update runbook's [Report step](hermes-vm-updates.md#report) reads the reference directly, so an absent field fails the `op read` at the end of an otherwise successful update.
@@ -105,7 +149,7 @@ Nothing in this estate creates that check, that item or that field, and the upda
 The cadence allows one skipped week against a roughly weekly runbook before it alarms.
 A ping UUID is a tier-2 spam-target identifier rather than a secret, which is why the field is `[text]` — but it belongs in 1Password and never in this repository.
 
-### 5. Install `unattended-upgrades`
+### 7. Install `unattended-upgrades`
 
 Four files, and **two of them do not install where they live in the repository**:
 
@@ -122,7 +166,7 @@ Four files, and **two of them do not install where they live in the repository**
 sudo systemctl daemon-reload
 ```
 
-### 6. Verify the install
+### 8. Verify the install
 
 Check each of these once.
 Every one of them fails silently if it is wrong.
@@ -162,14 +206,15 @@ Every one of them fails silently if it is wrong.
    timedatectl | grep 'Time zone'
    ```
 
-6. **The units verify under real systemd**, and the standard for that is specific. **`systemd-analyze verify` exiting zero proves nothing**: a misspelled directive exits zero with only a warning on stderr. The evidence is the **absence** of an `Unknown key … ignoring` line, **plus** the resolved value read back:
+6. **The cron job exists and its next run is 05:45 UTC.** The job lives in the agent's own store, so nothing in this repository proves it is there:
 
    ```sh
-   systemd-analyze --user verify \
-     /home/hermes/.config/systemd/user/hermes-app-alive.service
-   systemctl --user show hermes-app-alive -p TimeoutStartUSec
-   systemctl --user show hermes-app-alive.timer -p TimersCalendar -p Persistent
+   hermes cron list
    ```
+
+7. **The token actually reaches the script.** This is the one step that catches a sanitiser name collision, a typo in the `op://` reference and a gateway that was never restarted, and none of the three is visible any other way. Run the job once and confirm the `hermes-app-alive` monitor turns green in uptime-kuma. **`hermes cron --help` for the run-now spelling** — as with the create command above, the mechanism is verified and the flag names are not.
+
+   A run that fails on its first line prints `HERMES_APP_ALIVE_PUSH_TOKEN: not injected …` to the gateway's journal, which is the tell for all three.
 
 **Expect a reboot the first night after installing.** Before the first install the VM has a pending kernel reboot — an uptime over four days and a kernel image in the reboot-required list — and nothing has been arming an automatic reboot, because the drop-in that arms it is part of this install.
 So the first 04:45 window clears that backlog.
@@ -199,9 +244,11 @@ Do not delete it as redundant.
 | 03:30 (+0–10 min) | `apt-daily.timer` refreshes the package lists | `unattended-upgrade` installs only from the cache and never refreshes the lists itself |
 | 04:00 (+0–10 min) | `apt-daily-upgrade.timer` runs `unattended-upgrade` | Leaves a 35-minute margin before the reboot |
 | 04:45 | Automatic reboot | Reboot is **on**, by operator decision, August 26, 2026 |
-| 05:45 (+0–5 min) | `hermes-app-alive` | **One hour** after the reboot, so the reboot has finished and the lingering user units have come back before anything looks at them |
+| 05:45 | `hermes-app-alive`, as a cron job inside the default gateway | **One hour** after the reboot, so the reboot has finished and the lingering user units have come back before anything looks at them |
 
-Both drop-ins set `FixedRandomDelay=true`, so the offset is derived from the machine ID and unit name rather than re-rolled nightly.
+The 05:45 row is the only one with no jitter: it is a cron expression in the agent's scheduler rather than a systemd timer, and neither `RandomizedDelaySec` nor `Persistent=` applies to it. Catch-up after a missed window comes from the scheduler's ticker picking up past-due jobs instead.
+
+Both apt drop-ins set `FixedRandomDelay=true`, so the offset is derived from the machine ID and unit name rather than re-rolled nightly.
 The gap between the refresh and the install is then a constant for this machine, and `systemctl list-timers` can be read once and still trusted tomorrow.
 
 **The jitter is 10 minutes, not Debian's hour, and that is a reboot correctness matter rather than a tidiness one.** `unattended-upgrade` hands the literal `04:45` to `shutdown`, and systemd resolves a time that has already passed to the same time **tomorrow**.
@@ -227,19 +274,30 @@ The VM has no MTA, so `unattended-upgrades` mail would be a silent failure; the 
 - **Nothing continuous.** Detection latency for an application fault is up to about a day, and a missing heartbeat alarms about 30 hours after the last good one. **Accepted by the operator on August 26, 2026 — "homelab not NASA."** The `hermes` uptime-kuma monitor still catches a VM that is off or unreachable, faster, through the dashboard on `hermes.cynexia.com`.
 - **No chat turn is monitored at all.** The daily check makes none, by design. The only chat turn this estate performs is the update runbook's verification step, and update sessions are unscheduled, so a fault that lets the agent import, serve `/health` and keep its units up while failing every chat turn is caught at the next session.
 - **The daily import runs in a fresh interpreter, not the WebUI's process.** So a venv repaired without restarting `hermes-webui` reports `verdict=ok` while the live process still cannot serve — which is the very failure that check exists to catch. After any venv repair, restart the unit.
-- **Four of the five units are only counted, never exercised.** The daily check asserts something real about exactly one unit, `hermes-webui`, through its `/health`, and about the shared venv through the import. The three gateways **and `hermes-dashboard`** contribute nothing but a `systemctl --user is-active` result, so a wedged-but-running gateway or dashboard reports healthy. The gap is smaller for the dashboard: the `hermes` uptime-kuma monitor probes it externally on `hermes.cynexia.com/api/health`. **Nothing external probes the three gateways.**
+- **Three of the five units are only counted, never exercised.** The daily check asserts something real about `hermes-webui` through its `/health`, about the shared venv through the import, and — since the check became a cron job inside it — about **`hermes-gateway`**, the default gateway, simply by running at all: a beat arriving means its scheduler executed a subprocess, so the old wedged-but-running-gateway blind spot is closed for that one unit. `hermes-gateway-emh`, `hermes-gateway-hal` and `hermes-dashboard` still contribute nothing but a `systemctl --user is-active` result. The gap is smaller for the dashboard: the `hermes` uptime-kuma monitor probes it externally on `hermes.cynexia.com/api/health`. **Nothing external probes the two remaining gateways.**
 - **Per-profile state.** The check exercises the shared venv and the default profile. A fault confined to `emh` or `hal` profile state is invisible to it.
 - **Memory writes.** Nothing here detects a Hindsight write that fails: the write is on a background path a chat response does not wait for, so a profile can retain nothing while every check on this page passes. That is not hypothetical — from August 23 to August 27, 2026 the `default` profile's writes all returned `401 Invalid API key` and no check in this estate noticed ([hindsight.md](hindsight.md#monitoring)). The journal grep that would have caught it is a step of [the update runbook's Verify](hermes-vm-updates.md#verify).
 - **A dead apt timer.** The 14-day gate that catches it is a precondition of the update runbook, so it surfaces at the next update session rather than on its own.
+- **Its own cron job going missing.** The job is agent state rather than a file this repository installs, so a rebuild, a restore or a hand edit can drop it. Nothing notices until the monitor's heartbeat lapses about 30 hours later, and the report then reads as "no beat at all" — indistinguishable from a VM that is off. `hermes cron list` is the only positive proof it is still there.
 
-## Accepted exposures
+## What moving the check inside hermes traded
 
-`hermes-app-alive.env` lives under `~/.hermes`, so it **rides the nightly `hermes backup` zip** to the `hermes-dumps` PVC and on to B2.
-The uptime-kuma push token therefore rests in two more encrypted places than it strictly needs to.
+The check used to be a systemd user timer with a service unit and an environment file holding the push URL.
+Three things changed with it, and two of them cost something.
 
-That is accepted, and the reason is the tier.
-The token is a **tier-2 spam-target identifier**, not a secret: holding it lets a stranger report a heartbeat and mask a genuine failure, and grants nothing else.
-It needs no rotation and earns no honesty-box row.
+**Gained: the default gateway is now exercised.** A beat cannot arrive unless `hermes-gateway`'s scheduler ran a subprocess, so a wedged-but-running default gateway — invisible to every check on this page before — now shows up as silence.
+
+**Gained: nothing holding the token is installed on this VM.** The old environment file lived under `~/.hermes` and rode the nightly `hermes backup` zip to the `hermes-dumps` PVC and on to B2.
+The token now arrives injected at gateway start and exists only in memory.
+That is hygiene rather than incident response.
+The token is a **tier-2 spam-target identifier**, not a secret: holding it lets a stranger report a heartbeat and mask a genuine failure, and grants nothing else, so it needs no rotation and earns no honesty-box row.
+
+**Cost: the hang bound is weaker.** The service unit set `TimeoutStartSec=120`, so a wedged run failed rather than sitting there.
+What bounds a cron subprocess is whatever the hermes scheduler imposes, which nobody has read out of the code and this page does not record.
+Every command in the script that reaches the network carries its own `-m 15`, so the residual exposure is a wedged `systemctl` or a wedged Python import rather than an unbounded wait.
+
+**Cost: the schedule is agent state.** A systemd timer is a file this repository owns and an install copies.
+A cron job lives in the agent's store, so it can be lost to a restore without anything saying so — see the last bullet above.
 
 ## Facts about this VM
 

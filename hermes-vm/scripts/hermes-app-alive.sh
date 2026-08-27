@@ -8,8 +8,11 @@
 # Canonical copy: hermes-vm/scripts/hermes-app-alive.sh in
 # github.com/mnbf9rca/kubernetes_config. Runbook:
 # docs/operations/hermes-vm.md. Installed on VM 103 at
-# /home/hermes/bin/hermes-app-alive.sh and run by hermes-app-alive.timer at
-# 05:45 UTC daily.
+# /home/hermes/bin/hermes-app-alive.sh and run at 05:45 UTC daily by a hermes
+# `no_agent` cron job, which runs the script as a subprocess of the default
+# gateway and delivers its stdout without involving the model. It used to be a
+# systemd user timer reading its token from an installed environment file; both
+# were deleted on 2026-08-27.
 set -eu
 
 HERMES_HOME=/home/hermes/.hermes
@@ -56,6 +59,20 @@ if [ "$UNIT_COUNT" -lt 1 ]; then
   exit 1
 fi
 
+# ---- push URL --------------------------------------------------------------
+# THE TOKEN ARRIVES AS AN INJECTED ENVIRONMENT VARIABLE and is stored nowhere on
+# this VM. hermes's own 1Password secrets provider resolves
+# `HERMES_APP_ALIVE_PUSH_TOKEN` from the default profile's
+# `secrets.onepassword.env` at gateway start, and the cron subprocess inherits
+# it. The name is deliberately one no provider registry knows, because the
+# subprocess sanitiser strips by NAME: a registry name, an `AUXILIARY_*` or a
+# `GATEWAY_RELAY_*` would be removed before the script ever ran.
+#
+# THE URL IS ASSEMBLED HERE rather than injected whole, so the variable holding
+# a credential is the only thing crossing the boundary. KUMA_PUSH_BASE is an
+# ordinary identifier - a hostname and an endpoint path - and carries nothing.
+KUMA_PUSH_BASE=https://uptime.cynexia.com/api/push
+
 # Scratch under $HERMES_HOME at mode 0700, never /tmp: every agent session on
 # this VM runs as this same user, and a symlink planted at a fixed /tmp path
 # would make this script's `>>` append to a file of someone else's choosing AND
@@ -64,9 +81,13 @@ RUNDIR=$HERMES_HOME/hermes-app-alive.run
 MSG_FILE=$RUNDIR/kuma-msg
 
 # ---- uptime-kuma push ------------------------------------------------------
-# NO /start PING: the push API has no such concept. The hang bound is the
-# service unit's TimeoutStartSec; the silence bound is the monitor's 24-hour
-# heartbeat interval plus its retry.
+# NO /start PING: the push API has no such concept. The silence bound is the
+# monitor's 24-hour heartbeat interval plus its retry. THE HANG BOUND IS NOW
+# WHATEVER THE HERMES SCHEDULER IMPOSES ON A CRON SUBPROCESS, which is not
+# recorded here and is a weaker guarantee than the systemd unit's
+# TimeoutStartSec=120 it replaced. Every command below that could block carries
+# its own `-m 15`, so the exposure is a wedged `systemctl` or a wedged python
+# import rather than an unbounded network wait.
 #
 # NEVER EMIT A COMMAND'S OUTPUT. A failing curl quotes the URL, and a push URL
 # carries the monitor's token as its last path segment. Everything emitted below
@@ -112,13 +133,19 @@ on_exit() {
 
 main() {
   # This one assertion stays ABOVE the traps, because it is the one failure an
-  # exit trap could not report anyway: with no PUSH_URL there is nowhere to
-  # push. It fails loudly in the journal and the unit goes `failed`.
-  : "${PUSH_URL:?set PUSH_URL (see /home/hermes/.hermes/hermes-app-alive.env)}"
+  # exit trap could not report anyway: with no token there is nowhere to push,
+  # so NO FALSE `down` IS POSSIBLE HERE. It fails loudly on stderr, the cron run
+  # exits non-zero, and uptime-kuma sees silence - which its heartbeat reports on
+  # its own schedule. `:?` covers unset and empty alike.
+  # No apostrophe in that message: shellcheck cannot parse one inside `${x:?...}`
+  # even though every shell accepts it.
+  : "${HERMES_APP_ALIVE_PUSH_TOKEN:?not injected - add it to secrets.onepassword.env in the default profile, then restart hermes-gateway}"
+  PUSH_URL=$KUMA_PUSH_BASE/$HERMES_APP_ALIVE_PUSH_TOKEN
 
   # Signal traps before the EXIT trap: in POSIX sh an untrapped signal ends the
-  # shell WITHOUT running the EXIT trap, so a TimeoutStartSec expiry would push
-  # nothing at all and read as a healthy silent day until the heartbeat lapsed.
+  # shell WITHOUT running the EXIT trap, so a scheduler killing a slow run would
+  # push nothing at all and read as a healthy silent day until the heartbeat
+  # lapsed.
   trap 'exit 143' TERM
   trap 'exit 130' INT
   trap 'exit 129' HUP
@@ -159,7 +186,18 @@ main() {
   # generic line below. There is no disclosure question - the traceback goes to
   # the journal and never near the pushed message, which carries the fixed
   # `verdict=import-failed` and nothing else.
-  if ! "$VENV/python" -c 'import run_agent' >/dev/null; then
+  #
+  # THE `cd /` IS LOAD-BEARING, and it is here because the systemd unit that used
+  # to carry it was deleted. `python -c` puts the CURRENT WORKING DIRECTORY on
+  # sys.path. Run from inside the agent checkout, this import resolves
+  # `run_agent` from the checkout's own source rather than from the venv, so the
+  # assertion passes on a venv in which the agent package is not installed at
+  # all - which is exactly the failure this check exists to catch. The unit
+  # pinned WorkingDirectory=/home/hermes; a cron subprocess inherits the
+  # gateway's working directory instead, and nothing says what that is. So the
+  # pin moved into the script, where it holds however the script is started.
+  # The subshell keeps it from leaking into the rest of the run.
+  if ! (cd / && "$VENV/python" -c 'import run_agent') >/dev/null; then
     echo "ERROR: the agent venv cannot import run_agent" >&2
     exit 1
   fi

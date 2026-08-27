@@ -80,8 +80,8 @@ glob `/foo/*` does not match bare `/foo`, so a bypassed health path needs both d
 ### The push path is bypassed at the edge
 
 Every push monitor in this estate is driven by something that holds no Access credential — a
-CronJob inside a cluster, or, for `hermes-app-alive`, a systemd timer on the off-cluster hermes
-VM — so without a bypass the edge answers 302 and no push monitor could ever report UP. An
+CronJob inside a cluster, or, for `hermes-app-alive`, a cron job inside the hermes agent on the
+off-cluster VM — so without a bypass the edge answers 302 and no push monitor could ever report UP. An
 Access application named **`uptime-kuma push`** carries that bypass, created
 **August 26, 2026**. It covers two destinations: `uptime.cynexia.com/api/push/*` and the bare
 `uptime.cynexia.com/api/push`. The wildcard is the load-bearing one — a push URL always carries
@@ -327,7 +327,7 @@ assuming up-on-success everywhere.
 | `hindsight-canary` | `op://Homelab/hindsight/canary-kuma-push-token` | 3600s, 1 retry at 1800s | `hindsight-canary` CronJob in `hindsight`, from an EXIT trap: `up` when retain and recall both pass, `down` when either fails. `msg` carries `verdict=` from that script's enum plus both HTTP statuses |
 | `homelab-update-watch` | `op://Homelab/update-watch/kuma-push-token` | 86400s, 1 retry at 21600s | `update-watch` CronJob in `ops`, Python: `up` on a green verdict, `down` on a determinate red, and **nothing at all** on an indeterminate one. `msg` carries `verdict=`, `next=` and the counters |
 | `jottacloud-backup` | `op://Homelab/jottacloud-backup/kuma-push-token` | 21600s, 1 retry at 7200s | The `jottacloud-backup-scheduled` CronJob's own image, on success only. This repo does not build that image and does not control the request — see the note below |
-| `hermes-app-alive` | `op://hermes/hermes-app-alive/kuma-push-token` | 86400s, 1 retry at 21600s | `hermes-app-alive.timer` on the hermes VM at 05:45 UTC, `up` on exit 0 and `down` on failure, from an EXIT trap |
+| `hermes-app-alive` | `op://hermes/hermes-app-alive/kuma-push-token` | 86400s, 1 retry at 21600s | A `no_agent` cron job inside `hermes-gateway` on the hermes VM at 05:45 UTC, `up` on exit 0 and `down` on failure, from an EXIT trap |
 
 Each row's interval and retry mirror the period and grace of the healthchecks.io check it
 replaced, so nothing got quieter or noisier in the move (August 26, 2026).
@@ -336,15 +336,16 @@ replaced, so nothing got quieter or noisier in the move (August 26, 2026).
 from inside a cluster. Three things about it are unlike every other row here.
 
 - **It is the only push monitor driven from outside both clusters.** Every other one is a CronJob
-  in a namespace; this is a systemd user timer on an off-cluster Debian VM. It relies on the same
-  `/api/push/*` Access bypass, which is what makes that bypass's blast radius wider than "the
-  clusters": remove or narrow it and this monitor goes permanently DOWN over a perfectly healthy
-  VM, along with every other push monitor here.
+  in a namespace; this is a cron job inside the hermes agent on an off-cluster Debian VM. It relies
+  on the same `/api/push/*` Access bypass, which is what makes that bypass's blast radius wider
+  than "the clusters": remove or narrow it and this monitor goes permanently DOWN over a perfectly
+  healthy VM, along with every other push monitor here.
 - **Its token lives in the `hermes` vault, not `Homelab`**, because the VM's 1Password service
-  account can see only that vault. Anyone looking for it in `Homelab` will not find it. No
-  manifest in this estate assembles its `PUSH_URL`: the monitor, the 1Password field and the
-  VM-side environment file are all created by hand during the install in
-  [hermes-vm.md](hermes-vm.md#installing-or-reinstalling).
+  account can see only that vault — which is what lets the VM resolve it for itself. Anyone
+  looking for it in `Homelab` will not find it. No manifest in this estate assembles its
+  `PUSH_URL`: the monitor and the 1Password field are created by hand during the install in
+  [hermes-vm.md](hermes-vm.md#installing-or-reinstalling), and the token reaches the script as an
+  injected environment variable that the script turns into a URL.
 - It replaced no healthchecks.io check, so its interval and retry mirror nothing. They are chosen:
   a 24-hour heartbeat with one 6-hour retry, matching a check that runs once a day, which means a
   missing beat alarms about 30 hours after the last good one. The runbook is

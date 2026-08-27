@@ -619,22 +619,24 @@ signal to open a Hermex issue, not a new steady state.
   nothing bounding its size. **Treat `/home/hermes/workspace` as expendable**: anything
   worth keeping goes into a git remote or into the profile.
 
-The liveness and OS-patching machinery adds more VM-side state, and **only the two entries under `~/.hermes` are inside the nightly zip**:
+The liveness and OS-patching machinery adds more VM-side state, and **only the entries under `~/.hermes` are inside the nightly zip**:
 
 | Path | In the zip? |
 |---|---|
 | `/home/hermes/bin/hermes-app-alive.sh` | No |
-| `/home/hermes/.config/systemd/user/hermes-app-alive.service` | No |
-| `/home/hermes/.config/systemd/user/hermes-app-alive.timer` | No |
 | `/etc/apt/apt.conf.d/{20auto-upgrades,52unattended-upgrades-local}` | No |
 | `/etc/systemd/system/apt-daily{,-upgrade}.timer.d/override.conf` | No |
-| `/home/hermes/.hermes/hermes-app-alive.env` (mode 0600) | Yes |
+| `~/.hermes/config.yaml` — the `HERMES_APP_ALIVE_PUSH_TOKEN` injection | Yes |
+| The agent's cron store — the `hermes-app-alive` job itself | Yes |
 | `/home/hermes/.hermes/hermes-update.pre-run` (mode 0644) | Yes |
 
-The canonical copies live in `hermes-vm/` in this repository, not inline in this document.
+The canonical copy of the script lives in `hermes-vm/` in this repository, not inline in this document.
+The liveness check has no systemd unit and no environment file: it runs as a `no_agent` cron job inside `hermes-gateway`, and its push token is injected from 1Password at gateway start.
 **Everything outside `~/.hermes` must be reinstalled by hand after a rebuild** — the install runbook is [hermes-vm.md](hermes-vm.md#installing-or-reinstalling).
-The two entries inside `~/.hermes` come back with the restored archive.
-`hermes-app-alive.env` carries the monitor's push URL; `hermes-update.pre-run` is written by the update runbook, so a rebuilt VM inherits whatever rollback target the last update recorded — confirm the revisions it names still exist in both checkouts before trusting it.
+
+The entries inside `~/.hermes` come back with the restored archive, and **two of them need looking at rather than trusting**.
+Run `hermes cron list` after a restore: a liveness job that failed to come back looks exactly like a healthy day until the monitor's heartbeat lapses about 30 hours later.
+`hermes-update.pre-run` is written by the update runbook, so a rebuilt VM inherits whatever rollback target the last update recorded — confirm the revisions it names still exist in both checkouts before trusting it.
 
 #### Rebuild step
 
@@ -653,11 +655,11 @@ systemctl --user enable --now hermes-webui
 ```
 
 **`loginctl enable-linger hermes` is not optional and is easy to miss.** Without it the
-`hermes` user manager stops when the last session ends, so all five user units — and
-`hermes-app-alive.timer` — die at the next reboot, which is now automatic and can happen
-any night at 04:45 UTC. Part of the failure hides itself: the timer that would push a
-`down` is down too, so uptime-kuma sees silence and that monitor stays green until its
-heartbeat lapses about 30 hours later. The existing `hermes` HTTP monitor does catch it
+`hermes` user manager stops when the last session ends, so all five user units die at the
+next reboot, which is now automatic and can happen any night at 04:45 UTC. Part of the
+failure hides itself: the daily liveness check runs as a cron job inside `hermes-gateway`,
+so the thing that would push a `down` dies with everything else. uptime-kuma sees silence
+and that monitor stays green until its heartbeat lapses about 30 hours later. The existing `hermes` HTTP monitor does catch it
 sooner, because the dashboard it probes is one of the units that died. Confirm lingering
 with `loginctl show-user hermes -p Linger`, which must print `Linger=yes`.
 
