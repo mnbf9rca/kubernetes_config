@@ -119,7 +119,11 @@ shallow — are in [monitoring.md](monitoring.md#vps-cluster).
 `make route-vps-dns` reads the hostname list straight out of
 `vps/bootstrap/cloudflared/cloudflared.yaml` (that ConfigMap is the single source of
 truth for hostname → Service routing) and upserts a CNAME per hostname onto the current
-tunnel UUID. Run it after adding a hostname, and after any full cluster rebuild.
+tunnel UUID. Run it after adding a hostname, and after any full cluster rebuild. It shells
+out to `cloudflared tunnel route dns`, so the invoking machine needs an origin certificate at
+`~/.cloudflared/cert.pem` — run `cloudflared tunnel login` once, or, on a machine that has
+not, create the single CNAME through the Cloudflare API by copying an existing record's shape
+(the same trap as `make route-health-dns`, [homelab-health.md](homelab-health.md)).
 
 ### The `ops` namespace
 
@@ -318,11 +322,10 @@ dedicated postgres instances, which share one script parameterised by dump user.
 Each refreshes a `*.restic` snapshot every 12h.
 
 PinePods' episode audio has no sidecar and no snapshot, because it is not backed up at all.
-It lives on the separate `media` Cloud Volume at `/var/mnt/media`, which the restic job's
-`hostPath` source never reaches — so the exclusion is structural rather than an exclude rule
-somebody could delete. Losing that volume costs re-downloading the episodes. The subscriptions
-and listening history, which no download would bring back, live in `pinepods-pg-data`, and that
-PVC is swept and gate-verified nightly like every other.
+It lives on the separate `media` Cloud Volume at `/var/mnt/media`, which the restic job's `hostPath` source never reaches — so the exclusion is structural rather than an exclude rule somebody could delete.
+The same volume also holds PinePods' own in-app backup exports, under subPath `backups`, equally outside the restic sweep.
+Losing that volume costs re-downloading the episodes.
+The subscriptions and listening history, which no download would bring back, live in `pinepods-pg-data`, and that PVC is swept and gate-verified nightly like every other.
 
 **None of the six sidecars carries a probe**, and that is deliberate: any failing probe
 on a sidecar takes the *application* offline (readiness directly, liveness via

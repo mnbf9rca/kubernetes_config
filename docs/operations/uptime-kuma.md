@@ -40,10 +40,9 @@ passes, so on an endpoint whose status code already carries the verdict a keywor
 and `saveErrorResponse` already captures Cloudflare's error body into the alert, which makes a
 `1033` diagnosable.
 
-**The exception is an endpoint that answers 200 through its own failure.** There the status check
-carries no verdict and the body carries all of it, so the keyword is the only assertion that says
-anything. `pinepods` is the one monitor of that shape today; the entry in the monitor list below
-gives the keyword and why its quotes are load-bearing.
+**The exception is an endpoint that answers 200 through its own failure.**
+There the status check carries no verdict and the body carries all of it, so the keyword is the only assertion that says anything.
+`pinepods` is the one monitor of that shape today; the entry in the monitor list below gives the keyword and why its quotes are load-bearing.
 
 ## The Cloudflare Access trap
 
@@ -73,10 +72,11 @@ Paste the headers as JSON in the monitor's **Headers** box:
 Read the values with `op read` as you paste them; never write them into this repo. A wrong or
 missing header produces a 302, which fails the monitor — the correct, loud outcome.
 
-**The `rss.cynexia.com` and `Karakeep` monitors need no headers.** Path-scoped Access apps
-(`freshrss api`, `karakeep api`) serve those two URLs, and both apps carry the anonymous
-`bypass` policy, so each returns 200 with no credential. Verified August 25, 2026 by
-requesting both without headers. An earlier version of this file claimed one token covered
+**The `rss.cynexia.com`, `Karakeep` and `pinepods` monitors need no headers.** Path-scoped
+Access apps (`freshrss api`, `karakeep api`, `pinepods api`) serve those three URLs, and each
+app carries the anonymous `bypass` policy, so each returns 200 with no credential. The first
+two were verified August 25, 2026 by requesting them without headers. An earlier version of
+this file claimed one token covered
 `analytics`, `rss`, `keep`, `watch` and `n8n`. That was wrong: an IP bypass policy supplied the
 access, and that policy was deleted on August 25, 2026.
 
@@ -129,8 +129,8 @@ Each path mirrors the service's in-pod probe target, so a monitor failing while 
 passes isolates the fault to the tunnel or the edge. `uptime.cynexia.com` is absent on
 purpose: uptime-kuma checking its own hostname reports nothing it can deliver.
 
-Monitor names below match `kuma.db` as of August 25, 2026, with `pinepods` added as a
-specification ahead of its creation. The Access column names the
+Monitor names below match `kuma.db` as of August 25, 2026, plus `pinepods`, created
+August 27, 2026. The Access column names the
 application that answers the URL and the policies attached to it, so you can tell a
 credential fault from an outage without opening the dashboard.
 
@@ -148,22 +148,18 @@ VPS cluster, Access-protected:
 The first three carry the service-token headers. The last three must not: their apps admit
 anonymous requests, and adding headers there would imply a credential that nothing checks.
 
-**`pinepods` is the estate's only keyword monitor, and the keyword is the monitor.** Set the type
-to **HTTP(s) - Keyword** and the keyword to `"status":"healthy"` — **with the quotes**. PinePods'
-`/api/health` returns HTTP 200 whatever it finds and puts the verdict in the JSON body beside live
-`database` and `valkey` booleans, so `["200-299"]` alone proves only that the process answers.
+**`pinepods` is the estate's only keyword monitor, and the keyword is the monitor.**
+Set the type to **HTTP(s) - Keyword** and the keyword to `"status":"healthy"` — **with the quotes**.
+PinePods' `/api/health` returns HTTP 200 whatever it finds and puts the verdict in the JSON body beside live `database` and `valkey` booleans, so `["200-299"]` alone proves only that the process answers.
 The keyword turns the same request into real database-outage detection at no extra cost.
 
-**Never shorten it to the bare word `healthy`.** uptime-kuma matches a substring, and `healthy` is
-a substring of `unhealthy` — so the short form passes on exactly the body it exists to fail.
+**Never shorten it to the bare word `healthy`.**
+uptime-kuma matches a substring, and `healthy` is a substring of `unhealthy` — so the short form passes on exactly the body it exists to fail.
 `"database":true` is the equally valid alternative if the top-level field is ever renamed.
 
-This monitor is created by hand when the service goes live, after the `pinepods api` Access app
-exists. Until then the entry above is the specification, not an observation. It needs no
-service-token headers: `/api/health` resolves under that path-scoped bypass rather than the root
-app ([vps.md](vps.md#cloudflare-access-bypasses)). Keep `maxredirects: 0` regardless — a 302 here
-means the bypass is missing or scoped wrong, and following it would report UP off the Cloudflare
-login page.
+This monitor is created by hand, after the `pinepods api` Access app exists.
+It needs no service-token headers: `/api/health` resolves under that path-scoped bypass rather than the root app ([vps.md](vps.md#cloudflare-access-bypasses)).
+Keep `maxredirects: 0` regardless — a 302 here means the bypass is missing or scoped wrong, and following it would report UP off the Cloudflare login page.
 
 Homelab health tunnel:
 

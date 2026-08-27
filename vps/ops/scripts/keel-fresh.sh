@@ -125,8 +125,8 @@ START_METRIC=process_start_time_seconds
 # and, like those four, contributes MORE THAN ONE image - pinepods:latest plus
 # its own valkey/valkey:8-alpine sidecar - so it moves the count by two, not
 # one. The floor is 9, two below. Setting it to 11 would leave ZERO margin,
-# which is the failure this constant exists to avoid. Confirm the 11 against
-# poll_trigger_tracked_images after the first apply.
+# which is the failure this constant exists to avoid. The 11 was confirmed
+# against poll_trigger_tracked_images on 2026-08-27, after the first apply.
 #
 # Raise it deliberately when the estate grows; a floor that drifts below reality
 # is a check that has stopped checking.

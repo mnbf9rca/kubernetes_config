@@ -94,7 +94,10 @@ Full mechanics, target-by-target reference and failure modes:
   `build-*` is already wrapped in `op run` by the Makefile, so no extra wrapper is needed
   to hit it: `make build-homelab > out.yaml` writes `<concealed by 1Password>` into the
   Secrets and `kubectl apply -f out.yaml` stores the mask. **Never render-then-apply**;
-  `diff-*`/`apply-*` keep the stream inside the child, where values are real.
+  `diff-*`/`apply-*` keep the stream inside the child, where values are real. Redirecting a
+  diff is the **mirror hazard**: `kubectl diff` prints Secret data as base64, which the mask
+  does not recognise, so `make diff-<cluster> > out.diff` writes the **real** values to disk —
+  never redirect `diff-*` either.
   Detail: `docs/operations/apply-workflow.md`.
 - **`ENVSUBST_VARS` is an explicit allowlist, passed single-quoted.** Never call envsubst
   without one: with no allowlist it eats every `${VAR}` in the stream including shell

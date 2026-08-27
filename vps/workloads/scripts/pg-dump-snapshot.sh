@@ -1,6 +1,11 @@
 #!/bin/sh
-# Quiesce sidecar for umami's postgres. Same shape as the sqlite sidecars, with
-# pg_dumpall in place of `.backup`.
+# Quiesce sidecar for a dedicated postgres. Same shape as the sqlite sidecars,
+# with pg_dumpall in place of `.backup`.
+#
+# ONE FILE, TWO CONSUMERS: umami's postgres and pinepods'. They differ only in
+# the role the dump runs as, which arrives as $PGDUMP_USER and defaults to
+# umami, the first consumer. Nothing else here is per-application, and anything
+# that becomes so must be parameterised the same way rather than branched on.
 #
 # Retries after 5 min on failure instead of sleeping 12h past it. The old form
 # slept 43200 unconditionally, including on failure. That matters now that the
@@ -13,7 +18,8 @@
 # `set -e` is DELIBERATELY ABSENT here for the same reason as the sqlite
 # sidecars: exiting on a failed dump would CrashLoopBackOff this container,
 # making the whole Pod not Ready and taking the postgres Service's only
-# endpoint down — i.e. a failed backup would take umami itself offline.
+# endpoint down — i.e. a failed backup would take the application in front of
+# it offline.
 set -u
 
 DUMP=/var/lib/postgresql/data/dump.sql
@@ -22,16 +28,19 @@ DUMP=/var/lib/postgresql/data/dump.sql
 # sqlite sidecars make with `select count(*) from sqlite_master`, and for the
 # same reason.
 #
-# pg_dumpall EXITS 0 against a freshly-initialised postgres that has no umami
-# schema. Recreate the PVC, or let PGDATA re-initialise for any reason, and the
-# image's entrypoint creates an empty `umami` database; pg_dumpall then writes a
-# valid, roughly 100-line, roles-and-databases-only file, `mv` puts it at
-# dump.sql.restic with a current mtime, and it sails through the restic gate,
-# whose freshness test is mtime and nothing else. The backup would look healthy
-# and restore to an empty analytics database.
+# pg_dumpall EXITS 0 against a freshly-initialised postgres that has no
+# application schema. Recreate the PVC, or let PGDATA re-initialise for any
+# reason, and the image's entrypoint creates the empty database named by
+# POSTGRES_DB; pg_dumpall then writes a valid, roughly 100-line,
+# roles-and-databases-only file, `mv` puts it at dump.sql.restic with a current
+# mtime, and it sails through the restic gate, whose freshness test is mtime and
+# nothing else. The backup would look healthy and restore to an empty database —
+# empty analytics for umami, empty subscriptions and listening history for
+# pinepods.
 #
-# `CREATE TABLE` is the discriminator: a roles-only dump has none, and umami's
-# Prisma-managed schema has many. Checking for the `umami` database instead
+# `CREATE TABLE` is the discriminator: a roles-only dump has none, and both
+# schemas here have many — umami's is Prisma-managed, pinepods' is built by its
+# own startup migrations. Checking for the application database by name instead
 # would not work — the entrypoint creates that database whether or not anything
 # is in it.
 MIN_TABLES=1

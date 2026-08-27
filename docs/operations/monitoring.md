@@ -255,10 +255,9 @@ that would skip a whole night of everything else over one stale artifact.
 
 **Add every new artifact to its cluster's expected set, or that application's backup goes
 unverified, silently.** On VPS that means every new service that publishes a quiesce artifact;
-on homelab, every
-local-path PVC holding something you would miss. An explicit list beats a wildcard, which cannot
-tell "no databases exist" from "the volume is unmounted" from "three of four present" — all
-three produce no stale files.
+on homelab, every local-path PVC holding something you would miss. An explicit list beats a
+wildcard, which cannot tell "no databases exist" from "the volume is unmounted" from "three of
+four present" — all three produce no stale files.
 
 | Cluster | Artifact | Path | Assertion |
 |---|---|---|---|
@@ -992,8 +991,7 @@ at 7 against 9 and both numbers rose by two on August 27, 2026, when pinepods jo
 carrying its own valkey sidecar — one workload, two images. That is the shape of every future
 change here: raise the floor in the same commit as the workload, and keep the margin rather than
 setting the floor to the count. Reconciling either number against a list of keel-annotated
-workloads is off by
-however many distinct sidecar images those workloads carry: the gauge counts
+workloads is off by however many distinct sidecar images those workloads carry: the gauge counts
 **images**, and keel tracks every container in an annotated workload, which is why the VPS reads
 11 over 9 Deployments. Adding a keel-managed workload does not raise either floor; removing
 several without taking that estate below its floor does not lower it. Revisit them whenever the
@@ -1011,7 +1009,7 @@ Probes fix hung request paths, not silently stopped background work — often th
 | Service | The probe stays green while… |
 |---|---|
 | **umami** | `/api/heartbeat` returns a static `{ok:true}` that never touches Prisma. It returns 200 through any database failure (upstream #3417, connection-pool exhaustion). This buys Node-wedge detection only, not DB-outage detection |
-| **pinepods** | `/api/health` returns HTTP 200 whatever it finds; the `database` and `valkey` booleans it reports live in the body only. So the readiness and startup probes stay green through a dead database, exactly as umami's do, and that is not fixed in the pod — dropping the single replica from its EndpointSlice during a database outage repairs nothing. The `pinepods` kuma monitor closes it from outside by asserting the body keyword ([uptime-kuma.md](uptime-kuma.md#monitor-list)). Separately, **episode audio on the `media` volume is backed up by nothing** and no gate looks for it: the restic job's `hostPath` source is `/var/mnt/data`, so `/var/mnt/media` is out of reach by construction. Losing it costs re-downloading the episodes; the subscriptions and history are in `pinepods-pg-data`, which is swept |
+| **pinepods** | `/api/health` returns HTTP 200 whatever it finds; the `database` and `valkey` booleans it reports live in the body only. So the readiness and startup probes stay green through a dead database, exactly as umami's do, and that is not fixed in the pod — dropping the single replica from its EndpointSlice during a database outage repairs nothing. The `pinepods` kuma monitor closes it from outside by asserting the body keyword ([uptime-kuma.md](uptime-kuma.md#monitor-list)). Separately, **episode audio on the `media` volume is backed up by nothing** and no gate looks for it: the restic job's `hostPath` source is `/var/mnt/data/local-path-provisioner`, so `/var/mnt/media` is out of reach by construction — and that includes PinePods' own in-app backup exports, which land on the same volume under subPath `backups`. Losing it costs re-downloading the episodes; the subscriptions and history are in `pinepods-pg-data`, which is swept |
 | **changedetection** | Upstream #4214: 134 watches went 23 days unchecked while `/` returned 200 and `/worker-health` reported healthy, because the ticker died, not the workers. Only `overdue_watches` from `/api/v1/systeminfo` sees it. Wire it as an external json-query alert, never as liveness: a restart does not fix a scheduling bug |
 | **uptime-kuma** | The HTTP server and the monitor scheduler run independently (#4967). A monitoring tool that has silently stopped monitoring is the worst version of this bug, and no in-pod probe detects it. Hence layer 4 |
 | **karakeep** | `/api/health` is a hardcoded literal in the web process and cannot observe the worker. Stuck-queue reports (#1802, #2704) all leave it returning 200. The detector is the `karakeep_queue_jobs` metric (`pending > 0 && running == 0`) |
