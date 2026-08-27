@@ -121,13 +121,16 @@ START_METRIC=process_start_time_seconds
 # header describes, observed here rather than reasoned about: ten counter series,
 # nine tracked images.
 #
-# So the steady-state count is 10 (pinepods:latest joined the keel set on
-# 2026-08-27) and the floor is 8, two below. Setting it to 10 would leave
-# ZERO margin, which is the failure this constant exists to avoid.
+# So the steady-state count is 11: pinepods joined the keel set on 2026-08-27
+# and, like those four, contributes MORE THAN ONE image - pinepods:latest plus
+# its own valkey/valkey:8-alpine sidecar - so it moves the count by two, not
+# one. The floor is 9, two below. Setting it to 11 would leave ZERO margin,
+# which is the failure this constant exists to avoid. Confirm the 11 against
+# poll_trigger_tracked_images after the first apply.
 #
 # Raise it deliberately when the estate grows; a floor that drifts below reality
 # is a check that has stopped checking.
-IMAGE_FLOOR=8
+IMAGE_FLOOR=9
 
 STATE_DIR=/state
 STATE_FILE=$STATE_DIR/last
