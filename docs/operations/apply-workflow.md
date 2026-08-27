@@ -106,7 +106,10 @@ corruption that doesn't look like a mistake at the point it happens. The same ap
 `diff-*` and `apply-*` are safe because they keep the rendered stream **inside** the
 `op run` child and pipe it straight into kubectl, so real values never cross stdout and
 masking never sees them. **Render-then-apply is the risky shape; the one-step pipeline is
-not.** `op run --no-masking` exists and is deliberately not used: an unmasked render is a
+not.** But **redirecting a diff is the mirror hazard**: `kubectl diff` prints Secret data as
+base64, which the mask does not recognise, so `make diff-homelab > out.diff` writes the real
+values to disk where `build-*` would have written the placeholder. Never redirect `diff-*`
+either. `op run --no-masking` exists and is deliberately not used: an unmasked render is a
 secret-shaped file on disk waiting to be committed or pasted.
 
 One consequence worth knowing: because `kubectl diff` prints whole manifests, a change to
