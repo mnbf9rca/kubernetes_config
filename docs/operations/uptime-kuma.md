@@ -182,8 +182,8 @@ which is the assertion the HTTP surface cannot make.
 If a monitor is ever added here anyway, it is not a copy of the `hermes` monitor: this
 Access app authenticates every request with Service Auth, so the monitor must send the
 service-token headers and set `maxredirects: 0`. Residuals are in
-[monitoring.md](monitoring.md#what-this-does-not-catch); the runbook is
-[hermes-vm-updates.md](hermes-vm-updates.md).
+[monitoring.md](monitoring.md#what-this-does-not-catch); the check's own triage is in
+[hermes-vm.md](hermes-vm.md#reading-a-down-hermes-app-alive).
 
 **The triage here inverted on August 25, 2026.** The monitor used to reach the
 origin because it probes from the VPS's Hetzner IP, which an Access bypass
@@ -344,11 +344,11 @@ from inside a cluster. Three things about it are unlike every other row here.
   account can see only that vault. Anyone looking for it in `Homelab` will not find it. No
   manifest in this estate assembles its `PUSH_URL`: the monitor, the 1Password field and the
   VM-side environment file are all created by hand during the install in
-  [hermes-vm-updates.md](hermes-vm-updates.md#installing-or-reinstalling).
+  [hermes-vm.md](hermes-vm.md#installing-or-reinstalling).
 - It replaced no healthchecks.io check, so its interval and retry mirror nothing. They are chosen:
   a 24-hour heartbeat with one 6-hour retry, matching a check that runs once a day, which means a
   missing beat alarms about 30 hours after the last good one. The runbook is
-  [hermes-vm-updates.md](hermes-vm-updates.md#reading-a-down-hermes-app-alive).
+  [hermes-vm.md](hermes-vm.md#reading-a-down-hermes-app-alive).
 
 ### The one monitor whose request this repo does not control
 

@@ -537,63 +537,49 @@ iOS app answers every message with `AIAgent not available`. Upstream reaches the
 conclusion in `bootstrap.py`, where `ensure_python_has_webui_deps` prefers the agent venv
 and creates a local `.venv` only when no agent venv can run both.
 
-**This section is why the update wrapper installs both passengers into the agent venv**, and
-why `hindsight-client` is now a third resident of it, pinned to the version the deployed
-Hindsight server reports. It is also why `hermes-app-alive.sh` imports `run_agent` every
-day at 05:45 UTC: that import is the cheapest assertion that catches the failure documented
-above, and no HTTP check on any of the three services can catch it. See
-[hermes-vm-updates.md](hermes-vm-updates.md#what-the-health-assertion-asserts).
+**This section is why the update runbook installs the WebUI's requirements into the agent venv**, under a constraint file generated from that venv, and why `hindsight-client` is a third resident of it rather than a tenant of its own environment.
+It is also why `hermes-app-alive.sh` imports `run_agent` every day at 05:45 UTC: that import is the cheapest assertion that catches the failure documented above, and no HTTP check on any of the three services can catch it.
+The verification step that repeats it after every update is in [hermes-vm-updates.md](hermes-vm-updates.md#verify).
 
 #### Update — tracks upstream, not pinned
 
-The title is still accurate, and that is the point of the ruling of August 26, 2026: the
-checkout tracks `origin/master` rather than a pinned tag.
+The checkout tracks `origin/master` rather than a pinned tag, which is the ruling of August 26, 2026.
+Upstream's newest tag sits more than 560 commits behind its own deployed master, and it stopped tagging; a pin here would freeze the WebUI on code nobody runs.
 
-**The manual runbook that used to be here is now a script.** `hermes-update.sh` on the VM
-updates the agent and both venv passengers in one run, asserts that the result still
-serves, and rolls back to last-good when it does not. Run it, and read
-[hermes-vm-updates.md](hermes-vm-updates.md):
+**The WebUI moves as one step of the whole-VM update procedure, not on its own.**
+The procedure is a runbook that an agent or the operator follows roughly weekly, with someone watching: [hermes-vm-updates.md](hermes-vm-updates.md).
+Its [Update](hermes-vm-updates.md#update) step fetches `origin/master`, checks the branch out with `git checkout -f -B master origin/master`, and installs `requirements.txt` into the **agent** venv under a constraint file frozen from that same venv moments earlier.
 
-```sh
-ssh hermes@hermes.cynexia.net 'hermes-update'
-```
+Two consequences of that checkout form are worth knowing before you touch the tree by hand:
 
-One behavioural change to know. **The constrained `pip install` this runbook introduced now
-runs on every update**, from inside the wrapper, rather than whenever an operator
-remembered it. The constraint file is not decoration: `pyyaml` and `cryptography` are
-already hermes-agent dependencies (`pyproject.toml` pins `pyyaml==6.0.3` and
-`cryptography==50.0.0`), so today the install is a no-op. The risk is not that the
-dependencies go missing; it is that an unpinned install eventually moves one of them under
-four production services. With `-c`, pip fails loudly and a human decides.
+- **`git checkout master && git pull --ff-only` agrees with it.** The command you already have in your fingers leaves the checkout in the shape the runbook maintains: local `master`, HEAD attached, tracking upstream.
+- **`-f` force-sets the branch, so uncommitted changes in `/home/hermes/hermes-webui` are discarded.** Do not keep work there. The runbook's preconditions stop on a dirty tree for exactly this reason, and the `-f` states the intent rather than hiding it.
 
-The wrapper moves the checkout with `git checkout -B master <sha>` against `origin/master`,
-which has two consequences:
-
-- **`git checkout master && git pull --ff-only` now agrees with it.** The command an
-  operator already has in their fingers leaves the checkout in the same shape the wrapper
-  maintains: local `master`, HEAD attached, tracking upstream.
-- **It force-sets the branch, so uncommitted changes in `/home/hermes/hermes-webui` are
-  discarded.** Do not keep work there.
+**The constraint file is not decoration.** `pyyaml` and `cryptography` are already hermes-agent dependencies (`pyproject.toml` pins `pyyaml==6.0.3` and `cryptography==50.0.0`), so today the install is a no-op.
+The risk is not that the dependencies go missing; it is that an unpinned install eventually moves one of them under four production services.
+With `-c`, pip fails loudly and a person decides.
 
 #### Rollback when an update breaks the app
 
-**The wrapper does this automatically.** When its health assertion fails, `hermes-update.sh`
-restores all three revisions from `~/.hermes/hermes-update.last-good`, which carries
-`agent_sha`, `webui_sha` and `client_version`, and it keeps `~/.hermes/webui.last-good` in
-step so the manual path below still works. Read
-[hermes-vm-updates.md](hermes-vm-updates.md#manual-rollback) before doing this by hand, and
-read the caveat there first: **the rollback restores code and cannot restore state**,
-because `hermes update`'s config and `state.db` migrations are forward-only.
+**Nothing rolls back on its own.** Rollback is a manual, judgement-bearing procedure, and the full form — agent, WebUI, `hindsight-client` and the five units, in the order that matters — is [the runbook's Rollback section](hermes-vm-updates.md#rollback).
+Read its caveat before you start: **a rollback restores code and pinned versions, and cannot restore state**, because `hermes update`'s configuration and `state.db` migrations are forward-only. State comes back only from the `--backup` snapshot, and only by discarding everything since.
 
-To roll back the webui alone, by hand, to the revision that last worked **here**:
+What makes a by-hand rollback possible is a file the runbook writes **before anything mutates**: `~/.hermes/hermes-update.pre-run`, which records `agent_sha`, `agent_branch`, `webui_sha` and `client_version`, then gains `target_sha` and `webui_target_sha` as the run proceeds.
+It is plain text, mode 0644, and every value in it is an ordinary identifier.
+It lives inside `~/.hermes`, so the nightly zip carries it and a rebuilt VM inherits a rollback target — confirm the revisions it names still exist in both checkouts before trusting it.
+
+To roll back the WebUI alone, to the revision recorded before this run:
 
 ```sh
-SHA=$(cat /home/hermes/.hermes/webui.last-good)
-git -C /home/hermes/hermes-webui checkout "$SHA"   # detached HEAD, expected
+SHA=$(sed -n 's/^webui_sha=//p' /home/hermes/.hermes/hermes-update.pre-run)
+git -C /home/hermes/hermes-webui checkout -f -B master "$SHA"
 systemctl --user restart hermes-webui
 ```
 
-Second resort, if `webui.last-good` is missing or is itself the broken revision: the
+That form leaves the checkout on a branch rather than detached, which is the state the next update expects.
+It moves the WebUI alone, so use it only when the agent side is known good — otherwise take the runbook's ordered rollback, which regenerates the constraint file from the restored agent tree.
+
+Second resort, if the record is missing or names a revision that is itself broken: the
 Hermex repo publishes the upstream commit the app was last validated against as
 `UPSTREAM_TESTED_SHA`. Note the branch is `master`, not `main`, and validate the value
 before it reaches `git` — a 404 returns an HTML error page, and `git checkout ""` on an
@@ -609,7 +595,8 @@ git -C /home/hermes/hermes-webui fetch origin
 git -C /home/hermes/hermes-webui checkout "$SHA"
 ```
 
-Prefer `webui.last-good`. `UPSTREAM_TESTED_SHA` advances only when the app's own contract
+Prefer the `webui_sha` in the pre-run record.
+`UPSTREAM_TESTED_SHA` advances only when the app's own contract
 tests are re-run, so it drifts: on 2026-08-24 it pointed at a commit from 2026-05-17 while
 upstream `master` was three months further on. Rolling back that far means running May
 code against an August `~/.hermes/webui` state directory and an agent that has moved
@@ -632,30 +619,22 @@ signal to open a Hermex issue, not a new steady state.
   nothing bounding its size. **Treat `/home/hermes/workspace` as expendable**: anything
   worth keeping goes into a git remote or into the profile.
 
-The update and liveness machinery adds more VM-side state, and **only the four entries
-under `~/.hermes` are inside the nightly zip**:
+The liveness and OS-patching machinery adds more VM-side state, and **only the two entries under `~/.hermes` are inside the nightly zip**:
 
 | Path | In the zip? |
 |---|---|
-| `/home/hermes/bin/hermes-update.sh` | No |
 | `/home/hermes/bin/hermes-app-alive.sh` | No |
-| `/usr/local/bin/hermes-update` (root-owned, mode 0755) | No |
-| `/home/hermes/.config/systemd/user/hermes-update.service` | No |
 | `/home/hermes/.config/systemd/user/hermes-app-alive.service` | No |
 | `/home/hermes/.config/systemd/user/hermes-app-alive.timer` | No |
 | `/etc/apt/apt.conf.d/{20auto-upgrades,52unattended-upgrades-local}` | No |
 | `/etc/systemd/system/apt-daily{,-upgrade}.timer.d/override.conf` | No |
-| `/home/hermes/.hermes/hermes-update.env` (mode 0600) | Yes |
 | `/home/hermes/.hermes/hermes-app-alive.env` (mode 0600) | Yes |
-| `/home/hermes/.hermes/hermes-update.last-good` | Yes |
-| `/home/hermes/.hermes/webui.last-good` | Yes |
+| `/home/hermes/.hermes/hermes-update.pre-run` (mode 0644) | Yes |
 
 The canonical copies live in `hermes-vm/` in this repository, not inline in this document.
-**Everything outside `~/.hermes` must be reinstalled by hand after a rebuild** — the
-install runbook is [hermes-vm-updates.md](hermes-vm-updates.md#installing-or-reinstalling).
-The four entries that are inside `~/.hermes` come back with the restored archive, so a
-rebuilt VM inherits a rollback target rather than starting without one — but confirm the
-revisions it names still exist in both checkouts before trusting it.
+**Everything outside `~/.hermes` must be reinstalled by hand after a rebuild** — the install runbook is [hermes-vm.md](hermes-vm.md#installing-or-reinstalling).
+The two entries inside `~/.hermes` come back with the restored archive.
+`hermes-app-alive.env` carries the monitor's push URL; `hermes-update.pre-run` is written by the update runbook, so a rebuilt VM inherits whatever rollback target the last update recorded — confirm the revisions it names still exist in both checkouts before trusting it.
 
 #### Rebuild step
 
@@ -770,9 +749,9 @@ the OS; restore the state.
    `hermes setup`. Run `loginctl enable-linger hermes` before enabling any user unit, or
    every one of them dies at the next reboot. `hermes-webui` is a separate install that the
    zip does not carry — re-clone it and re-create its unit from [Hermes WebUI on the
-   VM](#rebuild-step) before step 5 restarts it. The update wrapper, the daily liveness
-   check and `unattended-upgrades` are a separate install as well —
-   [hermes-vm-updates.md](hermes-vm-updates.md#installing-or-reinstalling).
+   VM](#rebuild-step) before step 5 restarts it. The daily liveness check and
+   `unattended-upgrades` are a separate install as well —
+   [hermes-vm.md](hermes-vm.md#installing-or-reinstalling).
 7. Delete every operator-side copy: `./hermes-restore.zip`, the `./restore/` tree if
    step 1 used B2, and `~/hermes-restore.zip` on the VM.
 

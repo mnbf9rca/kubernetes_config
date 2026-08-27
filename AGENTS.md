@@ -21,7 +21,8 @@ procedures live under `docs/` and are referenced from here rather than duplicate
 | `docs/operations/uptime-kuma.md` | Layer 3/4 runbook: creating uptime-kuma monitors by hand, per-monitor HTTP settings, the Cloudflare Access trap, the push monitors driven from inside the clusters (and the one driven from the hermes VM) and the bypass they need, the self-monitor |
 | `docs/operations/hindsight.md` | The `hindsight` namespace: the self-hosted memory backend for the Hermes profiles — topology, auth, the canary, upgrade and restore runbooks, the restore drill, key rotation, and the removal path |
 | `docs/operations/agent-mail.md` | Per-agent email for Hermes agents: Purelymail mailboxes on cynexia.io, per-profile mcp-email-server config, provisioning runbook, credential scheme, limits, and the deliberate monitoring/backup gaps |
-| `docs/operations/hermes-vm-updates.md` | Updating the Hermes VM: the on-demand `hermes update` wrapper with its health assertion and last-good rollback, what that rollback cannot restore, why it is deliberately unscheduled, `unattended-upgrades` with automatic reboot, and the daily `hermes-app-alive` liveness check |
+| `docs/operations/hermes-vm.md` | The Hermes VM itself: lingering, triaging a DOWN `hermes-app-alive`, installing the kept components, `unattended-upgrades` with its automatic reboot, what the daily check does not watch, the accepted exposures, and the VM's own facts |
+| `docs/operations/hermes-vm-updates.md` | The update runbook for the Hermes application stack, run by an agent or the operator roughly weekly: preconditions, change analysis, the detached update, verification, the report ping, and manual rollback. Steps and latent hazards only — everything observable at failure time is left to the agent running it |
 
 Design documents and implementation plans are local-only under the gitignored
 `docs/superpowers/` tree (`specs/2026-04-11-talos-homelab-rebuild-design.md`,
@@ -65,9 +66,8 @@ kubernetes_config/
 │   └── backup/               # restic init Job + nightly CronJob (hostPath /var/mnt/ssd/local-path-provisioner)
 ├── vps/                      # Hetzner Talos cluster, same sub-layout (bootstrap/secrets/workloads/backup/ops/talos)
 ├── hermes-vm/                # files that live on the hermes VM, not in a cluster
-│   ├── scripts/              # the on-demand update wrapper + tests, and the daily alive check
-│   ├── bin/                  # the root-owned /usr/local/bin entry point
-│   ├── systemd/              # the update oneshot (NO timer) + the alive service and its timer
+│   ├── scripts/              # the daily alive check — the tree's one script
+│   ├── systemd/              # the alive service and its timer
 │   └── etc/                  # unattended-upgrades config + the two apt timer drop-ins
 ├── scripts/                  # repo-level helpers (karakeep tags, FreshRSS WebSub status, the check-* guards)
 ├── legacy-microk8s/          # frozen reference copies of the old microk8s manifests
@@ -268,16 +268,26 @@ Full mechanics, target-by-target reference and failure modes:
   notification transport its destination has configured, a list nobody has enumerated on
   either side. Policy, the accepted residuals and that open item:
   `docs/operations/monitoring.md`.
-- **The hermes VM's update wrapper is deliberately not scheduled.** `hermes update`
-  sometimes carries manual steps, so `hermes-vm/systemd/` holds a oneshot service and no
-  `.timer` **for it**. Adding one is a design change and needs the operator, not a
-  tidy-up. The one timer in that directory, `hermes-app-alive.timer`, drives a read-only
+- **Updating the hermes VM is a runbook, not a script, and it is deliberately not
+  scheduled.** `hermes update` sometimes carries a step that needs judgement — a migration
+  prompt, a stash of local edits — and a script cannot exercise judgement, so the procedure
+  lives as prose an agent or the operator follows with the session open, roughly weekly:
+  `docs/operations/hermes-vm-updates.md`. Everything else about the VM — lingering, the
+  daily liveness check, the install, `unattended-upgrades` — is in
+  `docs/operations/hermes-vm.md`. The wrapper that used to automate updates, with its two
+  test harnesses, its systemd unit and its root-owned entry point, was deleted on
+  2026-08-27. Building it back is a design change and needs the operator, not a tidy-up;
+  the one timer under `hermes-vm/systemd/`, `hermes-app-alive.timer`, drives a read-only
   daily liveness check and is not a precedent for scheduling updates.
-  These files are not rendered by kustomize, so `make check-script-lint` cannot see them —
-  `make check-vm-scripts` is their guard. It runs in **no** preflight and there is no CI,
-  so nothing runs it automatically: it is the first step of the install runbook
-  (`docs/operations/hermes-vm-updates.md`) and of the 4-to-6-week update session. Run it
-  after touching anything under `hermes-vm/`.
+  **Nothing mechanical guards runbook prose**, which is why its disclosure rules are
+  written into the steps they govern rather than referenced.
+  The files that remain under `hermes-vm/` are not rendered by kustomize, so
+  `make check-script-lint` cannot see them — `make check-vm-scripts` is their guard, and it
+  is `shellcheck -s sh` over `hermes-vm/scripts/hermes-app-alive.sh` plus
+  `scripts/check-ping-bodies.py hermes-vm`. It runs in **no** preflight and there is no CI,
+  so nothing runs it automatically: it is step 1 of the install procedure in
+  `docs/operations/hermes-vm.md`, and the update runbook never calls it. Run it by hand
+  after touching anything under `hermes-vm/`, and before copying any of it to the VM.
 - **A new InfluxDB bucket in the `health` namespace means three edits, not one:** create it
   (a `make health-influx-*-bootstrap` target), add it to the explicit `for B in ...` list in
   `homelab/health/scripts/influx-export-lp.sh`, **and** raise `LP_EXPECTED` in
@@ -454,6 +464,13 @@ Full mechanics, target-by-target reference and failure modes:
 - Documentation belongs in `docs/`, **referenced** from this file rather than included in
   it. When you learn something operational, write it into the relevant `docs/` file and
   add a pointer here only if it changes how an agent edits the repo.
+- **Markdown is not hard-wrapped** (operator ruling, 2026-08-27). Write one line per
+  sentence, or per paragraph where a paragraph is one thought; let the editor wrap it. A
+  sentence then owns a line in every diff, so a one-word change shows as a one-line change
+  instead of reflowing the paragraph around it. The exception is **files that ship to a
+  machine and are read with `cat` or `less`** — apt configuration, systemd units, shell
+  scripts and their comments — which keep the roughly 80-column wrapping they have, because
+  no editor wraps them where they are read.
 - **Documentation, not agent memories.** Do not record repo, cluster, or account state in
   an agent's private memory system — that hides operational knowledge from the operator,
   from other agents, and from review. Anything worth remembering goes in `docs/` (or this

@@ -77,16 +77,24 @@ Then, by hand:
 3. `make apply-homelab`.
 4. `kubectl -n hindsight rollout status deploy/hindsight --timeout=600s`.
 5. Watch the startup probe settle, then run `hermes memory status` on VM 103.
-6. **Move the VM's client.** Bumping the server pin also moves `hindsight-client` on the
-   hermes VM, but only the next time `hermes-update.sh` runs — and that script is
-   deliberately unscheduled. Run it when convenient:
-   `ssh hermes@hermes.cynexia.net 'hermes-update'`
-   ([hermes-vm-updates.md](hermes-vm-updates.md)).
+6. **Prove one Hermes memory write still lands.** The canary proves the *server*; it says
+   nothing about the agent's client, which is a different library talking to the same API.
+   On VM 103, take one chat turn against the default gateway — the command is in
+   [the update runbook's Verify step](hermes-vm-updates.md#verify) — then read that
+   gateway's journal for the write behind it:
 
-Between a server bump and the next update run, the VM talks to the new server with the
-previous client. That skew is what this design bounds rather than eliminates: the client is
-pinned to the version the server *reports*, so it converges on the next run instead of
-drifting indefinitely.
+   ```sh
+   journalctl --user -u hermes-gateway --since '10 min ago' | grep -i hindsight
+   ```
+
+   A `401`, a timeout or a schema complaint here, with the canary green, points at the
+   client rather than the server. The write is on a background path the chat response does
+   not wait for, so a 200 from the chat turn proves nothing on its own.
+
+**Server and client move independently, and the skew is accepted.** The VM's
+`hindsight-client` is never pinned by this estate — see
+[The client on the hermes VM](#the-client-on-the-hermes-vm) — so a server bump moves the
+server alone, and the client moves only when hermes-agent's own pin moves.
 
 Keep the API and control-plane images on the **same** version tag: Renovate groups them,
 and a skewed pair is a combination nobody has tested. Keep the API pin at or above
@@ -104,6 +112,24 @@ restore, planned deliberately.
 
 The dump is the rollback. Restore it (below) and pin the image back to the previous tag
 in the same commit.
+
+## The client on the hermes VM
+
+**Ruling, August 27, 2026: `hindsight-client` on VM 103 is never pinned by this estate.**
+The version installed there is whatever hermes-agent's own `pyproject.toml` asks for, and this repository neither records it nor moves it.
+Nothing on the VM reads the server's reported version to choose a client, and no file here carries a client pin to keep in step with the server tag.
+
+Four facts support that:
+
+1. **Upstream's `hindsight-client==0.6.1` is a supply-chain policy, not a compatibility statement.** NousResearch exact-pin every dependency and age each one 14 days before adopting it. The pin says "this version has been vetted", not "this version is what the server needs".
+2. **The wire surface is additive across the gap.** Comparing 0.6.1 against 0.9.x, all 49 of the paths 0.6.1 calls are still present, and the authentication scheme is unchanged. Nothing the old client sends has been removed or renamed.
+3. **The plugin's version check is a floor, not an equality.** It refuses a client below its minimum and accepts anything at or above it, so a client older than the server is a supported configuration rather than an accident.
+4. **The server is the side that must stay current, and it does.** The homelab deployment is under Renovate, keeps its API and control-plane images on the same tag, and holds the 0.9.1 floor. Client-to-server skew is therefore bounded by the server moving forward, and it is accepted.
+
+**What would overturn this.** Any one of the four failing: the upstream pin moving for a stated compatibility reason rather than an aging one; a release removing or renaming a path the installed client calls; the authentication scheme changing; or the plugin raising its floor above the client the agent installs.
+The change-analysis step of [the update runbook](hermes-vm-updates.md#change-analysis) reads the `pyproject.toml` diff on every run, which is where a pin move shows up first.
+
+**Bumping upstream's pin is the operator's, by hand.** The pull request goes to NousResearch under the operator's name, so no agent opens it. This estate carries no local override in the meantime.
 
 ## Restoring
 
@@ -181,16 +207,36 @@ answer.
 
 The tenant key is one value with four consumers: the API validates against it, the
 control-plane container presents it to the API, the canary authenticates with it, and
-the Hermes profiles on VM 103 send it on every request. Rotating it means:
+the Hermes profiles on VM 103 send it on every request.
 
-1. Generate a new value and update **both** vault copies: `op://Homelab/hindsight/tenant-api-key` (read by the cluster apply) and `op://Homelab/hermes/tenant-api-key` (read by the Hermes profiles on VM 103). They hold the same value; updating only one splits the key and the profiles stop authenticating at their next restart.
+**It is deliberately stored twice, and the duplication is the vault-visibility split rather than an accident.**
+
+| Vault item | Read by | How |
+|---|---|---|
+| `op://Homelab/hindsight/tenant-api-key` | The cluster apply, from the operator's laptop | `${HINDSIGHT_TENANT_API_KEY}` in `homelab/secrets/hindsight.yaml`, resolved by `op run` at apply time |
+| `op://hermes/hindsight/tenant-api-key` | The three gateways on VM 103 | hermes's own 1Password secrets provider, resolved into each gateway process's environment at startup |
+
+The VM's 1Password service account can see the `hermes` vault and nothing else, so it cannot read the `Homelab` copy; the operator's laptop credential reads either.
+Both copies and the live cluster Secret held the same value when they were last compared, on August 27, 2026.
+**Nothing keeps them in step.** No guard, job or apply compares them, so a rotation that updates one item and misses the other splits the key silently — which is why step 4 below checks the outcome rather than trusting the edit.
+
+Rotating means:
+
+1. Generate a new value and update **both** vault items in the table above. Updating one splits the key, and the side that was missed stops authenticating at its next restart.
 2. `make apply-homelab`, then `kubectl -n hindsight rollout restart deploy/hindsight` —
    a Secret change does not restart a Pod on its own.
-3. Update `HINDSIGHT_API_KEY` in **every** profile's `.env` on VM 103.
-4. **Re-run the smoke test.** Tell a profile a fact, start a new session, ask for it
+3. **Restart the three gateways on VM 103** — `hermes-gateway`, `hermes-gateway-emh` and `hermes-gateway-hal`. The provider resolves the reference once, at process start, so a running gateway keeps presenting the old key indefinitely. The key is in no file on the VM, so there is nothing to edit.
+4. **Confirm the outcome, not the inputs.** After the restart, take one chat turn and read the gateway's journal for a Hindsight write — a `401` there means the VM copy did not get the new value:
+
+   ```sh
+   journalctl --user -u hermes-gateway --since '10 min ago' | grep -i hindsight
+   ```
+
+   A write that lands is proof the whole path agrees, which comparing the two vault items would not give you. If you want the inputs anyway, compare **truncated digests** and never the raw values — `op read '<reference>' | tr -d '\n' | shasum -a 256 | cut -c1-12` on each side, the `tr -d '\n'` because `op read` appends a newline and the cluster Secret's YAML scalar does not.
+5. **Re-run the smoke test.** Tell a profile a fact, start a new session, ask for it
    back.
 
-Step 4 is not optional and is the whole reason this section exists. Hermes fails open:
+Step 5 is not optional and is the whole reason this section exists. Hermes fails open:
 with a stale key it keeps working, injects no memories, and drops every retain with a
 log warning nobody reads. The canary will catch a server that stopped accepting the new
 key within about 90 minutes — but the canary uses the key from the cluster Secret, so it
@@ -241,11 +287,18 @@ config file, which is the point — the file is per profile, but no value inside
 value in an `.env` file:
 
 ```sh
-hermes -p emh secrets onepassword set HINDSIGHT_API_KEY "op://Homelab/hermes/tenant-api-key"
+hermes -p emh secrets onepassword set HINDSIGHT_API_KEY "op://hermes/hindsight/tenant-api-key"
 ```
+
+**The vault is `hermes`, not `Homelab`.** The VM's 1Password service account can see only
+the `hermes` vault, so a `Homelab` reference here resolves to nothing and the gateway
+starts with an empty key. [Rotating the tenant API key](#rotating-the-tenant-api-key)
+covers the two-copy design that constraint forces.
 
 hermes records its own `op://` reference in the profile's `config.yaml` and resolves it at
 start ("1Password: applied N secrets"), so the key value never sits on disk.
+**The resolution happens once, at process start**, which is why adding or changing a
+reference does nothing until that gateway is restarted.
 
 The per-profile config:
 
@@ -354,8 +407,8 @@ server-side, from the key in the cluster Secret.
 1. Copy the config file to `~/.hermes/profiles/<name>/hindsight/config.json`. The
    contents are identical every time — `bank_id_template` resolves `hermes-<name>` at run
    time, and banks auto-create on first write.
-2. Set the profile-scoped secret:
-   `hermes -p <name> secrets onepassword set HINDSIGHT_API_KEY "op://Homelab/hermes/tenant-api-key"`
+2. Set the profile-scoped secret, from the `hermes` vault:
+   `hermes -p <name> secrets onepassword set HINDSIGHT_API_KEY "op://hermes/hindsight/tenant-api-key"`
 3. Enable the provider for that profile, then confirm it with trap 2's call test.
 4. **Configure the new bank's missions — do not skip this.** A fresh bank inherits
    memory defense from the server's default bank template, but its three missions
@@ -384,12 +437,12 @@ and the monitor's interval plus retry is the silence bound. The roster is in
 [uptime-kuma.md](uptime-kuma.md#push-monitors) and the reasoning behind the canary is in
 [monitoring.md](monitoring.md#healthchecksio-checks).
 
-**`/health/live` has a second consumer outside the cluster.** The hermes VM reads its
-`version` field to decide which `hindsight-client` to install, because the VM holds no
-kubeconfig and the repository pin is intent rather than state. Removing that field, or
-putting the endpoint behind auth, breaks the VM's update path — see
-[hermes-vm-updates.md](hermes-vm-updates.md#the-passenger-design). The endpoint is
-unauthenticated today because the cluster's own probes call it with no credential.
+**`/health/live` has no consumer outside the cluster.** It used to: the deleted update
+wrapper on VM 103 read its `version` field to choose a `hindsight-client` to install. That
+went with the wrapper, and the client is no longer pinned from here at all — see
+[The client on the hermes VM](#the-client-on-the-hermes-vm). The remaining callers are the
+Deployment's own liveness probe and the canary, both in-cluster, which is why the endpoint
+is unauthenticated. Keep the API pin at or above 0.9.1 for the probe's sake, not the VM's.
 
 An uptime-kuma **HTTP** monitor still could not do the canary's job: kuma runs on the VPS,
 which has no route to any `*.cynexia.net` address. A **push** monitor reverses the
@@ -418,14 +471,25 @@ the monitor goes DOWN at its interval plus retry. The full detail behind each ve
 table counts, the byte sizes, the two HTTP statuses — is on the pod log's `detail:` line;
 the one-line heartbeat carries the verdict and one or two numbers.
 
-**A known auth fault, open as of August 26, 2026.** The hermes agent's memory writes to
-this backend are failing with HTTP 401, "Invalid API key". Every occurrence in two months of
-gateway journal is that same failure, with no successes at all. Nothing here detects it:
-the canary authenticates with the tenant key and passes, the chat turn returns success
-because the write happens on a background path the response does not wait for, and
-`/health` checks database connectivity rather than auth validity. Investigate from this
-side — the key the profile presents against the key the server accepts — starting with
-[Rotating the tenant API key](#rotating-the-tenant-api-key) and
+**One profile once wrote nothing for four days, and no check here noticed.** From August
+23 to August 27, 2026 the `default` profile's memory writes all returned `401 Invalid API
+key`: its gateway had started the day before `~/.hermes/config.yaml` gained the
+`HINDSIGHT_API_KEY` reference, so the plugin initialised with an empty key and kept it
+until the process was restarted — `emh` and `hal`, whose gateways started after the
+reference landed, were unaffected throughout.
+
+Nothing detected it, and that gap is the part worth keeping: the canary authenticates with
+the cluster's own copy of the tenant key and passed throughout, a chat turn returns 200
+because the write is on a background path the response does not wait for, and `/health`
+checks database connectivity rather than auth validity. **A profile that has retained
+nothing looks identical to a healthy one from every check in this estate.** The only thing
+that would have caught it is the journal grep that is now a step of
+[the update runbook's Verify](hermes-vm-updates.md#verify).
+
+If a 401 appears again, restart that profile's gateway first — a reference the running
+process never read is the cheapest explanation. If it survives the restart, work the key
+the profile presents against the key the server accepts:
+[Rotating the tenant API key](#rotating-the-tenant-api-key), then
 [Trap 3](#trap-3-the-dashboard-gui-writes-secrets-to-disk-in-cleartext), because a key the
 GUI wrote into `config.json` shadows the 1Password-backed variable until it is removed.
 
@@ -457,8 +521,9 @@ Nothing else in the estate references hindsight, which was a design goal.
 6. Delete both uptime-kuma push monitors and both Route53 records.
 7. `local-path` uses `reclaimPolicy: Retain`, so the PV directories survive on the node.
    Delete them by hand once the final restic snapshot is confirmed.
-8. Keep the 1Password item until the dumps have aged out of restic retention, then
-   delete it.
+8. Keep **both** 1Password items — `op://Homelab/hindsight` and the VM's
+   `op://hermes/hindsight` — until the dumps have aged out of restic retention, then
+   delete them.
 
 Leave the `df` disk-usage check in the restic gate. It was added alongside hindsight but
 it is not about hindsight: it watches the node SSD every workload shares.
