@@ -35,9 +35,15 @@ quiesce sidecar backs up `kuma.db` nightly, so a rebuild restores the monitors.
 | Accepted status codes | per monitor | — |
 | Certificate expiry, ignore TLS | defaults | TLS terminates at the Cloudflare edge |
 
-Skip keyword monitors. uptime-kuma evaluates the keyword only after the status check passes,
-so a keyword adds nothing, and `saveErrorResponse` already captures Cloudflare's error body
-into the alert, which makes a `1033` diagnosable.
+Skip keyword monitors by default. uptime-kuma evaluates the keyword only after the status check
+passes, so on an endpoint whose status code already carries the verdict a keyword adds nothing,
+and `saveErrorResponse` already captures Cloudflare's error body into the alert, which makes a
+`1033` diagnosable.
+
+**The exception is an endpoint that answers 200 through its own failure.** There the status check
+carries no verdict and the body carries all of it, so the keyword is the only assertion that says
+anything. `pinepods` is the one monitor of that shape today; the entry in the monitor list below
+gives the keyword and why its quotes are load-bearing.
 
 ## The Cloudflare Access trap
 
@@ -123,7 +129,8 @@ Each path mirrors the service's in-pod probe target, so a monitor failing while 
 passes isolates the fault to the tunnel or the edge. `uptime.cynexia.com` is absent on
 purpose: uptime-kuma checking its own hostname reports nothing it can deliver.
 
-Monitor names below match `kuma.db` as of August 25, 2026. The Access column names the
+Monitor names below match `kuma.db` as of August 25, 2026, with `pinepods` added as a
+specification ahead of its creation. The Access column names the
 application that answers the URL and the policies attached to it, so you can tell a
 credential fault from an outage without opening the dashboard.
 
@@ -136,9 +143,27 @@ VPS cluster, Access-protected:
 | `n8n.cynexia.com` | `https://n8n.cynexia.com/healthz` | `n8n`: `service-auth-monitoring`, `allow_cynexia_com` | `["200-299"]` |
 | `rss.cynexia.com` | `https://rss.cynexia.com/api/` | `freshrss api`: `bypass` — send no headers | `["200-299"]` |
 | `Karakeep` | `https://keep.cynexia.com/api/health` | `karakeep api`: `bypass` — send no headers | `["200-299"]` |
+| `pinepods` | `https://podcasts.cynexia.com/api/health` | `pinepods api`: `bypass` — send no headers | `["200-299"]`, **plus a keyword** — see below |
 
-The first three carry the service-token headers. The last two must not: their apps admit
+The first three carry the service-token headers. The last three must not: their apps admit
 anonymous requests, and adding headers there would imply a credential that nothing checks.
+
+**`pinepods` is the estate's only keyword monitor, and the keyword is the monitor.** Set the type
+to **HTTP(s) - Keyword** and the keyword to `"status":"healthy"` — **with the quotes**. PinePods'
+`/api/health` returns HTTP 200 whatever it finds and puts the verdict in the JSON body beside live
+`database` and `valkey` booleans, so `["200-299"]` alone proves only that the process answers.
+The keyword turns the same request into real database-outage detection at no extra cost.
+
+**Never shorten it to the bare word `healthy`.** uptime-kuma matches a substring, and `healthy` is
+a substring of `unhealthy` — so the short form passes on exactly the body it exists to fail.
+`"database":true` is the equally valid alternative if the top-level field is ever renamed.
+
+This monitor is created by hand when the service goes live, after the `pinepods api` Access app
+exists. Until then the entry above is the specification, not an observation. It needs no
+service-token headers: `/api/health` resolves under that path-scoped bypass rather than the root
+app ([vps.md](vps.md#cloudflare-access-bypasses)). Keep `maxredirects: 0` regardless — a 302 here
+means the bypass is missing or scoped wrong, and following it would report UP off the Cloudflare
+login page.
 
 Homelab health tunnel:
 

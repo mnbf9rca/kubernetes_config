@@ -88,8 +88,11 @@ Defaults, unless a service's entry below says otherwise:
 | umami | `/api/heartbeat` (:3000) | Shallow — see [What this does not catch](#what-this-does-not-catch) |
 | uptime-kuma | `/api/entry-page` (:3001) | Unauthenticated JSON that reads sqlite through a 60s cache. Also sets `enableServiceLinks: false` |
 | postgres (umami) | readiness plain `pg_isready`; liveness and startup as `sh -c 'pg_isready -q …; test $? -lt 2'` | Exit 1 means "rejecting connections during recovery". Liveness and startup count that as alive so recovery can finish; readiness does not, so traffic waits. A plain `pg_isready` liveness kills the postmaster mid-recovery and never converges |
+| pinepods | readiness and startup `/api/health` (:8040) | **No liveness, deliberately.** The endpoint returns 200 unconditionally — the verdict lives only in the JSON body (read off `rust-api/src/handlers/health.rs`, 2026-08-27) — so it detects a wedged process and nothing a restart would fix, while a timeout during a database incident would restart the single replica for no gain. Upstream's own manifests use the static `/api/pinepods_check` for liveness; start there if a real wedge ever appears. The DB-outage half is caught outside the pod, by the `pinepods` kuma keyword monitor ([uptime-kuma.md](uptime-kuma.md#monitor-list)) |
+| valkey (pinepods) | none | An `emptyDir` cache with one consumer, in the app's own pod. A readiness probe on it would mark pinepods NotReady over a cache fault |
+| postgres (pinepods) | readiness plain `pg_isready`; liveness and startup as `sh -c 'pg_isready -q …; test $? -lt 2'` | Copied verbatim from umami-postgres above, and for the same reasons |
 | keel-fresh | none | Scheduled work. The `vps-keel-fresh` kuma push monitor plus `activeDeadlineSeconds: 300` is the instrument |
-| the 5 quiesce sidecars | none | Deliberate — see below |
+| the 6 quiesce sidecars | none | Deliberate — see below |
 
 ### Homelab cluster
 
@@ -115,9 +118,10 @@ Defaults, unless a service's entry below says otherwise:
 
 ## Why the sidecars have no probes
 
-**Put no probe — readiness, liveness or startup — on any of the five VPS quiesce sidecars:
+**Put no probe — readiness, liveness or startup — on any of the six VPS quiesce sidecars:
 `sqlite-snapshot` in n8n, freshrss, karakeep and uptime-kuma, and `pg-dump-sidecar` in
-umami-postgres.** This has nearly been re-broken twice, and the chain is short:
+umami-postgres and pinepods-postgres.** This has nearly been re-broken twice, and the chain is
+short:
 
 > A container that is not Running is not Ready. A Pod with a non-Ready container leaves its
 > EndpointSlice. cloudflared then returns 502 for the application.
@@ -135,7 +139,7 @@ a day — the right scale for a backup fault, and it never costs you the applica
 
 ### What the sidecar loops do instead
 
-`set -e` is deliberately absent from all five: if a sidecar exits, kubelet restarts it and a
+`set -e` is deliberately absent from all six: if a sidecar exits, kubelet restarts it and a
 persistent fault reaches the same `CrashLoopBackOff` chain. Each loop instead runs under `set -u`,
 logs failures to stderr and keeps going; sleeps 300s after a failure and 43200s after a success;
 publishes atomically as `.tmp` then `mv`, so a failed run leaves the previous snapshot intact;
@@ -146,20 +150,25 @@ not. `snapshot()` runs `sqlite3 <tmp> 'select count(*) from sqlite_master'` and 
 schema objects, since a truncated source makes `.backup` emit a structurally valid but empty
 database with a current mtime. `pg-dump-snapshot.sh` refuses fewer than one
 `grep -c '^CREATE TABLE '`, since `pg_dumpall` exits 0 against a freshly initialised postgres with
-no umami schema — the entrypoint creates the empty `umami` database either way, yielding a
-roles-only dump that restores to an empty analytics database. Refusing to publish leaves the
+no application schema — the entrypoint creates the empty database either way, yielding a
+roles-only dump that restores to an empty one. That assertion covers both instances that run
+this script: umami's postgres and pinepods'. Refusing to publish leaves the
 previous artifact ageing, which turns the check red. And because these loops report failure by
 logging rather than exiting, their restart counts stay at zero: **to debug a missing snapshot, read
 the sidecar's stderr**, and read nothing into `RESTARTS: 0`.
 
-All five loops are real files under `vps/workloads/scripts/`, delivered by the
+All six loops are real files under `vps/workloads/scripts/`, delivered by the
 `sqlite-snapshot-scripts` `configMapGenerator` in `vps/workloads/kustomization.yaml` and mounted
 at `/scripts`. Four source `sqlite-snapshot-lib.sh`; n8n, karakeep and uptime-kuma share
-`sqlite-snapshot.sh` outright and differ only in `$SNAPSHOT_DB`. Editing one rolls every
-Deployment that mounts it, and all five use `strategy: Recreate`, so a script edit costs a brief
-hard-down window for each rather than a rolling update. Generated scripts also pass through
-envsubst, so run `make check-script-substitution` and read the note in `AGENTS.md` before you
-write a `$VAR` into one.
+`sqlite-snapshot.sh` outright and differ only in `$SNAPSHOT_DB`. umami-postgres and
+pinepods-postgres share `pg-dump-snapshot.sh` the same way, differing only in `$PGDUMP_USER`.
+The generator's content hash covers the whole ConfigMap, so editing any one script rolls every
+Deployment that mounts it — all six, not just the one you edited — and all six use
+`strategy: Recreate`, so a script edit costs a brief hard-down window for each rather than a
+rolling update. uptime-kuma is one of the six, so a heartbeat that arrives during its restart
+window has nowhere to land: expect the occasional push-monitor blip on such an apply.
+Generated scripts also pass through envsubst, so run `make check-script-substitution` and read
+the note in `AGENTS.md` before you write a `$VAR` into one.
 
 ## Scheduled work
 
@@ -245,7 +254,8 @@ repository that grows in B2 until somebody looks; the false negative costs every
 that would skip a whole night of everything else over one stale artifact.
 
 **Add every new artifact to its cluster's expected set, or that application's backup goes
-unverified, silently.** On VPS that means every new sqlite-backed service; on homelab, every
+unverified, silently.** On VPS that means every new service that publishes a quiesce artifact;
+on homelab, every
 local-path PVC holding something you would miss. An explicit list beats a wildcard, which cannot
 tell "no databases exist" from "the volume is unmounted" from "three of four present" — all
 three produce no stale files.
@@ -256,6 +266,7 @@ three produce no stale files.
 | VPS | karakeep | `/data/*_vps_karakeep-data/db.db.restic` | present, <15h |
 | VPS | uptime-kuma | `/data/*_vps_uptime-kuma-data/kuma.db.restic` | present, <15h |
 | VPS | umami | `/data/*_vps_umami-pg-data/dump.sql.restic` | present, <15h |
+| VPS | pinepods | `/data/*_vps_pinepods-pg-data/dump.sql.restic` | present, <15h |
 | VPS | freshrss | iterates `/data/*_vps_freshrss-data/users/*/db.sqlite` | a sibling `.restic` **per user**; zero user DBs passes with a note |
 | homelab | emby-library | `/data/pvc-*_downloads_emby-config/data/library.db` | ≥1 MiB |
 | homelab | hydra2-config | `/data/pvc-*_downloads_hydra2-config/nzbhydra.yml` | ≥4 KiB |
@@ -976,13 +987,15 @@ the stored state, the resolved endpoint — is in the pod log.
 
 **The image floor is a literal and it does not track reality on its own.** It was set at rollout
 to the steady-state tracked-image count with margin: 4 against the 5 homelab's own script
-records, one container clear, and 7 against the 9 measured on the VPS, two clear. The margins
-differ because the VPS floor was fixed before its count was measured and left alone once the
-measurement came in higher than expected — a floor with more headroom than the rule asks for is
-not worth moving. Reconciling either number against a list of keel-annotated workloads is off by
+records, one container clear, and 9 against the 11 now on the VPS, two clear. The VPS pair began
+at 7 against 9 and both numbers rose by two on August 27, 2026, when pinepods joined the keel set
+carrying its own valkey sidecar — one workload, two images. That is the shape of every future
+change here: raise the floor in the same commit as the workload, and keep the margin rather than
+setting the floor to the count. Reconciling either number against a list of keel-annotated
+workloads is off by
 however many distinct sidecar images those workloads carry: the gauge counts
 **images**, and keel tracks every container in an annotated workload, which is why the VPS reads
-9 over 8 Deployments. Adding a keel-managed workload does not raise either floor; removing
+11 over 9 Deployments. Adding a keel-managed workload does not raise either floor; removing
 several without taking that estate below its floor does not lower it. Revisit them whenever the
 keel-managed set changes materially — a floor that has drifted below reality is a check that has
 stopped checking.
@@ -998,6 +1011,7 @@ Probes fix hung request paths, not silently stopped background work — often th
 | Service | The probe stays green while… |
 |---|---|
 | **umami** | `/api/heartbeat` returns a static `{ok:true}` that never touches Prisma. It returns 200 through any database failure (upstream #3417, connection-pool exhaustion). This buys Node-wedge detection only, not DB-outage detection |
+| **pinepods** | `/api/health` returns HTTP 200 whatever it finds; the `database` and `valkey` booleans it reports live in the body only. So the readiness and startup probes stay green through a dead database, exactly as umami's do, and that is not fixed in the pod — dropping the single replica from its EndpointSlice during a database outage repairs nothing. The `pinepods` kuma monitor closes it from outside by asserting the body keyword ([uptime-kuma.md](uptime-kuma.md#monitor-list)). Separately, **episode audio on the `media` volume is backed up by nothing** and no gate looks for it: the restic job's `hostPath` source is `/var/mnt/data`, so `/var/mnt/media` is out of reach by construction. Losing it costs re-downloading the episodes; the subscriptions and history are in `pinepods-pg-data`, which is swept |
 | **changedetection** | Upstream #4214: 134 watches went 23 days unchecked while `/` returned 200 and `/worker-health` reported healthy, because the ticker died, not the workers. Only `overdue_watches` from `/api/v1/systeminfo` sees it. Wire it as an external json-query alert, never as liveness: a restart does not fix a scheduling bug |
 | **uptime-kuma** | The HTTP server and the monitor scheduler run independently (#4967). A monitoring tool that has silently stopped monitoring is the worst version of this bug, and no in-pod probe detects it. Hence layer 4 |
 | **karakeep** | `/api/health` is a hardcoded literal in the web process and cannot observe the worker. Stuck-queue reports (#1802, #2704) all leave it returning 200. The detector is the `karakeep_queue_jobs` metric (`pending > 0 && running == 0`) |

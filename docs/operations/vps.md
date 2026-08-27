@@ -8,7 +8,7 @@ Kubectl context: `cynexia-vps`. Manifests live in `vps/`.
 | Aspect | Detail |
 |---|---|
 | Host | Hetzner CX43 in `fsn1`, Talos single-node, managed by the same Omni instance as homelab (cluster name `vps`) |
-| Storage | Hetzner Cloud Volume as a Talos user volume mounted at `/var/mnt/data`; local-path-provisioner points there |
+| Storage | Two Hetzner Cloud Volumes, each a Talos user volume: `data` (80 GB) at `/var/mnt/data`, where local-path-provisioner points, and `media` (150 GiB) at `/var/mnt/media`, which holds PinePods episode audio and sits outside the nightly restic sweep by construction |
 | Network | Hetzner Private Network `10.0.0.0/24`. No public :80/:443 on the node; the Hetzner Cloud Firewall drops public inbound |
 | Ingress | `cloudflared` tunnel only (named tunnel `cynexia-vps`). No Traefik, no cert-manager, no MetalLB, no NFS CSI |
 | TLS / auth | Terminated at the Cloudflare edge. Cloudflare Access with email-OTP in front of every hostname |
@@ -18,10 +18,13 @@ Kubectl context: `cynexia-vps`. Manifests live in `vps/`.
 | Image updates | keel runs here (`vps/bootstrap/keel/`) and workloads carry the standard keel annotation set, except keel itself, which is digest-pinned and Renovate-bumped (see below) |
 | Apply | `make apply-vps`, gated by `check-vps-context` |
 
-The Talos user-volume patch (`vps/talos/machineconfig-patches/400-vps-user-volume-data.yaml`)
-selects the Cloud Volume by **size bracket** (70–100 GB), because the boot disk and the
-Cloud Volume both report `transport=virtio` and can't be distinguished by transport
-alone. Note there is no `make` target for VPS Talos patches — apply them with
+Two patches under `vps/talos/machineconfig-patches/` provision those volumes, and their disk selectors differ because the disks do.
+`400-vps-user-volume-data.yaml` selects the `data` volume by **size bracket** (70–100 GB), because the boot disk and that Cloud Volume both report `transport=virtio` and cannot be told apart by transport alone.
+`410-vps-user-volume-media.yaml` selects the `media` volume by **disk model plus a size floor** — `disk.model == "Volume"` excludes the boot disk, which reports `QEMU HARDDISK`, and `disk.size > 100u * GB` separates the two Cloud Volumes.
+It carries no size *ceiling* on purpose: Talos reports the media volume as 161 GB, above the boot disk's nominal 160 GB, so a ceiling written to exclude the boot disk would exclude the media volume instead.
+A third Cloud Volume over 100 GB would collide with that selector silently, because Talos takes the first match — reselect with `talosctl get disks` in front of you if that day comes.
+
+Note there is no `make` target for VPS Talos patches — apply them with
 `omnictl apply -f <file>` directly.
 
 Fresh Hetzner Cloud Volumes ship pre-formatted and Talos refuses to provision over them;
@@ -48,6 +51,8 @@ silent one:
   not refuse an unlisted node — it creates a fresh empty directory there and binds happily.
   The pod starts, reads and writes an empty volume that is not the Cloud Volume, and nothing
   errors anywhere.
+
+**The `media` volume is pinned by a different mechanism, and that is why one Deployment here carries no `nodeSelector`.** `pinepods-media` is a static `local` PersistentVolume over `/var/mnt/media`, not a `local-path` one, and a `local` PV carries its own `nodeAffinity` that the scheduler enforces — so the `pinepods` Deployment is welded to the storage node without a selector and correctly has none. The `pinepods-postgres` Deployment beside it holds an ordinary `local-path` PVC and does carry one.
 
 **A `hostPath` mount of that same directory is subject to the identical rule.** The nightly
 restic CronJob in `vps/backup/restic-cronjob.yaml` mounts
@@ -104,10 +109,12 @@ as the caller.
 | umami | `analytics.cynexia.com` | dedicated postgres |
 | n8n | `n8n.cynexia.com` | sqlite |
 | karakeep (+ meilisearch) | `keep.cynexia.com` | sqlite |
+| pinepods | `podcasts.cynexia.com` | dedicated postgres |
 
-Every container here carries readiness and (where a restart is a safe remedy) liveness
-probes; the per-service targets and the reasoning behind each — including the ones that
-are deliberately shallow — are in [monitoring.md](monitoring.md#vps-cluster).
+Every application container here carries readiness and, where a restart is a safe remedy,
+liveness probes; the backup sidecars and the pinepods valkey cache carry none. The
+per-service targets and the reasoning behind each — including the ones that are deliberately
+shallow — are in [monitoring.md](monitoring.md#vps-cluster).
 
 `make route-vps-dns` reads the hostname list straight out of
 `vps/bootstrap/cloudflared/cloudflared.yaml` (that ConfigMap is the single source of
@@ -141,7 +148,7 @@ together.**
 Public endpoints serve callers that cannot authenticate: strangers' browsers running the
 umami beacon, third-party webhook senders, WebSub hubs, and — since August 26, 2026 — jobs
 inside either cluster driving an uptime-kuma push monitor. They must be Access-bypassed or
-they break. **Five** path-scoped Access apps carry the shared `bypass` policy, covering **ten**
+they break. **Six** path-scoped Access apps carry the shared `bypass` policy, covering **thirteen**
 globs in total:
 
 | Access app | Destinations | Added |
@@ -151,9 +158,10 @@ globs in total:
 | `freshrss api` | `rss.cynexia.com/api/*`, `/p/api/*` | — |
 | `karakeep api` | `keep.cynexia.com/api/*` | — |
 | `uptime-kuma push` | `uptime.cynexia.com/api/push/*`, `/api/push` | August 26, 2026 |
+| `pinepods api` | `podcasts.cynexia.com/api/*`, `/api`, `/ws/*` | August 27, 2026 |
 
 `bypass` is the only Access action that admits an unauthenticated request; an `Allow` policy
-with `Everyone` still serves a login page. FreshRSS and karakeep enforce their own API
+with `Everyone` still serves a login page. FreshRSS, karakeep and PinePods enforce their own API
 credentials behind these globs. The umami send and n8n webhook endpoints are open by design.
 
 A bypass path glob of `/foo/*` does **not** match the bare path `/foo` — add both the
@@ -168,7 +176,12 @@ list and no settings. It reuses the shared bypass policy rather than carrying it
 verification performed at creation, and the proof commands to repeat after any Access change:
 [uptime-kuma.md](uptime-kuma.md#the-push-path-is-bypassed-at-the-edge).
 
-These apps are also why the `rss.cynexia.com` and `Karakeep` uptime-kuma monitors need
+The `pinepods api` app is the widest bypass in the table, by operator ruling on August 27, 2026.
+PinePods' native iOS and desktop clients hold no Access credential, and everything they use rides `/api/*` — login, the API key that follows it, subscription and history calls, and audio streaming and downloads — while `/ws/*` carries the websockets for task progress, episode refresh and now-playing.
+So the bypass is the whole API surface rather than a health path: PinePods' own user/password-to-API-key auth is what protects it, which is the FreshRSS and karakeep posture over a larger area.
+The bare `/api` destination is present only because `/api/*` does not match it. A service-token path for the native clients was explored and deferred, not rejected.
+
+These apps are also why the `rss.cynexia.com`, `Karakeep` and `pinepods` uptime-kuma monitors need
 no service-token headers: their URLs resolve to the path-scoped app, not the root one
 ([uptime-kuma.md](uptime-kuma.md#monitor-list)).
 
@@ -278,7 +291,7 @@ rather than a hostname.
 
 ## Database shape
 
-Per-service sqlite, except umami which needs postgres. A shared postgres was researched
+Per-service sqlite, except umami and pinepods, each of which runs its own postgres. A shared postgres was researched
 and rejected: karakeep is sqlite-only (karakeep issue #1782), uptime-kuma v2 supports
 only sqlite/MariaDB (issue #5674), and the remaining consolidation saving didn't justify
 the upgrade-coupling cost.
@@ -300,10 +313,18 @@ across 131 hostnames, nothing ever pruned since the backup system was built. The
 on the one job you cannot re-run).
 
 Consistency sidecars run alongside the app containers: sqlite quiesce for
-n8n / freshrss / karakeep / uptime-kuma, and `pg_dumpall` for umami's dedicated postgres.
+n8n / freshrss / karakeep / uptime-kuma, and `pg_dumpall` for the umami and pinepods
+dedicated postgres instances, which share one script parameterised by dump user.
 Each refreshes a `*.restic` snapshot every 12h.
 
-**None of the five sidecars carries a probe**, and that is deliberate: any failing probe
+PinePods' episode audio has no sidecar and no snapshot, because it is not backed up at all.
+It lives on the separate `media` Cloud Volume at `/var/mnt/media`, which the restic job's
+`hostPath` source never reaches — so the exclusion is structural rather than an exclude rule
+somebody could delete. Losing that volume costs re-downloading the episodes. The subscriptions
+and listening history, which no download would bring back, live in `pinepods-pg-data`, and that
+PVC is swept and gate-verified nightly like every other.
+
+**None of the six sidecars carries a probe**, and that is deliberate: any failing probe
 on a sidecar takes the *application* offline (readiness directly, liveness via
 CrashLoopBackOff → EndpointSlice), so a backup fault would cost you the service. A
 freshness liveness probe existed here briefly and was removed; the full reasoning, which
@@ -326,7 +347,7 @@ one orphaned PV directory cannot pin the gate permanently red. Together that tur
 silently dead sidecar — or one deleted from the manifest, or an empty/unmounted volume —
 into a backup alert rather than years of backing up a stale or absent copy.
 
-**Adding a sqlite-backed service means adding its snapshot to that list.** The gate proves
+**Adding a service with a quiesce sidecar means adding its snapshot to that list.** The gate proves
 a snapshot exists, is fresh and has a schema; it does not prove the contents are complete.
 That, and why the gate runs after rather than before the backup, are in
 [monitoring.md](monitoring.md#the-backup-verification-gates).
