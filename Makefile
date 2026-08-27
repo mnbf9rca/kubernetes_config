@@ -127,7 +127,7 @@ help:
 	@echo "                     the diff-*/apply-* preflight; the first five per cluster, this one whole)"
 	@echo ""
 	@echo "Hermes VM targets (not cluster-applied):"
-	@echo "  check-vm-scripts - shellcheck + unit-test + failure-path harness + ping-body scan the hermes VM scripts"
+	@echo "  check-vm-scripts - shellcheck + ping-body scan the hermes VM's alive-check script"
 	@echo ""
 	@echo "VPS cluster targets:"
 	@echo "  check-vps-context - assert kubectl current-context matches VPS_CONTEXT ($(VPS_CONTEXT))"
@@ -394,49 +394,31 @@ check-renovate-scope-vps:
 
 # ---- check-vm-scripts ------------------------------------------------------
 # The hermes VM's files are not rendered by kustomize, so check-script-lint
-# cannot see them: it extracts shell from the RENDER. They still ship real
-# logic, and they still post a healthchecks.io body and an uptime-kuma push
-# message, so they get the same two guarantees through their own target —
-# shellcheck as POSIX sh, the helper unit tests, and the ping-body leak guard
-# pointed at the hermes-vm root.
+# cannot see them: it extracts shell from the RENDER. hermes-app-alive.sh still
+# ships real logic, and it still posts an uptime-kuma push message, so it gets
+# the same two guarantees through its own target — shellcheck as POSIX sh, and
+# the ping-body leak guard pointed at the hermes-vm root.
 #
-# -x is required: the test script sources hermes-update.sh, and without -x
-# shellcheck raises SC1091 at info level, which exits 1 under the default
-# `style` severity floor.
-#
-# THREE THINGS RUN HERE, and the second and third are different tests.
-# test-hermes-update.sh covers the pure helpers. test-hermes-update-paths.sh
-# drives the WHOLE of hermes-update.sh against stubs - `curl`, `systemctl`,
-# `pip`, the venv python and the `hermes` entry point - inside one `mktemp -d`
-# root, and asserts the ping body on all fourteen routes through it: the happy
-# path, both halves of the "did the tree move?" split at each of its two sites,
-# a rollback that completes, one that stops part way, one whose result is still
-# unhealthy, the deliberate silence when another run holds the lock, and the
-# degraded chat turn. Nothing in it touches a network or the VM, and it
-# neutralises the operator's git configuration as well as their identity - a
-# global `commit.gpgsign` was demonstrated to WEDGE it, and this target has no
-# timeout. It exists because every failure the review round found lives in
-# `main`, which the helper tests never execute, and because the live rollback
-# drill exercises exactly one of those routes. It costs about 10 seconds,
-# almost all of it real `git`.
-#
-# hermes-vm/bin/hermes-update is linted here too. It has no `.sh` suffix - the
-# name IS its interface, since `command -v hermes-update` is what the
-# /update-estate skill asserts - so it has to be named explicitly rather than
-# picked up by the glob.
+# ONE SCRIPT IS LINTED, because one is all the hermes-vm tree carries. Updating
+# the Hermes app stack is not a script here at all: it is a runbook an agent (or
+# the operator) executes about weekly, docs/operations/hermes-vm-updates.md.
+# The update wrapper that used to live beside the alive check, along with its
+# two test harnesses, its systemd unit and its root-owned entry point, was
+# deleted on 2026-08-27: a task that is always run with someone watching does
+# not need a thousand lines of unwatched-failure machinery. Nothing mechanical
+# guards runbook prose, and no guard in this repository reads it; that is the
+# trade the deletion makes.
 #
 # Not wired into diff-*/apply-*: nothing here is applied to a cluster, so
 # gating a cluster apply on it would be noise. That is a real cost — nothing
 # runs it on a schedule and this repo has no CI (there is no .github/workflows
-# directory), so it can rot unnoticed. Two things keep it honest: it is the
-# first step of the install runbook (docs/operations/hermes-vm-updates.md),
-# and the 4-to-6-week update session runs it.
+# directory), so it can rot unnoticed. What keeps it honest is that it is run
+# by hand before anything under hermes-vm/ is copied to the VM.
 .PHONY: check-vm-scripts
 check-vm-scripts:
-	@shellcheck -x -s sh hermes-vm/scripts/*.sh hermes-vm/bin/hermes-update
-	@sh hermes-vm/scripts/test-hermes-update.sh
-	@sh hermes-vm/scripts/test-hermes-update-paths.sh
+	@shellcheck -s sh hermes-vm/scripts/hermes-app-alive.sh
 	@scripts/check-ping-bodies.py hermes-vm
+	@echo "OK: hermes-vm scripts lint clean and ping-body safe"
 
 .PHONY: require-vars
 require-vars:

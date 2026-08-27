@@ -17,8 +17,7 @@ AGENT_DIR=$HERMES_HOME/hermes-agent
 VENV=$AGENT_DIR/venv/bin
 WEBUI_HEALTH=http://127.0.0.1:8787/health
 UNITS="hermes-gateway hermes-gateway-emh hermes-gateway-hal hermes-dashboard hermes-webui"
-# DERIVED from UNITS, never written beside it. hermes-update.sh derives its copy
-# the same way.
+# DERIVED from UNITS, never written beside it.
 #
 # WHAT DERIVING BUYS is the one direction a hand-written count gets wrong in
 # silence: add a sixth unit to the list above, leave a literal 5 here, and a
@@ -130,8 +129,7 @@ main() {
   # no EXIT trap installed and pushed NOTHING - silence, when a `down` was
   # available and was the right answer. Nothing is lost by moving it: msg_reset
   # and emit both end in `|| true` and tolerate a missing $RUNDIR, so a run that
-  # dies here still pushes, with an empty message. hermes-update.sh orders its
-  # prepare_rundir the same way and for the same reason.
+  # dies here still pushes, with an empty message.
   (umask 077; mkdir -p "$RUNDIR")
   chmod 0700 "$RUNDIR"
   msg_reset
