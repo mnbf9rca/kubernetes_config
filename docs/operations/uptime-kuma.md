@@ -79,9 +79,10 @@ glob `/foo/*` does not match bare `/foo`, so a bypassed health path needs both d
 
 ### The push path is bypassed at the edge
 
-Every push monitor in this estate is driven from inside a cluster, by a job that holds no
-Access credential, so without a bypass the edge answers 302 and no push monitor could ever
-report UP. An Access application named **`uptime-kuma push`** carries that bypass, created
+Every push monitor in this estate is driven by something that holds no Access credential — a
+CronJob inside a cluster, or, for `hermes-app-alive`, a cron job inside the hermes agent on the
+off-cluster VM — so without a bypass the edge answers 302 and no push monitor could ever report UP. An
+Access application named **`uptime-kuma push`** carries that bypass, created
 **August 26, 2026**. It covers two destinations: `uptime.cynexia.com/api/push/*` and the bare
 `uptime.cynexia.com/api/push`. The wildcard is the load-bearing one — a push URL always carries
 its token as a path segment, so every real request matches it — and the bare form is present
@@ -165,10 +166,24 @@ allowlist, so the origin asks for nothing; the credential this monitor needs is
 the one Access asks for.
 
 The health tunnel publishes a fourth hostname, `hermes-app.cynexia.com`
-(hermes-webui, for the Hermex iOS app), which has **no monitor by decision** - see
-[monitoring.md](monitoring.md#what-this-does-not-catch). Adding one is not a copy of
-the `hermes` monitor: its Access app authenticates every request with Service Auth,
-so a monitor must send the service-token headers and set `maxredirects: 0`.
+(hermes-webui, for the Hermex iOS app). **That hostname still has no monitor, by
+decision.** What changed on August 26, 2026 is that the service behind it is now checked
+from *inside* the VM instead, once a day, by the `hermes-app-alive` push monitor below.
+
+**Do not "improve" that push monitor into a GET against this hostname.** An HTTP monitor
+is the wrong instrument here for two independent reasons. `GET /health` returns
+`status: ok` straight through the broken-venv failure that is worth catching — the unit
+stays `active` and the endpoint stays green while every chat turn answers
+`AIAgent not available` — so the check would be green over the outage it exists for. And
+the chat path needs a login session, which a monitor cannot perform. The daily check
+sidesteps both by running on the VM: it deep-imports `run_agent` from the shared venv,
+which is the assertion the HTTP surface cannot make.
+
+If a monitor is ever added here anyway, it is not a copy of the `hermes` monitor: this
+Access app authenticates every request with Service Auth, so the monitor must send the
+service-token headers and set `maxredirects: 0`. Residuals are in
+[monitoring.md](monitoring.md#what-this-does-not-catch); the check's own triage is in
+[hermes-vm.md](hermes-vm.md#reading-a-down-hermes-app-alive).
 
 **The triage here inverted on August 25, 2026.** The monitor used to reach the
 origin because it probes from the VPS's Hetzner IP, which an Access bypass
@@ -256,11 +271,13 @@ There is **no `/start` equivalent** on this API and there must not be a syntheti
 is a heartbeat carrying a status. The hang bound is the job's own `activeDeadlineSeconds`; the
 silence bound is the interval plus retries below.
 
-**Every push in this estate is made from inside a cluster, outbound, through the Cloudflare Access
-bypass described above.** That is what lets the private homelab cluster — which uptime-kuma cannot
-reach, because it probes from a Hetzner IP and every `*.cynexia.net` name resolves to a LAN
-address — report to a monitor at all. It is also why the bypass is load-bearing rather than a
-convenience: without it every push monitor here would be permanently DOWN.
+**Almost every push in this estate is made from inside a cluster, outbound, through the Cloudflare
+Access bypass described above.** That outbound direction is what lets the private homelab
+cluster — which uptime-kuma cannot reach, because it probes from a Hetzner IP and every
+`*.cynexia.net` name resolves to a LAN address — report to a monitor at all. It is also why the
+bypass is load-bearing rather than a convenience: without it every push monitor here would be
+permanently DOWN. The one exception to "from inside a cluster", `hermes-app-alive`, is described
+below the table — and it needs the same bypass, from further away.
 
 **Some monitors deliberately receive nothing on some runs, so silence is not always a fault.**
 `health-ingest` pushes only when both its buckets are fresh, and `homelab-update-watch` pushes
@@ -310,9 +327,29 @@ assuming up-on-success everywhere.
 | `hindsight-canary` | `op://Homelab/hindsight/canary-kuma-push-token` | 3600s, 1 retry at 1800s | `hindsight-canary` CronJob in `hindsight`, from an EXIT trap: `up` when retain and recall both pass, `down` when either fails. `msg` carries `verdict=` from that script's enum plus both HTTP statuses |
 | `homelab-update-watch` | `op://Homelab/update-watch/kuma-push-token` | 86400s, 1 retry at 21600s | `update-watch` CronJob in `ops`, Python: `up` on a green verdict, `down` on a determinate red, and **nothing at all** on an indeterminate one. `msg` carries `verdict=`, `next=` and the counters |
 | `jottacloud-backup` | `op://Homelab/jottacloud-backup/kuma-push-token` | 21600s, 1 retry at 7200s | The `jottacloud-backup-scheduled` CronJob's own image, on success only. This repo does not build that image and does not control the request — see the note below |
+| `hermes-app-alive` | `op://hermes/hermes-app-alive/kuma-push-token` | 86400s, 1 retry at 21600s | A `no_agent` cron job inside `hermes-gateway` on the hermes VM at 05:45 UTC, `up` on exit 0 and `down` on failure, from an EXIT trap |
 
 Each row's interval and retry mirror the period and grace of the healthchecks.io check it
 replaced, so nothing got quieter or noisier in the move (August 26, 2026).
+
+`hermes-app-alive` is the exception to that sentence, and to the claim above that every push comes
+from inside a cluster. Three things about it are unlike every other row here.
+
+- **It is the only push monitor driven from outside both clusters.** Every other one is a CronJob
+  in a namespace; this is a cron job inside the hermes agent on an off-cluster Debian VM. It relies
+  on the same `/api/push/*` Access bypass, which is what makes that bypass's blast radius wider
+  than "the clusters": remove or narrow it and this monitor goes permanently DOWN over a perfectly
+  healthy VM, along with every other push monitor here.
+- **Its token lives in the `hermes` vault, not `Homelab`**, because the VM's 1Password service
+  account can see only that vault — which is what lets the VM resolve it for itself. Anyone
+  looking for it in `Homelab` will not find it. No manifest in this estate assembles its
+  `PUSH_URL`: the monitor and the 1Password field are created by hand during the install in
+  [hermes-vm.md](hermes-vm.md#installing-or-reinstalling), and the token reaches the script as an
+  injected environment variable that the script turns into a URL.
+- It replaced no healthchecks.io check, so its interval and retry mirror nothing. They are chosen:
+  a 24-hour heartbeat with one 6-hour retry, matching a check that runs once a day, which means a
+  missing beat alarms about 30 hours after the last good one. The runbook is
+  [hermes-vm.md](hermes-vm.md#reading-a-down-hermes-app-alive).
 
 ### The one monitor whose request this repo does not control
 

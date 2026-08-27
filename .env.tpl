@@ -115,10 +115,12 @@ HEALTH_GRAFANA_ADMIN_PASSWORD=op://Homelab/health-grafana/admin-password
 # provider-neutral `llm-api-key`. Switching provider is two env lines in
 # hindsight.yaml plus a new field here.
 #
-# tenant-api-key is shared by the API, the control plane and the canary, and the
-# SAME value goes into the Hermes profiles' .env on VM 103. Rotating it is not
-# finished until the VM-side smoke test has been re-run — see
-# docs/operations/hindsight.md.
+# tenant-api-key is shared by the API, the control plane and the canary. The Hermes
+# gateways on VM 103 send the same value but do NOT read it from here: they resolve
+# a second vault copy, op://hermes/hindsight/tenant-api-key, because the VM's
+# service account can see only the `hermes` vault. Rotating it means updating BOTH
+# vault items, restarting the three gateways, and re-running the VM-side smoke test
+# — see docs/operations/hindsight.md.
 HINDSIGHT_PG_PASSWORD=op://Homelab/hindsight/pg-password
 HINDSIGHT_LLM_API_KEY=op://Homelab/hindsight/openai-api-key
 HINDSIGHT_TENANT_API_KEY=op://Homelab/hindsight/tenant-api-key

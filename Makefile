@@ -126,6 +126,9 @@ help:
 	@echo "                    (check-job-ttl through check-keel-fresh-parity — those six — also run in"
 	@echo "                     the diff-*/apply-* preflight; the first five per cluster, this one whole)"
 	@echo ""
+	@echo "Hermes VM targets (not cluster-applied):"
+	@echo "  check-vm-scripts - shellcheck + ping-body scan the hermes VM's alive-check script"
+	@echo ""
 	@echo "VPS cluster targets:"
 	@echo "  check-vps-context - assert kubectl current-context matches VPS_CONTEXT ($(VPS_CONTEXT))"
 	@echo "  build-vps         - render manifests to stdout (PREVIEW ONLY — secrets masked)"
@@ -388,6 +391,34 @@ check-renovate-scope-homelab:
 
 check-renovate-scope-vps:
 	@scripts/check-renovate-scope.py vps
+
+# ---- check-vm-scripts ------------------------------------------------------
+# The hermes VM's files are not rendered by kustomize, so check-script-lint
+# cannot see them: it extracts shell from the RENDER. hermes-app-alive.sh still
+# ships real logic, and it still posts an uptime-kuma push message, so it gets
+# the same two guarantees through its own target — shellcheck as POSIX sh, and
+# the ping-body leak guard pointed at the hermes-vm root.
+#
+# ONE SCRIPT IS LINTED, because one is all the hermes-vm tree carries. Updating
+# the Hermes app stack is not a script here at all: it is a runbook an agent (or
+# the operator) executes about weekly, docs/operations/hermes-vm-updates.md.
+# The update wrapper that used to live beside the alive check, along with its
+# two test harnesses, its systemd unit and its root-owned entry point, was
+# deleted on 2026-08-27: a task that is always run with someone watching does
+# not need a thousand lines of unwatched-failure machinery. Nothing mechanical
+# guards runbook prose, and no guard in this repository reads it; that is the
+# trade the deletion makes.
+#
+# Not wired into diff-*/apply-*: nothing here is applied to a cluster, so
+# gating a cluster apply on it would be noise. That is a real cost — nothing
+# runs it on a schedule and this repo has no CI (there is no .github/workflows
+# directory), so it can rot unnoticed. What keeps it honest is that it is run
+# by hand before anything under hermes-vm/ is copied to the VM.
+.PHONY: check-vm-scripts
+check-vm-scripts:
+	@shellcheck -s sh hermes-vm/scripts/hermes-app-alive.sh
+	@scripts/check-ping-bodies.py hermes-vm
+	@echo "OK: hermes-vm scripts lint clean and ping-body safe"
 
 .PHONY: require-vars
 require-vars:

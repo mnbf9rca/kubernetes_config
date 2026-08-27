@@ -17,10 +17,12 @@ procedures live under `docs/` and are referenced from here rather than duplicate
 | `docs/operations/homelab.md` | Homelab cluster: platform stack, namespaces/workloads, NFS and storage, node network, DNS/Route53, encryption at rest, operational gotchas |
 | `docs/operations/homelab-health.md` | The `health` namespace: ingest pipeline, image-pin rationale, InfluxDB bootstrap, backups/restore, Garmin re-auth, monitoring, probe rationale |
 | `docs/operations/vps.md` | VPS cluster: shape, workloads, Cloudflare tunnel/Access, DB decisions, backups |
-| `docs/operations/monitoring.md` | How failures get noticed: the triage table, probe policy and inventory, CronJob deadlines, the backup verification gates, the four healthchecks.io checks that remain, the ten uptime-kuma push monitors, the disclosure rules for both, and what none of it catches |
-| `docs/operations/uptime-kuma.md` | Layer 3/4 runbook: creating uptime-kuma monitors by hand, per-monitor HTTP settings, the Cloudflare Access trap, the push monitors driven from inside the clusters and the bypass they need, the self-monitor |
+| `docs/operations/monitoring.md` | How failures get noticed: the triage table, probe policy and inventory, CronJob deadlines, the backup verification gates, the five healthchecks.io checks that remain, the eleven uptime-kuma push monitors, the disclosure rules for both, and what none of it catches |
+| `docs/operations/uptime-kuma.md` | Layer 3/4 runbook: creating uptime-kuma monitors by hand, per-monitor HTTP settings, the Cloudflare Access trap, the push monitors driven from inside the clusters (and the one driven from the hermes VM) and the bypass they need, the self-monitor |
 | `docs/operations/hindsight.md` | The `hindsight` namespace: the self-hosted memory backend for the Hermes profiles — topology, auth, the canary, upgrade and restore runbooks, the restore drill, key rotation, and the removal path |
 | `docs/operations/agent-mail.md` | Per-agent email for Hermes agents: Purelymail mailboxes on cynexia.io, per-profile mcp-email-server config, provisioning runbook, credential scheme, limits, and the deliberate monitoring/backup gaps |
+| `docs/operations/hermes-vm.md` | The Hermes VM itself: lingering, triaging a DOWN `hermes-app-alive`, installing the kept components, `unattended-upgrades` with its automatic reboot, what the daily check does not watch, the trade the in-gateway cron job makes, and the VM's own facts |
+| `docs/operations/hermes-vm-updates.md` | The update runbook for the Hermes application stack, run by an agent or the operator roughly weekly: preconditions, change analysis, the detached update, verification, the report ping, and manual rollback. Steps and latent hazards only — everything observable at failure time is left to the agent running it |
 
 Design documents and implementation plans are local-only under the gitignored
 `docs/superpowers/` tree (`specs/2026-04-11-talos-homelab-rebuild-design.md`,
@@ -63,6 +65,9 @@ kubernetes_config/
 │   │   └── scripts/          # nightly pg_dump + the 15-minute canary; mounted via configMapGenerator
 │   └── backup/               # restic init Job + nightly CronJob (hostPath /var/mnt/ssd/local-path-provisioner)
 ├── vps/                      # Hetzner Talos cluster, same sub-layout (bootstrap/secrets/workloads/backup/ops/talos)
+├── hermes-vm/                # files that live on the hermes VM, not in a cluster
+│   ├── scripts/              # the daily alive check — the tree's one script, run by a hermes cron job
+│   └── etc/                  # unattended-upgrades config + the two apt timer drop-ins
 ├── scripts/                  # repo-level helpers (karakeep tags, FreshRSS WebSub status, the check-* guards)
 ├── legacy-microk8s/          # frozen reference copies of the old microk8s manifests
 └── no_longer_used/           # retired manifests kept for reference
@@ -205,7 +210,7 @@ Full mechanics, target-by-target reference and failure modes:
   The rule matches whole **file paths**, not containers, so it also suppresses digest
   pinning for the pinned, keel-free containers that happen to share those files — the
   four `alpine:3.20` quiesce sidecars and both `postgres:16-alpine` containers. They
-  still get version bumps, so nothing is broken; they simply arrive without a digest.
+  still get version bumps, so nothing is broken; they arrive without a digest.
   That is the accepted cost of a path-scoped rule, not an oversight.
 - **Probes: readiness on every long-running container that serves traffic; liveness only
   where that probe can actually detect the failure *and* a restart is a safe remedy**
@@ -262,6 +267,28 @@ Full mechanics, target-by-target reference and failure modes:
   notification transport its destination has configured, a list nobody has enumerated on
   either side. Policy, the accepted residuals and that open item:
   `docs/operations/monitoring.md`.
+- **Updating the hermes VM is a runbook, not a script, and it is deliberately not
+  scheduled.** `hermes update` sometimes carries a step that needs judgement — a migration
+  prompt, a stash of local edits — and a script cannot exercise judgement, so the procedure
+  lives as prose an agent or the operator follows with the session open, roughly weekly:
+  `docs/operations/hermes-vm-updates.md`. Everything else about the VM — lingering, the
+  daily liveness check, the install, `unattended-upgrades` — is in
+  `docs/operations/hermes-vm.md`. The wrapper that used to automate updates, with its two
+  test harnesses, its systemd unit and its root-owned entry point, was deleted on
+  2026-08-27. Building it back is a design change and needs the operator, not a tidy-up.
+  **Nothing under `hermes-vm/` is scheduled by systemd any more**: the `systemd/` directory
+  was deleted on 2026-08-27 and the daily liveness check now runs as a hermes `no_agent`
+  cron job inside the default gateway. That job is a read-only check and is not a precedent
+  for scheduling updates.
+  **Nothing mechanical guards runbook prose**, which is why its disclosure rules are
+  written into the steps they govern rather than referenced.
+  The files that remain under `hermes-vm/` are not rendered by kustomize, so
+  `make check-script-lint` cannot see them — `make check-vm-scripts` is their guard, and it
+  is `shellcheck -s sh` over `hermes-vm/scripts/hermes-app-alive.sh` plus
+  `scripts/check-ping-bodies.py hermes-vm`. It runs in **no** preflight and there is no CI,
+  so nothing runs it automatically: it is step 1 of the install procedure in
+  `docs/operations/hermes-vm.md`, and the update runbook never calls it. Run it by hand
+  after touching anything under `hermes-vm/`, and before copying any of it to the VM.
 - **A new InfluxDB bucket in the `health` namespace means three edits, not one:** create it
   (a `make health-influx-*-bootstrap` target), add it to the explicit `for B in ...` list in
   `homelab/health/scripts/influx-export-lp.sh`, **and** raise `LP_EXPECTED` in
@@ -438,6 +465,13 @@ Full mechanics, target-by-target reference and failure modes:
 - Documentation belongs in `docs/`, **referenced** from this file rather than included in
   it. When you learn something operational, write it into the relevant `docs/` file and
   add a pointer here only if it changes how an agent edits the repo.
+- **Markdown is not hard-wrapped** (operator ruling, 2026-08-27). Write one line per
+  sentence, or per paragraph where a paragraph is one thought; let the editor wrap it. A
+  sentence then owns a line in every diff, so a one-word change shows as a one-line change
+  instead of reflowing the paragraph around it. The exception is **files that ship to a
+  machine and are read with `cat` or `less`** — apt configuration, systemd units, shell
+  scripts and their comments — which keep the roughly 80-column wrapping they have, because
+  no editor wraps them where they are read.
 - **Documentation, not agent memories.** Do not record repo, cluster, or account state in
   an agent's private memory system — that hides operational knowledge from the operator,
   from other agents, and from review. Anything worth remembering goes in `docs/` (or this

@@ -74,7 +74,7 @@ import sys
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MAKEFILE = os.path.join(REPO_ROOT, "Makefile")
 
-SCAN_ROOTS = ("homelab", "vps")
+SCAN_ROOTS = ("homelab", "vps", "hermes-vm")
 TEXT_SUFFIXES = (".sh", ".yaml", ".yml")
 PY_SUFFIXES = (".py",)
 
@@ -93,6 +93,7 @@ REQUIRED_TARGETS = (
     "homelab/hindsight/scripts/hindsight-pg-dump.sh",
     "homelab/hindsight/scripts/hindsight-canary.sh",
     "vps/backup/scripts/restic-backup.sh",
+    "hermes-vm/scripts/hermes-app-alive.sh",
     "vps/ops/scripts/keel-fresh.sh",
 )
 
@@ -337,6 +338,25 @@ def scan_text(path, lines, denied):
         after a digits gate - but it means a LATER emit of the same name, from a
         different capture, is silent. Reuse of a variable name after a marker is
         the thing to look at in review.
+      * The pass runs FORWARD, one line at a time, so a sink call inside a
+        function defined ABOVE a later assignment is judged before that
+        assignment taints the name. An exit handler is the shape that hits
+        this: hermes-vm/scripts/hermes-app-alive.sh defines `on_exit` above
+        `main` and emits its whole report body from there, while `WEBUI_HTTP`
+        is assigned from a command substitution further down, inside `main`.
+        That emit is never inspected against that taint.
+
+        WHAT THAT MEANS FOR MARKERS, said plainly so nobody reads one as
+        evidence: an `untaint` marker placed below such a handler clears a name
+        the handler's emit never saw. It proves nothing about that emit, and a
+        reviewer who finds one there has learned nothing from it. What makes
+        those particular values safe is the script's own construction - a
+        verdict from a fixed enumeration, a count derived from a literal list,
+        or an HTTP status code gated to digits at the point of assignment -
+        which is a human-review property under spec section 9, not something
+        this guard establishes. Do not add a marker in that position expecting
+        it to carry weight, and do not delete one expecting the guard to catch
+        what it was standing in for.
       * Files are chosen by extension, not by being a `configMapGenerator` input,
         so a generator input with no extension is not scanned. REQUIRED_TARGETS
         names every one that exists today; a new one needs adding there.
