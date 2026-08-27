@@ -632,8 +632,8 @@ signal to open a Hermex issue, not a new steady state.
   nothing bounding its size. **Treat `/home/hermes/workspace` as expendable**: anything
   worth keeping goes into a git remote or into the profile.
 
-The update and liveness machinery adds more VM-side state, and **only the last two entries
-are inside the nightly zip**:
+The update and liveness machinery adds more VM-side state, and **only the four entries
+under `~/.hermes` are inside the nightly zip**:
 
 | Path | In the zip? |
 |---|---|

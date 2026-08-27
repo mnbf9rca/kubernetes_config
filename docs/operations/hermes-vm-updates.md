@@ -243,12 +243,28 @@ reachable alongside a `rollback_state=` naming a step that failed, so reading th
 alone is optimistic. `verdict` says what the run concluded; `rollback_state` says whether
 the restore actually finished.
 
+**After any rollback, inspect the agent checkout by hand.** `rollback_state=complete` is
+truthful about code and silent about the stash. `hermes update` stashes local changes
+before it pulls, and the rollback never pops that stash, so a stash entry is work that was
+serving before the run and is not serving now:
+
+```sh
+git -C /home/hermes/.hermes/hermes-agent status --porcelain
+git -C /home/hermes/.hermes/hermes-agent stash list
+git -C /home/hermes/.hermes/hermes-agent rev-parse --abbrev-ref HEAD
+```
+
+The third command matters because the rollback resets whichever branch the update left the
+checkout on, to a revision that came from last-good rather than from upstream. That can
+leave the branch in a state the next update refuses to work with.
+[The rollback drill](#the-rollback-drill) states the same hazard from the other side.
+
 | `verdict=` | What broke | Was the VM restored? |
 |---|---|---|
 | `preflight-failed` | The run died before it updated anything — a missing `flock`, `timeout`, `curl`, `git`, `python3` or `systemctl` (exit 70), an unwritable run directory, or a lock file that could not be created (exit 73) | Nothing moved |
 | `already-running` | Another run holds the lock; this one did nothing. Exit **75**, and it reports **nothing at all** — you see this in the journal, never in a ping body | Nothing moved |
 | `client-failed` with `rollback_source=none` | Phase 0: the deployed Hindsight version was unreadable. Read before anything moved, on purpose | Nothing moved |
-| `update-failed` | `hermes update` itself failed. `update_rc=` carries its exit status; **124 means this script's `timeout` killed it**, which is the case where the `--backup` snapshot is the only route back for the migrated state | Only if `agent_changed=` is `yes` or `unknown`. `rollback_source=none` means nothing had moved |
+| `update-failed` | `hermes update` itself failed. `update_rc=` carries its exit status; **124 means this script's `timeout` killed it; 137 means the same `timeout` fired, the child ignored the `SIGTERM` for its whole kill grace, and it was `SIGKILL`ed instead**. Both are the same case — killed mid-flight, with the `--backup` snapshot the only route back for the migrated state | Only if `agent_changed=` is `yes` or `unknown`. `rollback_source=none` means nothing had moved |
 | `webui-failed` with `rollback_source=none` | The `git fetch` failed, or `origin/master` did not resolve to a 40-hex object name, **and** the agent tree had not moved. Failed closed before the checkout moved | Nothing moved |
 | `webui-failed` with `rollback_source=last-good` or `pre-run` | Either the same two failures after `hermes update` had already moved the agent, or the checkout or its constrained `pip install` failed | Yes — all three revisions restored and the units restarted |
 | `client-failed` with a rollback source | Pinning `hindsight-client` failed. The webui had already moved, so the rollback ran | Yes |
@@ -268,7 +284,7 @@ prints a usage line and exits **64** before any trap is registered.
 | Field | Values | Read it for |
 |---|---|---|
 | `backup=` | `requested`, `not-attempted` | Whether `--backup` was passed. `requested` is not a promise that a snapshot exists — see the caveat above |
-| `update_rc=` | `hermes update`'s own exit status | `124` means this script killed it mid-flight |
+| `update_rc=` | `hermes update`'s own exit status | `124` means this script's `timeout` killed it mid-flight; `137` means the child ignored that `SIGTERM` for its whole kill grace and was `SIGKILL`ed. Go and find the snapshot either way |
 | `agent_changed=` | `no`, `yes`, `unknown` | `unknown` means the agent checkout would not answer `git rev-parse` after the update, which is itself a post-mutation fault. It routes into the rollback |
 | `rollback_source=` | `none`, `last-good`, `pre-run` | Where the restore target came from. `none` means the failure happened **before anything moved** |
 | `rollback_state=` | `none`, `complete`, or `failed-agent-reset`, `failed-agent-install`, `failed-webui-checkout`, `failed-webui-requirements`, `failed-client-pin`, `failed-restart` | Whether the restore finished, and if not, the **first** step that failed. Later failures do not overwrite an earlier one |
@@ -301,7 +317,7 @@ hours after the last good one**.
 
 | `verdict=` | What it means | First thing to do |
 |---|---|---|
-| `units-down` | Fewer than five hermes user units are active. `units=N/5` says how many | `systemctl --user status` the five. If none are up, check `loginctl show-user hermes -p Linger` first |
+| `units-down` | Not every hermes user unit is active. `units=<active>/<expected>` carries both counts, and the expected one is derived from the `UNITS` list in the script, so it follows the list rather than a number written down here | `systemctl --user status` each unit in that list. If none are up, check `loginctl show-user hermes -p Linger` first |
 | `import-failed` | The shared venv cannot import `run_agent`. **This is the silent failure the whole design exists for**: every unit is still active and `/health` still answers `status: ok`, while the iOS app answers `AIAgent not available` | Read [homelab.md, "Do not give it a venv of its own"](homelab.md#hermes-webui-on-the-vm), then roll the webui back with `~/.hermes/hermes-update.last-good`. The Python traceback in the journal names which import failed |
 | `webui-unreachable` | The WebUI's own `/health` did not answer 2xx. `webui_http=` carries the status; `000` means no connection | `journalctl --user -u hermes-webui`. Note the unit's `StartLimitIntervalSec=60`/`StartLimitBurst=5` parking behaviour — a repeatedly failing start parks in `failed` rather than looping invisibly |
 | **No beat at all** | The VM is off, the user manager is not running, lingering was lost, the timer was disabled, or the Cloudflare Access bypass on `/api/push/*` was removed | Check the VM is up, then check the bypass. **A bypass regression turns every push monitor in the estate red at once, which is the tell** |
@@ -394,7 +410,7 @@ twice. What tells a passing drill apart from a genuinely broken rollback is
 the only thing still failing is the hook you set. A real failure names a step —
 `rollback_state=failed-webui-checkout` and so on.
 
-Two risks, stated because the drill is a live operation on the production VM:
+Three risks, stated because the drill is a live operation on the production VM:
 
 - **It runs a real update first.** If upstream moved since the last run, the drill's
   rollback silently undoes that update. With a `master`-tracking passenger, "upstream
@@ -402,6 +418,16 @@ Two risks, stated because the drill is a live operation on the production VM:
   rev-parse HEAD` against `origin/master` before you start.
 - **Its rollback is a live reinstall against the production venv** — the same venv all
   five units execute from. It is not a simulation.
+- **It moves the agent checkout as well, and the rollback undoes less than it looks like.**
+  `hermes update` stashes the checkout's local changes and switches off a parked branch
+  before it pulls. The rollback then hard-resets whichever branch that left it on to the
+  last-good revision, and it never pops the stash. Two things follow. What comes back is
+  the last-good code *without* any uncommitted modifications that were part of what was
+  serving before the drill, so "restored" is not the state you started from. And the
+  checkout can be left in a branch state the next update refuses to work with, because the
+  revision it now holds came from last-good rather than from upstream. Before you start,
+  run `git -C /home/hermes/.hermes/hermes-agent status --porcelain` and commit or discard
+  what it lists; afterwards, read `git -C /home/hermes/.hermes/hermes-agent stash list`.
 
 The drill also sends a real failure ping, so the `hermes-update` check goes red and stays
 red until the next successful run. Take an ordinary run afterwards, or resolve the check by
@@ -410,9 +436,9 @@ hand.
 ## Installing or reinstalling
 
 A VM rebuild must repeat **all** of this. The nightly `hermes backup` zip covers
-`~/.hermes`, so it carries the two environment files and nothing else here. Everything
-under `/home/hermes/bin`, `/usr/local/bin` and `~/.config/systemd/user` is rebuild
-territory.
+`~/.hermes`, so it carries the two environment files and the two last-good files, and
+nothing else named here. Everything under `/home/hermes/bin`, `/usr/local/bin` and
+`~/.config/systemd/user` is rebuild territory.
 
 ### 1. Lint first
 
@@ -499,6 +525,19 @@ pings nothing, so it needs no environment file:
 /home/hermes/bin/hermes-update.sh --seed
 ```
 
+**Before the first real run, leave the agent checkout with nothing to stash.** Check what
+it holds:
+
+```sh
+git -C /home/hermes/.hermes/hermes-agent status --porcelain
+```
+
+Commit or discard every file it lists, and decide whether you still want the branch the
+checkout is parked on. `hermes update` is configured to stash local changes and to switch
+off a parked branch, and the rollback restores neither — see
+[The rollback drill](#the-rollback-drill) for what that costs when a run fails its health
+assertion.
+
 Then, from the laptop, take the first real run:
 
 ```sh
@@ -508,6 +547,22 @@ ssh hermes@hermes.cynexia.net 'hermes-update'
 Seed **before** the first real run, so that run has a rollback target which has already
 passed the assertion. Take the first real run **after** `unattended-upgrades` has written
 its stamp at least once, or the run ends in a designed `apt-stale` failure.
+
+**The first run is the most expensive this wrapper will ever take.** It stashes the agent
+checkout, switches branch, pulls a long gap of commits, syncs the whole dependency tree,
+writes a roughly 200 MiB snapshot, runs the `state.db` integrity check and applies
+migrations — all inside one `hermes update`, which this script bounds at **thirty
+minutes** (1800 seconds) plus a 300-second kill grace. Watch it rather than walking away:
+
+```sh
+ssh hermes@hermes.cynexia.net 'journalctl --user -u hermes-update -f'
+```
+
+A run that exceeds the bound is terminated part way through and reported honestly, as
+`verdict=update-failed` with `update_rc=124` or `137`. That report is accurate and the
+interruption is still self-inflicted on a run that was working, so treat those two exit
+statuses on the **first** run as a bound to reconsider rather than as a broken update, and
+recover the migrated state from the snapshot before trying again.
 
 ### 6. Verify the install
 

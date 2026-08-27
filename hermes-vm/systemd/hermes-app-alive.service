@@ -20,6 +20,26 @@ Documentation=https://github.com/mnbf9rca/kubernetes_config/blob/master/docs/ope
 Type=oneshot
 ExecStart=/home/hermes/bin/hermes-app-alive.sh
 
+# SAME PATH AS hermes-update.service, and set here for the same reason that one
+# gives: the working directory must be what it is BY CONSTRUCTION, not by the
+# coincidence that an unset WorkingDirectory= in a systemd USER unit defaults to
+# the user's home. Unlike the update script, hermes-app-alive.sh pins no working
+# directory of its own, so this line is the only pin there is.
+#
+# The failure it forecloses is specific. This script's central assertion is
+# `python -c 'import run_agent'` against the shared venv, and `python -c` puts
+# the CURRENT WORKING DIRECTORY on sys.path. Started from inside the agent
+# checkout, that import can resolve run_agent from the checkout's own source
+# rather than from the venv, so the assertion passes on a venv in which the
+# agent package is not installed at all - which is the false pass the sibling
+# unit's comment exists to forbid.
+#
+# Under the timer the default working directory is already /home/hermes, so the
+# scheduled run was never at risk. What this covers is a HAND-DEBUG run started
+# from somewhere else - which is exactly when an operator is asking the check
+# whether the venv is broken. Change one unit's pin and change the other.
+WorkingDirectory=/home/hermes
+
 # HERMES_HOME for the same reason the update unit sets it: everything hermes
 # resolves under $HERMES_HOME is resolved by absolute path from that variable.
 # This script only reads paths it hard-codes, so the line is defensive rather

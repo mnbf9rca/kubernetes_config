@@ -344,7 +344,20 @@ rewrite_script() {
   # remembered. Checking "absolute and not under the scratch root" needs nobody
   # to enumerate anything. The URL constants are unaffected: they start `http`,
   # not `/`.
-  _stray=$(grep '^[A-Z_][A-Z_]*=/' "$ROOT/hermes-update.sh" | grep -Fv -- "=$ROOT/") || _stray=''
+  #
+  # THE OPTIONAL QUOTE IS THE WHOLE POINT OF THE sed. An earlier version matched
+  # `^NAME=/` only, so a constant written `NAME="/home/hermes/x"` matched neither
+  # this check nor the rewrite above it: it escaped both, and the harness would
+  # have run `git reset --hard` and `pip install` against the real installation
+  # while reporting nothing wrong. Quoting a path is ordinary shell, so that was
+  # a gap the claim above ("needs nobody to enumerate anything") did not cover.
+  # The sed strips one leading `'` or `"` before the `/` so that BOTH halves see
+  # the path: the -Fv exclusion below then recognises a rewritten quoted
+  # constant the same way it recognises an unquoted one. A quoted constant the
+  # sed at the top of this function does not redirect still fails here, which is
+  # the intended outcome - it must be added to that sed.
+  _stray=$(sed -n 's#^\([A-Z_][A-Z_]*\)=["'\'']\{0,1\}\(/.*\)$#\1=\2#p' \
+    "$ROOT/hermes-update.sh" | grep -Fv -- "=$ROOT/") || _stray=''
   if [ -n "$_stray" ]; then
     printf 'FATAL: a constant still names an absolute path outside the scratch\n' >&2
     printf 'root after the rewrite:\n%s\n' "$_stray" >&2
