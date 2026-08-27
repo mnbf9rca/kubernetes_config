@@ -437,7 +437,7 @@ hand.
 
 A VM rebuild must repeat **all** of this. The nightly `hermes backup` zip covers
 `~/.hermes`, so it carries the two environment files and the two last-good files, and
-nothing else named here. Everything under `/home/hermes/bin`, `/usr/local/bin` and
+nothing else this page installs. Everything under `/home/hermes/bin`, `/usr/local/bin` and
 `~/.config/systemd/user` is rebuild territory.
 
 ### 1. Lint first
