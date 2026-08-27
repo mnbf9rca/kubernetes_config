@@ -42,6 +42,9 @@ printf 'agent_sha=%s\nagent_branch=%s\nwebui_sha=%s\nclient_version=%s\n' \
   "$(git -C ~/hermes-webui rev-parse HEAD)" \
   "$(~/.hermes/hermes-agent/venv/bin/pip show hindsight-client | sed -n 's/^Version: //p')" \
   > ~/.hermes/hermes-update.pre-run    # the venv's own pip, never a system one
+printf 'secrets_applied=%s\n' "$(for U in hermes-gateway hermes-gateway-emh hermes-gateway-hal; do
+  journalctl --user -u "$U" | sed -n 's/.*applied \([0-9]*\) secrets.*/\1/p' | tail -1
+  done | paste -sd, -)" >> ~/.hermes/hermes-update.pre-run
 cat ~/.hermes/hermes-update.pre-run
 ```
 
@@ -95,13 +98,11 @@ systemctl --user reset-failed hermes-update-manual 2>/dev/null; true
 **The run passed only if all three read `ActiveState=inactive`, `Result=success` and `ExecMainStatus=0`.** Anything else goes to [Rollback](#rollback) — read the journal first.
 `ActiveState` is in that list because the wait loop is what makes the other two mean anything: read on a unit that is still running, `Result` reports the `success` it was initialised with.
 Do not take the next step's snapshot check as the completion signal: the snapshot is written at the START of the run, so it exists whatever happened afterwards.
-A transient **service** survives; the user manager forks it, so no `&` is wanted.
-A `--scope` backgrounded with `&` does **not** — that client takes the session's `SIGHUP`.
+A transient **service** survives because the user manager forks it, so no `&` is wanted; a `--scope` backgrounded with `&` does **not**, because that client stays a child of the session's shell and takes its `SIGHUP`.
 `--collect` is deliberately absent: it garbage-collects the unit on exit and takes `Result` with it, which is the only completion signal there is, so `reset-failed` clears the unit by hand instead.
 The wait loop blocks; to watch the run as it goes, open a second ssh shell and `journalctl --user -u hermes-update-manual -f`.
 `--setenv=HERMES_HOME` replaces what the deleted unit pinned: `hermes` resolves `uv` at `$HERMES_HOME/bin/uv` by absolute path, so an absent `HERMES_HOME`, not a short PATH, is what would stop the update finding its own tooling.
-**Unverified:** that `uv` resolves inside the transient unit — the first supervised run confirms it.
-**Unverified:** whether this update prompts for the config migration.
+**Unverified:** that `uv` resolves inside the transient unit, and whether this update prompts for the config migration; the first supervised run settles both.
 A prompt has nowhere to go in a detached unit, so if the journal stalls on one, stop the unit and re-run in the foreground — which accepts the `SIGHUP` exposure this section opens by forbidding, because a prompt needs a tty; do not start that re-run anywhere near 04:45.
 `tmux` is absent: if `systemd-run --user` itself fails, investigate the user manager ([hermes-vm.md](hermes-vm.md#lingering-is-a-precondition)).
 
@@ -136,7 +137,8 @@ systemctl --user restart hermes-gateway hermes-gateway-emh hermes-gateway-hal \
 ```sh
 systemctl --user is-active hermes-gateway hermes-gateway-emh hermes-gateway-hal \
   hermes-dashboard hermes-webui
-journalctl --user -u hermes-gateway --since '10 min ago' | grep '1Password: applied'
+for U in hermes-gateway hermes-gateway-emh hermes-gateway-hal; do
+  journalctl --user -u "$U" --since '10 min ago' | grep '1Password: applied'; done
 /home/hermes/.local/bin/hermes secrets onepassword status
 cd /home/hermes && ~/.hermes/hermes-agent/venv/bin/python -c 'import run_agent'  # not in the checkout
 curl -sS -m 10 -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8787/health
@@ -152,7 +154,7 @@ journalctl --user -u hermes-gateway --since '10 min ago' | grep -i hindsight
 
 `is-active` prints one `active` per unit and exits non-zero if any of the five is not, so its exit status alone is the pass condition.
 
-**The secret count is the cheapest post-update check there is.** The journal line must match the count the provider declares — seven references and "applied 7 secrets" as of 2026-08-27 — because that path is fail-open and swallows errors, so an expired `OP_SERVICE_ACCOUNT_TOKEN` or an unreachable `op` shows up as a *smaller* number, not a failure.
+**A DROP in the applied-secrets count is the cheapest post-update check there is; the absolute number is not a gate.** The count is per profile home, so the three gateways legitimately differ, and any one of them rises when a reference is added to that home's `config.yaml` — on 2026-08-27 all three logged six. Compare each gateway's line against that same gateway's figure in the record's `secrets_applied=`, and alarm only on a **decrease**: the application path is fail-open and swallows errors, so an expired `OP_SERVICE_ACCOUNT_TOKEN` or an unreachable `op` shows up as a smaller number and never as a failure.
 `status` confirms the references survived the migration; whether it preserves the `secrets:` block is **unverified**, and this settles it.
 
 The import catches the documented broken-venv failure: a venv missing `dotenv`, `httpx` or `openai` leaves every unit active and `/health` answering `status: ok` while the iOS app answers `AIAgent not available`.
@@ -160,10 +162,9 @@ Run it from outside the checkout, or the import resolves from source and passes 
 The chat key reaches `curl` through a configuration file on stdin, so it never appears on argv, and the character gate is deliberate: an unresolved `op://…` reference fails it on its `:` and `/`, degrading visibly instead of sending a meaningless bearer token.
 The test is that `choices[0].message.content` came back non-empty; model wording is not a contract.
 
-**The Hindsight grep is not optional.** A chat turn returns 200 whether or not the memory write behind it succeeded, because that write is on a background path the response does not wait for, so without it a green run passes over a VM that has retained no memory in months.
-Its pass condition is stated plainly because it is not yet demonstrable: **no successful write has ever been observed on this VM**, so nobody knows what the success line looks like.
-Every occurrence in the journal is `401 Invalid API key`, whose cause is settled in [First session](#first-session) and whose fix is a gateway restart.
-After that restart, the first success defines the line — record it here when you see it.
+**The Hindsight grep is not optional.** A chat turn returns 200 whether or not the memory write behind it succeeded, because that write is on a background path the response does not wait for, so without it a green run passes over a profile that has retained nothing.
+It greps `hermes-gateway` because that is the profile the chat turn ran against, and its pass condition is the narrow one: **no write has ever succeeded for the default profile** — every occurrence in that journal is `401 Invalid API key`, whose cause and one-unit fix are in [First session](#first-session).
+`emh` and `hal` do write, so a success line exists to pattern-match against; after the operator's restart the default gateway's first success defines it here — record it when you see it.
 
 ## Report
 
@@ -227,13 +228,12 @@ The first run validates this page's mechanics, not its weekly ergonomics.
 As of 2026-08-27 the checkout is 1,151 commits behind `origin/main`, a `_config_version` 38 migration is pending and the semantic version does not move.
 Take it supervised, and expect a 04:45 reboot the first night after install: a kernel reboot is already pending.
 
-**The Hindsight 401 has a settled cause: a gateway older than its own configuration.** Every memory write in two months of journal failed with `401 Invalid API key`, and the running gateway had started on 2026-08-23 at 14:22 applying **six** secrets; `config.yaml` gained the `HINDSIGHT_API_KEY` reference on 2026-08-24 at 14:43, and nothing restarted the gateway afterwards, so the plugin initialised with an empty key and kept it.
-**The fix is a gateway restart**, and it is the operator's to run.
-The key was never wrong: the two vault copies and the live cluster secret were compared on 2026-08-27 and all three held the identical value.
+**The Hindsight 401 is confined to the default profile, and the cause is a gateway older than its own configuration.** `hermes-gateway` has run since 2026-08-23; `~/.hermes/config.yaml` gained its `HINDSIGHT_API_KEY` reference on 2026-08-24 and nothing restarted the process, so the plugin initialised with an empty key and every write since has returned `401 Invalid API key`.
+The observable is that the `hermes` bank is **empty — not one write has ever landed** — while `emh` and `hal`, whose gateways started after the reference did, hold 237 and 40 memories; those two are the controls, and they prove the configuration, the vault copies and the server are all fine.
+**The fix is `systemctl --user restart hermes-gateway` alone**, the operator's to run, and it has worked when a write appears in the `hermes` bank and in that gateway's journal.
 Note that [hindsight.md](hindsight.md#rotating-the-tenant-api-key) names `op://Homelab/hermes/tenant-api-key` for the VM and **no such item exists** — a typo in that page, not a third copy.
 
-The key is in no file on the VM: hermes's 1Password provider resolves `secrets.onepassword.env.HINDSIGHT_API_KEY: op://hermes/hindsight/tenant-api-key` at startup, from all three homes (`~/.hermes/config.yaml` and the `emh` and `hal` profiles' own `config.yaml`), into the gateway process's environment alone.
-That is why the applied-count gate in [Verify](#verify) earns its place: a count one short of the declared references is exactly the state this VM lived in for four days, and it is the only cheap signal of it.
+The key is in no file on the VM: hermes's 1Password provider resolves `secrets.onepassword.env.HINDSIGHT_API_KEY: op://hermes/hindsight/tenant-api-key` at startup, from each home's own `config.yaml`, into that gateway process's environment alone — which is why a restart, and only a restart, applies a newly added reference.
 
 **[laptop]** The digest comparison stays, as the drift check the two-copy design needs — it is what proved the two vaults in sync. **Never compare raw values and never print one:**
 

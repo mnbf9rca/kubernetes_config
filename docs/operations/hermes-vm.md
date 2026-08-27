@@ -85,7 +85,7 @@ See [uptime-kuma.md](uptime-kuma.md#push-monitors).
 
 Write it mode 0600, by piping `op read` over ssh from the operator's laptop.
 **Placement rule, from the August 26, 2026 ruling:** any reference the VM itself resolves must live in the `hermes` vault, because the VM's 1Password service account can see only that vault; a reference the operator's laptop resolves and pipes over ssh may live anywhere.
-The VM does resolve `op://` references — hermes's own 1Password secrets provider resolves seven of them at gateway startup — so the vault choice here is load-bearing.
+The VM does resolve `op://` references — hermes's own 1Password secrets provider resolves each home's references at gateway startup — so the vault choice here is load-bearing.
 
 The service uses no leading `-` on its `EnvironmentFile=`.
 A check that cannot report is worse than one that refuses to start.
