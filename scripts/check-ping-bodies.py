@@ -352,11 +352,11 @@ def scan_text(path, lines, denied):
         reviewer who finds one there has learned nothing from it. What makes
         those particular values safe is the script's own construction - a
         verdict from a fixed enumeration, a count derived from a literal list,
-        or an HTTP status code forced back to three digits at the point of
-        assignment - which is a human-review property under spec section 9, not
-        something this guard establishes. Do not add a marker in that position
-        expecting it to carry weight, and do not delete one expecting the guard
-        to catch what it was standing in for.
+        or an HTTP status code gated to digits at the point of assignment -
+        which is a human-review property under spec section 9, not something
+        this guard establishes. Do not add a marker in that position expecting
+        it to carry weight, and do not delete one expecting the guard to catch
+        what it was standing in for.
       * Files are chosen by extension, not by being a `configMapGenerator` input,
         so a generator input with no extension is not scanned. REQUIRED_TARGETS
         names every one that exists today; a new one needs adding there.

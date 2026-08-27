@@ -54,8 +54,9 @@ Unattended-Upgrade::Origins-Pattern {
 // estate update strategy deferred the reboot to the session; the operator
 // overruled. A kernel patch waiting weeks is the worse trade, and a bad
 // comeback is caught by hermes-app-alive, which runs at 05:45, ONE HOUR after
-// this window. The one-hour gap is the point: the reboot must have finished and
-// the lingering user units must have come back before the check looks. (The continuous 15-minute monitor an earlier draft relied on here was
+// this window. The one-hour gap is the point: the reboot must have finished
+// and the lingering user units must have come back before the check looks.
+// (The continuous 15-minute monitor an earlier draft relied on here was
 // deleted on 2026-08-26 as overengineering; detection latency is now up to
 // about a day, accepted by the operator - "homelab not NASA".)
 Unattended-Upgrade::Automatic-Reboot "true";
