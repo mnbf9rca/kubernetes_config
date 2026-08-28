@@ -396,13 +396,14 @@ Verified 2026-07-27: `kubectl diff` over these resources is empty and `kubectl a
 `kubectl diff` showing nothing is the ground truth; `configured` in apply output is not evidence of drift.
 
 **That list is a set of examples, not a closed membership test, and treating it as one produces false alarms.**
-The mechanism underneath is field ownership: when an apply adopts or rewrites the managed-fields metadata of an object whose spec already matches, the server records a write and `kubectl` prints `configured`, while `kubectl diff` — which compares the object, not its ownership — reports nothing.
+These applies are client-side (`kubectl apply -f -`), and kubectl prints `unchanged` only when the three-way patch it computes locally is empty — so any object whose stored `last-applied-configuration` differs from the render in a way the server normalises away prints `configured` while `kubectl diff` reports nothing.
+What is in that set is a property of the object's history, not of its kind.
 Any resource can end up in that state; nothing about being a Secret, a PV or a webhook config is required.
 On 2026-08-28 `cronjob/jottacloud-backup-scheduled` and `cronjob/cloudflare-analytics` each reported `configured` on a converged tree, appearing in no diff before or after, and a re-run `make diff-homelab` returned nothing at all.
 
 So decide it by the mechanism rather than by the list:
 
-> A resource that is **absent from the immediately-preceding diff** and whose **re-run diff is also empty** is ownership adoption, not drift.
+> A resource that is **absent from the immediately-preceding diff** and whose **re-run diff is also empty** is a patch the server converges away, not drift.
 
 A resource the diff *does* name is a real change, and the concurrent-branch rule in `AGENTS.md` applies to it: prove which branch deployed it before you accept it.
 Do not go enumerating the class by experiment — the membership moves with every apply, and the rule above does not.
