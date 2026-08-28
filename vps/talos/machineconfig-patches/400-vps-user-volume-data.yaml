@@ -1,5 +1,5 @@
-# Talos user volume for the Hetzner Cloud Volume attached to the VPS node.
-# Allocates a partition filling the 80 GB block device and mounts it at
+# Talos user volume for the Hetzner Cloud Volume attached to the original VPS
+# node. Allocates a partition filling the 80 GB block device and mounts it at
 # /var/mnt/data. local-path-provisioner points its root here.
 #
 # Disk selector: the boot disk (sda, 164 GB, model "QEMU HARDDISK") and the
@@ -9,12 +9,25 @@
 # Cross-checked with `talosctl get disks` at plan time:
 #   sda  164 GB  virtio  QEMU HARDDISK   <-- boot (excluded by size)
 #   sdb   80 GB  virtio  Volume          <-- selected
+#
+# SCOPE: this patch is labelled to ONE machine, not to the cluster. Since the
+# 2026-08-28 expansion to three control planes, the other two nodes are CX23s
+# with no Hetzner Cloud Volume attached, and a cluster-scoped UserVolumeConfig
+# would push a disk selector at them that matches nothing. If the Cloud Volume
+# is ever moved or a second one is attached, add a SECOND patch file with that
+# machine's UUID rather than widening this one back to the cluster.
+#
+# The UUID is an Omni machine identifier: it grants no access and is safe in a
+# public repo (AGENTS.md, "Know the difference between a secret and an
+# identifier"). Re-derive it with:
+#   omnictl get clustermachines
 metadata:
   namespace: default
   type: ConfigPatches.omni.sidero.dev
   id: 400-vps-user-volume-data
   labels:
     omni.sidero.dev/cluster: vps
+    omni.sidero.dev/cluster-machine: 55e00d9f-dc1e-4047-8e95-ab9c003670c0
   annotations:
     name: user-volume-data
 spec:
