@@ -34,8 +34,8 @@ The control-plane count is part of the record because it decides whether an upgr
 
 | Cluster | Talos | Kubernetes | Control-plane nodes | Confirmed |
 |---|---|---|---|---|
-| homelab | 1.13.8 | 1.36.0 | 1 (`talos-5yn-s9u`) | August 28, 2026 |
-| vps | 1.13.8 | 1.36.1 | 3 (`ubuntu-16gb-fsn1-2`, `ubuntu-4gb-fsn1-2`, `ubuntu-4gb-nbg1-1`) | August 28, 2026 |
+| homelab | 1.13.9 | 1.36.4 | 1 (`talos-5yn-s9u`) | August 28, 2026 |
+| vps | 1.13.9 | 1.36.4 | 3 (`ubuntu-16gb-fsn1-2`, `ubuntu-4gb-fsn1-2`, `ubuntu-4gb-nbg1-1`) | August 28, 2026 |
 
 Read the live values with:
 
@@ -102,8 +102,17 @@ omnictl cluster kubernetes manifest-sync <cluster> --dry-run=false   # applies
 The UI equivalent is **Bootstrap Manifests** in the left navigation, which Omni surfaces after a Kubernetes upgrade completes and before the changes are applied.
 Read the dry run in full and apply only what suits this cluster.
 
-Both clusters carried `outofsync: 21` with an empty `lastfatalerror` on August 28, 2026, before any upgrade.
-That backlog is pre-existing, not something an upgrade created.
+**A backlog here is not cosmetic, and the first session to read one found out why.**
+Both clusters carried `outofsync: 21` with an empty `lastfatalerror` on August 28, 2026, accumulated before that session.
+Reading the dry run showed it was not drift in annotations: kube-proxy was running **v1.35.3** on homelab and **v1.35.2** on the VPS against a control plane that had just moved to **v1.36.4**.
+CoreDNS was on v1.13.2 and Flannel on v0.27.4.
+Earlier Kubernetes upgrades had moved the control plane and left these behind, because Omni holds them back by design and nothing had ever applied them.
+
+One minor of skew between kube-proxy and the API server is the edge of what upstream supports, so the next upgrade would have taken it out of support.
+Both clusters were synced on August 28, 2026 and now report `outofsync: 0`, with kube-proxy v1.36.4, CoreDNS v1.14.6 and Flannel 0.28.8.
+
+So read the count as a version gap, not a queue of formatting changes, and sync it in the session that creates it.
+Applying restarts kube-proxy, the CNI and DNS, so verify service networking afterwards rather than assuming: on the single-node homelab this is a brief outage, and on the VPS it rolls.
 
 Do not run `talosctl get manifests -o yaml` unfiltered to inspect the sources: the output embeds the cluster's bootstrap-token Secret.
 
