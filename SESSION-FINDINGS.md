@@ -149,3 +149,26 @@ The pre-upgrade dump `pre-upgrade-20260828153152` covers it if it is done later.
 **Proposed fix:** decide whether the extension should track the image.
 If it should, add the `ALTER EXTENSION vector UPDATE` to the hindsight upgrade runbook in `docs/operations/hindsight.md`, after the rollout and before the canary, and state that the pre-upgrade dump is its rollback.
 Then run it once to close the current 0.8.1 to 0.8.6 gap.
+
+## 8. Renovate splits the keel-fresh pair into two pull requests, which the parity guard forbids
+
+`homelab/ops/keel-fresh.yaml` and `vps/ops/keel-fresh.yaml` hold the same CronJob twice on purpose, and `make check-keel-fresh-parity` requires them to be identical outside a stated list of sanctioned differences.
+The container image is not on that list.
+
+Renovate opened the `curlimages/curl` bump as two pull requests: 70 for the homelab copy and 74 for the VPS copy.
+Taking either one alone puts the two copies out of parity.
+This session confirmed the consequence by rebasing pull request 70 alone and running the guard, which failed and named the image line.
+The guard has no per-cluster half, so a divergence refuses `apply-homelab` and `apply-vps` alike.
+
+The skill's Step 2 says to work the pull requests one at a time, oldest first.
+Followed literally, that instruction produces an estate where neither cluster can be applied at all until the second pull request is taken.
+The instruction to carry other branches covers deployed-but-unmerged work, not two open pull requests that are individually invalid.
+
+**How this session handled it.**
+It built a branch carrying both file changes, confirmed the guard passed, applied to homelab and then to the VPS, verified `keel-fresh` on both, and only then pushed and merged the two pull requests back to back.
+Each pull request merged normally, so neither had to be closed unmerged, which is unsupported and snoozes the update-watch monitor.
+
+**Proposed fix, in two parts.**
+First, stop Renovate splitting them: add a `packageRules` entry in `renovate.json` grouping `homelab/ops/keel-fresh.yaml` and `vps/ops/keel-fresh.yaml` under one `groupName`, so the pair arrives as a single pull request.
+Second, describe the general case in the skill's Step 2: when two open pull requests are individually invalid under a guard, deploy a branch carrying both, then merge them back to back.
+Any future enforced copy pair inherits the same problem.
