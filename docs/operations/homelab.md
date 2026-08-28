@@ -27,7 +27,7 @@ Any new hostPath/hostNetwork workload needs the same treatment.
 `cert-manager` and `local-path-storage` namespaces are created by their upstream manifests, so they are deliberately absent from `namespaces.yaml` (kustomize rejects duplicates).
 **Those three upstream bases stay unwatched, and the 2026-08-26 Renovate widening did not change that.**
 `cert-manager`, `nfs-csi` and `local-path` are pulled in as raw GitHub URLs with the version in the *path*, which the `kustomize` manager does not parse; it reads `?ref=` and `images:` transformers, and this tree has neither.
-That manager's only footprint in the repo is the VPS's `vps/bootstrap/local-path/kustomization.yaml`, pinned `?ref=v0.0.31`.
+That manager's only footprint in the repo is the VPS's `vps/bootstrap/local-path/kustomization.yaml`, pinned `?ref=v0.0.37`.
 Bumping a homelab base is still a hand edit of the URL.
 `keel`'s namespace **is** declared there, because upstream keel moved to Helm-only distribution and `homelab/bootstrap/keel/keel.yaml` is hand-written.
 

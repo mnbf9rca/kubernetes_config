@@ -278,7 +278,7 @@ A *dotted* tag — `alpine:3.20`, `traefik:v3.3`, `postgres:16-alpine`, `pgvecto
 
 **Remote-base images are advisory, in every mode.**
 An image named by no file in the cluster's own tree came from a remote base — cert-manager, the CSI drivers, local-path-provisioner — so nothing here can edit the reference; it moves only when the base's own ref moves.
-That is not the same as unreachable: the VPS local-path base is pinned as `?ref=v0.0.31`, which the kustomize manager parses, so Renovate proposes that bump even though the guard still calls the image advisory.
+That is not the same as unreachable: the VPS local-path base is pinned as `?ref=v0.0.37`, which the kustomize manager parses, so Renovate proposes that bump even though the guard still calls the image advisory.
 Failing an apply on somebody else's manifest produces a gate people route around, so those are printed as advisories and do not fail the check, exactly as `check-script-lint` treats upstream findings.
 Ownership is therefore established *before* any verdict, not only before the scope one: a remote base that ever shipped keel annotations on a pinned tag would otherwise hard-fail an apply over a manifest this repo cannot edit.
 
