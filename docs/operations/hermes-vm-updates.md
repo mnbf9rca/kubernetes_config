@@ -111,15 +111,6 @@ systemctl --user restart hermes-gateway hermes-gateway-emh hermes-gateway-hal \
   hermes-dashboard hermes-webui
 ```
 
-**[VM]** Until the IMAP ID capability gate lands upstream, re-apply it: the update resets `main` and silently drops the local commit carrying it, and without it Purelymail kills every IMAP connection the agent opens with a misleading `[Email] IMAP connection failed: command: SELECT => Unknown command.` that names neither ID nor the cause.
-Skip this step only when `_send_imap_id` in `plugins/platforms/email/adapter.py` already checks `imap.capabilities` after the update.
-
-```sh
-grep -n 'capabilities' ~/.hermes/hermes-agent/plugins/platforms/email/adapter.py  # empty = gate missing
-git -C ~/.hermes/hermes-agent cherry-pick e04d498bad  # branch test/imap-id-capability-gating; patch copy at ~/purelymail-imap-id.patch
-systemctl --user restart hermes-gateway hermes-gateway-emh hermes-gateway-hal
-```
-
 ## Verify
 
 **[VM]** Any failure sends you to [Rollback](#rollback).
