@@ -33,6 +33,7 @@ When you cannot satisfy one, stop and tell the operator what blocked you.
    Everything the session invents - a runbook correction, a new guard, a rule, a better command - goes on the findings branch and merges once, after review.
    The test is "did the runbook ask me to make it?", not "is this change good?".
    A session revises its own conclusions as later work contradicts them, and a mid-session merge forecloses that.
+   At the first invention, cut that branch from `master` and commit it there - never inside a pull request's worktree, which is force-pushed, merged and removed.
 3. **Read `make diff-<cluster>` in full before every apply.**
    Not the summary - every resource it names.
    A resource in that list your branch never touched is another branch's deployed work about to be reverted.
@@ -337,6 +338,8 @@ There is no updater on the VM.
 - [ ] Count what you did: pull requests merged, pins bumped, and one verdict for the VM.
 - [ ] Say what you left unmerged and why: every pull request held back on a `PENDING` check or a hold you encoded in `renovate.json`, and everything gate 2 put on the findings branch rather than into `master` - a runbook correction, a guard, a rule.
       The close is where the operator learns that work exists and is waiting for one review.
+- [ ] Push the findings branch and open one pull request for it: `git push -u origin HEAD`, then `gh pr create --fill`.
+      It merges in a later session, because the deploy-then-merge extension wants the prose exercised first - but nothing on GitHub exists until you push it.
 - [ ] Ping the `estate-update` check.
       **Every `<...>` below is a placeholder.**
       Replace the two counts with numbers you tallied yourself, and replace the verdict with one value from the enum written inline beside it:
