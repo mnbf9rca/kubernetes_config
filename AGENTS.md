@@ -146,8 +146,10 @@ The rules that must not be broken:
   The rebase-before-apply rule does not cover this: a branch that never reaches a cluster still reaches `master`.
   The check is one command, read before you commit and again before you merge:
 
-      git diff --stat origin/master..HEAD
+      git fetch origin && git diff --stat origin/master..HEAD
 
+  The fetch is half the check, not a formality: `origin/master` is a remote-tracking ref that advances only on a fetch or a pull, so against a stale one the two-dot diff can only ever name the branch's own files and the check passes green on a branch that is eleven merges behind.
+  A `git rebase origin/master` on that same stale ref is a no-op for the same reason.
   It must name only the files that branch exists to change.
   Any other file is a revert until proven otherwise, exactly as in `make diff-<cluster>`.
   On 2026-08-28 a findings branch held open across one session drifted eleven merges behind, and its diff named 22 workload files it had never touched.
@@ -178,7 +180,7 @@ The rules that must not be broken:
 - **Concurrent deployed-but-unmerged branches are last-apply-wins on shared files.**
   An apply reconciles the whole rendered tree, so every file the applying branch does not carry is reset to that branch's version — another branch's already-deployed change included, silently, with every job still green.
   On 2026-08-24 an apply from a branch cut from `master` reverted the deployed restic gate, and that night's backup verified without it.
-  So before **any** apply, the branch must already contain every other deployed-but-unmerged change: rebase onto `origin/master`, **and** check the open pull requests for another that is deployed and touches the same files.
+  So before **any** apply, the branch must already contain every other deployed-but-unmerged change: `git fetch origin`, rebase onto `origin/master`, **and** check the open pull requests for another that is deployed and touches the same files.
   `make diff-<cluster>` names every resource the apply would change — read that list first, and treat a resource the branch never touched as a revert until proven otherwise.
 - `make apply-homelab` reporting `configured` rather than `unchanged` is expected and is **not** drift whenever the resource is absent from the immediately-preceding diff and a re-run diff is empty: that is a client-side apply patch the server converges away, and Secrets, some PVs and the cert-manager webhooks are examples of the class rather than the whole of it — two CronJobs joined them on 2026-08-28.
   Apply that rule, not a membership test; see the apply-workflow doc before investigating.
