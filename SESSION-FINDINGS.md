@@ -129,7 +129,7 @@ Read it before every merge:
 
     gh pr view <n> --repo mnbf9rca/kubernetes_config --json statusCheckRollup
 
-## 7. A pgvector image bump leaves the extension in the database behind
+## 7. A pgvector image bump leaves the extension in the database behind — researched, and it is a no-op today
 
 Pull request 65 moved `pgvector/pgvector` from `0.8.1-pg17` to `0.8.6-pg17`.
 After the rollout, the database reports:
@@ -139,16 +139,49 @@ After the rollout, the database reports:
 The image ships the 0.8.6 shared library and its SQL scripts, but the `vector` extension inside the `hindsight` database stays at the version it was created with until somebody runs `ALTER EXTENSION vector UPDATE`.
 The PostgreSQL server itself moved from 17.6 to 17.11 in place, which is a patch release within the same major and needs no action.
 
-The hindsight canary passed after the upgrade, retaining and recalling with HTTP 200 and one result, so nothing is broken today.
-The concern is drift: every future pgvector bump widens the gap between the library and the extension, and new index types or functions in later versions stay unavailable while the estate believes it is running the version in the manifest.
+### Is the extension version pinned by the vendor?
 
-This session did not run the `ALTER`.
-It is a schema change to the store holding an agent's memory, the runbook does not call for it, and the pull request only asked to move an image tag.
-The pre-upgrade dump `pre-upgrade-20260828153152` covers it if it is done later.
+No.
+Upstream hindsight's compose files use `pgvector/pgvector:pg${HINDSIGHT_DB_VERSION:-18}`, an unpinned tag that takes whatever pgvector ships for that PostgreSQL major.
+Upstream expresses no opinion about the extension version at all.
 
-**Proposed fix:** decide whether the extension should track the image.
-If it should, add the `ALTER EXTENSION vector UPDATE` to the hindsight upgrade runbook in `docs/operations/hindsight.md`, after the rollout and before the canary, and state that the pre-upgrade dump is its rollback.
-Then run it once to close the current 0.8.1 to 0.8.6 gap.
+Hindsight creates the extension with a bare `CREATE EXTENSION vector` in `_ensure_pgvector_extension_in_public`, naming no version, and never runs `ALTER EXTENSION vector UPDATE`.
+It checks only that the extension exists and lives in the `public` schema.
+So the extension version is whatever was current when the database was first initialized, and nothing upstream will ever move it.
+
+This repository's own requirement is a floor, not a pin.
+The comment in `homelab/hindsight/hindsight.yaml` states that pgvector 0.8.0 or later covers the one documented feature floor, iterative scans.
+That is accurate: hindsight sets the `hnsw.iterative_scan` and `hnsw.max_scan_tuples` settings, and `hnsw.iterative_scan` arrived in pgvector 0.8.0.
+The installed 0.8.1 clears that floor.
+
+### Should the `ALTER` be applied?
+
+It changes nothing functional today, because every pgvector release from 0.8.2 to 0.8.6 is a fix inside the C library:
+
+- 0.8.2 fixed a buffer overflow with parallel HNSW index builds.
+- 0.8.3 fixed possible index corruption with HNSW vacuuming.
+- 0.8.4 fixed an `hnsw graph not repaired` error, an insert error during HNSW vacuuming, and memory exceeding `maintenance_work_mem`.
+- 0.8.5 and 0.8.6 reduced memory usage and fixed an IVFFlat buffer overflow on 32-bit systems.
+
+None of them adds a SQL function, type, operator or index method.
+pgvector's own upgrade scripts confirm it: `vector--0.8.0--0.8.1.sql` through `vector--0.8.5--0.8.6.sql` are each 153 bytes, containing only the standard psql guard line and no statements.
+
+The practical consequence is that the estate already has those fixes.
+They live in the shared library, which was replaced when the container image was replaced, so the HNSW vacuuming corruption fix in 0.8.3 is active now.
+`extversion` is a catalog label recording which SQL definitions are installed, and running the `ALTER` would relabel 0.8.1 to 0.8.6 and execute nothing.
+
+### Why it is still worth doing
+
+`vector--0.8.6--0.8.7.sql` is 11,833 bytes.
+The next release does add SQL objects.
+Once 0.8.7 ships, a database still labelled 0.8.1 needs an `ALTER` that replays five empty scripts and then a real one, and anybody looking at the version gap has to redo this analysis to know whether it is safe.
+Keeping the label current makes the eventual real upgrade a single visible step.
+
+**Proposed fix:** run `ALTER EXTENSION vector UPDATE` once, as a catalog relabel with no SQL to execute.
+Then add it to the hindsight upgrade runbook in `docs/operations/hindsight.md`, after the rollout and before the canary, so the label tracks the image from now on.
+Note in that runbook that the fixes ship in the library and arrive with the image, so the `ALTER` is about keeping the catalog honest rather than about applying fixes.
+
+The pre-upgrade dump `pre-upgrade-20260828153152` covers it, though an empty upgrade script needs no rollback.
 
 ## 8. Renovate splits the keel-fresh pair into two pull requests, which the parity guard forbids
 
