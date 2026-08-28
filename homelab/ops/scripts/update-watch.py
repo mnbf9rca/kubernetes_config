@@ -17,8 +17,8 @@ Renovate cannot look up gets no pull request, and every image the update engine
 is forbidden to touch is pinned, so a failed lookup freezes it silently --
 `make check-renovate-scope` still reports it watched, because that guard proves
 the file is in scope and never that the lookup succeeded. Only a COUNT of failed
-lookups reaches the heartbeat: the section names packages, and a package name is
-remote text (rule 4). The lines themselves go to the pod log.
+lookups reaches the heartbeat: the warning block names the packages, and a
+package name is remote text (rule 4). The lines themselves go to the pod log.
 
 THE FOUR RULES THIS SCRIPT EXISTS TO ENFORCE. Read them before changing anything.
 
@@ -112,8 +112,9 @@ PR_AGE_RED_DAYS = 45
 
 # THE LIVENESS THRESHOLD, ON THIS SAME MONITOR. The verdict becomes
 # `renovate-stale` when the Dependency Dashboard issue has not been touched in
-# this many days. The dashboard's `updated_at` is a stable API field; nothing
-# here parses its markdown.
+# this many days. The dashboard's `updated_at` is a stable API field; this
+# signal reads none of the body -- the one marker read out of the markdown is at
+# LOOKUP_FAILED_SECTION below.
 #
 # THIS USED TO BE A SECOND CHECK WITH ITS OWN UUID. The argument for splitting
 # was that an alerting backend notifies on status FLIPS and this signal was
@@ -214,7 +215,7 @@ NEXT_ACTIONS = {
     V_CONFIG_ERROR:
         "gh issue list -R mnbf9rca/kubernetes_config --author app/renovate"
         " - read it and fix renovate.json",
-    # 109 characters. The fix is nearly always registry authentication, so the
+    # 109 characters. The likeliest fix is a registry `hostRules` entry, so the
     # line names the remedy as well as the place: the count says how many
     # packages, the dashboard says which, and a hostRules entry is what moves
     # them again.
@@ -780,10 +781,10 @@ def build_message(verdict, facts, run_epoch):
     #
     # `lookup_failures=` HEADS THE GROUP, ahead even of `prs_open=`, and only a
     # run that found the section emits it at all. Its `next=` is 109 characters,
-    # which leaves about 40 after `verdict=` and `run_epoch=`, so anywhere
-    # further down this group it would be cut from the one message it exists
-    # for. Every run that saw no repository problem omits it, so heading the
-    # group costs the other verdicts nothing.
+    # which with `verdict=` and `run_epoch=` leaves 34 characters, so past the
+    # second counter it would be cut from the one message it exists for. Every
+    # run that saw no repository problem omits it, so heading the group costs
+    # the other verdicts nothing.
     if lookup_failures >= 0:
         hc_emit("lookup_failures=%d" % lookup_failures)
     if prs_open >= 0:

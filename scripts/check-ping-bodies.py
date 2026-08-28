@@ -160,10 +160,10 @@ PY_VALUE_ALLOWLIST = frozenset({
     "oldest_pr_days",   # int(): whole days since the oldest PR was created
     "dash_age_days",    # int(): whole days since the Dependency Dashboard moved
     "config_issues",    # int(): count of renovate[bot] config-error issues
-    # int(): how many failed package lookups the Dependency Dashboard's
-    # repository-problems section reports. The section NAMES the packages and
-    # those names are remote text; only the count is emitted, and the lines
-    # themselves go to the pod log through `log`, which is not a sink.
+    # int(): how many failed package lookups the Dependency Dashboard reports.
+    # The dependency-lookup warning block NAMES the packages and those names
+    # are remote text; only the count is emitted, and the lines themselves go
+    # to the pod log through `log`, which is not a sink.
     "lookup_failures",
     "http",             # int(): the HTTP status code of the one GitHub call
     "run_epoch",        # int(): this run's own Unix timestamp

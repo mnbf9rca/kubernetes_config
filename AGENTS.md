@@ -223,7 +223,7 @@ The rules that must not be broken:
   The guard's claim is structural — this image is named by a file inside `kubernetes.managerFilePatterns` and outside `ignorePaths` — and that claim stays true while the lookup behind it fails.
   Both keel images are the case in hand: correctly scoped, digest-pinned so that only Renovate can move them, and reported on the dependency dashboard on 2026-08-28 as `Failed to look up docker package ghcr.io/keel-hq/keel: no-result`.
   Nothing could have proposed a keel advisory, and every guard was green.
-  Finding such a failure is no longer a manual read: since August 28, 2026 the daily `update-watch` job parses the **repository problems** block at the top of the Renovate dependency dashboard issue and pushes `verdict=renovate-lookup-failed`.
+  Finding such a failure is no longer a manual read: since August 28, 2026 the daily `update-watch` job parses the **dependency-lookup warning block** on the Renovate dependency dashboard issue and pushes `verdict=renovate-lookup-failed`.
   The residual is acting on it — the alert carries a count, never the package names, so open that block when it fires, and never read a passing `check-renovate-scope` as evidence that a bump would arrive.
   A deliberate hold is the second way an in-scope image stops being watched: an `allowedVersions` cap or an `enabled: false` rule in `renovate.json` withholds the pull request by design, and only a hand edit lifts it.
   `hindsight` is the sharpest case: it runs Alembic migrations on startup against the store holding an agent's memory, and those migrations are forward-only, so the pre-upgrade dump is the only rollback.

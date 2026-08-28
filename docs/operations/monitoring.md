@@ -382,7 +382,7 @@ That third column replaced healthchecks.io's `/log` ping on August 26, 2026 and 
 | `renovate-stale` | `down` | The Dependency Dashboard has not moved in `renovate_alive_max_days=`. Renovate itself has gone quiet |
 | `dashboard-missing` | `down` | Renovate's Dependency Dashboard is gone or closed, so Renovate is probably uninstalled |
 | `renovate-config-error` | `down` | Renovate opened a configuration-error issue and has stopped proposing pull requests |
-| `renovate-lookup-failed` | `down` | The Dependency Dashboard reports a failed package lookup, so `lookup_failures=` pinned images can get no pull request at all — see below |
+| `renovate-lookup-failed` | `down` | The Dependency Dashboard reports a failed package lookup, so `lookup_failures=` dependencies get no pull request at all, freezing every pinned image that references them — see below |
 | `rate-limited` | nothing | GitHub's unauthenticated quota is exhausted for this IP |
 | `secondary-limit` | nothing | A GitHub secondary rate limit |
 | `repo-unreachable` | nothing | HTTP 404 — the repo was renamed, deleted or made private |
@@ -434,14 +434,17 @@ A missing dashboard and a configuration error keep their own, more specific verd
 A dashboard whose timestamp does not parse is `api-error`, which pushes **nothing at all** and so changes nothing: an unreadable field is never evidence that Renovate is alive.
 
 **A failed package lookup is its own `down` verdict**, `verdict=renovate-lookup-failed`, added August 28, 2026.
-Renovate writes a repository-problems block at the top of the Dependency Dashboard when a datasource lookup fails.
-The case that prompted this had sat there unread for weeks: `Failed to look up docker package ghcr.io/keel-hq/keel: no-result`, against two digest-pinned images that only Renovate can move.
+Renovate records a failed datasource lookup on the Dependency Dashboard in two places.
+The `## Repository Problems` section at the top carries a one-line `⚠️ WARN: Package lookup failures` summary and a link to the run log, and names nothing.
+The dependency-lookup warning block further down — `> [!WARNING] Renovate failed to look up the following dependencies:` — names the packages and the files affected.
+The job matches either, because neither is unconditional.
+The case that prompted this sat there unread for weeks and was still open when this shipped: `Failed to look up docker package ghcr.io/keel-hq/keel: no-result`, against two digest-pinned images that only Renovate can move.
 An image Renovate cannot look up gets no pull request, so a failed lookup freezes it while every guard stays green — `make check-renovate-scope` proves the file is in scope, never that the lookup succeeded.
-**What to do when it fires:** open the Dependency Dashboard issue and read its repository-problems block, which names the packages, then fix the lookup.
-It is almost always registry authentication, and the remedy is a `hostRules` entry in `renovate.json` for that registry.
+**What to do when it fires:** open the Dependency Dashboard issue and read the dependency-lookup warning block, which names the packages and the files affected, then fix the lookup.
+The leading hypothesis for the one case seen here is registry authentication on Mend's side, whose remedy is a `hostRules` entry in `renovate.json` for that registry; that diagnosis is still open — `renovate.json` declares no `hostRules` and the `ghcr.io/keel-hq/keel` lookup is still failing — so confirm it in the Mend run log before adding one.
 The heartbeat carries `lookup_failures=`, a count and nothing else: a package name is remote text and rule 4 keeps it out of the message.
 The pod log carries the full lines on every run, and that is where the names are.
-The count heads the counter group rather than trailing it, because this verdict's `next=` is 109 characters and a token further down the group would be cut from the one message it exists for.
+The count heads the counter group rather than trailing it, because this verdict's `next=` is 109 characters, which with `verdict=` and `run_epoch=` leaves 34 characters — past the second counter it would be cut from the one message it exists for.
 `lookup_failures=0` means the section is there but its item lines did not parse — what a Renovate reword looks like — and the verdict fires anyway, because the section itself is the evidence.
 It is evaluated above the pull-request rules and below staleness: a dependency that cannot be looked up proposes nothing, so the pull-request count is an undercount by exactly the frozen images, while a Renovate that has stopped running at all is the larger fact and its dashboard is as stale as the rest of it.
 A body this job could not read is not a lookup failure and never becomes one — it reads the body only when the issue list came back, so nothing here weakens the indeterminate contract above.
