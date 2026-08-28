@@ -978,14 +978,20 @@ hindsight-upgrade: check-context
 	  echo "### The dump is the rollback. Migrations are forward-only."; \
 	  echo "###"; \
 	  echo "### Next, by hand:"; \
-	  echo "###   1. Merge the Renovate \"hindsight stack\" PR on GitHub, then: git pull"; \
-	  echo "###      (do NOT close it unmerged - not a supported move today, and it"; \
-	  echo "###       snoozes homelab-update-watch; docs/operations/monitoring.md)"; \
+	  echo "### DEPLOY BEFORE YOU MERGE. master records what is running, not what is intended."; \
+	  echo "###   1. gh pr checkout <n> for the Renovate \"hindsight stack\" PR, then"; \
+	  echo "###      git rebase origin/master. Carry any other deployed-but-unmerged branch:"; \
+	  echo "###      an apply reconciles the whole tree and would revert it."; \
 	  echo "###   2. make diff-homelab      <- READ IT. Confirm only the image lines moved."; \
 	  echo "###   3. make apply-homelab"; \
 	  echo "###   4. kubectl -n hindsight rollout status deploy/hindsight --timeout=600s"; \
 	  echo "###   5. Verify: the startup probe settles, then \`hermes memory status\` on VM 103"; \
-	  echo "###   6. Confirm the homelab-update-watch monitor goes UP after the next"; \
+	  echo "###   6. git push --force-with-lease  <- the rebase rewrote the branch. Without"; \
+	  echo "###      this, gh pr merge merges the tree you did NOT deploy."; \
+	  echo "###   7. Only now: gh pr merge <n> --squash --delete-branch, then git pull on master"; \
+	  echo "###      (do NOT close it unmerged - not a supported move today, and it"; \
+	  echo "###       snoozes homelab-update-watch; docs/operations/monitoring.md)"; \
+	  echo "###   8. Confirm the homelab-update-watch monitor goes UP after the next"; \
 	  echo "###      06:45 run"; \
 	  echo "###      (or force one: kubectl -n ops create job --from=cronjob/update-watch now-$$ts)"; \
 	  echo "###"; \

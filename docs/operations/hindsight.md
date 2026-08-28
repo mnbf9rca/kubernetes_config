@@ -55,10 +55,13 @@ The Job's completion **is** the verification.
 The dump script publishes an artifact only after asserting a `CREATE TABLE` count of at least one and a byte-size floor, because `pg_dump` exits 0 against an empty database, so the exit code alone is a lie.
 The target adds no second, weaker copy of that assertion.
 
-Then, by hand:
+Then, by hand.
+**Deploy before you merge** — `master` records what is running, so the apply comes first and the merge records it:
 
-1. Merge the Renovate "hindsight stack" pull request, then `git pull`.
-2. `make diff-homelab` — **read it**, and confirm only the image lines moved.
+1. `gh pr checkout <n>` for the Renovate "hindsight stack" pull request, then `git rebase origin/master`.
+   If another branch is already deployed and unmerged, carry its changes too: an apply reconciles the whole tree and would revert them.
+2. `make diff-homelab` — **read it in full**, and confirm only the image lines moved.
+   A changed resource this branch never touched is a revert until you prove otherwise.
 3. `make apply-homelab`.
 4. `kubectl -n hindsight rollout status deploy/hindsight --timeout=600s`.
 5. Watch the startup probe settle, then run `hermes memory status` on VM 103.
@@ -72,6 +75,10 @@ Then, by hand:
 
    A `401`, a timeout or a schema complaint here, with the canary green, points at the client rather than the server.
    The write is on a background path the chat response does not wait for, so a 200 from the chat turn proves nothing on its own.
+7. `git push --force-with-lease`.
+   The rebase in step 1 rewrote the branch, so the pull request head must be updated before you merge — otherwise `gh pr merge` merges the tree you did not deploy, and the carried work never reaches `master`.
+   Renovate may reset or recreate a branch you force-pushed; that is its normal behaviour and costs nothing here, because the merge lands first.
+8. Only now: `gh pr merge <n> --squash --delete-branch`, then `git checkout master && git pull`.
 
 **Server and client move independently, and the skew is accepted.**
 The VM's `hindsight-client` is never pinned by this estate — see [The client on the hermes VM](#the-client-on-the-hermes-vm) — so a server bump moves the server alone, and the client moves only when hermes-agent's own pin moves.
