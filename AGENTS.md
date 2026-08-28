@@ -89,6 +89,20 @@ The rules that must not be broken:
   **Never render-then-apply**; `diff-*`/`apply-*` keep the stream inside the child, where values are real.
   Redirecting a diff is the **mirror hazard**: `kubectl diff` prints Secret data as base64, which the mask does not recognise, so `make diff-<cluster> > out.diff` writes the **real** values to disk — never redirect `diff-*` either.
   Detail: `docs/operations/apply-workflow.md`.
+- **An agent reads a diff through a filter, because its terminal is a transcript.**
+  Two standing rules collide on `diff-*`: read every resource the diff names, and never print a resolved secret.
+  `kubectl diff` prints Secret `data:` as base64, and an agent's terminal output is a conversation transcript that persists, so the human rule "read it on screen and move on" does not carry over.
+  Pipe it — a pipe keeps the values inside the process group and never writes them to disk, which is what makes this different from the redirect the rule above forbids.
+  To get the resource list, which is what gate 2 is actually about:
+
+      make diff-homelab 2>&1 | grep -E '^diff -u -N' | sed -E 's#.*/(LIVE|MERGED)-[0-9]+/##' | awk '{print $NF}' | sort -u
+
+  To read the body with base64 values masked:
+
+      make diff-homelab 2>&1 | sed -E 's/^([-+ ]?[[:space:]]*[A-Za-z0-9_.-]+:[[:space:]]+)[A-Za-z0-9+/=]{24,}[[:space:]]*$/\1<redacted-base64>/'
+
+  The mask leaves image references intact, because a tag or a `sha256:` digest contains `.` and `:` and so does not match the pattern.
+  Neither command redirects, and neither may be changed into one.
 - **`ENVSUBST_VARS` is an explicit allowlist, passed single-quoted.**
   Never call envsubst without one: with no allowlist it eats every `${VAR}` in the stream, including shell variables inside upstream manifests (`$VOL_DIR` in local-path-provisioner's helper pod); with double quotes the shell expands the tokens before envsubst sees them.
 - **Adding a secret means four edits:** the `op://` line in `.env.tpl`, the name in `ENVSUBST_VAR_NAMES`, the name in `REQUIRED_VARS`, and the `${VAR}` placeholder in the manifest.
@@ -109,6 +123,20 @@ The rules that must not be broken:
   A PR branch is applied to the cluster and verified healthy **before** the PR merges: `master` records what has been successfully deployed, never intent.
   Apply from the branch checkout (the preflight guards still run), confirm the workload is healthy, then the operator merges.
   Never merge-then-apply.
+  **This covers every change, including ones with nothing to apply to a cluster** — a runbook, a skill, a guidance edit, a documentation-only PR.
+  For those, the apply is *running the thing on a real session*: work the runbook end to end, follow the guidance through the task it governs, exercise the skill.
+  Reading a procedure proves only that it parses; running it is what finds the step that names a file that moved, the assertion that cannot be satisfied from the tool available, the count that is wrong.
+  A prose change that has only been read is intent, and `master` does not record intent.
+  Merge it when the session that exercised it is finished, so the corrections it turned up land on the same branch rather than in a follow-up PR.
+- **Read a PR's status checks before merging it, and treat a check that has not reported as a refusal.**
+  `renovate.json` sets `minimumReleaseAge` to `3 days`, so every Renovate pull request carries a `renovate/stability-days` check that is `PENDING` until the release is three days old.
+  The check is the whole of the stability policy — nothing on the repository enforces it — so merging past a `PENDING` one silently discards the wait the policy exists to impose.
+  Read it, for any PR, with:
+
+      gh pr view <n> --repo mnbf9rca/kubernetes_config --json statusCheckRollup
+
+  A `PENDING` or failing check means the pull request is not this session's work: leave it open and say so at the close.
+  Deploy-then-merge does not override this — a pull request can be applied and healthy and still be too young to merge.
 - **Concurrent deployed-but-unmerged branches are last-apply-wins on shared files.**
   An apply reconciles the whole rendered tree, so every file the applying branch does not carry is reset to that branch's version — another branch's already-deployed change included, silently, with every job still green.
   On 2026-08-24 an apply from a branch cut from `master` reverted the deployed restic gate, and that night's backup verified without it.
