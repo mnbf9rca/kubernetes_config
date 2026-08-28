@@ -263,3 +263,31 @@ Whichever is chosen, write the reason down, because the next base bump will pres
 A second, smaller point from the same pull request: the helper-pod image inside the ConfigMap changed from `busybox` to `docker.io/library/busybox`.
 It is still an untagged reference, which means `:latest`, and it is embedded in a block scalar where `check-renovate-scope` cannot see it at all.
 That is pre-existing and documented, not caused by this bump.
+
+## 12. cert-manager was taken to v1.20.3, not v1.21.1 — a decision to revisit
+
+Step 3 bumped cert-manager from v1.20.2 to v1.20.3 rather than to v1.21.1, which is the latest release.
+
+Both carry the same security fix.
+`GHSA-8rvj-mm4h-c258`, rated HIGH, is that the default `cert-manager-edit` aggregate ClusterRole let a namespace user create ACME `Challenge` and `Order` resources directly, supplying attacker-controlled solver configuration while cert-manager loaded credentials from the ClusterIssuer's namespace.
+That bypasses the Issuer's solver selectors.
+Upstream says all users should upgrade.
+
+v1.21.1 adds three known open issues, listed in its own release notes:
+
+1. The controller crash-loops on any Certificate that sets `spec.renewal.policy: Disabled`, through a nil pointer dereference in the trigger controller.
+2. An Issuer or ClusterIssuer that references a solver Secret which does not yet exist reports `Ready: False` with reason `InvalidSolver` and never self-corrects when the Secret appears, until a 10-hour resync, a spec change, or a controller restart.
+3. Log spam from type assertion failures on every non-cert-manager-labelled Secret event, multiplied by seven sub-controllers. Cosmetic.
+
+None of the three bites this estate as it stands.
+No Certificate sets a renewal policy, that field is new in v1.21.
+The `route53-credentials` Secret exists, so the solver validation passes.
+The third is only noise.
+
+The reason for staying on the patch is the blast radius rather than the probability.
+This cluster has exactly one certificate, the `*.cynexia.net` wildcard that Traefik serves as its default, so cert-manager failing takes out TLS for every homelab service at the next renewal.
+The patch delivers the security fix with no new known issues.
+
+**Proposed fix:** take v1.21 at the next session, once the crash-loop in issue 9031 is closed upstream.
+Check that issue first.
+If it is still open, staying on the 1.20 line is still the better trade, and there will be a v1.20.4 by then.
