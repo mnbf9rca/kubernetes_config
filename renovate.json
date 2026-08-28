@@ -44,6 +44,12 @@
       "automerge": false,
       "prPriority": 1,
       "description": "The update watcher's own image — watched so the watcher is not the one unwatched pin in the estate." },
+    { "matchFileNames": [
+        "homelab/ops/keel-fresh.yaml",
+        "vps/ops/keel-fresh.yaml"
+      ],
+      "groupName": "keel-fresh copy pair",
+      "description": "ONE PULL REQUEST, BOTH COPIES. These two files are an ENFORCED COPY PAIR: `make check-keel-fresh-parity` requires them byte-identical outside a short list of sanctioned differences, and the image line is NOT on that list. So a bump taken on one cluster alone fails the guard, and the guard has no per-cluster half — a divergence refuses apply-homelab AND apply-vps until the other copy lands. Renovate split the curlimages/curl bump into two pull requests (70 for homelab, 74 for the VPS), each individually invalid. The shared groupName makes the pair arrive as a single pull request. This rule sits AFTER the homelab/ops/** rule on purpose: later rules win per field, so this groupName overrides 'ops tooling' for the homelab copy, while that rule's automerge and prPriority still apply. Any future enforced copy pair needs the same treatment." },
     { "matchFileNames": ["homelab/hindsight/**"],
       "groupName": "hindsight stack",
       "automerge": false,
