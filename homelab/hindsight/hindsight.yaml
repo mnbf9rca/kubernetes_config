@@ -110,7 +110,7 @@ spec:
           # not a tag edit, and a grouped PR carrying one would be a data-loss trap
           # that `make hindsight-upgrade` could not catch — the dump would succeed
           # and the new major would refuse the old data directory.
-          image: pgvector/pgvector:0.8.1-pg17
+          image: pgvector/pgvector:0.8.6-pg17@sha256:cf134a767f474095eeba57e0117be8e568e011a63f33fbf252f14c9b760f8e6f
           env:
             # The image's entrypoint creates this database and role on an empty
             # PGDATA. That role owns its database and can run `CREATE EXTENSION
@@ -438,7 +438,7 @@ spec:
               # is the wget one. pg_dump needs no vector extension client-side.
               # Keep the MAJOR (17) matched to the server image above - bump the
               # two together.
-              image: postgres:17.6-alpine
+              image: postgres:17.11-alpine@sha256:18cfe3ef5e6815560c98237d6216d1e5119702fb0f3894c8785dd58b8bbe5d73
               command: ["sh", "/scripts/hindsight-pg-dump.sh"]
               env:
                 # `PGPASSWORD`, not the envsubst name. A generated script may never
@@ -503,7 +503,7 @@ spec:
             - name: canary
               # Renovate watches homelab/hindsight/**; this pin moves with the
               # grouped PR like the rest.
-              image: curlimages/curl:8.14.1
+              image: curlimages/curl:8.21.0@sha256:7c12af72ceb38b7432ab85e1a265cff6ae58e06f95539d539b654f2cfa64bb13
               command: ["sh", "/scripts/hindsight-canary.sh"]
               env:
                 # `CANARY_API_KEY`, not HINDSIGHT_TENANT_API_KEY, for the same
