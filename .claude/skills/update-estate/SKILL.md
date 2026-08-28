@@ -37,6 +37,7 @@ When you cannot satisfy one, stop and tell the operator what blocked you.
    Not the summary - every resource it names.
    A resource in that list your branch never touched is another branch's deployed work about to be reverted.
    **Treat it as a revert until you have proved otherwise**, by finding the branch that deployed it.
+   Read it through the two filter pipelines in `AGENTS.md` ("An agent reads a diff through a filter") - one prints the resource list, the other the body with base64 Secret values masked - which is how you read every line without a resolved secret landing in the transcript.
 4. **Carry every deployed-but-unmerged branch before you apply.**
    Rebase onto `origin/master`, then read the open pull requests for another branch that is already deployed and touches the same files.
    An apply reconciles the whole rendered tree: every file your branch does not carry is reset to your branch's version, silently, with every job still green.

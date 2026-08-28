@@ -93,7 +93,7 @@ The rules that must not be broken:
   Two standing rules collide on `diff-*`: read every resource the diff names, and never print a resolved secret.
   `kubectl diff` prints Secret `data:` as base64, and an agent's terminal output is a conversation transcript that persists, so the human rule "read it on screen and move on" does not carry over.
   Pipe it — a pipe keeps the values inside the process group and never writes them to disk, which is what makes this different from the redirect the rule above forbids.
-  To get the resource list, which is what gate 2 is actually about:
+  To get the resource list, which is what the `/update-estate` skill's read-the-diff gate is actually about:
 
       make diff-homelab 2>&1 | grep -E '^diff -u -N' | sed -E 's#.*/(LIVE|MERGED)-[0-9]+/##' | awk '{print $NF}' | sort -u
 
@@ -207,8 +207,8 @@ The rules that must not be broken:
   The guard's claim is structural — this image is named by a file inside `kubernetes.managerFilePatterns` and outside `ignorePaths` — and that claim stays true while the lookup behind it fails.
   Both keel images are the case in hand: correctly scoped, digest-pinned so that only Renovate can move them, and reported on the dependency dashboard on 2026-08-28 as `Failed to look up docker package ghcr.io/keel-hq/keel: no-result`.
   Nothing could have proposed a keel advisory, and every guard was green.
-  The residual is read by hand: the **repository problems** block at the top of the Renovate dependency dashboard issue names every dependency whose lookup failed.
-  Read it in each estate-update session, and never read a passing `check-renovate-scope` as evidence that a bump would arrive.
+  Finding such a failure is no longer a manual read: since August 28, 2026 the daily `update-watch` job parses the **repository problems** block at the top of the Renovate dependency dashboard issue and pushes `verdict=renovate-lookup-failed`.
+  The residual is acting on it — the alert carries a count, never the package names, so open that block when it fires, and never read a passing `check-renovate-scope` as evidence that a bump would arrive.
   `hindsight` is the sharpest case: it runs Alembic migrations on startup against the store holding an agent's memory, and those migrations are forward-only, so the pre-upgrade dump is the only rollback.
   `make hindsight-upgrade` takes it.
   `health` is the same shape in miniature — a Grafana major migrates `grafana.db` in place on first start, so a tag revert is not a rollback there either; `make health-upgrade` takes that dump, and it covers the InfluxDB export in the same Job.
