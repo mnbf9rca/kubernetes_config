@@ -1123,17 +1123,18 @@ health-upgrade: check-context
 	  echo "###   2. git rebase origin/master, and carry every other deployed-but-"; \
 	  echo "###      unmerged branch that touches these files. Find them with:"; \
 	  echo "###      gh pr list --state open   <- read the FILE list, not just titles"; \
-	  echo "###   3. git push --force-with-lease   <- the rebase rewrote this branch,"; \
-	  echo "###      and --force-with-lease refuses if anyone else pushed to it since."; \
-	  echo "###   4. make diff-homelab      <- READ IT IN FULL. Only the image lines"; \
+	  echo "###   3. make diff-homelab      <- READ IT IN FULL. Only the image lines"; \
 	  echo "###      may move, beyond the usual always-differs Secrets, PVs and"; \
 	  echo "###      cert-manager webhooks. Anything else is a revert until proven."; \
-	  echo "###   5. make apply-homelab"; \
-	  echo "###   6. kubectl -n health rollout status deploy/influxdb --timeout=600s"; \
+	  echo "###   4. make apply-homelab"; \
+	  echo "###   5. kubectl -n health rollout status deploy/influxdb --timeout=600s"; \
 	  echo "###      kubectl -n health rollout status deploy/grafana  --timeout=600s"; \
-	  echo "###   7. Verify ingest: force one freshness run and read its POD LOG -"; \
+	  echo "###   6. Verify ingest: force one freshness run and read its POD LOG -"; \
 	  echo "###      kubectl -n health create job --from=cronjob/ingest-freshness now-$$ts"; \
-	  echo "###   8. Open a Grafana dashboard and confirm it renders against InfluxDB."; \
+	  echo "###   7. Open a Grafana dashboard and confirm it renders against InfluxDB."; \
+	  echo "###   8. git push --force-with-lease   <- the rebase rewrote this branch."; \
+	  echo "###      Without this, gh pr merge merges the tree you did NOT deploy;"; \
+	  echo "###      --force-with-lease refuses if anyone else pushed to it since."; \
 	  echo "###   9. ONLY NOW, with the cluster healthy:"; \
 	  echo "###      gh pr merge --squash --delete-branch   (this repo squashes only)"; \
 	  echo "###      git checkout master && git pull"; \

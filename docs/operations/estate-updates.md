@@ -80,6 +80,24 @@ The documented mechanism is the Omni web UI: **Clusters → the cluster → Upda
 A cluster-template path exists (`talos.version` and `kubernetes.version` on a `kind: Cluster` document, applied with `omnictl cluster template diff -f <file>` then `omnictl cluster template sync -f <file>`), but this repo keeps no template file — `homelab/talos/` and `vps/talos/` hold machine config patches only.
 Export one with `omnictl cluster template export <cluster> -o <file>` if you want a reviewable diff; otherwise the UI is the working path.
 
+**Do not take that path.** Both clusters were created in the web interface rather than from a template, which the cluster resource shows by carrying no template annotation.
+Sidero documents export-then-`omnictl cluster template sync` as the way to move such a cluster onto template management, so running `sync` against one is not an update step — it is the adoption decision itself, taken by running a command.
+Adopting it is a design decision and not a step in an update session, because the exported template inlines the cluster's config patches by `idOverride` — including the five `homelab/talos/machineconfig-patches/` files that `make apply-talos` already owns.
+That would give those patches two writers, last write winning, with no guard between the two tools: the concurrent-writer failure this repo has already paid for once.
+Taking it means deciding in the same change which tool owns the patches, and deleting or guarding the other; until somebody does, the web UI is the only upgrade path and Step 4 of the session needs the operator.
+
+**`homelab/talos/` and `vps/talos/` are a subset of the live patch set, not an inventory of it.**
+Omni is the system of record for machine config patches, and these trees hold only the ones this repository authors.
+`make apply-talos` is push-only: it applies each file under `homelab/talos/machineconfig-patches/`, never enumerates what Omni already holds, and never deletes.
+It also covers the homelab alone — there is no VPS equivalent, so the two files under `vps/talos/machineconfig-patches/` reach Omni only through a hand-run `omnictl apply`.
+A patch created in the web interface, or one whose file was deleted here, therefore stays applied and invisible.
+Omni's own patches are recognisable by the `omni.sidero.dev/system-patch:` label — the `400-<cluster>-control-planes-untaint` pair and the per-machine `900-cm-<machine>-kubernetes-upgrade` patches written by `KubernetesUpgradeStatusController` — and they must never be copied into a file here, because a repo copy would collide with a resource Omni rewrites.
+The hand-made ones carry no such label, and those are the ones that need a decision.
+`200-homelab`, which sets the cluster's pod and service subnets, was typed into the cluster-creation form and lived only in Omni until it was codified from the live cluster on August 28, 2026.
+The reconciliation has already caught one: `500-7a4333c7-df30-4205-a022-fd93154da992`, a fossil of the pre-SSD kubelet self-bind on `/var/mnt/local-path-provisioner`, survived in Omni after its codified successor was deleted from this repository at `ea0a75c`, inert only because nothing mounted at that path any more.
+The operator deleted it on August 28, 2026 (`omnictl delete configpatch <id>` — note it restarts the kubelet, so a future deletion of this kind belongs in a maintenance window rather than in the middle of an update session).
+Run `omnictl get configpatches` at the start of every estate-update session and reconcile the list against these two trees; anything unaccounted for is either Omni's by its label or a decision waiting to be made.
+
 Editing the `Clusters.omni.sidero.dev` resource directly to change a version is **undocumented**.
 It is mechanically possible and it is not a supported path.
 Do not.
@@ -110,6 +128,15 @@ Earlier Kubernetes upgrades had moved the control plane and left these behind, b
 
 One minor of skew between kube-proxy and the API server is the edge of what upstream supports, so the next upgrade would have taken it out of support.
 Both clusters were synced on August 28, 2026 and now report `outofsync: 0`, with kube-proxy v1.36.4, CoreDNS v1.14.6 and Flannel 0.28.8.
+
+**Read the distinct changed lines rather than paging through the objects**, which is what turned a count that looked like drift into a version gap:
+
+```bash
+omnictl cluster kubernetes manifest-sync <cluster> 2>&1 | grep -E '^[-+][^-+]' | sort -u
+```
+
+That collapses the whole backlog to the set of things that actually differ, which is where the image versions are.
+Then read the dry run in full before applying, because the one-liner discards the object each line belongs to.
 
 So read the count as a version gap, not a queue of formatting changes, and sync it in the session that creates it.
 Applying restarts kube-proxy, the CNI and DNS, so verify service networking afterwards rather than assuming: on the single-node homelab this is a brief outage, and on the VPS it rolls.

@@ -28,25 +28,34 @@ When you cannot satisfy one, stop and tell the operator what blocked you.
 1. **Never merge before you have deployed and verified.**
    `master` records what is running, never what is intended.
    The order is always: check out the branch, apply, verify, then merge.
-2. **Read `make diff-<cluster>` in full before every apply.**
+2. **Merge only what this runbook prescribes.**
+   Steps 2, 3 and 4 name it: the Renovate pull requests, the hand-managed pins, the version ledger.
+   Everything the session invents - a runbook correction, a new guard, a rule, a better command - goes on the findings branch and merges once, after review.
+   The test is "did the runbook ask me to make it?", not "is this change good?".
+   A session revises its own conclusions as later work contradicts them, and a mid-session merge forecloses that.
+   At the first invention, cut that branch from `master` and commit it there - never inside a pull request's worktree, which is force-pushed, merged and removed.
+3. **Read `make diff-<cluster>` in full before every apply.**
    Not the summary - every resource it names.
    A resource in that list your branch never touched is another branch's deployed work about to be reverted.
    **Treat it as a revert until you have proved otherwise**, by finding the branch that deployed it.
-3. **Carry every deployed-but-unmerged branch before you apply.**
-   Rebase onto `origin/master`, then read the open pull requests for another branch that is already deployed and touches the same files.
+   Read it through the two filter pipelines in `AGENTS.md` ("An agent reads a diff through a filter") - one prints the resource list, the other the body with long base64-looking values masked.
+   `kubectl diff` redacts Secret `data` itself and `op run` masks plaintext, so the pipelines are a reading aid and a second line of defence rather than the protection.
+4. **Carry every deployed-but-unmerged branch before you apply.**
+   `git fetch origin`, rebase onto `origin/master`, then read the open pull requests for another branch that is already deployed and touches the same files.
+   Without the fetch the rebase is a no-op against a stale remote-tracking ref.
    An apply reconciles the whole rendered tree: every file your branch does not carry is reset to your branch's version, silently, with every job still green.
    This cost a reverted restic gate on August 24, 2026.
-4. **Never bypass the context guards.**
+5. **Never bypass the context guards.**
    Never pass `HOMELAB_CONTEXT=` or `VPS_CONTEXT=` on the command line, and never invoke an `_*-inner` Makefile target directly.
-5. **Never render then apply.**
+6. **Never render then apply.**
    `make build-* > file` writes the literal string `<concealed by 1Password>` into every Secret, and the apply reports success.
    Use `make diff-*` and `make apply-*`, whose pipelines keep real values inside one process.
-6. **Dump before you upgrade anything stateful, and show the dump succeeded.**
+7. **Dump before you upgrade anything stateful, and show the dump succeeded.**
    Then keep going - no per-item pause for approval.
-7. **Squash merges only.**
-   `gh pr merge <n> --squash --delete-branch`.
+8. **Squash merges only.**
+   `gh pr merge <n> --squash --delete-branch`, run from outside the pull request's worktree.
    Merge commits and rebase merges are disabled on the repository.
-8. **Never print a resolved secret, and never build a ping body from a command's output.**
+9. **Never print a resolved secret, and never build a ping body from a command's output.**
    If a real secret value does reach your output, tell the operator in your next message and add a row to `secrets-to-rotate.md` before doing anything else.
 
 ## Step 0 - Open the session
@@ -88,6 +97,38 @@ When you cannot satisfy one, stop and tell the operator what blocked you.
 Work them one at a time, oldest first.
 Nothing here waits for per-item approval.
 
+**Two pull requests can be individually invalid, and then "one at a time" is the wrong instruction.**
+`make check-keel-fresh-parity` requires `homelab/ops/keel-fresh.yaml` and `vps/ops/keel-fresh.yaml` to stay identical outside a stated list, and it has no per-cluster half - so an image bump that arrives as one pull request per copy makes *either one alone* refuse `apply-homelab` and `apply-vps` both.
+Renovate split exactly that on August 28, 2026.
+When a guard rejects two open pull requests taken singly: build one branch carrying both changes, confirm the guard passes, apply to each cluster and verify, then push and merge the two back to back.
+**Never close either one unmerged** - that is unsupported and snoozes the update-watch monitor.
+Any future enforced copy pair inherits this shape.
+
+**Read the change before you take it.**
+This applies to the pinned set only: keel-floating workloads are keel's by the two-modes rule and stay unread.
+Depth is proportionate - a patch span gets a skim, a major gets a real read, a PostgreSQL major stays refused.
+
+1. **Why is this pinned where it is?**
+   The repository first: the comment on the line, the docs, `git log -L` over it.
+   Where the reason was never written down, the vendor's release notes across the span are where it usually lives - a breaking change immediately above the pin is probably the reason it sits there, and probably still standing.
+2. **What changed across the span?**
+   Ask this only once the pin has no standing reason to hold.
+   Read for work the tag edit cannot do itself: a migration, a component versioned inside the stored data, a renamed setting, a manual step named in a release body.
+   Handle each one or record it.
+3. **Declining is a configuration change, not a pull request action.**
+   Never close a Renovate pull request by hand, and never leave one open you have decided not to merge.
+   Encode the hold in `renovate.json` - an `allowedVersions` cap or a disable, with a `description` carrying the reason and the date - and Renovate withdraws its own pull request.
+   Publish it like the ledger in Step 4: commit on its own branch, `git push -u origin HEAD`, `gh pr create --fill`, squash-merge.
+   There is nothing to apply; the hold takes effect on Renovate's next run after it reaches `master`.
+   That recorded reason is what makes question 1 answerable next session.
+   Scope the cap deliberately: `<1.42` still takes patches, an exact version freezes the line.
+
+`getmeili/meilisearch` in `vps/workloads/karakeep.yaml` is the worked example.
+Question 1: karakeep's own compose file pins v1.41.0, so the pin is the pairing karakeep tests against, and that reason still stands.
+Question 2 therefore does not arise - and it would not have been cheap, because Meilisearch does not convert its index across that span on startup.
+Question 3: the hold lives in `renovate.json`, capping the version and recording karakeep's pin as the reason, so the pull request withdraws itself.
+The cap is static - Renovate does not watch karakeep's compose file, so lifting the hold is a hand edit to `renovate.json` when that pin moves.
+
 **Dump first where the service holds state:**
 
 | The pull request touches | Take the dump with |
@@ -103,24 +144,54 @@ Do not hand-roll a substitute dump.
 
 **The per-pull-request loop:**
 
+- [ ] Read this pull request's status checks first, before you spend an apply on it:
+
+      gh pr view <n> --repo mnbf9rca/kubernetes_config --json statusCheckRollup
+
+      A `PENDING` or failing `renovate/stability-days` means the release is younger than `minimumReleaseAge` and this pull request is **not this session's work**: leave it open, do not apply it, and name it at the close.
+      The rule is in `AGENTS.md` (read a pull request's status checks before merging).
+- [ ] Answer the three questions above for this pull request before you spend a worktree on it.
+      Record the answer; where a limb declines the bump, encode the hold in `renovate.json` and move on.
 - [ ] `kubectl config use-context cynexia-homelab` or `kubectl config use-context cynexia-vps`, matching the cluster this pull request touches.
       The Makefile's `check-context` and `check-vps-context` guards read `kubectl config current-context` and refuse otherwise, and the loop alternates between clusters.
-- [ ] `gh pr checkout <n>`, then `git rebase origin/master`.
+- [ ] Give this pull request its own worktree and work it there:
+
+      git worktree add ../kubernetes_config-worktrees/pr-<n> --detach
+      cd ../kubernetes_config-worktrees/pr-<n> && gh pr checkout <n> && git fetch origin && git rebase origin/master
+
       Merge in any other deployed-but-unmerged branch you identified in Step 1.
+      Every `make` target works from a worktree: `op run` reads `OP_SERVICE_ACCOUNT_TOKEN` out of the shell environment - if direnv reports `.envrc is blocked` on entering the new worktree, run `direnv allow` there once.
 - [ ] Take the dump if the table above calls for one.
       Print the result.
       A failed dump ends this pull request - move to the next one and report it at the close.
 - [ ] `make diff-homelab` or `make diff-vps`.
       **Read every resource it names.**
       Confirm only the image lines you expect have moved.
-      Apply gate 2 to anything else.
+      Apply gate 3 to anything else.
+- [ ] If this pull request changes a standalone `kind: Job` - not a CronJob; today that is `homelab/backup/restic-init-job.yaml` and `vps/backup/restic-init-job.yaml` - clear the completed Job before you apply.
+      A Job's `spec.template` is immutable and `restic-init` sets `ttlSecondsAfterFinished: 86400`, so for a day after any apply recreates it, a second apply that moves its image fails on that one resource - and `kubectl apply` continues past the failure, leaving the tree half-updated with a non-zero exit as the only sign (the TTL rule in `AGENTS.md`).
+      A session that applies twice in one afternoon hits this; one that runs every 4 to 6 weeks finds the Job already collected:
+
+      kubectl -n backup get job restic-init -o 'custom-columns=NAME:.metadata.name,COMPLETE:.status.conditions[?(@.type=="Complete")].status,IMAGE:.spec.template.spec.containers[0].image'
+      kubectl -n backup delete job restic-init
+
+      The quoting is required - zsh globs the unquoted `[?(...)]` and the command exits 1 before kubectl runs.
+      Deleting it once it has finished - `Complete` or `Failed`, since a `Failed` Job still inside its TTL window blocks the apply identically - is safe here: `restic-init.sh` probes the repository before initialising, so the re-run the next apply triggers is a no-op.
 - [ ] `make apply-homelab` or `make apply-vps`.
 - [ ] Wait for the rollout and then verify by hand, from the table below.
 - [ ] `git push --force-with-lease`.
       The rebase rewrote the branch, so the pull request head must be updated before you merge - otherwise `gh pr merge` merges the tree you did not deploy, `master` never receives the work you carried, and the next session's apply reverts it.
       That is the August 24, 2026 incident, reached by procedure rather than by accident.
       Renovate may reset or recreate a branch you force-pushed; that is normal and costs nothing, because the merge lands first.
-- [ ] `gh pr merge <n> --squash --delete-branch`.
+- [ ] Free the branch before you merge: return to the **main checkout**, then `git worktree remove ../kubernetes_config-worktrees/pr-<n>`.
+      Both halves of the merge need this.
+      `gh` checks out the default branch as its own cleanup step, which fails with `fatal: 'master' is already used by worktree at <path>`; and `--delete-branch` runs `git branch -D`, which git refuses for a branch a worktree still has checked out, so `gh` exits non-zero with `failed to delete local branch <b>` **after the merge has already succeeded**.
+      Either message reads like a failed merge and invites a retry, at the one point in the session where `master` and the cluster are meant to agree.
+- [ ] `gh pr merge <n> --squash --delete-branch`, from the main checkout.
+- [ ] Confirm the outcome from the API rather than from the exit status:
+
+      gh pr view <n> --repo mnbf9rca/kubernetes_config --json state,mergedAt
+
 - [ ] `git checkout master && git pull --ff-only`.
 
 **Verify by triggering the job, not by waiting for its schedule.**
@@ -175,7 +246,7 @@ The three files below repeat the version inside the URL path, where the manager 
 - [ ] Check each upstream: `gh release list -R <owner>/<repo> --limit 5`.
 - [ ] For each one that moved, branch from `master`, edit **every** occurrence, and read the upstream release notes for anything that is not a version bump.
 - [ ] `make diff-<cluster>` and read it.
-      A base bump changes many resources at once, so this diff is long and gate 2 still applies to every line of it.
+      A base bump changes many resources at once, so this diff is long and gate 3 still applies to every line of it.
 - [ ] `make apply-<cluster>`, then confirm the component is healthy: cert-manager's controller and webhook Ready, the CSI node and controller pods Running, the local-path provisioner Running.
 - [ ] Publish and merge, in that order: `git push -u origin HEAD`, then `gh pr create --fill`, then `gh pr merge <n> --squash --delete-branch` once the apply is verified.
       Nothing on GitHub exists until you push it.
@@ -189,6 +260,7 @@ Do not carry a remembered number: the VPS control plane grew from one node to th
 
     kubectl --context <ctx> get nodes -l node-role.kubernetes.io/control-plane
 
+- [ ] `omnictl get configpatches` - reconcile against `homelab/talos/` and `vps/talos/`; see [estate-updates.md](../../../docs/operations/estate-updates.md#upgrading-talos-and-kubernetes-through-omni).
 - [ ] Read the current versions and what Omni will allow:
 
       omnictl get clusters -o json | jq '{id:.metadata.id, talos:.spec.talosversion, k8s:.spec.kubernetesversion}'
@@ -216,7 +288,7 @@ Do not carry a remembered number: the VPS control plane grew from one node to th
       `manifest-sync` defaults to `--dry-run` true and prints what it would do.
       Read it in full, then apply what suits this cluster with `--dry-run=false`.
       The UI equivalent is **Bootstrap Manifests** in the left navigation.
-      Both clusters carried a backlog of 21 out-of-sync objects on August 28, 2026, from before any of this, so expect the first run to be long.
+      A non-zero `outofsync` after a Kubernetes upgrade means the data-plane components - kube-proxy, the CNI and CoreDNS - have not moved with the control plane, so read it as a version gap rather than a queue and sync it in the session that created it: [Bootstrap manifests](../../../docs/operations/estate-updates.md#bootstrap-manifests), which also carries the one-liner that collapses the backlog to the lines that actually differ.
       Do not run `talosctl get manifests -o yaml` unfiltered to inspect the sources - it embeds the bootstrap-token Secret.
 - [ ] Verify: `kubectl --context <ctx> get nodes -o wide` shows the new versions and the node `Ready`; every namespace's pods return to Running.
 - [ ] Update the version ledger in `docs/operations/estate-updates.md` - the versions, the control-plane counts and node names, and the "Confirmed" date, even when nothing moved.
@@ -273,6 +345,11 @@ There is no updater on the VM.
 
 - [ ] Confirm `master` contains everything you deployed: `git status` clean, no unmerged pull request that has been applied.
 - [ ] Count what you did: pull requests merged, pins bumped, and one verdict for the VM.
+- [ ] Say what you left unmerged and why: every pull request held back on a `PENDING` check or a hold you encoded in `renovate.json`, and everything gate 2 put on the findings branch rather than into `master` - a runbook correction, a guard, a rule.
+      The close is where the operator learns that work exists and is waiting for one review.
+- [ ] Push the findings branch and open one pull request for it: `git checkout <findings-branch>`, then `git push -u origin HEAD`, then `gh pr create --fill`.
+      Check the branch out first - the session reaches this step on `master`, so a bare `git push -u origin HEAD` pushes `master` and the findings never leave your disk.
+      It merges in a later session, because the deploy-then-merge extension wants the prose exercised first - but nothing on GitHub exists until you push it.
 - [ ] Ping the `estate-update` check.
       **Every `<...>` below is a placeholder.**
       Replace the two counts with numbers you tallied yourself, and replace the verdict with one value from the enum written inline beside it:

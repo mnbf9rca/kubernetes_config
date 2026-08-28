@@ -75,6 +75,38 @@ patches:
           - key: node-role.kubernetes.io/control-plane
             operator: Exists
             effect: NoSchedule
+  # The v0.0.37 base added a liveness, a readiness and a startup probe to the
+  # provisioner and set `timeoutSeconds` on none of them, so all three run at
+  # the API default of one second. This estate's rule is that every probe sets
+  # `timeoutSeconds` explicitly, because one second false-positives on a loaded
+  # node — upstream's silence satisfies the letter of that rule and defeats its
+  # purpose.
+  #
+  # The probes themselves are kept. The provisioner is stateless, so a restart
+  # is a safe remedy; what is not acceptable is the trigger. This is the only
+  # storage provisioner on a small shared VPS and it is single-replica, so a
+  # /health response that arrives slowly under load restarts it and stalls
+  # volume provisioning for the whole cluster. Five seconds is this estate's
+  # usual figure and leaves upstream's failure thresholds alone.
+  #
+  # If a later base renames or drops one of these probes, `op: add` against a
+  # parent path that no longer exists fails the render by name. That is the
+  # wanted behaviour: read the new probe set rather than silently going back to
+  # a one-second timeout.
+  - target:
+      kind: Deployment
+      name: local-path-provisioner
+      namespace: local-path-storage
+    patch: |-
+      - op: add
+        path: /spec/template/spec/containers/0/livenessProbe/timeoutSeconds
+        value: 5
+      - op: add
+        path: /spec/template/spec/containers/0/readinessProbe/timeoutSeconds
+        value: 5
+      - op: add
+        path: /spec/template/spec/containers/0/startupProbe/timeoutSeconds
+        value: 5
   # Mark the upstream StorageClass as default and switch to Retain reclaim
   # policy so accidental PVC deletion doesn't nuke the underlying data —
   # matches the homelab cluster's discipline.

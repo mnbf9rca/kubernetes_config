@@ -79,7 +79,8 @@ The rules that must not be broken:
   `.envrc` exports **only** `OP_SERVICE_ACCOUNT_TOKEN` — no secret value ever enters the ambient environment.
   The `Makefile` defines `OP_RUN := op run --env-file=.env.tpl --`, and every build/diff/apply target runs its guards in the parent shell then re-enters make under it, so values exist inside one child process only.
   **The old `set -a` + `op inject` block in `.envrc` is gone deliberately — do not restore it.**
-  Because `OP_SERVICE_ACCOUNT_TOKEN` lives in the shell environment once direnv has exported it, `op run` — and therefore every build/diff/apply target — works from **any directory in that shell, git worktrees included**: no re-running `direnv allow` in a worktree, no avoiding worktrees for `op`-dependent work (operator ruling, 2026-08-27).
+  Because `OP_SERVICE_ACCOUNT_TOKEN` lives in the shell environment once direnv has exported it, `op run` — and therefore every build/diff/apply target — works from **any directory in that shell, git worktrees included**: no avoiding worktrees for `op`-dependent work (operator ruling, 2026-08-27).
+  direnv keys its allow record on path *and* content, though, so a fresh worktree's committed `.envrc` starts unallowed: if direnv reports `.envrc is blocked` on entering one, run `direnv allow` there once.
 - **Never commit plaintext secret values.**
   `${VAR}` placeholders only.
 - **`op run` masks stdout, not env vars** — corrected 2026-08-20; the previous claim in this file was a misdiagnosis.
@@ -87,8 +88,32 @@ The rules that must not be broken:
   (`len=${#ACME_EMAIL}` returning 24 was a coincidence — that value is genuinely 24 characters.)
   The real hazard is therefore rendering to a file — and `build-*` is already wrapped in `op run` by the Makefile, so no extra wrapper is needed to hit it: `make build-homelab > out.yaml` writes `<concealed by 1Password>` into the Secrets and `kubectl apply -f out.yaml` stores the mask.
   **Never render-then-apply**; `diff-*`/`apply-*` keep the stream inside the child, where values are real.
-  Redirecting a diff is the **mirror hazard**: `kubectl diff` prints Secret data as base64, which the mask does not recognise, so `make diff-<cluster> > out.diff` writes the **real** values to disk — never redirect `diff-*` either.
+  **Never redirect `diff-*` either** — but not for the reason this file used to give.
+  `kubectl diff` redacts a Secret's `data` itself, so a redirected diff is not the plaintext dump once claimed here.
+  What neither mechanism covers is the residual: encoded or JSON-escaped secret material carried by a resource that is *not* a Secret, which kubectl does not redact and `op run`'s literal-plaintext match does not catch.
+  A file on disk is where that residual gets committed or pasted, so the ban stands as defence in depth, and it also covers a future regression in kubectl's own redaction.
   Detail: `docs/operations/apply-workflow.md`.
+- **An agent reads a diff through a filter, because its terminal is a transcript.**
+  Two standing rules collide on `diff-*`: read every resource the diff names, and never print a resolved secret.
+  An agent's terminal output is a conversation transcript that persists, so the human rule "read it on screen and move on" does not carry over.
+  Two mechanisms already do the protecting, and neither of them is the filter.
+  `kubectl diff` redacts a v1 Secret's `data` itself — `--show-secrets` defaults to false and no target here passes it — so a changed Secret prints `*** (before)` / `*** (after)` and never its values; the `stringData` manifests in this repo are covered too, because the comparison runs on server-side objects where `stringData` has already been folded into `data`.
+  `op run` masks verbatim plaintext everywhere else in the stream.
+  The residual is secret material that is neither: encoded or JSON-escaped, and carried by a resource that is not a Secret.
+  The mechanism block above `diff-homelab` in the `Makefile` sets out what each one covers.
+  The pipelines below are a reading aid and a second line of defence, not the protection.
+  To get the resource list, which is what the `/update-estate` skill's read-the-diff gate is actually about:
+
+      make diff-homelab 2>&1 | grep -E '^diff -u -N' | sed -E 's#.*/(LIVE|MERGED)-[0-9]+/##' | awk '{print $NF}' | sort -u
+
+  An empty list means the tree agrees with the cluster only if the guards' `OK:` lines went past first — `2>&1 | grep` discards a guard's failure text and the pipe discards make's exit status — so on an empty list re-read it through the masking pipeline below, which passes error text through.
+  To read the body, with long base64-looking values masked:
+
+      make diff-homelab 2>&1 | sed -E 's/^([-+ ]?[[:space:]]*[A-Za-z0-9_.-]+:[[:space:]]+)[A-Za-z0-9+/=]{24,}[[:space:]]*$/\1<redacted-base64>/'
+
+  Two things that mask does not do: it does not touch a value shorter than 24 characters, and it only sees a single `key: value` line, so a block-scalar payload such as the `last-applied-configuration` annotation passes through untouched.
+  It leaves image references intact, because every image reference in this repo carries a tag or an `@sha256:` digest and so misses the pattern — by convention, not by guarantee.
+  Neither command redirects, and neither may be changed into one.
 - **`ENVSUBST_VARS` is an explicit allowlist, passed single-quoted.**
   Never call envsubst without one: with no allowlist it eats every `${VAR}` in the stream, including shell variables inside upstream manifests (`$VOL_DIR` in local-path-provisioner's helper pod); with double quotes the shell expands the tokens before envsubst sees them.
 - **Adding a secret means four edits:** the `op://` line in `.env.tpl`, the name in `ENVSUBST_VAR_NAMES`, the name in `REQUIRED_VARS`, and the `${VAR}` placeholder in the manifest.
@@ -109,12 +134,58 @@ The rules that must not be broken:
   A PR branch is applied to the cluster and verified healthy **before** the PR merges: `master` records what has been successfully deployed, never intent.
   Apply from the branch checkout (the preflight guards still run), confirm the workload is healthy, then the operator merges.
   Never merge-then-apply.
+  **This covers a change to a procedure someone follows** — a runbook, a skill, a gate, guidance that governs a task — including one with nothing to apply to a cluster.
+  For those, the apply is *running the thing on a real session*: work the runbook end to end, follow the guidance through the task it governs, exercise the skill.
+  Reading a procedure proves only that it parses; running it is what finds the step that names a file that moved, the assertion that cannot be satisfied from the tool available, the count that is wrong.
+  A prose change that has only been read is intent, and `master` does not record intent.
+  Merge it when the session that exercised it is finished, so the corrections it turned up land on the same branch rather than in a follow-up PR.
+  A change that governs no procedure — a records update, a corrected reference, wording — merges on review.
+  It follows that a session driven by a runbook merges only what that runbook prescribes: everything the session invents — a runbook correction, a guard, a rule — goes on the findings branch, which merges once, after the operator has reviewed it, and the test is "did the runbook ask me to make it?", not "is it good?".
+- **A branch held open across a session is rebased onto a freshly fetched `origin/master` before every commit to it, not only before an apply.**
+  A branch that lacks a commit presents its absence as a deletion, so a stale branch is a revert of everything merged since it was cut — documentation-only branches included, because merging one still rewrites the files it is behind on.
+  The rebase-before-apply rule does not cover this: a branch that never reaches a cluster still reaches `master`.
+  The check is one command, read before you commit and again before you merge:
+
+      git fetch origin && git diff --stat origin/master..HEAD
+
+  The fetch is half the check, not a formality: `origin/master` is a remote-tracking ref that advances only on a fetch or a pull, so against a stale one the two-dot diff can only ever name the branch's own files and the check passes green on a branch that is eleven merges behind.
+  A `git rebase origin/master` on that same stale ref is a no-op for the same reason.
+  It must name only the files that branch exists to change.
+  Any other file is a revert until proven otherwise, exactly as in `make diff-<cluster>`.
+  On 2026-08-28 a findings branch held open across one session drifted eleven merges behind, and its diff named 22 workload files it had never touched.
+- **An image tag is not always the whole version. Ask what the image installed into the data.**
+  A container image bump replaces the binary and nothing else.
+  Anything the software wrote *into its own data* on first start keeps the version it was written with, and no image bump moves it.
+  A PostgreSQL extension is the case this estate has: `pgvector` ships its shared library in the image, but the `vector` entry in `pg_extension` keeps whatever `CREATE EXTENSION` recorded, and only `ALTER EXTENSION ... UPDATE` moves it.
+  Hindsight ran the 0.8.6 library against a 0.8.1 catalog entry for as long as nobody looked.
+  The same shape applies to any in-database component versioned separately from its image, and to on-disk schema versions generally.
+  When a stateful image moves, ask what version the data claims, and compare the two:
+
+      kubectl -n <ns> exec deploy/<db> -c postgres -- psql -U <user> -d <db> -tAc \
+        "SELECT extname, extversion FROM pg_extension;"
+
+  Then find out whether the gap matters before acting.
+  **Read the vendor's own manifests first** — an upstream that pins the component tells you the pin is deliberate, and an upstream that floats it tells you the version is not load-bearing.
+  For a PostgreSQL extension, the upgrade scripts settle it: an empty script means the release changed only the library, so the fix is already live and the update is a relabel.
+  Record which of the two it was, because the next reader inherits the same question.
+  The worked case, the command and the estate's decision on it are step 5 of the upgrade runbook in `docs/operations/hindsight.md`.
+- **Read a PR's status checks before merging it, and treat a check that has not reported as a refusal.**
+  `renovate.json` sets `minimumReleaseAge` to `3 days`, so every Renovate pull request carries a `renovate/stability-days` check that is `PENDING` until the release is three days old.
+  The check is the whole of the stability policy — nothing on the repository enforces it — so merging past a `PENDING` one silently discards the wait the policy exists to impose.
+  Read it, for any PR, with:
+
+      gh pr view <n> --repo mnbf9rca/kubernetes_config --json statusCheckRollup
+
+  A `PENDING` or failing check means the pull request is not this session's work: leave it open and say so at the close.
+  This repository runs no CI, so a pull request with no checks at all is the normal case for human and agent work and has nothing to wait for; the rule bites on a check that exists and has not gone green.
+  Deploy-then-merge does not override this — a pull request can be applied and healthy and still be too young to merge.
 - **Concurrent deployed-but-unmerged branches are last-apply-wins on shared files.**
   An apply reconciles the whole rendered tree, so every file the applying branch does not carry is reset to that branch's version — another branch's already-deployed change included, silently, with every job still green.
   On 2026-08-24 an apply from a branch cut from `master` reverted the deployed restic gate, and that night's backup verified without it.
-  So before **any** apply, the branch must already contain every other deployed-but-unmerged change: rebase onto `origin/master`, **and** check the open pull requests for another that is deployed and touches the same files.
+  So before **any** apply, the branch must already contain every other deployed-but-unmerged change: `git fetch origin`, rebase onto `origin/master`, **and** check the open pull requests for another that is deployed and touches the same files.
   `make diff-<cluster>` names every resource the apply would change — read that list first, and treat a resource the branch never touched as a revert until proven otherwise.
-- `make apply-homelab` reporting `configured` rather than `unchanged` for Secrets, some PVs and cert-manager webhooks is expected and is **not** drift — see the apply-workflow doc before investigating.
+- `make apply-homelab` reporting `configured` rather than `unchanged` is expected and is **not** drift whenever the resource is absent from the immediately-preceding diff and a re-run diff is empty: that is a client-side apply patch the server converges away, and Secrets, some PVs and the cert-manager webhooks are examples of the class rather than the whole of it — two CronJobs joined them on 2026-08-28.
+  Apply that rule, not a membership test; see the apply-workflow doc before investigating.
 
 ## File Conventions
 
@@ -140,14 +211,21 @@ The rules that must not be broken:
 - Every new Deployment must include the full keel annotation set above — **except** in the `health`, `ops`, `hindsight` and `backup` namespaces, which explicitly forbid keel, and **except keel itself**, which is digest-pinned on both clusters so the update engine cannot update itself (`homelab/bootstrap/keel/keel.yaml`, `vps/bootstrap/keel/keel.yaml`).
   The rule that decides which mode a workload is in: **floating tag means keel; pinned tag means Renovate; never both.**
   `match-tag: "true"` on a pinned tag only refreshes the digest, so a semver pin carrying keel annotations is frozen while looking covered.
-- **Every pinned image in both clusters is watched, and keeping it that way is a standing obligation.**
+- **Every pinned image in both clusters is inside Renovate's scope, and keeping it that way is a standing obligation.**
   `renovate.json` scopes Renovate to `homelab/**` and `vps/**` as of 2026-08-26, so every version- or digest-pinned image in either tree — `health`, `ops`, `hindsight`, `backup`, keel itself, traefik and the VPS workloads alike — gets its bump as a pull request (`docs/operations/homelab-health.md`, `docs/operations/homelab.md`, `docs/operations/hindsight.md`).
   Two kinds of image sit outside that, and the guard treats them differently.
   An image from a **remote base** is named by no file here, so nothing can edit the reference — it moves only when the base's own ref moves.
   `check-renovate-scope` prints those as advisories.
-  That is not the same as unreachable: `vps/bootstrap/local-path/kustomization.yaml` pins its base as `?ref=v0.0.31`, which the `kustomize` manager parses, so Renovate proposes that bump even though the image itself is still reported advisory.
+  That is not the same as unreachable: `vps/bootstrap/local-path/kustomization.yaml` pins its base as `?ref=v0.0.37`, which the `kustomize` manager parses, so Renovate proposes that bump even though the image itself is still reported advisory.
   An image **embedded inside another resource** — local-path-provisioner ships its helper Pod as a block scalar in a ConfigMap — the guard cannot see at all, so it says nothing about it: silence, not an advisory.
-  Everything else hard-fails, so a new pinned image that nothing watches cannot reach a cluster.
+  Everything else hard-fails, so a new pinned image that nothing is configured to watch cannot reach a cluster.
+  **In scope is not the same as watched, and `check-renovate-scope` only proves the first.**
+  The guard's claim is structural — this image is named by a file inside `kubernetes.managerFilePatterns` and outside `ignorePaths` — and that claim stays true while the lookup behind it fails.
+  Both keel images are the case in hand: correctly scoped, digest-pinned so that only Renovate can move them, and reported on the dependency dashboard on 2026-08-28 as `Failed to look up docker package ghcr.io/keel-hq/keel: no-result`.
+  Nothing could have proposed a keel advisory, and every guard was green.
+  Finding such a failure is no longer a manual read: since August 28, 2026 the daily `update-watch` job parses the **dependency-lookup warning block** on the Renovate dependency dashboard issue and pushes `verdict=renovate-lookup-failed`.
+  The residual is acting on it — the alert carries a count, never the package names, so open that block when it fires, and never read a passing `check-renovate-scope` as evidence that a bump would arrive.
+  A deliberate hold is the second way an in-scope image stops being watched: an `allowedVersions` cap or an `enabled: false` rule in `renovate.json` withholds the pull request by design, and only a hand edit lifts it.
   `hindsight` is the sharpest case: it runs Alembic migrations on startup against the store holding an agent's memory, and those migrations are forward-only, so the pre-upgrade dump is the only rollback.
   `make hindsight-upgrade` takes it.
   `health` is the same shape in miniature — a Grafana major migrates `grafana.db` in place on first start, so a tag revert is not a rollback there either; `make health-upgrade` takes that dump, and it covers the InfluxDB export in the same Job.

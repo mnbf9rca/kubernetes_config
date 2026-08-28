@@ -16,7 +16,8 @@ Targets that need secrets are split in two: a **public target** that runs the pr
 `op run` resolves the `op://` references in `.env.tpl` against the service-account token and injects the real values into the environment of that **one child process**; envsubst substitutes them into the manifests inside that same child.
 
 Because the token itself lives in the shell environment once direnv has exported it, `op run` — and so every build, diff and apply target — works from **any directory in that shell, git worktrees included**.
-There is no need to re-run `direnv allow` in a worktree, or to avoid worktrees for work that needs `op` (operator ruling, 2026-08-27).
+There is no need to avoid worktrees for work that needs `op` (operator ruling, 2026-08-27).
+direnv keys its allow record on path *and* content, though, so a fresh worktree's committed `.envrc` starts unallowed: if direnv reports `.envrc is blocked` on entering one, run `direnv allow` there once.
 
 Why this shape:
 
@@ -83,11 +84,14 @@ The same applies to `tee`, and to copying a rendered manifest out of terminal sc
 
 `diff-*` and `apply-*` are safe because they keep the rendered stream **inside** the `op run` child and pipe it straight into kubectl, so real values never cross stdout and masking never sees them.
 **Render-then-apply is the risky shape; the one-step pipeline is not.**
-But **redirecting a diff is the mirror hazard**: `kubectl diff` prints Secret data as base64, which the mask does not recognise, so `make diff-homelab > out.diff` writes the real values to disk where `build-*` would have written the placeholder.
-Never redirect `diff-*` either.
+**Never redirect `diff-*` either** — but not for the reason once given here.
+`kubectl diff` redacts a Secret's `data` itself (`--show-secrets` defaults to false and no target here passes it), so `make diff-homelab > out.diff` does not write the Secret values to disk.
+What neither mechanism covers is the residual: encoded or JSON-escaped secret material carried by a resource that is *not* a Secret, which kubectl does not redact and `op run`'s literal-plaintext match does not catch.
+A file on disk is where that residual gets committed or pasted, so the ban stands as defence in depth, and it also covers a future regression in kubectl's own redaction.
+The mechanism block above `diff-homelab` in the `Makefile` sets out what each one covers.
 `op run --no-masking` exists and is deliberately not used: an unmasked render is a secret-shaped file on disk waiting to be committed or pasted.
 
-One consequence worth knowing: because `kubectl diff` prints whole manifests, a change to a secret **value** shows as *no change* on screen — both sides mask to the same string.
+One consequence worth knowing: a changed Secret prints `*** (before)` / `*** (after)`, so the diff tells you **that** it changed and never **what** it changed to.
 The server-side comparison and the apply both use the real value.
 To confirm a specific secret landed, read it back with `kubectl -n <ns> get secret <name> -o jsonpath=...`.
 
@@ -274,7 +278,7 @@ A *dotted* tag — `alpine:3.20`, `traefik:v3.3`, `postgres:16-alpine`, `pgvecto
 
 **Remote-base images are advisory, in every mode.**
 An image named by no file in the cluster's own tree came from a remote base — cert-manager, the CSI drivers, local-path-provisioner — so nothing here can edit the reference; it moves only when the base's own ref moves.
-That is not the same as unreachable: the VPS local-path base is pinned as `?ref=v0.0.31`, which the kustomize manager parses, so Renovate proposes that bump even though the guard still calls the image advisory.
+That is not the same as unreachable: the VPS local-path base is pinned as `?ref=v0.0.37`, which the kustomize manager parses, so Renovate proposes that bump even though the guard still calls the image advisory.
 Failing an apply on somebody else's manifest produces a gate people route around, so those are printed as advisories and do not fail the check, exactly as `check-script-lint` treats upstream findings.
 Ownership is therefore established *before* any verdict, not only before the scope one: a remote base that ever shipped keel annotations on a pinned tag would otherwise hard-fail an apply over a manifest this repo cannot edit.
 
@@ -391,3 +395,16 @@ Take the document from the render rather than retyping it, so what you apply is 
 
 Verified 2026-07-27: `kubectl diff` over these resources is empty and `kubectl apply --dry-run=server` is byte-identical to live state — the `caBundle` survives intact, so this is **not** the classic cert-manager-caBundle-gets-stripped footgun.
 `kubectl diff` showing nothing is the ground truth; `configured` in apply output is not evidence of drift.
+
+**That list is a set of examples, not a closed membership test, and treating it as one produces false alarms.**
+These applies are client-side (`kubectl apply -f -`), and kubectl prints `unchanged` only when the three-way patch it computes locally is empty — so any object whose stored `last-applied-configuration` differs from the render in a way the server normalises away prints `configured` while `kubectl diff` reports nothing.
+What is in that set is a property of the object's history, not of its kind.
+Any resource can end up in that state; nothing about being a Secret, a PV or a webhook config is required.
+On 2026-08-28 `cronjob/jottacloud-backup-scheduled` and `cronjob/cloudflare-analytics` each reported `configured` on a converged tree, appearing in no diff before or after, and a re-run `make diff-homelab` returned nothing at all.
+
+So decide it by the mechanism rather than by the list:
+
+> A resource that is **absent from the immediately-preceding diff** and whose **re-run diff is also empty** is a patch the server converges away, not drift.
+
+A resource the diff *does* name is a real change, and the concurrent-branch rule in `AGENTS.md` applies to it: prove which branch deployed it before you accept it.
+Do not go enumerating the class by experiment — the membership moves with every apply, and the rule above does not.

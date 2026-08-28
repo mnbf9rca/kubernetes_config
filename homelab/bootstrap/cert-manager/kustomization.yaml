@@ -4,6 +4,24 @@ kind: Kustomization
 # cert-manager v1.20.3. The upstream manifest includes its own `cert-manager`
 # Namespace definition, so homelab/bootstrap/namespaces.yaml intentionally
 # omits it — kustomize would reject a duplicate resource.
+#
+# HELD ON THE 1.20 LINE DELIBERATELY, decided August 28, 2026. v1.21.1 was the
+# latest release at the time and ships a known controller crash-loop: a nil
+# pointer dereference in the trigger controller on any Certificate that sets
+# `spec.renewal.policy: Disabled` (upstream issue 9031). Both lines carry the
+# fix for GHSA-8rvj-mm4h-c258, the HIGH-rated cert-manager-edit ClusterRole
+# escalation, so staying here costs no security.
+#
+# The reason is blast radius, not probability. Nothing here sets a renewal
+# policy — the field is new in v1.21 — but this cluster has exactly one
+# certificate, the *.cynexia.net wildcard Traefik serves as its default, so
+# cert-manager failing takes TLS out for every homelab service at the next
+# renewal. The patch delivers the security fix with no new known issues.
+#
+# Re-check issue 9031 at the next update session before taking v1.21. If it is
+# still open, the 1.20 line remains the better trade and there will be a newer
+# patch on it by then. When 9031 closes and this cluster takes v1.21 or later,
+# delete this block in the same commit as the version bump.
 
 resources:
   - https://github.com/cert-manager/cert-manager/releases/download/v1.20.3/cert-manager.yaml

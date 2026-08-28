@@ -366,8 +366,8 @@ Measurement and detail: [uptime-kuma.md](uptime-kuma.md#push-monitors).
 It exists because the `health` and `ops` namespaces forbid keel: their images are pinned, Renovate proposes the bumps, and until this watcher existed nothing pointed at the waiting pull requests.
 Detection for `health` came free on day one.
 
-**DOWN means one of eight things.**
-Four arrive as a `down` push and name themselves in the heartbeat's `verdict=` field.
+**DOWN means one of nine things.**
+Five arrive as a `down` push and name themselves in the heartbeat's `verdict=` field.
 The other four turn the monitor DOWN through **silence** past its interval plus retry: the job did not run, it ran and hung, its push token is well-formed but wrong, or GitHub has for a day been either unreachable or answering with something this script refuses to parse — every `nothing` verdict in the table below, sustained.
 
 **Every verdict the watcher can emit, and what each one pushes.**
@@ -382,6 +382,7 @@ That third column replaced healthchecks.io's `/log` ping on August 26, 2026 and 
 | `renovate-stale` | `down` | The Dependency Dashboard has not moved in `renovate_alive_max_days=`. Renovate itself has gone quiet |
 | `dashboard-missing` | `down` | Renovate's Dependency Dashboard is gone or closed, so Renovate is probably uninstalled |
 | `renovate-config-error` | `down` | Renovate opened a configuration-error issue and has stopped proposing pull requests |
+| `renovate-lookup-failed` | `down` | The Dependency Dashboard reports a failed package lookup, so `lookup_failures=` dependencies get no pull request at all, freezing every pinned image that references them — see below |
 | `rate-limited` | nothing | GitHub's unauthenticated quota is exhausted for this IP |
 | `secondary-limit` | nothing | A GitHub secondary rate limit |
 | `repo-unreachable` | nothing | HTTP 404 — the repo was renamed, deleted or made private |
@@ -394,7 +395,7 @@ That is why every message carries `run_epoch=`, an integer Unix timestamp: a `ru
 Telling the four silence causes apart means reading the pod log.
 The monitor has one bit; DOWN means "go and look".
 
-**`next=` is the third token of every message and names what to do about that verdict** — the `gh pr list` command for `updates-pending`, the Mend job log and a `managerFilePatterns` check for `renovate-stale`, the `gh issue list` command for `renovate-config-error`, the app-installations page for `dashboard-missing`, the pod-log command for the indeterminate verdicts, and `none` for both green verdicts (`updates-waiting`'s line says so explicitly, so a green message is not mistaken for one whose `next=` went missing).
+**`next=` is the third token of every message and names what to do about that verdict** — the `gh pr list` command for `updates-pending`, the Mend job log and a `managerFilePatterns` check for `renovate-stale`, the `gh issue list` command for `renovate-config-error`, the dashboard's repository problems and the Mend run log for `renovate-lookup-failed`, the app-installations page for `dashboard-missing`, the pod-log command for the indeterminate verdicts, and `none` for both green verdicts (`updates-waiting`'s line says so explicitly, so a green message is not mistaken for one whose `next=` went missing).
 Each string is a fixed literal in the script's `NEXT_ACTIONS` map, keyed by verdict, so the alert is self-contained and nothing derived at run time is formatted into it.
 It sits third — behind only `verdict=` and `run_epoch=` — rather than last, because kuma stores one line and cuts it at 200 characters: under a multi-line body last was where the eye landed, but under a one-line message last is the first thing lost.
 Read `next=` together with `run_epoch=`: a stale message's advice is about the last run that completed, not about the silence that raised the alert.
@@ -428,9 +429,33 @@ Read the value the heartbeat carries, not this number.
 The rule this replaced went red on any open pull request, which under session cadence made red the steady state, and an alarm that is normally red is not an alarm.
 
 **Renovate's own liveness is a `down` verdict on this same monitor**, `verdict=renovate-stale`.
-It fires when the Dependency Dashboard's `updated_at` (a stable API field; nothing parses its markdown) exceeds `renovate_alive_max_days=` in the heartbeat, and it is evaluated **above** the pull-request rules, so a dead Renovate with a young pull request still open cannot read as the green `updates-waiting`.
+It fires when the Dependency Dashboard's `updated_at` (a stable API field; this signal reads none of the body) exceeds `renovate_alive_max_days=` in the heartbeat, and it is evaluated **above** the pull-request rules, so a dead Renovate with a young pull request still open cannot read as the green `updates-waiting`.
 A missing dashboard and a configuration error keep their own, more specific verdicts — both are already red and both name their own `next=`.
 A dashboard whose timestamp does not parse is `api-error`, which pushes **nothing at all** and so changes nothing: an unreadable field is never evidence that Renovate is alive.
+
+**A failed package lookup is its own `down` verdict**, `verdict=renovate-lookup-failed`, added August 28, 2026.
+Renovate records a failed datasource lookup on the Dependency Dashboard in two places.
+The `## Repository Problems` section at the top carries a one-line `⚠️ WARN: Package lookup failures` summary and a link to the run log, and names nothing.
+The dependency-lookup warning block further down — `> [!WARNING] Renovate failed to look up the following dependencies:` — names the packages and the files affected.
+The job matches either, because neither is unconditional.
+The case that prompted this sat there unread for weeks and was still open when this shipped: `Failed to look up docker package ghcr.io/keel-hq/keel: no-result`, against two digest-pinned images that only Renovate can move.
+An image Renovate cannot look up gets no pull request, so a failed lookup freezes it while every guard stays green — `make check-renovate-scope` proves the file is in scope, never that the lookup succeeded.
+**What to do when it fires:** open the Dependency Dashboard issue and read the dependency-lookup warning block, which names the packages and the files affected, then fix the lookup.
+**The one case seen here was diagnosed on August 28, 2026 from two Mend run logs**, and three plausible causes are ruled out.
+Not repo configuration; not registry authentication, because sibling `ghcr.io` packages token-fetch and pull manifests normally seconds later in the same runs that fail on `ghcr.io/keel-hq/keel`; and not runner memory, because the second run completed at 1.8GB of the runner's 3.0GB cap and failed identically.
+What both logs show is that the keel lookup fails **before the `ghcr.io` host queue is created** and issues **no HTTP request at all**.
+A `no-result` returned without a network request is being served from Mend's shared package cache at the datasource layer.
+That is a known, acknowledged upstream bug: Renovate's docker `getTags()` caches a `null` result unconditionally under a key with no tenant isolation (`registryHost:repository`), so one tenant's bad credential poisons the entry for every tenant, and reads short-circuit before any HTTP — renovatebot discussion 45249, fix pending in pull requests 45348 and 45409.
+**The workable remedy is repeated reruns from the Dependency Dashboard's own checkbox**, spread over hours: the poisoned entry's TTL is 30 minutes, and a run landing in an expired window looks the package up anonymously, succeeds, and writes the good tag list back for everyone — until the next poisoner.
+There is no repo-side cache-bust (the key derives from registry plus package name, so nothing this repo can edit reaches it — a `hostRules` entry in `renovate.json` least of all) and Mend documents no cache-eviction procedure.
+A new instance of this verdict still starts at the run log.
+This diagnosis belongs to one package, and the same one-line dashboard warning covers failures with nothing in common.
+The heartbeat carries `lookup_failures=`, a count and nothing else: a package name is remote text and rule 4 keeps it out of the message.
+The pod log carries the full lines on every run, and that is where the names are.
+The count heads the counter group rather than trailing it, because this verdict's `next=` is 103 characters, which with `verdict=` and `run_epoch=` leaves 40 characters — past the second counter it would be cut from the one message it exists for.
+`lookup_failures=0` means the section is there but its item lines did not parse — what a Renovate reword looks like — and the verdict fires anyway, because the section itself is the evidence; a zero also arises from a body carrying only the `Package lookup failures` summary bullet and no per-package lines, which is the likelier route when `suppressNotifications` hides the warning blockquote.
+It is evaluated above the pull-request rules and below staleness: a dependency that cannot be looked up proposes nothing, so the pull-request count is an undercount by exactly the frozen images, while a Renovate that has stopped running at all is the larger fact and its dashboard is as stale as the rest of it.
+A body this job could not read is not a lookup failure and never becomes one — it reads the body only when the issue list came back, so nothing here weakens the indeterminate contract above.
 
 **Both threshold fields are the first things the 200-character cut takes, by design.**
 `pr_age_red_days=` and `renovate_alive_max_days=` are emitted last because they are literals in `update-watch.py` and identical between runs, so an alert that loses them costs the reader one look at the source.
@@ -458,7 +483,8 @@ Renovate lists an update as a dashboard checkbox rather than opening a pull requ
 Read the config rather than trusting an enumeration here, which has drifted once already.
 Such an update waits for a human tick indefinitely while this watcher reports `ok` with zero open pull requests, and `renovate-stale` does not catch it either: Renovate is alive and touching the dashboard the whole time.
 **Read the Dependency Dashboard, not just the pull-request list, at the start of every update session.**
-Counting dashboard-held items instead would mean parsing the dashboard's markdown, which rule 3 in `update-watch.py` deliberately refuses — the issue's `updated_at` is a stable API field, its body is not.
+Counting dashboard-held items instead would mean taking an *inventory* out of the dashboard's markdown, which `update-watch.py` still refuses — the issue's `updated_at` is a stable API field, its body is not, and a reworded body would undercount silently while the count was reported as authoritative.
+The repository-problems marker the watcher does read is the opposite shape and is the whole of the exception: it can only fail to *fire*, so a reword loses one red verdict and can turn nothing green, because no other verdict consults the body at all.
 
 **`estate-update` is the session's own dead-man's-switch**, at roughly 45 days with a 7-day grace, pinged by hand at the end of each session.
 It exists because a pull request's age is not a reliable proxy for a skipped session.
@@ -714,7 +740,7 @@ Probes fix hung request paths, not silently stopped background work — often th
 | **the hindsight dump** | The gate proves the dump exists, is fresh, is above a size floor and contains at least one `CREATE TABLE`. It does not prove the dump *restores*. The periodic restore drill in [hindsight.md](hindsight.md) is the only thing that does |
 | **the homelab gate** | It proves the SSD is mounted and the tree is the right *shape*: right number of PVC directories, right order of magnitude, the listed files present and non-trivial. It says nothing about *content*. Every homelab PVC is copied live, with no quiesce step: a sqlite database mid-write is captured torn, `sonarr.db` at 14 MiB of corruption passes the size floor exactly as 14 MiB of working database does, and a PVC that stopped being written to weeks ago looks identical to one written a minute ago. Grafana is the one exception, and only in its dump: `grafana-dump` is taken with SQLite's online backup API and read back before it is published, so that artifact is consistent and verified even though the live `grafana.db` beside it is not. The hindsight dump is verified the same way, at the shape level. Only the two influx dumps, that Grafana dump, the hindsight dump and the hermes zip are age-checked. A retained orphan directory from a recreated PVC can satisfy an expected-set entry the live PVC no longer can — the resolved paths are printed so it is visible, but nothing fails on it. The rest surfaces at restore time |
 | **cloudflare-analytics** | It proves the hours it fetched were fetched. It cannot prove Cloudflare's own numbers are right, and it does not alert on *content* — a hostname that stops receiving traffic entirely, or a spike, produces a perfectly green heartbeat. That is Phase 3 (Grafana alert rules), deliberately deferred until a baseline exists |
-| **update-watch (Renovate silence)** | Renovate is installed, has opened no error issue, and is proposing nothing. Since August 26, 2026 the *idle* form is a determinate verdict on this same monitor: a Dependency Dashboard that has not moved in `renovate_alive_max_days=` is `verdict=renovate-stale`, pushed `down`. What is left uncovered is a Renovate that keeps touching its dashboard while proposing nothing — a `managerFilePatterns` that stopped matching, or a registry lookup failing silently. `make check-renovate-scope` closes the commonest variant, a pinned image no in-scope file names; the rest is the narrowed quarterly drill above |
+| **update-watch (Renovate silence)** | Renovate is installed, has opened no error issue, and is proposing nothing. Since August 26, 2026 the *idle* form is a determinate verdict on this same monitor: a Dependency Dashboard that has not moved in `renovate_alive_max_days=` is `verdict=renovate-stale`, pushed `down`. What is left uncovered is a Renovate that keeps touching its dashboard while proposing nothing — a `managerFilePatterns` that stopped matching. A registry lookup failing silently was on that list until August 28, 2026 and no longer is: `verdict=renovate-lookup-failed` reads the dashboard's repository-problems block and pushes `down` on it. What that leaves is a lookup that fails without Renovate saying so, and a reworded problems block, which loses the verdict and nothing else. `make check-renovate-scope` closes the commonest remaining variant, a pinned image no in-scope file names; the rest is the narrowed quarterly drill above |
 | **update-watch (held on the dashboard)** | The watcher counts OPEN pull requests, and an update held by any `dependencyDashboardApproval` rule in `renovate.json` — today all majors, `kroniak/ssh-client` digests and `thisisarpanghosh/garmin-fetch-data`, but read the config, not this cell — is a dashboard checkbox, not a pull request. It can wait for a human tick indefinitely while the monitor reads `ok`, and `renovate-stale` will not fire because Renovate is alive and updating the dashboard throughout. The cover is procedural: read the Dependency Dashboard at the start of every update session |
 | **update-watch (merged but not applied)** | It watches the **repository**, not the cluster. Merging a Renovate pull request closes it, so the next run reports zero and the monitor goes UP while the cluster still runs the old image. Merge and apply are one runbook operation for that reason; the independent noticer is drift in `make diff-homelab` |
 

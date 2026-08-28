@@ -18,6 +18,8 @@ Kubectl context: `cynexia-homelab`.
 | restic | Nightly CronJob (03:00 UTC) → Backblaze B2 `b2:homelab-restic-d5e15f22`, 7 daily / 4 weekly / 6 monthly. Pings healthchecks.io on start and exit code — see [monitoring.md](monitoring.md#the-restic-ping-wrapper) |
 | jottacloud-backup | Own namespace; rclone Jottacloud → NFS, then kopia → B2 `cloud-files-backup`; reports to the `jottacloud-backup` uptime-kuma push monitor |
 
+Workloads run on the single node because Omni's own system patch `400-homelab-control-planes-untaint` sets `cluster.allowSchedulingOnControlPlanes: true` — the mirror of the VPS twin described in [vps.md](vps.md), labelled `omni.sidero.dev/system-patch:`, so Omni owns it and it must never be copied into a file under `homelab/talos/`.
+
 PSA: the cluster enforces `baseline` by default.
 `traefik` (hostNetwork/hostPort) and `backup` (hostPath) are elevated to `privileged` by labels in `homelab/bootstrap/namespaces.yaml`.
 Any new hostPath/hostNetwork workload needs the same treatment.
@@ -25,7 +27,7 @@ Any new hostPath/hostNetwork workload needs the same treatment.
 `cert-manager` and `local-path-storage` namespaces are created by their upstream manifests, so they are deliberately absent from `namespaces.yaml` (kustomize rejects duplicates).
 **Those three upstream bases stay unwatched, and the 2026-08-26 Renovate widening did not change that.**
 `cert-manager`, `nfs-csi` and `local-path` are pulled in as raw GitHub URLs with the version in the *path*, which the `kustomize` manager does not parse; it reads `?ref=` and `images:` transformers, and this tree has neither.
-That manager's only footprint in the repo is the VPS's `vps/bootstrap/local-path/kustomization.yaml`, pinned `?ref=v0.0.31`.
+That manager's only footprint in the repo is the VPS's `vps/bootstrap/local-path/kustomization.yaml`, pinned `?ref=v0.0.37`.
 Bumping a homelab base is still a hand edit of the URL.
 `keel`'s namespace **is** declared there, because upstream keel moved to Helm-only distribution and `homelab/bootstrap/keel/keel.yaml` is hand-written.
 

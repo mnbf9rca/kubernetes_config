@@ -186,7 +186,9 @@ def read(relative):
     except OSError as exc:
         raise CheckUnrunnable(
             "cannot read %s (%s). Both copies must exist; if one was renamed or "
-            "removed, this guard needs updating in the same commit."
+            "removed, this guard needs updating in the same commit, along with "
+            "the `keel-fresh copy pair` rule in renovate.json, which names the "
+            "same two paths."
             % (relative, exc.strerror))
 
 

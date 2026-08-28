@@ -18,7 +18,8 @@
   },
   "description": [
     "SETTING ignorePaths REPLACES THE config:recommended DEFAULTS. config:recommended pulls in :ignoreModulesAndTests, whose ignorePaths cover node_modules, bower_components, vendor, and assorted test/fixture directories. Declaring this key overrides that list wholesale rather than adding to it. No practical effect here - this repo manages no YAML under any of those paths - but a future manager (npm, gomod) added to enabledManagers would scan vendored trees this list no longer excludes. Re-add the defaults if that happens.",
-    "legacy-microk8s/** and no_longer_used/** currently match NOTHING. Both managerFilePatterns are anchored to ^homelab/ and ^vps/, so neither frozen tree is scanned in the first place. They are listed as defence in depth against a future pattern that is not anchored, not as active exclusions. **/secrets/** is the opposite and is the one genuinely active entry of the three: the homelab pattern does match homelab/secrets/*.yaml, and this excludes it. Harmless either way, since those files hold only ${VAR} placeholders and name no image, but the exclusion is real rather than defensive."
+    "legacy-microk8s/** and no_longer_used/** currently match NOTHING. Both managerFilePatterns are anchored to ^homelab/ and ^vps/, so neither frozen tree is scanned in the first place. They are listed as defence in depth against a future pattern that is not anchored, not as active exclusions. **/secrets/** is the opposite and is the one genuinely active entry of the three: the homelab pattern does match homelab/secrets/*.yaml, and this excludes it. Harmless either way, since those files hold only ${VAR} placeholders and name no image, but the exclusion is real rather than defensive.",
+    "DO NOT SET suppressNotifications: [\"dependencyLookupWarnings\"]. homelab/ops/scripts/update-watch.py reads the dependency-lookup warning block off the dependency dashboard issue, and that suppression deletes it from the body."
   ],
   "ignorePaths": [
     "**/secrets/**",
@@ -44,6 +45,12 @@
       "automerge": false,
       "prPriority": 1,
       "description": "The update watcher's own image — watched so the watcher is not the one unwatched pin in the estate." },
+    { "matchFileNames": [
+        "homelab/ops/keel-fresh.yaml",
+        "vps/ops/keel-fresh.yaml"
+      ],
+      "groupName": "keel-fresh copy pair",
+      "description": "ONE PULL REQUEST, BOTH COPIES. These two files are an ENFORCED COPY PAIR: `make check-keel-fresh-parity` requires them byte-identical outside a short list of sanctioned differences, and the image line is NOT on that list. So a bump taken on one cluster alone fails the guard, and the guard has no per-cluster half — a divergence refuses apply-homelab AND apply-vps until the other copy lands. Renovate split the curlimages/curl bump into two pull requests (70 for homelab, 74 for the VPS), each individually invalid. The shared groupName makes the pair arrive as a single pull request. This rule sits AFTER the homelab/ops/** rule on purpose: later rules win per field, so this groupName overrides 'ops tooling' for the homelab copy, while that rule's automerge and prPriority still apply. Any future enforced copy pair needs the same treatment." },
     { "matchFileNames": ["homelab/hindsight/**"],
       "groupName": "hindsight stack",
       "automerge": false,
@@ -61,6 +68,9 @@
       "description": "HOLD ON THE DASHBOARD, DO NOT AUTO-PROPOSE. homelab/backup/hermes-pull.yaml pins this by DIGEST WITH NO TAG, so Renovate resolves it against `latest` and every repoint of that tag becomes a digest-update proposal. A digest update is not a major, so the all-majors dashboard rule above does not catch it, and the 2026-08-26 scope widening to homelab/** is what started these arriving at all. This container handles an SSH private key and a zip full of live secrets, and the image is an unofficial personal Docker Hub repository - the exact case where an unattended bump is a security event rather than a convenience. When approving one, treat it as a NEW IMAGE: re-run the in-cluster probe from the design rollout section (ssh, sha256sum, wget, awk, du, od, head, stat present; the hermes-passwd mount is what makes `ssh -V` work as uid 1999) before applying. The same warning is in the manifest, twenty lines above the image line where a pull request diff will not show it; this rule is how it reaches the reviewer." },
     { "matchPackageNames": ["thisisarpanghosh/garmin-fetch-data"],
       "dependencyDashboardApproval": true,
-      "description": "Digest-pinned to a main build; the v0.5.0 release is broken (client.profile crash). Dashboard-only rather than disabled, so an upstream fix surfaces without auto-PRing a regression." }
+      "description": "Digest-pinned to a main build; the v0.5.0 release is broken (client.profile crash). Dashboard-only rather than disabled, so an upstream fix surfaces without auto-PRing a regression." },
+    { "matchPackageNames": ["getmeili/meilisearch"],
+      "allowedVersions": "<1.42",
+      "description": "HELD ON THE v1.41 LINE UNTIL KARAKEEP MOVES ITS OWN PIN. karakeep is the only client of this index, and karakeep's docker/docker-compose.yml on its default branch pins getmeili/meilisearch:v1.41.0 — exactly what vps/workloads/karakeep.yaml runs. v1.53.1, which Renovate proposed as pull request 75, is UNTESTED by upstream karakeep. Checked August 28, 2026. Take the bump when karakeep moves its compose pin, and re-read that file at the time rather than trusting this note. The cap is `<1.42` rather than an exact version so v1.41 patch releases still arrive; narrow it only if one of those breaks. Moving it is not a tag edit; the procedure is in the comment above the container in vps/workloads/karakeep.yaml." }
   ]
 }
