@@ -5,8 +5,8 @@ pipeline on **Talos Linux** (managed by Omni), and a second public-facing Talos 
 on a Hetzner VPS.
 
 This file is **background and conventions only** — what the repo is, how it's laid out,
-and the rules to follow when editing it. Cluster-specific detail, runbooks and
-procedures live under `docs/` and are referenced from here rather than duplicated.
+and the rules for editing it. Cluster-specific detail, runbooks and procedures live under
+`docs/`, referenced from here rather than duplicated.
 
 ## Documentation
 
@@ -87,9 +87,8 @@ Full mechanics, target-by-target reference and failure modes:
   gone deliberately — do not restore it.**
   Because `OP_SERVICE_ACCOUNT_TOKEN` lives in the shell environment once direnv has
   exported it, `op run` — and therefore every build/diff/apply target — works from **any
-  directory in that shell, git worktrees included**; there is no need to re-run `direnv
-  allow` in a worktree or to avoid worktrees for `op`-dependent work (operator ruling,
-  2026-08-27).
+  directory in that shell, git worktrees included**: no re-running `direnv allow` in a
+  worktree, no avoiding worktrees for `op`-dependent work (operator ruling, 2026-08-27).
 - **Never commit plaintext secret values.** `${VAR}` placeholders only.
 - **`op run` masks stdout, not env vars** — corrected 2026-08-20; the previous claim in
   this file was a misdiagnosis. `op run` passes the **real** values in the child
@@ -105,9 +104,9 @@ Full mechanics, target-by-target reference and failure modes:
   never redirect `diff-*` either.
   Detail: `docs/operations/apply-workflow.md`.
 - **`ENVSUBST_VARS` is an explicit allowlist, passed single-quoted.** Never call envsubst
-  without one: with no allowlist it eats every `${VAR}` in the stream including shell
-  variables inside upstream manifests (for example `$VOL_DIR` in local-path-provisioner's helper
-  pod); with double quotes the shell expands the tokens before envsubst sees them.
+  without one: with no allowlist it eats every `${VAR}` in the stream, including shell
+  variables inside upstream manifests (`$VOL_DIR` in local-path-provisioner's helper pod);
+  with double quotes the shell expands the tokens before envsubst sees them.
 - **Adding a secret means four edits:** the `op://` line in `.env.tpl`, the name in
   `ENVSUBST_VAR_NAMES`, the name in `REQUIRED_VARS`, and the `${VAR}` placeholder in the
   manifest. `make check-vars-consistency` hard-fails if a substituted var is missing from
@@ -115,8 +114,8 @@ Full mechanics, target-by-target reference and failure modes:
   time only**: the Makefile's `PLACEHOLDER_SCAN` runs inside `apply-homelab` and
   `apply-vps` after rendering and before kubectl, and hard-fails naming any surviving
   `${VAR}` whose name is declared in `.env.tpl`, so nothing is applied and no literal
-  placeholder reaches a Secret. Note the asymmetry: `diff-*` does **not** run that scan, so
-  a diff can look clean while the apply refuses. To confirm no placeholder survived the
+  placeholder reaches a Secret. The asymmetry matters: `diff-*` does **not** run that scan,
+  so a diff can look clean while the apply refuses. To confirm no placeholder survived the
   render after adding one, run
   `make build-<cluster> | grep -F "$(sed -n 's/^\([A-Za-z_][A-Za-z0-9_]*\)=.*/${\1}/p' .env.tpl)"`
   — it prints nothing on a clean tree. Do not use a bare `grep -F '${'`: shell
@@ -129,6 +128,12 @@ Full mechanics, target-by-target reference and failure modes:
   `op document get`, not `op read`.
 - **Apply targets assert the kubectl context first** (`check-context` /
   `check-vps-context`). Never bypass them.
+- **Agent work happens in an isolated git worktree, never in the main checkout**
+  (`.claude/worktrees/` or equivalent; operator ruling, 2026-08-27). Several agents and
+  sessions share that checkout at once, so its current branch is not yours to assume: run
+  `git branch --show-current`, confirm it, and only then commit. A guidance edit that day
+  landed on another agent's branch because the shared checkout had been switched
+  mid-flight. `op run` works from a worktree, so using one costs nothing.
 - **Deploy, then merge.** A PR branch is applied to the cluster and verified healthy
   **before** the PR merges: `master` records what has been successfully deployed, never
   intent. Apply from the branch checkout (the preflight guards still run), confirm the
@@ -248,11 +253,10 @@ Full mechanics, target-by-target reference and failure modes:
   two other reviewers missed (2026-08-27); the spec or plan's own author cannot fill it.
 - **Probes: readiness on every long-running container that serves traffic; liveness only
   where that probe can actually detect the failure *and* a restart is a safe remedy**
-  (everything here is single-replica, so an over-eager liveness probe manufactures
-  outages). **Always set
-  `timeoutSeconds`** — the 1s default false-positives on a loaded node. **Probe the data
-  plane, not a control-plane health endpoint**: the vendor-documented probe would have
-  stayed green through the 2026-08-18 Pomerium wedge. **Read the endpoint's handler at
+  (everything here is single-replica, so an over-eager liveness probe manufactures outages).
+  **Always set `timeoutSeconds`** — the 1s default false-positives on a loaded node.
+  **Probe the data plane, not a control-plane health endpoint**: the vendor-documented probe
+  would have stayed green through the 2026-08-18 Pomerium wedge. **Read the handler at
   source before wiring any probe to it**: an endpoint that returns 200 unconditionally and
   puts its verdict in the body detects nothing a restart fixes, yet still times out during a
   database incident and restarts the single replica for a fault no restart repairs
@@ -266,9 +270,10 @@ Full mechanics, target-by-target reference and failure modes:
   `timeZone: "UTC"` and `activeDeadlineSeconds` (with `concurrencyPolicy: Forbid`, one
   hung run silently blocks every later run), plus `startingDeadlineSeconds` where a missed
   window must be retried rather than dropped. **New scheduled work drives an uptime-kuma
-  PUSH monitor, not a healthchecks.io check**: as of 2026-08-26 only four checks remain
-  there — the two restic jobs, whose multi-line bodies are the triage runbook,
-  `vps-uptime-kuma-alive`, and the hand-pinged `estate-update`. Everything else pushes.
+  PUSH monitor, not a healthchecks.io check**: only five checks remain there — the two
+  restic jobs, whose multi-line bodies are the triage runbook, `vps-uptime-kuma-alive`, and
+  the hand-pinged `estate-update` and `hermes-update`. Everything else pushes, as of
+  2026-08-26.
   The default contract for a new job is **`up` on exit 0 and `down` otherwise**, from an
   EXIT trap in the shell runners — the two hindsight jobs, `influx-backup`, `hermes-pull`
   and both `keel-fresh` jobs — or, in Python, from a module-level `try`/`except` that
@@ -290,7 +295,7 @@ Full mechanics, target-by-target reference and failure modes:
   token on argv, and a failing `wget` or `curl` quotes the URL it was handed, which is the
   reporting credential either way: a healthchecks.io ping UUID, or a kuma push **token**,
   which is the last path segment of `PUSH_URL`. The rule is blanket because a script cannot
-  sort the tiers below apart at runtime. Emit a count, an age, a size, a path built from a
+  tell the tiers below apart at runtime. Emit a count, an age, a size, a path built from a
   literal glob, or a verdict from a fixed enum.
   `make check-ping-bodies` enforces it — it recognises a sink by FUNCTION NAME (`emit`,
   `say_err`, `fatal`; `hc_emit`, `hc_summary`) and never by the destination host, which is
@@ -302,9 +307,9 @@ Full mechanics, target-by-target reference and failure modes:
   sacrifices to the cut whichever token carries least — `error=` last in `influx-backup` and
   `hermes-pull`, but the two fixed-width threshold literals in `update-watch`, whose
   variable-length token is the `next=` action and is protected in third place. Every runner
-  prints the full detail to the pod log, which is now where triage starts. Either one travels with the alert to every
-  notification transport its destination has configured, a list nobody has enumerated on
-  either side. Policy, the accepted residuals and that open item:
+  prints the full detail to the pod log, where triage starts. Either one travels with the
+  alert to every notification transport its destination has configured, a list nobody has
+  enumerated on either side. Policy, the accepted residuals and that open item:
   `docs/operations/monitoring.md`.
 - **Updating the hermes VM is a runbook, not a script, and it is deliberately not
   scheduled.** `hermes update` sometimes carries a step that needs judgement — a migration
@@ -347,20 +352,20 @@ Full mechanics, target-by-target reference and failure modes:
   clusters, and `diff-*`/`apply-*` run the per-cluster variant as a preflight, so it
   cannot be forgotten. The preflight is a context assertion, a vars-consistency check,
   **five per-cluster guards that each run as their cluster's half** —
-  `check-script-substitution`, `check-job-ttl`, `check-ping-bodies`,
-  `check-script-lint` and `check-renovate-scope` — and one guard with no half,
-  `check-keel-fresh-parity`, on all four of `diff-homelab`,
-  `apply-homelab`, `diff-vps` and `apply-vps`. `check-renovate-scope` joined them on
-  2026-08-26, in the commit that widened Renovate far enough for it to pass.
+  `check-script-substitution`, `check-job-ttl`, `check-ping-bodies`, `check-script-lint` and
+  `check-renovate-scope` — and one guard with no half, `check-keel-fresh-parity`, on all
+  four of `diff-homelab`, `apply-homelab`, `diff-vps` and `apply-vps`.
+  `check-renovate-scope` joined them on 2026-08-26, in the commit that widened Renovate far
+  enough for it to pass.
   **Three of the five are RENDER-BASED** — `check-job-ttl`, `check-script-lint` and
   `check-renovate-scope` each shell out to a full `kustomize build`. That subset is not
   trivia: it decides wiring. The render-based three sit on the PUBLIC half of the split
   only, because duplicating them would double every apply's render cost, while
   `check-script-substitution` and `check-ping-bodies` scan source files under the cluster
-  trees and are cheap enough to run on both halves. Keep the distinction when editing
-  either list.
-  Jobs *generated by a CronJob* are exempt and the check ignores
-  them: each run gets a unique name, so they never collide, and pile-up is bounded by
+  trees and are cheap enough to run on both halves. Keep the distinction when editing either
+  list.
+  Jobs *generated by a CronJob* are exempt and the check ignores them: each run gets a
+  unique name, so they never collide, and pile-up is bounded by
   `successfulJobsHistoryLimit`.
 - **A deliberate copy of a file across the two clusters must be enforced, not just
   commented.** `homelab/ops/` and `vps/ops/` hold the same `keel-fresh` runner and
@@ -387,17 +392,16 @@ Full mechanics, target-by-target reference and failure modes:
   a VPS-only edit anyway. The coupling is real and is the kind that gets routed around
   under pressure; the answer is that the guard names the offending line and the fix.
   Any future copied pair should get the same treatment rather than a third comment.
-- **Logic lives in a script file, never in an inline YAML string.** Anything with
-  branching, parsing or loops goes in a real file under a `scripts/` path and reaches the
-  cluster through a `configMapGenerator`, as
-  `homelab/health/scripts/cloudflare-analytics-ingest.py` does. A file can be imported,
-  unit-tested, linted and diffed line by line; a 600-line block scalar can do none of
-  those, and reviewing one means extracting it by hand first. Two things the generator
-  needs: set `namespace:` on the generator entry (kustomize only rewrites a name
-  reference when referrer and referent agree on namespace — omit it and the ConfigMap
-  lands in `default` *and* the workload keeps pointing at the unsuffixed name), and leave
-  the content-hash suffix ON, so editing a script rolls the workload that mounts it.
-  Short straight-line `sh`/`kubectl` still belongs inline: the rule is about logic, not
+- **Logic lives in a script file, never in an inline YAML string.** Anything with branching,
+  parsing or loops goes in a real file under a `scripts/` path and reaches the cluster
+  through a `configMapGenerator`, as `homelab/health/scripts/cloudflare-analytics-ingest.py`
+  does. A file can be imported, unit-tested, linted and diffed line by line; a 600-line
+  block scalar can do none of those, and reviewing one means extracting it by hand first.
+  Two things the generator needs: set `namespace:` on the generator entry (kustomize only
+  rewrites a name reference when referrer and referent agree on namespace — omit it and the
+  ConfigMap lands in `default` *and* the workload keeps pointing at the unsuffixed name),
+  and leave the content-hash suffix ON, so editing a script rolls the workload that mounts
+  it. Short straight-line `sh`/`kubectl` still belongs inline: the rule is about logic, not
   length.
 - **A generated script must never name an `ENVSUBST_VAR_NAMES` variable.** Generator
   files ride the same stream as every manifest, so envsubst rewrites them — and it
@@ -409,12 +413,10 @@ Full mechanics, target-by-target reference and failure modes:
   placeholder survives, so `check-placeholder-coverage` sees nothing. `make
   check-script-substitution` is the guard, and `diff-*`/`apply-*` run the per-cluster
   variant as a preflight, alongside `check-ping-bodies`. If a script needs such a value,
-  indirect it:
-  give the container a differently named env var (`secretKeyRef` for a secret) and use
-  that name in the script. For the same reason, **do not share one script between the
-  two clusters** when it touches restic: the VPS names are `VPS_`-prefixed and the
-  homelab ones are not, so a shared file is safe under one tree and leaking under the
-  other.
+  indirect it: give the container a differently named env var (`secretKeyRef` for a secret)
+  and use that name in the script. For the same reason, **do not share one script between
+  the two clusters** when it touches restic: the VPS names are `VPS_`-prefixed and the
+  homelab ones are not, so a shared file is safe under one tree and leaking under the other.
 - **Every script is linted from the RENDER, as POSIX `sh`.** `make check-script-lint`
   runs `kustomize build`, pulls the shell back out of ConfigMap `data:` keys *and* out
   of inline `args:`/`command:` block scalars, and runs `shellcheck -s sh` over it — plus
@@ -427,32 +429,29 @@ Full mechanics, target-by-target reference and failure modes:
   `brew install shellcheck`. Findings from upstream bases are advisory and do not fail
   the check. Rationale and the extraction rules:
   `docs/operations/apply-workflow.md`.
-- **Every container is in exactly one update mode, and `make check-renovate-scope`
-  proves it.** Floating tag means keel; pinned tag means Renovate; never both. The
-  guard renders each cluster and judges one container at a time: a complete keel
-  annotation set on a floating tag is legal; the same set on a **pinned** tag is
-  the frozen state (`match-tag` only refreshes the digest) and fails; an
-  **incomplete** set fails on any tag, because a missing `match-tag` silently
-  downgrades a semver tag to `:latest`. A pinned, keel-free image must be named by
-  a repo file **in the same cluster's tree** that is inside
-  `kubernetes.managerFilePatterns` and outside `ignorePaths` — a `packageRule` alone
-  does **not** widen scope, and the per-cluster confinement is load-bearing, because
-  both trees name many of the same images and a repo-wide lookup would let a watched
-  homelab file vouch for an unwatched VPS container. keel annotations are a
-  **workload** property: a pinned sidecar beside a floating app image is
-  Renovate's, not frozen, so only a workload with nothing floating in it can be
-  frozen. Floating tags are forbidden in the `health`, `hindsight`, `ops` and
-  `backup` namespaces; `jottacloud-backup` is the one written exemption on that
-  guard's `FLOATING_EXEMPT` list, because it is a CronJob whose pods pull
-  `:latest` on every scheduled run and so needs no keel. Images from remote
-  bases are advisory.
+- **Every container is in exactly one update mode, and `make check-renovate-scope` proves
+  it.** The guard renders each cluster and judges one container at a time: a complete keel
+  annotation set on a floating tag is legal; the same set on a **pinned** tag is the frozen
+  state (`match-tag` only refreshes the digest) and fails; an **incomplete** set fails on
+  any tag, because a missing `match-tag` silently downgrades a semver tag to `:latest`. A
+  pinned, keel-free image must be named by a repo file **in the same cluster's tree** that
+  is inside `kubernetes.managerFilePatterns` and outside `ignorePaths` — a `packageRule`
+  alone does **not** widen scope, and the per-cluster confinement is load-bearing, because
+  both trees name many of the same images and a repo-wide lookup would let a watched homelab
+  file vouch for an unwatched VPS container. keel annotations are a **workload** property: a
+  pinned sidecar beside a floating app image is Renovate's, not frozen, so only a workload
+  with nothing floating in it can be frozen. Floating tags are forbidden in the `health`,
+  `hindsight`, `ops` and `backup` namespaces; `jottacloud-backup` is the one written
+  exemption on that guard's `FLOATING_EXEMPT` list, because it is a CronJob whose pods pull
+  `:latest` on every scheduled run and so needs no keel. Images from remote bases are
+  advisory.
 - For new `hostPath`/`hostNetwork` workloads: elevate their namespace to PSA
   `privileged` in the cluster's `bootstrap/namespaces.yaml`. The cluster-wide enforce
   level is `baseline`.
-- After adding a new secret placeholder: add it to `.env.tpl` and to **both**
-  `ENVSUBST_VAR_NAMES` and `REQUIRED_VARS` in the `Makefile` (the `VPS_*` lists for VPS
-  vars). No `direnv reload` is needed for a value — `op run` resolves references per
-  command; reload only after changing `OP_SERVICE_ACCOUNT_TOKEN` itself.
+- A new secret placeholder takes the four edits listed under **Apply Workflow** above; use
+  the `VPS_*` lists in the `Makefile` for VPS vars. No `direnv reload` is needed for a
+  value — `op run` resolves references per command; reload only after changing
+  `OP_SERVICE_ACCOUNT_TOKEN` itself.
 - When creating 1Password items with `op item create`, explicitly type the fields: a bare
   `field=value` defaults to **concealed**, so mark non-secret fields (emails, IDs, UUIDs,
   hostnames) as `field[text]=value` and keep only actual secrets concealed.
@@ -477,8 +476,8 @@ Full mechanics, target-by-target reference and failure modes:
      nothing else. Keep them out of this public repo (`op://` reference only) and type them
      `[text]` in the vault — but a transcript or a pod log is **not** a disclosure, they
      need **no rotation**, and they get **no honesty-box row**. This has been ruled three
-     times. Note that `jottacloud-backup`'s own image prints its push URL to the pod log on
-     every run; that is the same tier and needs no action.
+     times. `jottacloud-backup`'s own image prints its push URL to the pod log on every run:
+     same tier, no action.
   3. **Ordinary identifiers are not sensitive at all.** Restic repository URIs, B2 and
      InfluxDB bucket names, Cloudflare zone IDs, PVC UUIDs, namespaces, FreshRSS usernames,
      hostnames. They grant nothing and enable nothing. They are fine in pod logs, in ping
@@ -521,7 +520,8 @@ Full mechanics, target-by-target reference and failure modes:
 ## Legacy Reference
 
 `legacy-microk8s/` contains the original flat-layout microk8s manifests and
-`no_longer_used/` holds retired manifests. Both are **frozen reference only** — do not
-add new files to either. `legacy-microk8s/` exists to be deleted: remove it once the
-Talos rebuild is fully operational and nothing is still being cross-referenced out of it. `README.md` at the repo root still describes the retired
-microk8s/rancher setup and does not reflect the current clusters.
+`no_longer_used/` holds retired manifests. Both are **frozen reference only** — do not add
+new files to either. `legacy-microk8s/` exists to be deleted: remove it once the Talos
+rebuild is fully operational and nothing is still cross-referenced out of it. `README.md` at
+the repo root still describes the retired microk8s/rancher setup and does not reflect the
+current clusters.
