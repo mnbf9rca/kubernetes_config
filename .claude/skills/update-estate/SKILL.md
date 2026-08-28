@@ -170,7 +170,7 @@ The three files below repeat the version inside the URL path, where the manager 
 |---|---|---|
 | `homelab/bootstrap/local-path/kustomization.yaml` | `rancher/local-path-provisioner` | 1 |
 | `homelab/bootstrap/nfs-csi/kustomization.yaml` | `kubernetes-csi/csi-driver-nfs` | 4 URLs, each naming the version **twice** |
-| `homelab/bootstrap/cert-manager/kustomization.yaml` | `cert-manager/cert-manager` | 1 |
+| `homelab/bootstrap/cert-manager/kustomization.yaml` | `cert-manager/cert-manager` | 2 — the URL and a comment |
 
 - [ ] Check each upstream: `gh release list -R <owner>/<repo> --limit 5`.
 - [ ] For each one that moved, branch from `master`, edit **every** occurrence, and read the upstream release notes for anything that is not a version bump.
@@ -264,7 +264,10 @@ There is no updater on the VM.
       ssh hermes@hermes.cynexia.net 'sudo -n systemctl reboot'
 
       Wait for the VM to come back, then confirm the app answers a real request rather than a health endpoint.
-      The ready-made way: `ssh hermes@hermes.cynexia.net 'systemctl --user start hermes-app-alive.service'` — the daily alive check run on demand (units, agent import, webui health), which also pushes its kuma monitor.
+      Re-run the runbook's [Verify](../../../docs/operations/hermes-vm-updates.md#verify) block: its chat turn is that real request, and `/health` answers `status: ok` even when the agent cannot import.
+      The daily `hermes-app-alive` check is not a unit you can start.
+      It is a `no_agent` cron job inside the default gateway that runs at 05:45 UTC, one hour after the reboot window, and pushes its uptime-kuma monitor then - so the next scheduled beat is the independent confirmation.
+      To pull it forward, take the job id from `hermes cron list` and run `hermes cron run <job_id>`, then read the caveat in [hermes-vm.md](../../../docs/operations/hermes-vm.md): a hand-triggered run resolves its push token in the CLI's own process, so it can pass while the 05:45 scheduled run still fails.
 
 ## Step 6 - Close the session
 

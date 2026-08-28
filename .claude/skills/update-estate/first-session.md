@@ -31,7 +31,7 @@ Expect a timestamp inside the last day for each cluster.
 
 **If backups are disabled or the interval is `0`:** enable them — [estate-updates.md](../../../docs/operations/estate-updates.md#omni-etcd-backups) carries both mechanisms, for a cluster template and for a raw resource.
 
-Confirmed enabled at a 1-hour interval on both clusters on August 26, 2026, so expect this item to pass.
+Confirmed enabled at a 1-hour interval on both clusters on August 28, 2026, so expect this item to pass.
 
 ## 2. The FreshRSS `security` category
 
