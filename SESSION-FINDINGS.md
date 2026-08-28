@@ -196,10 +196,23 @@ Nothing in this repository calls `/tasks/compact`, and the endpoint is an admini
 The manifest's comment predicts a "liveness restart loop", and that reading is worth revisiting: the flag is reset when the process restarts, so a compaction produces one restart, which is what upstream intends the probe to do.
 A loop needs compaction to re-run on every start, which nothing here does.
 
-**Proposed fix, needing a decision.**
-Decide the upgrade mechanism first.
-The smaller option is a one-time `--upgrade-db` argument on the container, applied with the bump and removed in a follow-up once the index has been converted.
-The larger option is a dump and restore, which the runbook's table currently does not require for this workload.
-Either way, take a restic snapshot of the `karakeep-meilisearch` volume first, because the nightly sweep is the only floor this workload has.
+**The decisive constraint is karakeep, not the index.**
+The operator's ruling during this session is that losing the Meilisearch index is not serious, because karakeep rebuilds it, and the index holds a few thousand pages rather than a large corpus.
+So neither a dump nor a restic snapshot gates this bump.
+What matters is whether karakeep supports the Meilisearch version.
+It does not.
+`docker/docker-compose.yml` on karakeep's default branch pins `getmeili/meilisearch:v1.41.0`, which is exactly the version this estate runs.
+The current pin matches the pairing karakeep tests against, and v1.53.1 is untested by upstream.
 
-Then correct the manifest comment: it says the workload is pinned to v1.41.0 and predicts a restart loop, and both halves need rewriting once the version moves.
+**Proposed fix.**
+Leave pull request 75 open and take the bump when karakeep moves its own pin.
+Do not close it unmerged, which is unsupported and snoozes the update-watch monitor.
+
+Add a `packageRules` entry in `renovate.json` holding `getmeili/meilisearch` until karakeep's compose file moves, so the pull request stops reappearing every session.
+Record the reason in the rule, because a version pin without a stated reason gets bumped by the next reader.
+
+When the version does move, the upgrade still needs a mechanism.
+Meilisearch will not convert a v1.41 index on startup: it needs a one-time `--upgrade-db` argument on the container, removed in a follow-up once the index is converted.
+Rebuilding the index from karakeep is the alternative, and the operator has said that is acceptable.
+
+Correct the manifest comment at the same time: it says the workload is pinned to v1.41.0 and predicts a restart loop, and both halves need rewriting once the version moves.
