@@ -17,7 +17,7 @@ kind: Kustomization
 # Pointing PVs at the real mount path eliminates the bind entirely.
 
 resources:
-  - https://raw.githubusercontent.com/rancher/local-path-provisioner/v0.0.30/deploy/local-path-storage.yaml
+  - https://raw.githubusercontent.com/rancher/local-path-provisioner/v0.0.37/deploy/local-path-storage.yaml
 
 patches:
   - target:
