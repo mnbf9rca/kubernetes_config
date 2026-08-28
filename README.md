@@ -1,11 +1,12 @@
 # kubernetes_config
 
-Personal Kubernetes configuration for two single-node [Talos Linux](https://www.talos.dev/)
-clusters managed by [Omni](https://omni.siderolabs.com/):
+Personal Kubernetes configuration for two [Talos Linux](https://www.talos.dev/)
+clusters managed by [Omni](https://omni.siderolabs.com/) — a single-node homelab and a
+three-node VPS control plane:
 
 | | Homelab | VPS |
 |---|---|---|
-| Runs on | Proxmox VM at home | Hetzner cloud instance |
+| Runs on | Proxmox VM at home | Three Hetzner cloud instances |
 | Domain | `*.cynexia.net` (Route53) | `*.cynexia.com` (Cloudflare) |
 | Exposure | Private — LAN and Tailscale only | Public, via a cloudflared tunnel behind Cloudflare Access |
 | Ingress | Traefik + cert-manager wildcard | cloudflared only |

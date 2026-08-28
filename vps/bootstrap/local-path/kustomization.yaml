@@ -18,6 +18,32 @@ patches:
           pod-security.kubernetes.io/enforce: privileged
           pod-security.kubernetes.io/audit: privileged
           pod-security.kubernetes.io/warn: privileged
+  # Since the 2026-08-28 three-node expansion, /var/mnt/data only exists on
+  # ubuntu-16gb-fsn1-2 — it is the Talos user volume backed by the Hetzner
+  # Cloud Volume, and it is the only path the nightly restic job backs up.
+  # The other two control planes are CX23s with no Cloud Volume.
+  #
+  # So the catch-all is gone. An explicit entry names the storage node, and the
+  # DEFAULT entry carries `paths: []`, which makes the provisioner refuse.
+  #
+  # That refusal rests on the CODE, not on the README. Upstream documents the
+  # empty-paths refusal only for an explicitly LISTED node; for the DEFAULT
+  # entry it is undocumented behaviour that happens to be correct. In
+  # local-path-provisioner v0.0.31, provisioner.go:236 falls back to the
+  # DEFAULT entry's paths for a non-listed node and provisioner.go:243 then
+  # returns `no local path available on node %v` when that list is empty, so
+  # provisioning fails before the helper pod is ever created;
+  # canonicalizeStorageClassConfig accepts an empty Paths list, so the config
+  # reloads cleanly rather than being rejected. Re-check both call sites on any
+  # local-path-provisioner upgrade.
+  #
+  # Combined with the StorageClass's WaitForFirstConsumer binding mode, a PVC
+  # whose consumer is scheduled anywhere else stays Pending with a provisioning
+  # error on the PVC — loud, and recoverable — instead of silently binding to
+  # unbacked-up ephemeral disk.
+  #
+  # If the Cloud Volume ever moves to a different node, this list and the
+  # nodeSelector in vps/backup/restic-cronjob.yaml must change together.
   - target:
       kind: ConfigMap
       name: local-path-config
@@ -30,6 +56,10 @@ patches:
             "nodePathMap": [
               {
                 "node": "DEFAULT_PATH_FOR_NON_LISTED_NODES",
+                "paths": []
+              },
+              {
+                "node": "ubuntu-16gb-fsn1-2",
                 "paths": ["/var/mnt/data/local-path-provisioner"]
               }
             ]

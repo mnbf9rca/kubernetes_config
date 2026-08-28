@@ -1,0 +1,57 @@
+# Pin flannel's VXLAN transport to the Hetzner private network (10.0.0.0/24).
+#
+# Since the 2026-08-28 expansion to three control planes the cluster spans two
+# Hetzner locations (fsn1 and nbg1). On every node the default route leaves
+# through the PUBLIC interface, so flannel's default interface selection picks
+# the public address and sets up VXLAN between public IPs. A Hetzner Cloud
+# Firewall drops unsolicited inbound traffic, UDP 4789 included, so node-to-node
+# VXLAN was silently blackholed: pods on one node could not reach a Service
+# backed by a pod on another, and CoreDNS lookups from the two new nodes timed
+# out. Nothing logs an error in that state — the tunnel simply never delivers.
+#
+# The fix is to make flannel ride the private network instead, which every node
+# is attached to and which carries no firewall between members.
+#
+# --iface-can-reach=10.0.0.1 rather than a hard --iface=<name>: the private-net
+# interface is not named consistently across Hetzner server types, so naming it
+# would bind this patch to today's machine mix and break the next node added on
+# a different type. 10.0.0.1 is the private network's gateway, so "the interface
+# that can reach it" resolves to the right one on any of them.
+#
+# That the private network spans both locations is already proven in production:
+# etcd meshes over these same 10.0.0.x addresses across fsn1 and nbg1.
+#
+# SCOPE: cluster-wide, deliberately. Unlike the machine-scoped user-volume patch
+# alongside it, this must apply to every machine — flannel picking the private
+# interface on only some of them leaves exactly the broken half-mesh it fixes.
+#
+# APPLYING THIS PATCH DOES NOT MOVE THE RUNNING CLUSTER. Omni pushed the setting
+# into all three machine configs within seconds on 2026-08-28, but Talos does not
+# re-render its bundled flannel manifest over an existing DaemonSet, so the live
+# DaemonSet kept the old args indefinitely (observed unchanged over five minutes,
+# with no flannel pod restart). The live DaemonSet was therefore hand-patched
+# with the same single argument:
+#   kubectl -n kube-system patch ds kube-flannel --type=json \
+#     -p '[{"op":"add","path":"/spec/template/spec/containers/0/args/-",
+#           "value":"--iface-can-reach=10.0.0.1"}]'
+# This file is what makes it survive a node rebuild or a cluster recreate; the
+# hand-patch is what made it true today. THE TWO MUST AGREE — if this argument
+# is ever changed here, patch the live DaemonSet to match in the same session,
+# and check the live args after any Talos upgrade that may reset the manifest.
+metadata:
+  namespace: default
+  type: ConfigPatches.omni.sidero.dev
+  id: 300-vps-flannel-private-iface
+  labels:
+    omni.sidero.dev/cluster: vps
+  annotations:
+    name: flannel-private-iface
+spec:
+  data: |-
+    cluster:
+      network:
+        cni:
+          name: flannel
+          flannel:
+            extraArgs:
+              - --iface-can-reach=10.0.0.1

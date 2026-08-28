@@ -180,7 +180,7 @@ The rules that must not be broken:
 - **Probes: readiness on every long-running container that serves traffic; liveness only where that probe can actually detect the failure *and* a restart is a safe remedy** (everything here is single-replica, so an over-eager liveness probe manufactures outages).
   **Always set `timeoutSeconds`** — the 1s default false-positives on a loaded node.
   **Probe the data plane, not a control-plane health endpoint**: the vendor-documented probe would have stayed green through the 2026-08-18 Pomerium wedge.
-  **Read the handler at source before wiring any probe to it**: an endpoint that returns 200 unconditionally and puts its verdict in the body detects nothing a restart fixes, yet still times out during a database incident and restarts the single replica for a fault no restart repairs (2026-08-27).
+  **Read the endpoint's handler at source before wiring any probe to it**: an endpoint that returns 200 unconditionally and puts its verdict in the body detects nothing a restart fixes, yet still times out during a database incident and restarts the single replica for a fault no restart repairs (2026-08-27).
   Assert on real health fields in the body from a kuma keyword monitor instead.
   **Never probe a sidecar at all** — backup/quiesce container and single-consumer cache alike — because readiness drops the Pod from its EndpointSlice and liveness gets there through CrashLoopBackOff, so one sidecar fault takes the application offline; detect a backup fault at the artifact instead.
   Reasoning, per-service targets and the failures probes *don't* catch: `docs/operations/monitoring.md`.

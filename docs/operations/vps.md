@@ -1,6 +1,6 @@
 # VPS cluster (Phase 2)
 
-Public-internet-facing single-node Talos cluster on Hetzner for personal web services.
+Public-internet-facing three-node Talos control plane on Hetzner for personal web services.
 Kubectl context: `cynexia-vps`.
 Manifests live in `vps/`.
 
@@ -8,9 +8,10 @@ Manifests live in `vps/`.
 
 | Aspect | Detail |
 |---|---|
-| Host | Hetzner CX43 in `fsn1`, Talos single-node, managed by the same Omni instance as homelab (cluster name `vps`) |
-| Storage | One 80 GB Hetzner Cloud Volume as a Talos user volume mounted at `/var/mnt/data`; local-path-provisioner points there |
-| Network | Hetzner Private Network `10.0.0.0/24`. No public :80/:443 on the node; the Hetzner Cloud Firewall drops public inbound |
+| Host | Three Hetzner VMs, all control-plane, managed by the same Omni instance as homelab (cluster name `vps`): one CX43 in `fsn1` (`ubuntu-16gb-fsn1-2`, the storage node) plus two CX23s added August 28, 2026 — `ubuntu-4gb-fsn1-2` in `fsn1` and `ubuntu-4gb-nbg1-1` in `nbg1`. The Hetzner console shows all three in the same placement group. Shared Hetzner Private Network `10.0.0.0/24`; the nodes report internal IPs `10.0.0.2`, `10.0.0.3` and `10.0.0.4` |
+| Storage | One 80 GB Hetzner Cloud Volume, attached to the CX43 only, as a Talos user volume at `/var/mnt/data`; local-path-provisioner points there. See "Storage is single-node on purpose" below |
+| Scheduling | Workloads run on all three nodes. Omni's system patch `400-vps-control-planes-untaint` sets `cluster.allowSchedulingOnControlPlanes: true` and is labelled to the `vps-control-planes` machine set, so every control plane inherits it — there is no `NoSchedule` taint to remove when a node joins |
+| Network | No public :80/:443 on any node; the Hetzner Cloud Firewall drops **inbound** public traffic and leaves egress open. Flannel's VXLAN rides the private network rather than the public interface — see "Flannel rides the private network" below |
 | Ingress | `cloudflared` tunnel only (named tunnel `cynexia-vps`). No Traefik, no cert-manager, no MetalLB, no NFS CSI |
 | TLS / auth | Terminated at the Cloudflare edge. Cloudflare Access with email-OTP in front of every hostname |
 | Domain | `*.cynexia.com` (Cloudflare-hosted zone). Homelab's `cynexia.net` is separate and unrelated |
@@ -19,43 +20,12 @@ Manifests live in `vps/`.
 | Image updates | keel runs here (`vps/bootstrap/keel/`) and workloads carry the standard keel annotation set, except keel itself, which is digest-pinned and Renovate-bumped (see below) |
 | Apply | `make apply-vps`, gated by `check-vps-context` |
 
-The Talos user-volume patch (`vps/talos/machineconfig-patches/400-vps-user-volume-data.yaml`) selects the Cloud Volume by **size bracket** (70–100 GB): the boot disk and the Cloud Volume both report `transport=virtio`, so transport alone cannot tell them apart.
-There is no `make` target for VPS Talos patches — apply them with `omnictl apply -f <file>`.
+The Talos user-volume patch (`vps/talos/machineconfig-patches/400-vps-user-volume-data.yaml`) selects the Cloud Volume by **size bracket** (70–100 GB), because the boot disk and the Cloud Volume both report `transport=virtio` and can't be distinguished by transport alone.
+It is labelled `omni.sidero.dev/cluster-machine` to the one machine that has a Cloud Volume attached: cluster-scoped, it would push a disk selector at the two CX23s that matches nothing on their hardware.
+Note there is no `make` target for VPS Talos patches — apply them with `omnictl apply -f <file>` directly.
 
 Fresh Hetzner Cloud Volumes ship pre-formatted and Talos refuses to provision over them; wipe first with `talosctl wipe disk <dev> --method FAST`.
-
-### The local-path storage contract
-
-**This cluster's `local-path` storage lives on one machine, and a PVC bound there is reachable from nowhere else.**
-The storage node is `ubuntu-16gb-fsn1-2`, so far also the only node.
-Every `local-path` PersistentVolume carries `nodeAffinity` pinning it to that hostname, and the StorageClass binds `WaitForFirstConsumer`, so a PVC has no node until a pod using it is scheduled, and is welded to that node from then on.
-Verified 2026-08-26: all eight PVs then in existence read `[ubuntu-16gb-fsn1-2]`.
-
-That is invisible while the cluster has one node and load-bearing the moment it does not.
-**A pod with a `local-path` PVC needs a `nodeSelector` naming that hostname.**
-Without one the scheduler may place it elsewhere, and the two outcomes are a loud one and a silent one:
-
-- The PVC is **already bound** to the storage node.
-  The pod cannot reach the volume, so it sits `Pending` until whatever deadline it carries.
-  Loud, and easy to diagnose.
-- The PVC is **still unbound**.
-  This is the bad one.
-  `vps/bootstrap/local-path/kustomization.yaml` patches in a `DEFAULT_PATH_FOR_NON_LISTED_NODES` catch-all, so local-path-provisioner does not refuse an unlisted node — it creates a fresh empty directory there and binds happily.
-  The pod starts, reads and writes an empty volume that is not the Cloud Volume, and nothing errors anywhere.
-
-**A `hostPath` mount of that same directory is subject to the identical rule.**
-The nightly restic CronJob in `vps/backup/restic-cronjob.yaml` mounts `/var/mnt/data/local-path-provisioner` by `hostPath` and carries **no `nodeSelector`**, so on a multi-node cluster nothing keeps it on the storage node.
-
-The mount declares `type: Directory`, which looks like it might catch a wrong-node run and mostly will not: the catch-all above provisions into **that same path**, so any second node that has ever provisioned a `local-path` volume already has the directory and the check passes.
-You get the empty-source case instead — restic reading a tree holding, at most, that node's own stray volumes and none of the ones being backed up.
-
-That is caught, but late and at a cost.
-The job's expected-set verification gate names each snapshot by path, so the missing ones fail it by name.
-The gate runs **after** `restic backup`, so a wrong-node run has already written a snapshot of nothing into the repository, where it counts against the 7-daily / 4-weekly / 6-monthly retention, and that night has no usable backup.
-Neither the `Directory` check nor the gate has been exercised on a second node, because there has never been one — this is read off the manifest and the gate script, not observed.
-Pinning that pod is outstanding work, carried with the multi-node expansion; it is named here because a storage contract that omitted the case would be worse than none.
-
-The `keel-fresh` CronJob in the `ops` namespace is already pinned — see the comment beside its `nodeSelector`, which is where the reasoning lives in full.
+Boot disks arrive in the same state — see "Adding a control-plane node" at the end of this document.
 
 ### Image updates and keel
 
@@ -68,6 +38,56 @@ Renovate has reached this cluster since 2026-08-26, when `renovate.json` gained 
 
 Its RBAC was trimmed on August 26, 2026 (PR #68): no `secrets` rule, no `pods/portforward`.
 Verify keel's permissions with a SelfSubjectAccessReview issued with keel's own ServiceAccount token from inside the cluster — `kubectl auth can-i --as=` is meaningless through the Omni proxy, which ignores impersonation and answers as the caller.
+
+## Storage is single-node on purpose
+
+Only the CX43 has a Hetzner Cloud Volume, so `/var/mnt/data` exists on one node and every byte the nightly restic job backs up lives there.
+Three mechanisms keep it that way, and they are not interchangeable — read all three before changing any of them.
+
+1. **Existing volumes pin themselves.**
+   local-path-provisioner writes `spec.nodeAffinity.required` onto every PersistentVolume it creates, naming the node it provisioned on.
+   The scheduler honours it.
+   That is why `uptime-kuma`, `umami`'s postgres, `karakeep` and `meilisearch` cannot drift to another node, and why **none of them carries a `nodeSelector` or an affinity rule**.
+   Adding one would be redundant and would hide the real mechanism.
+   Verify with:
+
+   ```bash
+   kubectl --context cynexia-vps get pv \
+     -o custom-columns='NAME:.metadata.name,CLAIM:.spec.claimRef.name,NODE:.spec.nodeAffinity.required.nodeSelectorTerms[0].matchExpressions[0].values'
+   ```
+
+   Verified on the three-node cluster on August 28, 2026: all nine PVs then in existence read `[ubuntu-16gb-fsn1-2]`, and every stateful pod stayed on that node through a reboot and a drain of a different one.
+
+2. **New volumes are refused elsewhere.**
+   `vps/bootstrap/local-path/kustomization.yaml` names `ubuntu-16gb-fsn1-2` explicitly in `nodePathMap` and gives `DEFAULT_PATH_FOR_NON_LISTED_NODES` an empty `paths` list.
+   That refusal rests on the **code**, not on upstream's README, which documents empty `paths` only for an explicitly listed node: in local-path-provisioner v0.0.31, `provisioner.go:236` falls back to the DEFAULT entry's paths for a non-listed node and `provisioner.go:243` returns `no local path available on node %v` when that list is empty, before any helper pod is created.
+   Re-check both call sites on a provisioner upgrade.
+   With the StorageClass's `WaitForFirstConsumer` binding mode, a PVC whose consumer lands on another node stays `Pending` with a provisioning error rather than binding to unbacked-up ephemeral disk.
+
+3. **The backup job is pinned.**
+   `vps/backup/restic-cronjob.yaml` carries `nodeSelector: {kubernetes.io/hostname: ubuntu-16gb-fsn1-2}`.
+   Its `hostPath` mount already uses `type: Directory`, so an unpinned pod on the wrong node would fail to start rather than back up an empty tree — the selector removes the nightly failure, the hostPath type is what makes the failure loud.
+   Keep both.
+
+If the Cloud Volume ever moves to a different node, items 2 and 3 and the ConfigPatch scope all name that node by hand and must change together.
+
+## Flannel rides the private network
+
+The Hetzner Cloud Firewall drops **inbound** public traffic, UDP 4789 included, and every node's default route leaves through its public interface.
+Flannel's default interface selection therefore built its VXLAN mesh between public addresses, where the firewall silently blackholed it: pods on one node could not reach a Service backed by a pod on another, and CoreDNS lookups from the two new nodes timed out with nothing logging an error.
+`vps/talos/machineconfig-patches/300-vps-flannel-private-iface.yaml` fixes it by passing flannel `--iface-can-reach=10.0.0.1`, which resolves to whichever interface reaches the private network's gateway — a name-independent selector, because Hetzner does not name that interface consistently across server types.
+
+**The patch alone did not move the running cluster.**
+Omni pushed the setting into all three machine configs within seconds on August 28, 2026, but Talos does not re-render its bundled flannel manifest over an existing DaemonSet, so the live `kube-flannel` DaemonSet kept its old arguments and was hand-patched with the same single argument that day.
+The ConfigPatch is what makes the setting survive a node rebuild or a cluster recreate; the hand-patch is what made it true on the running cluster.
+
+**The two must agree, and nothing checks that they do.**
+After any Talos upgrade or node rebuild, re-read the live DaemonSet's arguments and re-apply the argument if they have diverged — the exact re-patch command is in the header comment of the patch file, which is also where the full reasoning lives.
+
+```bash
+kubectl --context cynexia-vps -n kube-system get ds kube-flannel \
+  -o jsonpath='{.spec.template.spec.containers[0].args}'
+```
 
 ## Workloads
 
@@ -95,7 +115,7 @@ Verdict enum, the image floor and why there is no `/start`: [monitoring.md](moni
 
 It has no hostname and no database, which is why it is not a row in the table above.
 It holds no ServiceAccount and no RBAC; its only peers are that ClusterIP and `uptime.cynexia.com`.
-Its two integers of state live on a 32Mi `local-path` PVC, `keel-fresh-state`, so its pod carries a `nodeSelector` for `ubuntu-16gb-fsn1-2` under the storage contract above.
+Its two integers of state live on a 32Mi `local-path` PVC, `keel-fresh-state`, so its pod carries a `nodeSelector` for `ubuntu-16gb-fsn1-2` under "Storage is single-node on purpose" above.
 
 It is a deliberate **copy** of the homelab tree rather than a shared one, script file included: a homelab pod holding a VPS kubeconfig would be a credential crossing a cluster boundary to save one file, and kustomize will not read a generator source outside its own root in any case.
 The two image floors differ because the two estates do.
@@ -128,6 +148,25 @@ It reuses the shared bypass policy rather than carrying its own.
 The verification performed at creation, and the proof commands to repeat after any Access change: [uptime-kuma.md](uptime-kuma.md#the-push-path-is-bypassed-at-the-edge).
 
 These apps are also why the `rss.cynexia.com` and `Karakeep` uptime-kuma monitors need no service-token headers: their URLs resolve to the path-scoped app, not the root one ([uptime-kuma.md](uptime-kuma.md#monitor-list)).
+
+### cloudflared runs two replicas
+
+`cloudflared` is the cluster's only ingress, so a single replica meant every hostname went dark for the length of a node reboot.
+Since August 28, 2026 it runs `replicas: 2` with `requiredDuringSchedulingIgnoredDuringExecution` pod anti-affinity on `kubernetes.io/hostname`, a surge-only rollout (`maxSurge: 1`, `maxUnavailable: 0`), and a `minAvailable: 1` PodDisruptionBudget.
+Both pods share the one named tunnel and the one credentials file, which is Cloudflare's documented pattern for connector redundancy.
+
+The anti-affinity is `required` rather than `preferred` deliberately: a `preferred` rule lets both replicas land on one node under scheduling pressure, reproducing the single point of failure while the Deployment still reports 2/2 ready.
+
+Both halves of that were exercised on August 28, 2026 and every one of the 309 one-second probe samples returned 200.
+A `talosctl reboot` of a replica's node makes no eviction call, so the PodDisruptionBudget is never consulted; what happened instead is that Talos stopped the pod gracefully, it went `Succeeded`, and the ReplicaSet placed a replacement on the third node within about ninety seconds — the 300-second `node.kubernetes.io/unreachable` toleration never came into it, because the node shut down cleanly rather than disappearing.
+A `kubectl drain` of a different replica's node is the case that does exercise the budget: the eviction went through the API, the budget held the surviving replica serving, and required anti-affinity left exactly one node the replacement could land on.
+Terminated pods from a reboot linger in `Completed` rather than being cleaned up, so a stale `0/1 Completed` cloudflared pod beside two `Running` ones is expected and is not a fault.
+
+To verify the tunnel survives a node reboot, probe an **Access-bypassed** path — a protected hostname answers `302` from the Cloudflare login page whether the origin is alive or dead:
+
+```bash
+curl -s -o /dev/null -w '%{http_code}\n' https://analytics.cynexia.com/script.js
+```
 
 ### FreshRSS WebSub push
 
@@ -221,6 +260,8 @@ A shared postgres was researched and rejected: karakeep is sqlite-only (karakeep
 Separate B2 bucket and separate restic repo from homelab.
 The restic CronJob runs at 04:00 UTC and backs up `/var/mnt/data/local-path-provisioner` by hostPath, with the same 7 daily / 4 weekly / 6 monthly retention as homelab, and `--group-by paths`.
 
+That hostPath exists on the storage node only, so the job carries a `nodeSelector` naming `ubuntu-16gb-fsn1-2` — one of the three mechanisms in "Storage is single-node on purpose" above, and the reason a three-node cluster still backs up the right tree.
+
 That flag is load-bearing: `restic forget` groups by host+paths by default, and every CronJob pod has a unique hostname, so each nightly snapshot formed a group of one and the policy kept all of them.
 Verified on homelab 2026-08-20 — 137 snapshots in 137 groups across 131 hostnames, nothing ever pruned since the backup system was built.
 The image is pinned to `restic/restic:0.17.3` (was `:latest` — an unpinned backup tool is a silent-change surface on the one job you cannot re-run).
@@ -239,6 +280,10 @@ The authoritative half is an expected-set assertion — each known snapshot pres
 A broad sweep for other stale `*.restic` files runs alongside it but is **advisory only**, so one orphaned PV directory cannot pin the gate permanently red.
 Together that turns a silently dead sidecar — or one deleted from the manifest, or an empty/unmounted volume — into a backup alert rather than years of backing up a stale or absent copy.
 
+**A passing gate prints nothing.**
+Its counts go into the healthchecks.io ping body and its findings to stderr, so on a clean run the pod log simply ends at `==> backup verification gate` and the pass signal is the job's exit status, not a line in the log.
+A hand-triggered run on August 28, 2026 confirmed that shape.
+
 **Adding a sqlite-backed service means adding its snapshot to that list.**
 The gate proves a snapshot exists, is fresh and has a schema; it does not prove the contents are complete.
 That, and why the gate runs after rather than before the backup, are in [monitoring.md](monitoring.md#the-backup-verification-gates).
@@ -252,3 +297,87 @@ uptime-kuma at `uptime.cynexia.com` is layer 3 of the detection stack.
 Its monitors are **created by hand in the UI** — v2 has no supported programmatic path — and are documented monitor-by-monitor in [uptime-kuma.md](uptime-kuma.md), including the Cloudflare Access trap (a monitor that follows the Access 302 reports UP while the origin is dead) and the healthchecks.io dead-man's-switch that watches uptime-kuma itself.
 
 Hand-created monitor config lives in `kuma.db`, which the quiesce sidecar snapshots and restic backs up nightly — so a cluster rebuild restores the monitors rather than requiring them to be retyped.
+
+## Adding a control-plane node
+
+Hetzner Cloud cannot mount a custom ISO, so a machine reaches Talos by having the Omni-generated raw image written over its boot disk from the Hetzner rescue system.
+That image carries the SideroLink join configuration, so the machine registers itself with Omni on first boot and there is no join token to paste.
+
+1. `omnictl download hcloud --arch amd64 --output /tmp/omni-media`.
+   The argument matches the media's **profile** (`hcloud`) or its **name** (`Hetzner Cloud (amd64)`) — never its resource ID `hcloud-amd64.raw.xz`, which matches nothing.
+   What lands in the output directory is named for the Omni instance and the Talos version, not for the profile: on August 28, 2026 it was `hcloud-amd64-omni-cynexia-1.13.8-88ace5.xz`.
+   Glob for it rather than assuming a name — `IMG=$(echo /tmp/omni-media/hcloud-amd64-*.xz)` — and use that variable in step 3.
+   `omnictl download` is deprecated in favour of `omni media download <preset-name>`; it still works today, so prefer the successor if the local CLI offers it.
+   The `--talos-version` default tracks the Omni instance; check it matches `omnictl get clusters`.
+   Add `--use-siderolink-grpc-tunnel` if the machine's network blocks UDP — that is an image-build option, so needing it later means re-imaging.
+2. In the Hetzner Cloud Console, open the server, click the **Rescue** tab, then **Enable rescue & power cycle** with **Operating System** `linux64`.
+   Copy the root password — it is shown once.
+   Rescue is one-shot: the next reboot boots from disk.
+3. In the rescue shell run `lsblk -o NAME,SIZE,TYPE,MODEL` first.
+   **Stop unless the output shows exactly the one boot disk you expect and nothing else** — a CX23 shows a single `sda` of roughly 40 GB with no `sdb`.
+   The commands below write to `/dev/sda` unconditionally, and if a Cloud Volume is attached, `dd` over the wrong device is unrecoverable data loss on that volume.
+   Then `wipefs -a /dev/sda`, `sgdisk --zap-all /dev/sda`, `xz -d -c "$IMG" | dd of=/dev/sda bs=4M`, `sync`, `reboot`.
+   **The two wipe commands are not optional.**
+   Fresh Hetzner disks arrive pre-formatted, and the backup GPT header at the end of the disk survives a raw-image write — that stale header is what makes Talos refuse to provision.
+   The rescue system runs from RAM, so streaming the image (`xz -d -c "$IMG" | ssh root@<ip> 'dd of=/dev/sda bs=4M'`) is preferable to `scp`-ing it into the rescue tmpfs first.
+4. Watch `omnictl get machines` until the machine appears with `CONNECTED true`.
+5. In the Omni UI: **Clusters** → **vps** → **Cluster Overview** → **Cluster Scaling**, tick the machine, click **ControlPlane**, click **Add Machines**.
+6. Wait with `omnictl cluster status vps --wait 15m`.
+7. Confirm pod-to-pod traffic actually crosses to the new node before trusting it — a Service backed by a pod on another node, or a CoreDNS lookup from a pod on the new one.
+   A broken VXLAN mesh reports no error anywhere; see "Flannel rides the private network" above for the failure this cluster hit and the argument that fixes it.
+
+**Take a snapshot before growing etcd.**
+Omni's automatic backups for `vps` run hourly to S3; assert one is genuinely fresh with `omnictl get etcdbackupstatus -o yaml`, and take a local copy as well so recovery does not depend on Omni being healthy.
+Never run `omnictl get etcdbackups3configs` — it prints the S3 credentials in plaintext (siderolabs/omni#3318).
+
+```bash
+omnictl get etcdbackupstatus -o yaml | grep -E 'id:|lastbackuptime|lastbackupstatus|error'
+install -m 600 /dev/null /tmp/vps-etcd-pre-expansion.db
+talosctl -n ubuntu-16gb-fsn1-2 etcd snapshot /tmp/vps-etcd-pre-expansion.db
+```
+
+That file contains every Secret in the cluster.
+Keep it at mode 600, never print or copy it, and delete it once the new member is verified healthy.
+
+**Add one machine at a time and check etcd between them.**
+A two-member etcd has quorum 2 and tolerates zero failures, so the window between the first and second join is strictly less available than a single-node cluster.
+Close it in the same session — and if you cannot, remove the machine you just added rather than leaving the cluster at two.
+
+```bash
+omnictl talosconfig --cluster vps --merge
+talosctl config context cynexia-vps
+talosctl -n ubuntu-16gb-fsn1-2 etcd members
+talosctl -n ubuntu-16gb-fsn1-2 service etcd
+talosctl -n ubuntu-16gb-fsn1-2 etcd alarm list
+```
+
+**Check what the new machine's rendered config contains while it is still installing**, before it reaches etcd — a cluster-scoped ConfigPatch reaches every machine the moment it joins, and a `UserVolumeConfig` whose disk selector matches nothing is the case to watch for here.
+Read the **redacted** resource: `omnictl get clustermachineconfig` is `PermissionDenied` for every user role, including Admin, and `redactedclustermachineconfig` is the readable form — which is also the safer one, since a rendered machine config carries the cluster CA private key.
+
+```bash
+omnictl get redactedclustermachineconfig <machine-uuid> -o yaml | grep -c UserVolumeConfig
+```
+
+Expected `0` for a machine with no Cloud Volume.
+A non-zero count means a patch is over-reaching: remove the machine from the cluster in **Cluster Scaling** and fix the patch scope first.
+
+If Omni reports that Talos refused to install on a dirty disk, wipe it through the Omni-wide talosconfig (no `--cluster`, which also reaches machines belonging to no cluster) and reset the server from the Hetzner console so Talos retries.
+**Note the addressing form:** machines in a cluster are addressed by node name, machines that belong to no cluster have no node name and are addressed by machine UUID.
+
+```bash
+omnictl talosconfig --merge
+talosctl -n <machine-uuid> get disks
+talosctl -n <machine-uuid> wipe disk sda --method FAST
+```
+
+Add `-i` to that last command if it is refused because the machine is still in maintenance mode.
+
+**`talosctl health` cannot finish against this cluster, and that is not a fault.**
+Every Talos-side check passes — etcd healthy, members consistent and all control plane, apid ready, no diagnostics, kubelet healthy, boot sequence finished — and then the run stops at `waiting for all k8s nodes to report` with `PermissionDenied`, followed by `DeadlineExceeded`.
+Omni withholds that path from this identity regardless of role.
+Read the Kubernetes half directly instead, which is stronger evidence anyway:
+
+```bash
+kubectl --context cynexia-vps get nodes -o custom-columns='NAME:.metadata.name,SCHEDULABLE:.spec.unschedulable,STATUS:.status.conditions[-1].type,TAINTS:.spec.taints'
+kubectl --context cynexia-vps get --raw='/readyz?verbose' | tail -1
+```
