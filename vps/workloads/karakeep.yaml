@@ -55,11 +55,22 @@ metadata:
   # `match-tag: "true"` on the pinned v1.41.0 only refreshed the digest, so this
   # was frozen while looking covered.
   #
-  # meilisearch is karakeep's search backend and its index format is coupled to
-  # karakeep's client. It gets bumped when a karakeep release says so, in the
-  # update session — not on its own six-hourly poll. Renovate watches vps/**
-  # and will propose the bump; the session decides whether karakeep is ready
-  # for it.
+  # WHY v1.41.0 AND NOT THE LATEST. meilisearch is karakeep's search backend,
+  # and the pin is a PAIRING with karakeep rather than a distrust of
+  # Meilisearch. karakeep's own docker/docker-compose.yml pins
+  # getmeili/meilisearch:v1.41.0, so that is the combination upstream tests;
+  # v1.53.1 is untested against karakeep (checked August 28, 2026).
+  # renovate.json carries the same hold as an `allowedVersions: "<1.42"` cap
+  # with its reason, so v1.41 patches still arrive and the untested bump stops
+  # reappearing every session. Move the cap when karakeep moves its compose
+  # pin, not before, and read that compose file at the time rather than
+  # trusting this note.
+  #
+  # Moving it is not a tag edit. Meilisearch does not convert a v1.41 index on
+  # startup, so the upgrade needs a one-time `--upgrade-db` argument on this
+  # container, removed in a follow-up once the index is converted. The
+  # alternative is dropping the volume and letting karakeep rebuild the index,
+  # which the operator has accepted: it holds a few thousand pages.
 spec:
   replicas: 1
   selector:
@@ -86,12 +97,16 @@ spec:
           # here: Meilisearch's `mustRestart` state literally asks to be
           # recycled (spec §4 P2).
           #
-          # Pin-sensitive: from v1.43.0 a successful POST /tasks/compact sets
-          # a static AtomicBool that is never reset, after which /health
-          # returns 500 permanently until the process restarts. We are pinned
-          # to v1.41.0 so this is latent, but a Renovate bump past v1.43.0
-          # would turn a routine compaction into a liveness restart loop.
-          # Re-check upstream before accepting that bump.
+          # From v1.43.0 a successful POST /tasks/compact puts /health into
+          # that `mustRestart` state. Upstream did that DELIBERATELY, in
+          # Meilisearch pull request 6346 (merged April 22, 2026), so that
+          # Meilisearch Cloud restarts an instance after compaction. It costs
+          # ONE restart, not a loop: the flag is cleared when the process
+          # starts again, and a loop would need compaction to re-run on every
+          # start. Nothing in this estate calls /tasks/compact — it is an
+          # administrative endpoint and karakeep does not issue it — so on
+          # v1.41.0 the behaviour is not reachable, and past v1.43.0 it would
+          # only fire if someone ran a compaction by hand.
           startupProbe:
             httpGet: { path: /health, port: 7700 }
             periodSeconds: 10
