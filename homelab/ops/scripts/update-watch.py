@@ -447,8 +447,23 @@ def partition(items):
 # The ITEM pattern requires a datasource word before `package`, so the section's
 # own heading -- "failed to look up the following dependencies" -- does not
 # match it and cannot inflate the count by one.
+#
+# THE SECTION PATTERN IS A UNION OF TWO MARKERS, because neither is
+# unconditional. The blockquote above comes from Renovate's
+# getDepWarningsDashboard, which returns '' when renovate.json sets
+# suppressNotifications: ["dependencyLookupWarnings"]. The one-line
+# `Package lookup failures` bullet in the issue's "## Repository Problems"
+# section comes from logger.warn('Package lookup failures') via
+# extractRepoProblems, a path that suppression does not gate. Under suppression,
+# though, that bullet reaches the body only when another caller (a pull request
+# body, onboarding, reconfigure) ran getDepWarnings first in the same run -- so
+# the two are kept as a union and neither may be dropped for the other. The
+# alternation is on the literal bullet TEXT, not on the "## Repository Problems"
+# heading, so a deprecation or config problem written into that same section
+# does not fire this verdict.
 LOOKUP_FAILED_SECTION = re.compile(
-    r"failed to look up the following dependencies", re.IGNORECASE)
+    r"failed to look up the following dependencies"
+    r"|Package lookup failures", re.IGNORECASE)
 LOOKUP_FAILED_ITEM = re.compile(
     r"Failed to look up\s+\S+\s+package\s", re.IGNORECASE)
 

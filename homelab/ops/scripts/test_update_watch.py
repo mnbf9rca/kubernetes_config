@@ -626,6 +626,40 @@ class TestLookupFailures(unittest.TestCase):
         self.assertEqual(verdict, uw.V_LOOKUP_FAILED)
         self.assertEqual(facts["lookup_failures"], 0)
 
+    def test_the_repository_problems_bullet_alone_is_a_determinate_red(self):
+        # The second half of the union. `suppressNotifications:
+        # ["dependencyLookupWarnings"]` deletes the blockquote, but the
+        # "## Repository Problems" bullet comes from extractRepoProblems, which
+        # that setting does not gate. A body carrying only the bullet still
+        # goes red, with a count of 0 -- no item line to parse.
+        dash = self._plain_dash()
+        dash["body"] = ("## Repository Problems\n"
+                        "\n"
+                        "- `WARN: Package lookup failures`\n")
+        verdict, facts = uw.decide([], dash, [], self.now)
+        self.assertEqual(verdict, uw.V_LOOKUP_FAILED)
+        self.assertEqual(facts["lookup_failures"], 0)
+        # The alternation is on the bullet TEXT, not on the heading: another
+        # problem written into the same section is not a lookup failure.
+        other = self._plain_dash()
+        other["body"] = ("## Repository Problems\n"
+                         "\n"
+                         "- `WARN: Using a deprecated preset`\n")
+        self.assertIsNone(uw.count_lookup_failures(other))
+
+    def test_the_blockquote_still_counts_items_beside_the_bullet(self):
+        # The regression the union could hide: matching the bullet first must
+        # not collapse the count when both markers are present.
+        dash = self._dash(packages=("ghcr.io/keel-hq/keel",
+                                    "docker.io/library/redis"))
+        dash["body"] = ("## Repository Problems\n"
+                        "\n"
+                        "- `WARN: Package lookup failures`\n"
+                        "\n") + dash["body"]
+        verdict, facts = uw.decide([], dash, [], self.now)
+        self.assertEqual(verdict, uw.V_LOOKUP_FAILED)
+        self.assertEqual(facts["lookup_failures"], 2)
+
     def test_it_outranks_the_green_pull_request_verdicts(self):
         # A dependency Renovate cannot look up proposes nothing, so the
         # pull-request count is an undercount by exactly the frozen images.
