@@ -16,7 +16,8 @@ Targets that need secrets are split in two: a **public target** that runs the pr
 `op run` resolves the `op://` references in `.env.tpl` against the service-account token and injects the real values into the environment of that **one child process**; envsubst substitutes them into the manifests inside that same child.
 
 Because the token itself lives in the shell environment once direnv has exported it, `op run` — and so every build, diff and apply target — works from **any directory in that shell, git worktrees included**.
-There is no need to re-run `direnv allow` in a worktree, or to avoid worktrees for work that needs `op` (operator ruling, 2026-08-27).
+There is no need to avoid worktrees for work that needs `op` (operator ruling, 2026-08-27).
+direnv keys its allow record on path *and* content, though, so a fresh worktree's committed `.envrc` starts unallowed: if direnv reports `.envrc is blocked` on entering one, run `direnv allow` there once.
 
 Why this shape:
 

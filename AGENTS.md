@@ -79,7 +79,8 @@ The rules that must not be broken:
   `.envrc` exports **only** `OP_SERVICE_ACCOUNT_TOKEN` — no secret value ever enters the ambient environment.
   The `Makefile` defines `OP_RUN := op run --env-file=.env.tpl --`, and every build/diff/apply target runs its guards in the parent shell then re-enters make under it, so values exist inside one child process only.
   **The old `set -a` + `op inject` block in `.envrc` is gone deliberately — do not restore it.**
-  Because `OP_SERVICE_ACCOUNT_TOKEN` lives in the shell environment once direnv has exported it, `op run` — and therefore every build/diff/apply target — works from **any directory in that shell, git worktrees included**: no re-running `direnv allow` in a worktree, no avoiding worktrees for `op`-dependent work (operator ruling, 2026-08-27).
+  Because `OP_SERVICE_ACCOUNT_TOKEN` lives in the shell environment once direnv has exported it, `op run` — and therefore every build/diff/apply target — works from **any directory in that shell, git worktrees included**: no avoiding worktrees for `op`-dependent work (operator ruling, 2026-08-27).
+  direnv keys its allow record on path *and* content, though, so a fresh worktree's committed `.envrc` starts unallowed: if direnv reports `.envrc is blocked` on entering one, run `direnv allow` there once.
 - **Never commit plaintext secret values.**
   `${VAR}` placeholders only.
 - **`op run` masks stdout, not env vars** — corrected 2026-08-20; the previous claim in this file was a misdiagnosis.
