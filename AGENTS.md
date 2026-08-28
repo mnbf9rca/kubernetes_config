@@ -320,4 +320,4 @@ The rules that must not be broken:
 `legacy-microk8s/` contains the original flat-layout microk8s manifests and `no_longer_used/` holds retired manifests.
 Both are **frozen reference only** — do not add new files to either.
 `legacy-microk8s/` exists to be deleted: remove it once the Talos rebuild is fully operational and nothing is still cross-referenced out of it.
-`README.md` at the repo root still describes the retired microk8s/rancher setup and does not reflect the current clusters.
+`README.md` at the repo root now describes the current Talos clusters (corrected 2026-08-28; it long described the retired microk8s/rancher setup).
