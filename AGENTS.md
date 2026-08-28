@@ -134,13 +134,14 @@ The rules that must not be broken:
   A PR branch is applied to the cluster and verified healthy **before** the PR merges: `master` records what has been successfully deployed, never intent.
   Apply from the branch checkout (the preflight guards still run), confirm the workload is healthy, then the operator merges.
   Never merge-then-apply.
-  **This covers every change, including ones with nothing to apply to a cluster** — a runbook, a skill, a guidance edit, a documentation-only PR.
+  **This covers a change to a procedure someone follows** — a runbook, a skill, a gate, guidance that governs a task — including one with nothing to apply to a cluster.
   For those, the apply is *running the thing on a real session*: work the runbook end to end, follow the guidance through the task it governs, exercise the skill.
   Reading a procedure proves only that it parses; running it is what finds the step that names a file that moved, the assertion that cannot be satisfied from the tool available, the count that is wrong.
   A prose change that has only been read is intent, and `master` does not record intent.
   Merge it when the session that exercised it is finished, so the corrections it turned up land on the same branch rather than in a follow-up PR.
-  It follows that a session driven by a runbook merges only what that runbook prescribes: everything the session invents — a runbook correction, a guard, a rule — goes on the findings branch and merges once, after review, and the test is "did the runbook ask me to make it?", not "is it good?".
-- **A branch held open across a session is rebased before every commit to it, not only before an apply.**
+  A change that governs no procedure — a records update, a corrected reference, wording — merges on review.
+  It follows that a session driven by a runbook merges only what that runbook prescribes: everything the session invents — a runbook correction, a guard, a rule — goes on the findings branch, which merges once, after the operator has reviewed it, and the test is "did the runbook ask me to make it?", not "is it good?".
+- **A branch held open across a session is rebased onto a freshly fetched `origin/master` before every commit to it, not only before an apply.**
   A branch that lacks a commit presents its absence as a deletion, so a stale branch is a revert of everything merged since it was cut — documentation-only branches included, because merging one still rewrites the files it is behind on.
   The rebase-before-apply rule does not cover this: a branch that never reaches a cluster still reaches `master`.
   The check is one command, read before you commit and again before you merge:
