@@ -17,8 +17,10 @@ Both orderings reach the same gate, so neither is unsafe on its own.
 The problem is that the estate prints two different procedures for the same action within one minute of each other, and an agent following the epilogue pushes a branch it has not yet proved deploys cleanly.
 Guidance that disagrees with itself gets resolved by whichever copy the reader saw last.
 
-**Proposed fix:** change the epilogue in the `health-upgrade` target to match the skill, so the push follows verification.
-Check `make hindsight-upgrade` for the same block, which was written from the same template.
+`make hindsight-upgrade` prints the same shape of block and gets it right: its step 6 is the push, after the apply and the rollout check, with the merge at step 7.
+So `health-upgrade` is the outlier, not the pattern.
+
+**Proposed fix:** change the epilogue in the `health-upgrade` target to match `hindsight-upgrade` and the skill, so the push follows verification.
 
 ## 2. `apply-homelab` reports `jottacloud-backup-scheduled` as `configured` on a converged tree
 
@@ -29,7 +31,12 @@ So the tree and the cluster agree, and the `configured` is server-side apply ado
 `AGENTS.md` already tells the reader that `configured` rather than `unchanged` is expected and is not drift, but its list names only Secrets, some persistent volumes and the cert-manager webhooks.
 An agent that has been told to treat anything outside that list as another branch's work being reverted will stop on this one, every time.
 
-**Proposed fix:** add `cronjob/jottacloud-backup-scheduled` to that list in `AGENTS.md`, and confirm first whether any other resource shows the same behavior by applying twice against a converged tree and reading the second run.
+A second apply during this session, for pull request 65, showed the same behavior for `cronjob/cloudflare-analytics`.
+It reported `configured` while appearing in no diff.
+So this is a class of resource, not one resource.
+
+**Proposed fix:** find every resource in the class by applying twice against a converged tree and reading the second run, then add them to that list in `AGENTS.md`.
+`cronjob/jottacloud-backup-scheduled` and `cronjob/cloudflare-analytics` are the two seen so far.
 
 ## 3. Gate 2 and gate 8 collide when the reader is an agent — FIXED ON THIS BRANCH
 
@@ -89,7 +96,10 @@ Only the local cleanup failed, because `gh` tries to check out the default branc
 This matters because the operator asked for one worktree per pull request, and that message reads like the merge failed.
 An agent that believes it can retry the merge, or that treats this as a blocker, does the wrong thing at the one point in the runbook where `master` and the cluster are supposed to agree.
 
-**Proposed fix:** note the behavior in the skill's Step 2, alongside the merge command.
+Running the same command from a worktree that is not the pull request's own worktree avoids it entirely.
+Pull request 65 merged cleanly that way later in the same session.
+
+**Proposed fix:** note in the skill's Step 2 that `gh pr merge` runs from outside the pull request's worktree.
 Confirm the outcome with `gh pr view <n> --json state,mergedAt` rather than trusting the exit status, then remove the worktree with `git worktree remove` and delete the local branch.
 
 ## 6. `renovate/stability-days` is not enforced, and enforcing it has a trap
@@ -118,3 +128,24 @@ Enforcement in the ruleset does not replace reading the check during a session.
 Read it before every merge:
 
     gh pr view <n> --repo mnbf9rca/kubernetes_config --json statusCheckRollup
+
+## 7. A pgvector image bump leaves the extension in the database behind
+
+Pull request 65 moved `pgvector/pgvector` from `0.8.1-pg17` to `0.8.6-pg17`.
+After the rollout, the database reports:
+
+    vector installed=0.8.1 available=0.8.6 server=17.11
+
+The image ships the 0.8.6 shared library and its SQL scripts, but the `vector` extension inside the `hindsight` database stays at the version it was created with until somebody runs `ALTER EXTENSION vector UPDATE`.
+The PostgreSQL server itself moved from 17.6 to 17.11 in place, which is a patch release within the same major and needs no action.
+
+The hindsight canary passed after the upgrade, retaining and recalling with HTTP 200 and one result, so nothing is broken today.
+The concern is drift: every future pgvector bump widens the gap between the library and the extension, and new index types or functions in later versions stay unavailable while the estate believes it is running the version in the manifest.
+
+This session did not run the `ALTER`.
+It is a schema change to the store holding an agent's memory, the runbook does not call for it, and the pull request only asked to move an image tag.
+The pre-upgrade dump `pre-upgrade-20260828153152` covers it if it is done later.
+
+**Proposed fix:** decide whether the extension should track the image.
+If it should, add the `ALTER EXTENSION vector UPDATE` to the hindsight upgrade runbook in `docs/operations/hindsight.md`, after the rollout and before the canary, and state that the pre-upgrade dump is its rollback.
+Then run it once to close the current 0.8.1 to 0.8.6 gap.
