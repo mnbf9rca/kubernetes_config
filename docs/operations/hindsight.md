@@ -43,7 +43,7 @@ retain, delete, bank delete, import and export — and not a viewer.
 **Isolation between profiles is logical, not cryptographic.** Every operation is scoped
 to a bank, and banks never share memories, so the `emh` profile writing to
 `hermes-emh` cannot reach another profile's `hermes-<name>`. But one tenant key spans
-every bank. That is accepted here because every profile belongs to the same operator. If
+every bank. That is accepted because every profile belongs to the same operator. If
 that ever stops being true, the escalation is a custom tenant extension keyed per bank,
 not a Traefik middleware.
 
@@ -67,7 +67,7 @@ unreviewed.
 
 The Job's completion **is** the verification. The dump script publishes an artifact only
 after asserting a `CREATE TABLE` count of at least one and a byte-size floor, because
-`pg_dump` exits 0 against an empty database and the exit code alone is a lie. The target
+`pg_dump` exits 0 against an empty database, so the exit code alone is a lie. The target
 adds no second, weaker copy of that assertion.
 
 Then, by hand:
@@ -102,7 +102,7 @@ and a skewed pair is a combination nobody has tested. Keep the API pin at or abo
 it, and 0.5.0+ is what makes the canary's fixed sentinel deduplicate instead of growing
 the bank.
 
-**PostgreSQL major versions are not a tag edit.** Renovate is configured to refuse them
+**PostgreSQL major versions are not a tag edit.** Renovate refuses them
 for this tree, because a grouped pull request quietly carrying one would be a data-loss
 trap that `make hindsight-upgrade` could not catch: the dump would succeed, and the new
 major would refuse the old data directory. A major is a dump, a fresh volume and a
@@ -122,7 +122,7 @@ Nothing on the VM reads the server's reported version to choose a client, and no
 Four facts support that:
 
 1. **Upstream's `hindsight-client==0.6.1` is a supply-chain policy, not a compatibility statement.** NousResearch exact-pin every dependency and age each one 14 days before adopting it. The pin says "this version has been vetted", not "this version is what the server needs".
-2. **The wire surface is additive across the gap.** Comparing 0.6.1 against 0.9.x, all 49 of the paths 0.6.1 calls are still present, and the authentication scheme is unchanged. Nothing the old client sends has been removed or renamed.
+2. **The wire surface is additive across the gap.** Comparing 0.6.1 against 0.9.x, all 49 paths 0.6.1 calls are still present and the authentication scheme is unchanged. Nothing the old client sends has been removed or renamed.
 3. **The plugin's version check is a floor, not an equality.** It refuses a client below its minimum and accepts anything at or above it, so a client older than the server is a supported configuration rather than an accident.
 4. **The server is the side that must stay current, and it does.** The homelab deployment is under Renovate, keeps its API and control-plane images on the same tag, and holds the 0.9.1 floor. Client-to-server skew is therefore bounded by the server moving forward, and it is accepted.
 
@@ -180,8 +180,8 @@ Migrations reconcile on startup. Then verify, in this order:
 ### The restore drill
 
 **Nothing in the nightly checks proves a dump restores.** The restic gate proves it
-exists, is fresh, is above a size floor and contains at least one `CREATE TABLE`. Those
-are shape assertions. The only thing that proves restorability is restoring, so do it on
+exists, is fresh, is above a size floor and contains at least one `CREATE TABLE` — all
+shape assertions. The only thing that proves restorability is restoring, so do it on
 purpose, roughly quarterly, into a scratch database rather than the live one:
 
 ```sh
@@ -200,8 +200,8 @@ kubectl -n hindsight exec deploy/hindsight-postgres -- \
 
 A table count in double figures is the pass. Zero, or a `psql` that stopped on an error,
 means the artifact the gate has been calling healthy is not a recovery point. Record the
-date of each drill in the pull request that notes it, so "when was this last checked" has an
-answer.
+date of each drill in the pull request that notes it, so "when was this last checked" has
+an answer.
 
 ## Rotating the tenant API key
 
@@ -209,7 +209,7 @@ The tenant key is one value with four consumers: the API validates against it, t
 control-plane container presents it to the API, the canary authenticates with it, and
 the Hermes profiles on VM 103 send it on every request.
 
-**It is deliberately stored twice, and the duplication is the vault-visibility split rather than an accident.**
+**It is deliberately stored twice. The duplication is the vault-visibility split, not an accident.**
 
 | Vault item | Read by | How |
 |---|---|---|
@@ -238,9 +238,9 @@ Rotating means:
 
 Step 5 is not optional and is the whole reason this section exists. Hermes fails open:
 with a stale key it keeps working, injects no memories, and drops every retain with a
-log warning nobody reads. The canary will catch a server that stopped accepting the new
+log warning nobody reads. The canary catches a server that stopped accepting the new
 key within about 90 minutes — but the canary uses the key from the cluster Secret, so it
-cannot see a VM that is still sending the old one. Only the smoke test can.
+cannot see a VM still sending the old one. Only the smoke test can.
 
 The same applies to the control-plane access key, minus the VM: rotate
 `op://Homelab/hindsight/cp-access-key`, apply, restart, log in again.
@@ -330,7 +330,7 @@ alongside the built-in one. Running the command strips `hindsight_retain`,
 `hindsight_recall` and `hindsight_reflect` from the agent.
 
 Confirmed live on 2026-08-24: before `hermes -p emh tools enable memory --platform cli`
-the three tools were genuinely absent; after it, `hindsight_recall` executed and returned
+the three tools were absent; after it, `hindsight_recall` executed and returned
 a memory retained in an earlier session. This is upstream hermes-agent issues #30979 and
 #46108, both unfixed — the candidate fix, PR #30991, is open and unmerged.
 
@@ -444,7 +444,7 @@ went with the wrapper, and the client is no longer pinned from here at all — s
 Deployment's own liveness probe and the canary, both in-cluster, which is why the endpoint
 is unauthenticated. Keep the API pin at or above 0.9.1 for the probe's sake, not the VM's.
 
-An uptime-kuma **HTTP** monitor still could not do the canary's job: kuma runs on the VPS,
+An uptime-kuma **HTTP** monitor could not do the canary's job: kuma runs on the VPS,
 which has no route to any `*.cynexia.net` address. A **push** monitor reverses the
 direction — the canary pod calls outward to `uptime.cynexia.com` through the Access
 bypass — which is why the reporting side could move to kuma while the probing side could
@@ -482,8 +482,8 @@ Nothing detected it, and that gap is the part worth keeping: the canary authenti
 the cluster's own copy of the tenant key and passed throughout, a chat turn returns 200
 because the write is on a background path the response does not wait for, and `/health`
 checks database connectivity rather than auth validity. **A profile that has retained
-nothing looks identical to a healthy one from every check in this estate.** The only thing
-that would have caught it is the journal grep that is now a step of
+nothing looks identical to a healthy one from every check in this estate.** Only the
+journal grep would have caught it, and that is now a step of
 [the update runbook's Verify](hermes-vm-updates.md#verify).
 
 If a 401 appears again, restart that profile's gateway first — a reference the running

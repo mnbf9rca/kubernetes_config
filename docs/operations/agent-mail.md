@@ -95,10 +95,10 @@ every agent profile.
 6. Confirm the profile's `config.yaml` holds the `${MAIL_PASSWORD}`
    placeholder, not a value.
 
-Decommissioning is a couple of clicks: delete the user in the Purelymail
-console, `hermes -p <profile> mcp remove mail`, remove the two secret
-mappings, delete the 1Password item. Deleting the user permanently
-removes the mailbox contents.
+To decommission an agent: delete the user in the Purelymail console, run
+`hermes -p <profile> mcp remove mail`, remove the two secret mappings, and
+delete the 1Password item. Deleting the user permanently removes the
+mailbox contents.
 
 ### Rules that must not be broken
 
@@ -154,19 +154,20 @@ credential, a wedged mcp-email-server process, a DNS record drift, or
 send-cap exhaustion all surface only as tool errors inside agent
 sessions. The designed-but-unbuilt detector is a round-trip canary (a
 cron on the hermes VM: send from a canary mailbox to itself, poll IMAP,
-report the outcome) — see the archived spec before building it. Note that
-the archived spec says healthchecks.io; since August 26, 2026 new scheduled
-work in this estate drives an uptime-kuma **push** monitor instead, and only
-four checks remain at healthchecks.io
+report the outcome) — see the archived spec before building it. The archived
+spec says healthchecks.io; since August 26, 2026 new scheduled work in this
+estate drives an uptime-kuma **push** monitor instead, and only five checks
+remain at healthchecks.io
 ([monitoring.md](monitoring.md#healthchecksio-checks)). The hermes VM is
 off-cluster, so such a canary would push outbound to `uptime.cynexia.com`
 through the same Access bypass the in-cluster jobs use.
 
-**There is no backup.** Purelymail's own durability is the only copy of
-agent mail, `delete_email` is permanent, and the hermes VM itself has no
-backup either ([homelab.md](homelab.md) records its rebuild-not-restore
-posture). Accepted deliberately; revisit if agent mail starts carrying
-anything worth keeping.
+**There is no backup of agent mail.** Purelymail's own durability is the
+only copy and `delete_email` is permanent. Nothing on the hermes VM holds
+mail, so the nightly `hermes backup` zip
+([homelab.md](homelab.md#what-hermes-backup-captures)) covers the profile
+config and the mcp-email-server index but no messages. Accepted
+deliberately; revisit if agent mail starts carrying anything worth keeping.
 
 ## Migration path
 

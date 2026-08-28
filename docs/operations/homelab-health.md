@@ -6,8 +6,8 @@ InfluxDB → Grafana, plus a Claude MCP connector. It was added in Phase 0/1 as 
 
 The namespace also hosts one workload that is **not** health data: the Cloudflare
 analytics ingest ([below](#cloudflare-analytics-ingest)). It shares this InfluxDB and
-Grafana rather than standing up a second pair. That is a deliberate trade — infrastructure
-telemetry living in the same database as personal health data — taken because a second
+Grafana rather than standing up a second pair — a deliberate trade of infrastructure
+telemetry living in the same database as personal health data, taken because a second
 InfluxDB for ~3,500 rows a day is not worth the operational surface. It stays in its own
 bucket and its own measurements.
 
@@ -35,12 +35,13 @@ PSA warnings — a hardening pass to `restricted` is a queued follow-up.
 - **`garmin-grafana` is digest-pinned to a main-branch build**
   (`thisisarpanghosh/garmin-fetch-data@sha256:8b7955d3...`), not a tagged release.
   Release `v0.5.0` crashes with an `AttributeError` on `client.profile` when
-  `TAG_MEASUREMENTS_WITH_USER_EMAIL` is set — fixed upstream post-release but not yet in
-  a tagged build. Renovate is **disabled** for this image in `renovate.json`
-  `packageRules`: a digest-tracking rule would eventually propose bumping straight to
-  the broken `v0.5.0` build, and there's no way to encode "this specific release is bad".
-  Exit path is manual — when upstream publishes a release newer than `v0.5.0`, re-enable
-  the Renovate rule and re-pin the manifest as `tag@digest`.
+  `TAG_MEASUREMENTS_WITH_USER_EMAIL` is set — fixed upstream post-release but not in
+  a tagged build. A `renovate.json` `packageRule` puts this image on
+  **`dependencyDashboardApproval`**: there is no way to encode "this specific release is
+  bad", so an unapproved rule would propose bumping straight to the broken `v0.5.0`
+  build. Dashboard-only rather than disabled, so an upstream fix still surfaces. The exit
+  path is manual — when upstream publishes a release newer than `v0.5.0`, approve the
+  bump from the dashboard and re-pin the manifest as `tag@digest`.
 - **`apple-health-ingester` memory limit is 1Gi**, not the original 256Mi: large Health
   Auto Export batch exports OOMKilled it at 256Mi.
 - **`influx-backup` runs on `alpine/k8s:1.36.0`**, version-matched to the cluster's
@@ -75,10 +76,9 @@ uptime-kuma monitor through, and `allow_cynexia_com`, which requires
 The `hermes-app` Access app is separate: a Service Auth policy holding the Hermex
 token, plus the same `allow_cynexia_com` policy for browsers.
 The dashboard runs its own mandatory login behind that (basic auth, forced by its
-non-loopback bind), so Access is defence in depth, not the only gate — but the
+non-loopback bind), so Access is defense in depth, not the only gate — but the
 Access gate still **fails open** like mcp's does, and the same post-rebuild rule
-applies: verify the edge challenges an unauthenticated client before trusting the
-hostname. Hermes Desktop's remote-attach cannot pass Access's browser login (no
+applies. Hermes Desktop's remote-attach cannot pass Access's browser login (no
 custom-header support upstream); it uses the tailnet path
 (`http://hermes.cynexia.net:9119` via the OPNsense subnet route) instead.
 
@@ -95,11 +95,11 @@ custom-header support upstream); it uses the tailnet path
   redirect a native client cannot complete. The cost is that the token headers must be on
   **every** request including the first `GET /health`; Hermex is built for exactly that,
   taking custom headers on the connect screen before the first probe.
-- **No IP bypass, neither the home address nor the VPS.** The VPS one is simply wrong —
+- **No IP bypass, neither the home address nor the VPS.** The VPS one is wrong outright —
   nothing there calls the WebUI. The home one is the tempting mistake: Hermex sends the
   token on every network, so a home bypass buys the app nothing, while creating a
   silently divergent path where it works on home WiFi with a broken or revoked token and
-  fails the moment the phone steps onto cellular. That is the worst failure shape for a
+  fails the moment the phone moves onto cellular. That is the worst failure shape for a
   mobile client — a misconfiguration that only appears away from where it can be
   debugged.
 - `options_preflight_bypass` is on, because an unadorned CORS preflight carries no token
@@ -123,7 +123,7 @@ through an interactive shell or by full path):
   unit. cloudflared runs off-host, so uvicorn must be told to trust
   `X-Forwarded-*` headers or cookies lose their `Secure` flag. The wildcard
   means any LAN client can spoof forwarded headers (they feed the login
-  rate-limiter and audit log); accepted for now — tighten to the cluster
+  rate-limiter and audit log); accepted — tighten to the cluster
   egress IP if it matters.
 
 `.bak-hermes-tunnel` copies of both edited files sit beside the originals.
@@ -159,8 +159,8 @@ never run `cloudflared tunnel login` that file does not exist, the target aborts
 `cloudflared` is not in `make check-tools`, so nothing warns first. Either run
 `cloudflared tunnel login` once, or create the single record through the Cloudflare API
 (zone `2bf4553c3f994e36202b5f574577d2e5`), which is also the only way to set the record
-comment this zone uses as its provenance note. `hermes-app.cynexia.com` was created that
-way.
+comment this zone uses as its provenance note. `hermes-app.cynexia.com` was created
+that way.
 
 To recreate the credentials Secret, `make create-health-cloudflared-secret`.
 
@@ -288,7 +288,7 @@ The read token has to be **replaced**, not amended: InfluxDB offers no way to ad
 to an existing auth, so Grafana and the MCP connector cannot see `cloudflare` until a new
 token exists. Order matters — paste, `make apply-homelab`, restart `grafana` and
 `influxdb-mcp`, and only **then** `influx auth delete` the superseded auth. Delete it first and
-you lock Grafana and the connector out until the new Secret has actually rolled.
+you lock Grafana and the connector out until the new Secret has rolled.
 
 ## Backups and restore
 
@@ -337,14 +337,14 @@ Nothing is published unverified. The copy is written to a `.tmp-` staging file, 
 and must return exactly `ok` from `PRAGMA integrity_check`, contain schema objects and
 clear a byte floor before it is `os.replace`d into position — so a failed run leaves last
 night's artifact intact rather than truncating it. A `.backup` of an empty or truncated
-source succeeds and yields a structurally valid, current-mtime, *empty* database, which is
-precisely what a freshness-and-size gate cannot tell from a good one; the read-back is what
-catches it.
+source succeeds and yields a structurally valid, current-mtime, *empty* database, which a
+freshness-and-size gate cannot tell from a good one; the read-back is what catches it.
 
-The size floor is a **placeholder** (64 KiB, in `MIN_BYTES`), matched by the gate row in
-`homelab/backup/restic-cronjob.yaml`. The first nightly run reports the real size as
-`grafana_kib=` in the `health-influx-backup` heartbeat message — raise both to roughly an
-order of magnitude below it then, as every other floor in the gate was set.
+The size floor is **measured**: the 2026-08-24 seed run published 2,039,808 bytes and 273
+schema objects, so `MIN_BYTES` is 204800 — roughly an order of magnitude below it, the
+same convention as every other floor in the gate. The `grafana-dump` row in
+`homelab/backup/restic-cronjob.yaml` carries the same number; raise the two together. Each
+run reports the current size as `grafana_kib=` in the `health-influx-backup` heartbeat.
 
 **Adding a bucket means adding it to that list**, or it is silently never exported — the
 same class of bug as the VPS backup gate's expected-set assertion
@@ -458,8 +458,8 @@ apply them. Run it from the `cynexia-homelab` context:
 
     make health-upgrade
 
-It creates a one-off Job from `cronjob/influx-backup`, waits for it, tails the log, and
-then stops. It applies nothing, merges nothing and edits no pin —
+It creates a one-off Job from `cronjob/influx-backup`, waits for it, tails the log, then
+stops. It applies nothing, merges nothing and edits no pin —
 checking out the Renovate pull request, rebasing it, reading the diff, applying, verifying,
 merging and deciding to roll back all stay manual. The banner it prints is the runbook for
 the rest, and it is written **deploy-then-merge**: check out the pull request, apply from
@@ -483,9 +483,9 @@ CronJob runs at 02:30 and the restic gate at 03:00, with its 30-hour window desc
 [monitoring.md](monitoring.md) — so a `health-upgrade` that passes proves the dump exists
 and is well-formed, not that anything upstream is still producing data.
 
-**Where the numbers actually are — and they moved on August 26, 2026.** They used to be in
+**Where the numbers are — and they moved on August 26, 2026.** They used to be in
 the healthchecks.io ping body only. The heartbeat that replaced it is one line and carries
-just `verdict=`, `buckets=n/m` and `grafana_kib=`, so the exit trap now also prints a
+only `verdict=`, `buckets=n/m` and `grafana_kib=`, so the exit trap now also prints a
 `detail:` line to the pod log carrying everything the body did: the native-dump size
 (`native_kib=`, `native_mib=`), the line-protocol size and file count (`lp_kib=`,
 `lp_files=`, one export per bucket) and the three prune counts. `make health-upgrade` tails
@@ -512,7 +512,7 @@ took 26 and 25 seconds start to completion, and a timed run of the target itself
 a manual `--from=cronjob/` Job behaves like a scheduled one. So the wait is roughly twenty
 times the observed span — room for a cold image pull and for years of growth, and still far
 below the CronJob's own
-`activeDeadlineSeconds` of 3600, which is what actually kills a hung run. If the wait
+`activeDeadlineSeconds` of 3600, which is what kills a hung run. If the wait
 expires, the target says so, leaves the Job in place to be inspected, and exits non-zero.
 It never reports a dump it did not watch finish.
 
@@ -536,10 +536,10 @@ Grafana hold state here.
 Cloudflare edge traffic data into the `cloudflare` bucket before Cloudflare deletes it.
 
 Cloudflare's Free plan keeps **8 days** of per-hostname analytics and rejects any GraphQL
-query wider than **1 day**. That window is enough to answer "what is happening right now"
-and useless for "was this normal?" — which is what you actually want when a webshell sweep
-shows up. This job is the retention fix; nothing about the Cloudflare configuration
-changes, and the token is read-only.
+query wider than **1 day**. That window answers "what is happening right now" and is
+useless for "was this normal?" — the question a webshell sweep raises. This job is the
+retention fix; nothing about the Cloudflare configuration changes, and the token is
+read-only.
 
 ### Shape
 
@@ -556,8 +556,8 @@ chunk) and `ingest_gap` (see below).
 
 ### Why the script is Python, and a file rather than an inline string
 
-Every other scheduled job in this repo is inline POSIX `sh`. This one is not, for three
-reasons that are all about the failure modes this repo has already been bitten by:
+Scheduled work in this repo defaults to POSIX `sh` in a mounted script file. This job is
+Python, for three reasons, each a failure mode this repo has already hit:
 
 - **Cloudflare answers a failed query with HTTP 200 and an `errors` array in the body.**
   Telling that apart from "no traffic" by grepping JSON in `sh` is precisely the shape
@@ -574,7 +574,7 @@ nothing but the two APIs it talks to.
 
 The watermark is `max(_time)` over the `cloudflare` bucket, read back from InfluxDB on
 every run. There is no state file, no PVC and no ConfigMap cursor, because all three can
-disagree with what was actually stored — after a restore, after a manual delete, after a
+disagree with what was stored — after a restore, after a manual delete, after a
 partial write. The data is its own watermark and cannot drift from itself.
 
 Every run then rewinds **2 hours** behind that watermark, because the final hour of the
@@ -633,9 +633,9 @@ host added there trades series cardinality for path detail.
 
 `sample_interval` is stored per point and **never applied**. Whether Cloudflare's `count`
 is already extrapolated is a property of the dataset, not something this job should
-silently assume, and a chart that quietly switches from real counts to estimates is exactly
-the kind of lie this repo has a rule about. Observed values are 1.03–1.14 — that is,
-effectively unsampled at current volume. **Confirm the relationship once against the Cloudflare
+silently assume, and a chart that quietly switches from real counts to estimates is the
+kind of lie this repo has a rule about. Observed values are 1.03–1.14 — effectively
+unsampled at this volume. **Confirm the relationship once against the Cloudflare
 dashboard for a known hour before building any panel that multiplies by it.**
 
 ### Row-cap subdivision
@@ -703,8 +703,8 @@ uncommitted scale-down.
 > custom probe target no longer exist. The section stays because it is why every
 > HTTP-serving workload in this namespace carries probes.
 
-Do not strip the liveness/readiness probes on the health workloads as cargo cult — they
-were added in response to a real, silent 18.5-hour outage.
+Do not strip the liveness/readiness probes on the health workloads: they were added in
+response to a real, silent 18.5-hour outage.
 
 On **2026-08-18 at 20:57Z** the Pomerium pod (all-in-one, v0.33.0) stopped serving HTTP
 entirely while its container stayed `Running`/`Ready` with **0 restarts for 12 days**.
@@ -716,7 +716,7 @@ sidecar upstream was healthy the whole time.
 
 Nothing noticed for 18.5 hours, because the `pomerium` container had no liveness or
 readiness probe: Kubernetes considered a process that answered no requests to be
-perfectly healthy, and this namespace's scheduled checks watch *data freshness*, not the
+healthy, and this namespace's scheduled checks watch *data freshness*, not the
 auth proxy.
 
 A `kubectl rollout restart` restored service immediately — 401 in 0.86s afterwards
@@ -777,7 +777,7 @@ change. Roster and per-monitor settings: [uptime-kuma.md](uptime-kuma.md#push-mo
 
 - `influx-backup` pushes `up` or `down` from an EXIT trap, so a failure is DOWN within a
   minute and is distinguishable from a never-scheduled run. It did not always: the report
-  used to be the script's last statement under `set -eu`, which meant a failing prune, a
+  used to be the script's last statement under `set -eu`, so a failing prune, a
   missing ConfigMap key or a dead influxdb pod produced *exactly nothing* until the silence
   bound expired some 30 hours later. The accepted cost of the conversion is that a transient
   fault — an influxdb pod mid-restart when `kubectl exec` lands — now alerts instead of
@@ -808,7 +808,7 @@ All three are bounded by `timeZone: "UTC"` and `activeDeadlineSeconds` (3600 for
 `concurrencyPolicy: Forbid` and no deadline, one hung run blocks every subsequent run with
 nothing alerting. `influx-backup` sets `startingDeadlineSeconds: 3600` and
 `cloudflare-analytics` 1800; `ingest-freshness` deliberately does not, since it runs again
-in six hours anyway.
+in six hours.
 
 This namespace's monitors watch **data freshness**, not the edge — which is why the
 2026-08-18 Pomerium wedge went unnoticed (that proxy has since been removed).

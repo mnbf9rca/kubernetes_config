@@ -8,26 +8,27 @@ manifests without ever being committed. The behaviour-changing rules are summari
 
 `.env.tpl` is committed and contains only `VAR=op://Vault/item/field` lines — no real
 values. **Nothing resolves them into the ambient shell.** `.envrc` exports exactly one
-variable:
-
-```bash
-export OP_SERVICE_ACCOUNT_TOKEN="$(op read 'op://homelab/1pw/service_account_key')"
-```
+variable, `OP_SERVICE_ACCOUNT_TOKEN`, read from
+`op://homelab/1pw/service_account_key`. It assigns to a temporary first and exports
+second, because `export VAR="$(cmd)"` returns export's status rather than the command's,
+so a failed `op read` would export an empty token unnoticed.
 
 Every target that needs secrets resolves them lazily, per command, through the Makefile's
+`OP_RUN := op run --env-file=.env.tpl --`.
 
-```make
-OP_RUN := op run --env-file=.env.tpl --
-```
+Targets that need secrets are split in two: a **public target** that runs the preflight
+guards — the context assertion, `check-vars-consistency`, the five per-cluster guards and
+`check-keel-fresh-parity` — in the parent shell, before anything can touch the cluster,
+then re-enters make under `$(OP_RUN)`; and a private **`_*-inner` target** that does the
+real work with the values present. `op run` resolves the `op://` references in `.env.tpl`
+against the service-account token and injects the real values into the environment of
+that **one child process**; envsubst substitutes them into the manifests inside that same
+child.
 
-Targets that need secrets are split in two: a **public target** that runs the guards
-(`check-context`, `check-vars-consistency`, `check-job-ttl-*`,
-`check-script-substitution-*`) in the parent shell — before anything can
-touch the cluster — and then re-enters make under `$(OP_RUN)`, and a private
-**`_*-inner` target** that does the real work with the values present. `op run` resolves
-the `op://` references in `.env.tpl` against the service-account token and injects the
-real values into the environment of that **one child process**; envsubst substitutes them
-into the manifests inside that same child.
+Because the token itself lives in the shell environment once direnv has exported it,
+`op run` — and so every build, diff and apply target — works from **any directory in that
+shell, git worktrees included**. There is no need to re-run `direnv allow` in a worktree,
+or to avoid worktrees for work that needs `op` (operator ruling, 2026-08-27).
 
 Why this shape:
 
@@ -35,7 +36,9 @@ Why this shape:
   lifetime of the shell — or of an agent session that inherited it. `printenv` in this
   directory shows the token and nothing else.
 - **Masked output.** `op run` masks the child's stdout/stderr, so a stray `echo` or a
-  rendered manifest scrolling past does not leak a value.
+  rendered manifest scrolling past does not leak a value. The match is on literal
+  plaintext and does not survive base64 or any other encoding, so masking is a backstop
+  and never the sole protection.
 - **Scoped credential.** The service account is limited to the vaults this project needs.
 
 > **The old `op inject` + `set -a` model is gone. Do not restore it.** `.envrc` no longer
@@ -50,7 +53,8 @@ Diagnostics when a value doesn't arrive:
 - `make require-vars` — re-enters under `op run` and asserts every `REQUIRED_VARS` entry
   is set **and** resolved (a value still holding a literal `op://...` string is reported
   UNRESOLVED, which is what catches a silent resolution failure). A healthy tree prints
-  `OK: 25 / 25 required vars set`.
+  `OK: 42 / 42 required vars set` — one per `REQUIRED_VARS` entry, so the number tracks
+  that list.
 - `direnv reload` — only relevant to `OP_SERVICE_ACCOUNT_TOKEN`. It does **not** refresh
   secret values, because no secret value is ever in the shell to refresh; see
   [rotation](#rotating-a-secret) below.
@@ -82,17 +86,16 @@ What is actually true:
 - `op run` passes the **real values** in the child's environment. Verified by measuring
   two secrets of known length — 100 characters and 27 characters — inside the child: both
   arrived intact.
-- What `op run` masks is the child's **stdout/stderr**. Any secret value that appears in
-  the output stream is replaced with `<concealed by 1Password>` on the way to the
-  terminal.
-- The original diagnostic tell was a coincidence: `echo "len=${#ACME_EMAIL}"` returned 24
+- What `op run` masks is the child's **stdout/stderr**: any secret value in the output
+  stream is replaced with `<concealed by 1Password>` on the way to the terminal.
+- The original diagnostic tell was a coincidence. `echo "len=${#ACME_EMAIL}"` returned 24
   because that value really is 24 characters long — the same length as the mask string —
   so the test could not tell a real value from the placeholder.
 
 That distinction is the whole reason `build-*` and `apply-*` are different targets.
 
-**The hazard — and note that no explicit `op run` wrapper is needed to hit it, because
-the Makefile already wraps `build-*`:**
+**The hazard, which needs no explicit `op run` wrapper because the Makefile already
+wraps `build-*`:**
 
 ```bash
 make build-homelab > out.yaml     # every secret in out.yaml is now the 24-char mask
@@ -113,9 +116,9 @@ either. `op run --no-masking` exists and is deliberately not used: an unmasked r
 secret-shaped file on disk waiting to be committed or pasted.
 
 One consequence worth knowing: because `kubectl diff` prints whole manifests, a change to
-a secret **value** shows as *no change* in `make diff-*` output — both sides mask to the
-same string. The server-side comparison and the apply both use the real value. To confirm
-a specific secret landed, read it back with
+a secret **value** shows as *no change* on screen — both sides mask to the same string.
+The server-side comparison and the apply both use the real value. To confirm a specific
+secret landed, read it back with
 `kubectl -n <ns> get secret <name> -o jsonpath=...`.
 
 ### Historical: `op inject` resolved commented lines
@@ -135,7 +138,7 @@ genuinely inert.
 without one:
 
 - With no allowlist, envsubst substitutes every `${VAR}` token in the stream, including
-  shell variables embedded in upstream manifests (e.g. `$VOL_DIR` inside
+  shell variables embedded in upstream manifests (for example `$VOL_DIR` inside
   local-path-provisioner's helper-pod setup script), breaking them silently.
 - With double-quoted args, the shell expands `${VAR}` before envsubst sees it,
   producing garbage arguments. Single-quoting preserves the literal tokens.
@@ -160,7 +163,7 @@ What that check does and does not catch:
 |---|---|---|
 | In `ENVSUBST_VAR_NAMES`, missing from `REQUIRED_VARS` | **Yes** — `check-vars-consistency` fails the apply | — |
 | In `REQUIRED_VARS`, missing from `.env.tpl` | **Yes** — `require-vars` reports MISSING | — |
-| Missing from **`ENVSUBST_VAR_NAMES`** | **No. Nothing catches this** | envsubst never substitutes the token, so the literal string `${VAR}` is written into the Secret and applied. The manifest looks fine and the workload gets a credential that is the placeholder text |
+| Missing from **`ENVSUBST_VAR_NAMES`** | **Yes, but at apply time only** — the Makefile's `PLACEHOLDER_SCAN`, inside `apply-homelab` / `apply-vps` | envsubst never substitutes the token, so the literal `${VAR}` survives the render. The scan runs after the render and before kubectl, names every surviving `${VAR}` whose name is declared in `.env.tpl`, and hard-fails — so nothing is applied. Note the asymmetry: `diff-*` does **not** run it, so a diff can look clean while the apply refuses. A placeholder whose name is in *neither* list is still invisible to it |
 
 That third row is the reason to treat the allowlist edit as the one to double-check. To
 confirm no placeholder survived the render after adding a var, run:
@@ -171,11 +174,14 @@ make build-<cluster> | grep -F "$(sed -n 's/^\([A-Za-z_][A-Za-z0-9_]*\)=.*/${\1}
 
 The `sed` turns every name in `.env.tpl` into a `${VAR}` pattern, so the grep matches
 only this repo's placeholders and prints nothing on a clean tree. Because the pattern
-comes from `.env.tpl`, not `ENVSUBST_VAR_NAMES`, it also catches the uncaught row above:
-a var added to `.env.tpl` but forgotten from the allowlist. Do not use a bare
-`grep -F '${'` — the rendered stream contains ConfigMap-mounted shell scripts whose
-parameter expansions (for example `${1:-}` and `${HC_UUID}`) match it about 20 times. A
-`make check-*` guard target running this in the apply preflight is a possible follow-up.
+comes from `.env.tpl`, not `ENVSUBST_VAR_NAMES`, it catches a var added to `.env.tpl` but
+forgotten from the allowlist. Do not use a bare `grep -F '${'` — the rendered stream
+contains ConfigMap-mounted shell scripts whose parameter expansions (for example `${1:-}`
+and `${HC_UUID}`) match it dozens of times.
+
+That grep is now also a target. `PLACEHOLDER_SCAN` is the same logic as a Makefile macro,
+run inline by `apply-homelab` and `apply-vps` against the exact bytes they are about to
+apply; `make check-placeholder-coverage` runs it over both trees on its own.
 
 `TAILSCALE_AUTH_KEY` is deliberately **not** in `ENVSUBST_VAR_NAMES`: auth keys are
 one-shot and only needed for initial node registration, so steady-state config must
@@ -190,8 +196,8 @@ hatch is a dedicated Makefile target that calls `op read` and pipes into
 `make create-jotta-secret` is the canonical pattern. Use it only for secrets that
 genuinely can't be single-line; everything else flows through envsubst.
 
-Note that 1Password **document** items (e.g. `health-cloudflared`) need
-`op document get`, not `op read` — document items don't expose a plain field.
+1Password **document** items such as `health-cloudflared` need `op document get`, not
+`op read` — document items don't expose a plain field.
 
 ## Makefile targets
 
@@ -201,19 +207,20 @@ Note that 1Password **document** items (e.g. `health-cloudflared`) need
 |---|---|
 | `check-tools` | Asserts `kubectl kustomize envsubst op direnv talosctl omnictl jq shellcheck` are on PATH |
 | `check-context` | Asserts `kubectl current-context == cynexia-homelab` (override with `HOMELAB_CONTEXT=`) |
-| `check-vars-consistency` | Asserts `ENVSUBST_VAR_NAMES` ⊆ `REQUIRED_VARS`. Runs in the parent shell, before the `op run` child exists. Cannot detect a var *missing* from `ENVSUBST_VAR_NAMES` |
+| `check-vars-consistency` | Asserts `ENVSUBST_VAR_NAMES` ⊆ `REQUIRED_VARS`. Runs in the parent shell, before the `op run` child exists. Cannot detect a var *missing* from `ENVSUBST_VAR_NAMES` — `PLACEHOLDER_SCAN` inside `apply-*` does |
+| `check-placeholder-coverage` | Renders both trees and asserts no `${VAR}` declared in `.env.tpl` survived envsubst. `apply-homelab`/`apply-vps` run the same scan inline instead of depending on this target, so they pay no second render |
 | `check-job-ttl` | Asserts every standalone `kind: Job` sets `ttlSecondsAfterFinished`, across both clusters. `check-job-ttl-homelab` scopes it to one cluster and runs in the `diff-homelab`/`apply-homelab` preflight |
 | `check-script-substitution` | Asserts no `configMapGenerator` script names an envsubst-allowlisted variable, across both cluster trees. `check-script-substitution-homelab` scopes the *scan* to one tree — both allowlists still apply — and runs in the `diff-homelab`/`apply-homelab` preflight |
-| `check-ping-bodies` | Asserts no healthchecks.io ping body and no uptime-kuma heartbeat message is built from a command's output, across both cluster trees — it recognises a sink by function name, never by destination host. `check-ping-bodies-homelab` scopes the scan to one tree and runs in the `diff-homelab`/`apply-homelab` preflight. Its `OK:` line's sink-call count is to be read per file, not in aggregate |
+| `check-ping-bodies` | Asserts no healthchecks.io ping body and no uptime-kuma heartbeat message is built from a command's output, across both cluster trees — it recognises a sink by function name, never by destination host. `check-ping-bodies-homelab` scopes the scan to one tree and runs in the `diff-homelab`/`apply-homelab` preflight. Read its `OK:` line's sink-call count per file, not in aggregate |
 | `check-script-lint` | Lints every script the clusters run, from the **rendered** stream rather than the source tree, plus the repo's Python. `check-script-lint-homelab` scopes the render to one cluster and runs in the `diff-homelab`/`apply-homelab` preflight. See below |
-| `check-renovate-scope` | Asserts every container is in exactly one update mode — floating means keel, pinned means Renovate, never both — from the `kustomize build` render, one container at a time, across both clusters. `check-renovate-scope-homelab` scopes it to one cluster and runs in the `diff-homelab`/`apply-homelab` preflight, joining it as the fifth per-cluster guard and the third render-based one. See below |
+| `check-renovate-scope` | Asserts every container is in exactly one update mode — floating means keel, pinned means Renovate, never both — from the render, one container at a time, across both clusters. `check-renovate-scope-homelab` scopes it to one cluster and runs in the `diff-homelab`/`apply-homelab` preflight as the fifth per-cluster guard and the third render-based one. See below |
 | `check-keel-fresh-parity` | Asserts the two `ops/keel-fresh` copies — runner script and CronJob manifest — differ only inside a stated allowlist. **The one guard with no per-cluster half**, because it compares the two trees against each other; it runs whole on both halves of all four chains. See below |
 | `require-vars` | Re-enters under `op run` and asserts every `REQUIRED_VARS` entry is set and not still an `op://` reference |
 | `build-homelab` | `kustomize build homelab/ \| envsubst` to stdout under `op run`. **PREVIEW ONLY — secret values are masked.** No cluster contact. Never redirect this to a file and apply it |
 | `diff-homelab` | Same pipeline into `kubectl diff`, inside the `op run` child (real values, printed diff masked) |
 | `apply-homelab` | Same pipeline into `kubectl apply` with real values, after the guards above |
 | `create-jotta-secret` | Imperative Secret creation for jottacloud-backup (multi-line rclone config) |
-| `apply-talos` | envsubst + `omnictl apply` over `homelab/talos/machineconfig-patches/*.yaml`. **Not** wrapped in `op run` — no current patch contains a `${VAR}`, so the envsubst pass is a no-op today; a patch that needs a secret would have to be wrapped first |
+| `apply-talos` | envsubst + `omnictl apply` over `homelab/talos/machineconfig-patches/*.yaml`, under `op run` with `_assert-vars` first. No patch contains a `${VAR}` today, so the envsubst pass is a no-op, but the wrapper is already in place for one that does |
 | `bootstrap-tailscale` | One-shot Tailscale extension bootstrap for a node (see below) |
 | `clear-tailscale-bootstrap` | Removes the one-shot bootstrap ConfigPatch |
 
@@ -230,10 +237,11 @@ Note that 1Password **document** items (e.g. `health-cloudflared`) need
 | `route-vps-dns` | `cloudflared tunnel route dns cynexia-vps <host>` for every hostname in `vps/bootstrap/cloudflared/cloudflared.yaml` |
 | `create-cloudflared-secret` | Imperative Secret creation for the VPS tunnel creds from `op://VPS/cloudflared/credentials-json` |
 
-Targets that read a single field imperatively (`create-jotta-secret`,
-`create-*-cloudflared-secret`, `health-influx-bootstrap`) call `op read` / `op document
-get` directly rather than going through `op run`; they authenticate with the same
-service-account token from `.envrc`.
+Targets that read a single field imperatively — `create-jotta-secret`,
+`create-hermes-ssh-secret`, both `create-*-cloudflared-secret` targets and the
+`health-influx-*-bootstrap` targets — call `op read` / `op document get` directly rather
+than going through `op run`; they authenticate with the same service-account token from
+`.envrc`.
 
 The VPS block is a deliberate copy-paste of the homelab block rather than a
 parameterised macro — reading `apply-vps` top to bottom is clearer than chasing a
@@ -246,6 +254,7 @@ generated target, and two clusters is not enough to justify the abstraction.
 | `create-health-cloudflared-secret` | Recreates the health tunnel creds Secret via `op document get health-cloudflared` |
 | `route-health-dns` | CNAMEs for every hostname in `homelab/health/cloudflared.yaml` onto the `cynexia-health` tunnel |
 | `health-influx-bootstrap` | InfluxDB buckets, v1 DBRP mapping, v1-compat auth user, and the two scoped tokens — see [homelab-health.md](homelab-health.md) |
+| `health-influx-cloudflare-bootstrap` | Creates the `cloudflare` bucket and mints its ingest token plus a replacement read token covering all four buckets. Prints both for pasting into 1Password; applies nothing |
 | `health-upgrade` | Creates a one-off Job from `cronjob/influx-backup`, waits for it, tails the log and **stops** — the pre-upgrade dump of InfluxDB *and* Grafana, and nothing else. The script's sizes and counts arrive on the log's `detail:` line, which the target tails; the one-line heartbeat sent to the `health-influx-backup` monitor carries only the verdict, `buckets=` and `grafana_kib=`. Applies nothing, merges nothing, edits no pin. See [homelab-health.md](homelab-health.md) |
 
 ### Hindsight namespace
@@ -256,19 +265,18 @@ generated target, and two clusters is not enough to justify the abstraction.
 
 ### `check-script-lint`: linting what the cluster actually runs
 
-Until this landed, nothing the repo could run looked at any of its sixteen
-shell and Python scripts. There was no shellcheck target, no ruff, no pyflakes,
-no test runner, no `.github/workflows` and no pre-commit hook — every
-shellcheck result that ever appeared in a review came from an agent typing the
-command by hand. That is the same defect `check-job-ttl` and
-`check-script-substitution` were each created to fix, and it is fixed the same
-way: `scripts/check-script-lint.py`, wired as a per-cluster preflight
-prerequisite of `diff-*` and `apply-*`.
+Until this landed, nothing the repo could run looked at any of its shell or
+Python scripts. There was no shellcheck target, no ruff, no pyflakes, no test
+runner, no `.github/workflows` and no pre-commit hook — every shellcheck result
+that ever appeared in a review came from an agent typing the command by hand.
+That is the same defect `check-job-ttl` and `check-script-substitution` were
+each created to fix, and the fix is the same: `scripts/check-script-lint.py`,
+wired as a per-cluster preflight prerequisite of `diff-*` and `apply-*`.
 
 Four decisions in it are load-bearing.
 
 **It lints the render, not the source tree.** `homelab/backup/restic-cronjob.yaml`
-carries roughly 430 lines of shell inline in a YAML block scalar, which a
+carries roughly 720 lines of shell inline in a YAML block scalar, which a
 source-tree lint walks straight past. So the check runs `kustomize build` and
 pulls the shell back out of the rendered stream — from ConfigMap `data:` keys
 (what a `configMapGenerator` produces) and from block scalars inside a
@@ -280,7 +288,7 @@ an unlinted block of shell is exactly the hole the check exists to close.
 Findings are reported against the source file wherever the snippet can be
 located there — exact contiguous match allowing a constant indent — so
 `homelab/backup/restic-cronjob.yaml:52` is somewhere you can go and edit, not a
-line number in a 19,000-line render.
+line number in a 22,000-line render.
 
 **`shellcheck -s sh`, never `-s bash`.** These scripts run under busybox ash
 (`restic/restic`, `alpine/k8s`) and dash. `-s bash` would suppress SC3040 and
@@ -304,9 +312,9 @@ you nothing about the scripts in it. `shellcheck` is treated as required (it is
 in `check-tools`; `brew install shellcheck`) because skipping it restores the
 hole. The Python phase always compiles every `*.py` and runs every `test_*.py`
 — both stdlib, so both always available — and runs a real linter only if `ruff`,
-`pyflakes` or `flake8` is genuinely installed, printing an explicit `SKIP`
-naming what it probed when none is. As of 2026-08-21 none is installed on the
-workstation, so Python is syntax-checked and tested but **not** linted.
+`pyflakes` or `flake8` is installed, printing an explicit `SKIP` naming what it
+probed when none is. As of 2026-08-21 none is installed on the workstation, so
+Python is syntax-checked and tested but **not** linted.
 
 The Python phase is repo-wide whichever cluster is named: it needs no render
 and no cluster, so scoping it per-cluster would only leave the repo's own
@@ -360,13 +368,12 @@ local-path-provisioner — so nothing here can edit the reference; it moves only
 when the base's own ref moves. That is not the same as unreachable: the VPS
 local-path base is pinned as `?ref=v0.0.31`, which the kustomize manager parses,
 so Renovate proposes that bump even though the guard still calls the image
-advisory. Failing an apply on
-somebody else's manifest produces a gate people route around, so those are
-printed as advisories and do not fail the check, exactly as `check-script-lint`
-treats upstream findings. Ownership is therefore established *before* any
-verdict, not only before the scope one: a remote base that ever shipped keel
-annotations on a pinned tag would otherwise hard-fail an apply over a manifest
-this repo cannot edit.
+advisory. Failing an apply on somebody else's manifest produces a gate people
+route around, so those are printed as advisories and do not fail the check,
+exactly as `check-script-lint` treats upstream findings. Ownership is therefore
+established *before* any verdict, not only before the scope one: a remote base
+that ever shipped keel annotations on a pinned tag would otherwise hard-fail an
+apply over a manifest this repo cannot edit.
 
 **The ownership lookup is confined to the cluster being analysed**, and that
 confinement is load-bearing. Both trees name `restic/restic:0.17.3` and the same
@@ -397,12 +404,11 @@ Floating tags are forbidden in `health`, `hindsight`, `ops` and `backup`.
 scheduled run, so the schedule already delivers what keel would, which is why it
 carries no keel annotations and needs none.
 
-The targets are `check-renovate-scope-homelab` and `check-renovate-scope-vps`,
-plus the bare `check-renovate-scope` which sweeps both. **Both per-cluster
-targets run in their cluster's `diff-*` and `apply-*` preflight**, on the public
-half, as of the 2026-08-26 commit that widened Renovate to `homelab/**` and
-`vps/**`. Each chain now reads the same way: a context assertion, a
-vars-consistency check, **five per-cluster guards** — `check-script-substitution`,
+**`check-renovate-scope-homelab` and `check-renovate-scope-vps` each run in their
+cluster's `diff-*` and `apply-*` preflight**, on the public half, as of the
+2026-08-26 commit that widened Renovate to `homelab/**` and `vps/**`. Each chain
+now reads the same way: a context assertion, a vars-consistency check,
+**five per-cluster guards** — `check-script-substitution`,
 `check-job-ttl`, `check-ping-bodies`, `check-script-lint` and `check-renovate-scope`,
 each running as its own cluster's half — and one guard that has no half,
 `check-keel-fresh-parity`.
@@ -418,17 +424,18 @@ inner half would double every apply's render cost. See the `GUARD PLACEMENT` blo
 `check-keel-fresh-parity` sits with the cheap two on **both** halves, and is the odd one
 out on scope rather than on cost. It compares `homelab/ops`'s `keel-fresh` copy against
 `vps/ops`'s, so "the VPS half of a homelab-versus-VPS comparison" is not a thing that
-exists; it takes no cluster argument and rejects one. The consequence is worth knowing
-before it surprises you: **a divergence introduced in the VPS copy blocks `apply-homelab`
-too.** That is a ruling rather than a side effect. A divergence means one cluster's
-dead-man's-switch may be broken, and nothing in the divergence itself says which, so
-neither cluster moves until it is resolved. A per-cluster split would not even be coherent:
+exists; it takes no cluster argument and rejects one. The consequence: **a divergence
+introduced in the VPS copy blocks `apply-homelab` too.** That is a ruling rather than a
+side effect. A divergence means one cluster's dead-man's-switch may be broken, and nothing
+in the divergence itself says which, so neither cluster moves until it is resolved. A
+per-cluster split would not even be coherent:
 the guard compares both trees, so a homelab-only variant would fail on a VPS-only edit
-anyway. The coupling is the kind that gets routed around under time pressure, and the
-answer to that is that the guard names the offending line and the fix — finish the edit. What it allows through is a short, stated list — the copy notes, the
-image floor, the schedule, the monitor name, the two paths, the `nodeSelector` and the
-token variable — and everything else must match byte for byte. Its own header carries the
-list and the reasoning.
+anyway. The coupling is the kind that gets routed around under time pressure; the answer
+is that the guard names the offending line and the fix — finish the edit. What it allows
+through is a short, stated list — the two copy notes, the image floor, the schedule, the
+monitor name, the runner-script and manifest paths, the `nodeSelector`, the 1Password
+vault path and the token variable — and everything else must match byte for byte. Its own
+header carries the list and the reasoning.
 
 Arming it needed that widening first, and the order is worth keeping in mind if
 the scope ever narrows again. The guard cannot pass against a `renovate.json`
@@ -524,8 +531,8 @@ benign set of resources. **Don't chase it.**
 - Every Secret shows `configured` on every apply, forever: `stringData` is write-only
   server-side (the API server never stores it back for comparison), so client-side
   apply's `last-applied-configuration` can never converge.
-- Same for objects whose fields the API server silently normalises away — e.g. a PV
-  declaring `storageClassName: ""`, which the server drops from `spec` entirely.
+- Same for objects whose fields the API server silently normalises away — a PV declaring
+  `storageClassName: ""`, for example, which the server drops from `spec` entirely.
 - Same for cert-manager's webhook configs, whose `caBundle` is injected post-apply by
   cainjector.
 

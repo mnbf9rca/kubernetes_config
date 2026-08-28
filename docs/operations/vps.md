@@ -8,7 +8,7 @@ Kubectl context: `cynexia-vps`. Manifests live in `vps/`.
 | Aspect | Detail |
 |---|---|
 | Host | Hetzner CX43 in `fsn1`, Talos single-node, managed by the same Omni instance as homelab (cluster name `vps`) |
-| Storage | Hetzner Cloud Volume as a Talos user volume mounted at `/var/mnt/data`; local-path-provisioner points there |
+| Storage | One 80 GB Hetzner Cloud Volume as a Talos user volume mounted at `/var/mnt/data`; local-path-provisioner points there |
 | Network | Hetzner Private Network `10.0.0.0/24`. No public :80/:443 on the node; the Hetzner Cloud Firewall drops public inbound |
 | Ingress | `cloudflared` tunnel only (named tunnel `cynexia-vps`). No Traefik, no cert-manager, no MetalLB, no NFS CSI |
 | TLS / auth | Terminated at the Cloudflare edge. Cloudflare Access with email-OTP in front of every hostname |
@@ -19,10 +19,9 @@ Kubectl context: `cynexia-vps`. Manifests live in `vps/`.
 | Apply | `make apply-vps`, gated by `check-vps-context` |
 
 The Talos user-volume patch (`vps/talos/machineconfig-patches/400-vps-user-volume-data.yaml`)
-selects the Cloud Volume by **size bracket** (70–100 GB), because the boot disk and the
-Cloud Volume both report `transport=virtio` and can't be distinguished by transport
-alone. Note there is no `make` target for VPS Talos patches — apply them with
-`omnictl apply -f <file>` directly.
+selects the Cloud Volume by **size bracket** (70–100 GB): the boot disk and the Cloud
+Volume both report `transport=virtio`, so transport alone cannot tell them apart. There is
+no `make` target for VPS Talos patches — apply them with `omnictl apply -f <file>`.
 
 Fresh Hetzner Cloud Volumes ship pre-formatted and Talos refuses to provision over them;
 wipe first with `talosctl wipe disk <dev> --method FAST`.
@@ -30,16 +29,15 @@ wipe first with `talosctl wipe disk <dev> --method FAST`.
 ### The local-path storage contract
 
 **This cluster's `local-path` storage lives on one machine, and a PVC bound there is
-reachable from nowhere else.** The storage node is `ubuntu-16gb-fsn1-2`, which today is
-also the only node. Every `local-path` PersistentVolume carries `nodeAffinity` pinning it
-to that hostname, and the StorageClass binds `WaitForFirstConsumer`, so a PVC has no node
-until a pod using it is scheduled and is welded to that node from then on. Verified
-2026-08-26: every PV then in existence — eight of them — read `[ubuntu-16gb-fsn1-2]`.
+reachable from nowhere else.** The storage node is `ubuntu-16gb-fsn1-2`, so far also the
+only node. Every `local-path` PersistentVolume carries `nodeAffinity` pinning it to that
+hostname, and the StorageClass binds `WaitForFirstConsumer`, so a PVC has no node until a
+pod using it is scheduled, and is welded to that node from then on. Verified 2026-08-26:
+all eight PVs then in existence read `[ubuntu-16gb-fsn1-2]`.
 
 That is invisible while the cluster has one node and load-bearing the moment it does not.
 **A pod with a `local-path` PVC needs a `nodeSelector` naming that hostname.** Without one
-the scheduler is free to place it elsewhere, and the two outcomes are a loud one and a
-silent one:
+the scheduler may place it elsewhere, and the two outcomes are a loud one and a silent one:
 
 - The PVC is **already bound** to the storage node. The pod cannot reach the volume, so it
   sits `Pending` until whatever deadline it carries. Loud, and easy to diagnose.
@@ -54,10 +52,10 @@ restic CronJob in `vps/backup/restic-cronjob.yaml` mounts
 `/var/mnt/data/local-path-provisioner` by `hostPath` and carries **no `nodeSelector`**, so on
 a multi-node cluster nothing keeps it on the storage node.
 
-The mount declares `type: Directory`, which looks like it might catch a wrong-node run, and
-mostly it will not: the catch-all above provisions into **that same path**, so any second
-node that has ever provisioned a `local-path` volume already has the directory and the check
-passes. What you get is the empty-source case — restic reading a tree holding, at most, that
+The mount declares `type: Directory`, which looks like it might catch a wrong-node run and
+mostly will not: the catch-all above provisions into **that same path**, so any second node
+that has ever provisioned a `local-path` volume already has the directory and the check
+passes. You get the empty-source case instead — restic reading a tree holding, at most, that
 node's own stray volumes and none of the ones being backed up.
 
 That is caught, but late and at a cost. The job's expected-set verification gate names each
@@ -67,7 +65,7 @@ where it counts against the 7-daily / 4-weekly / 6-monthly retention, and that n
 usable backup. Neither the `Directory` check nor the gate has been exercised on a second node,
 because there has never been one — this is read off the manifest and the gate script, not
 observed. Pinning that pod is outstanding work, carried with the multi-node expansion; it is
-named here because a storage contract that omitted the case would be worse than no contract.
+named here because a storage contract that omitted the case would be worse than none.
 
 The `keel-fresh` CronJob in the `ops` namespace is already pinned — see the comment beside
 its `nodeSelector`, which is where the reasoning lives in full.
@@ -105,11 +103,11 @@ as the caller.
 | n8n | `n8n.cynexia.com` | sqlite |
 | karakeep (+ meilisearch) | `keep.cynexia.com` | sqlite |
 
-Every container here carries readiness and (where a restart is a safe remedy) liveness
-probes; the per-service targets and the reasoning behind each — including the ones that
-are deliberately shallow — are in [monitoring.md](monitoring.md#vps-cluster).
+Every container here carries readiness and — where a restart is a safe remedy — liveness
+probes. Per-service targets and the reasoning behind each, including the deliberately
+shallow ones, are in [monitoring.md](monitoring.md#vps-cluster).
 
-`make route-vps-dns` reads the hostname list straight out of
+`make route-vps-dns` reads the hostname list out of
 `vps/bootstrap/cloudflared/cloudflared.yaml` (that ConfigMap is the single source of
 truth for hostname → Service routing) and upserts a CNAME per hostname onto the current
 tunnel UUID. Run it after adding a hostname, and after any full cluster rebuild.
@@ -159,8 +157,8 @@ credentials behind these globs. The umami send and n8n webhook endpoints are ope
 A bypass path glob of `/foo/*` does **not** match the bare path `/foo` — add both the
 exact and the wildcard destination.
 
-The `uptime-kuma push` app is the newest and the only one serving this estate's own jobs rather
-than strangers. A push monitor is driven from inside a cluster by a CronJob holding no Access
+The `uptime-kuma push` app is the only one serving this estate's own jobs rather than
+strangers. A push monitor is driven from inside a cluster by a CronJob holding no Access
 credential, so without the bypass the edge answers 302, `curl -f` fails, and every push monitor
 sits permanently DOWN over healthy jobs — check this app first when debugging one. Only the push
 path is opened: `/api/push/<token>` accepts a heartbeat and exposes no dashboard, no monitor
@@ -186,17 +184,17 @@ kubectl --context cynexia-vps -n vps exec deployment/freshrss -c freshrss -- \
 
 With an `http://` value, Cloudflare answers each hub callback with a 301 to the HTTPS
 URL. Verification survives that: hubs follow the redirect for the `GET`, and Google's
-FeedFetcher demonstrably did. Whether *delivery* survives it is a different question,
-because a hub is far less likely to replay a `POST` body across a redirect — and no push
-delivery has ever succeeded on this instance. The value was corrected on August 20, 2026;
-issue #29 tracks whether that was the cause.
+FeedFetcher did. Whether *delivery* survives it is unknown — a hub is far less likely to
+replay a `POST` body across a redirect, and no push delivery has ever succeeded on this
+instance. The value was corrected on August 20, 2026; issue #29 tracks whether that was
+the cause.
 
 #### What `"error"` in `!hub.json` actually means
 
-It is not a failure counter, and it is not a current-state signal. `p/api/pshb.php` sets
-it to `true` when a subscription is verified, with the comment *"Do not assume that WebSub
-works until the first successful push"*, and clears it only after a delivery that updates
-at least one feed for at least one user. So:
+It is neither a failure counter nor a current-state signal. `p/api/pshb.php` sets it to
+`true` when a subscription is verified, with the comment *"Do not assume that WebSub works
+until the first successful push"*, and clears it only after a delivery that updates at
+least one feed for at least one user. So:
 
 > `"error": true` means **no push has ever been successfully processed for this feed**.
 
@@ -230,8 +228,8 @@ of August 20, 2026 that log showed 2,959 successes against 69 transient 5xx over
 months, and no redirects at all.
 
 Neither check proves end-to-end delivery, only subscription. Delivery is a `POST` to
-`/api/pshb.php` in the pod log, and it only appears when a subscribed feed actually
-publishes something.
+`/api/pshb.php` in the pod log, and it appears only when a subscribed feed publishes
+something.
 
 The callback path `/api/pshb.php` falls under the `freshrss api` Access bypass, so it
 stays publicly reachable, and under the zone rate limiting rule of 50 requests per 10
@@ -242,7 +240,7 @@ seconds per IP, far above hub delivery volume.
 `claude.com/blog` has no RSS/Atom feed or JSON API (Webflow static site), so it is a
 native FreshRSS **HTML+XPath** feed (feed id 132, kind 10, user `ruined0346`). Config
 lives in the FreshRSS sqlite DB on the PVC (restic + sidecar backed up), not in git;
-it was imported via `cli/import-for-user.php` with `frss:`-namespace OPML attributes.
+it was imported with `cli/import-for-user.php` using `frss:`-namespace OPML attributes.
 
 - **Egress quirk:** Cloudflare's "Just a moment…" challenge fires on the workstation
   IP/UA but **not** on the VPS egress, so FreshRSS's own fetch gets clean HTML. Verify
@@ -280,7 +278,7 @@ rather than a hostname.
 
 Per-service sqlite, except umami which needs postgres. A shared postgres was researched
 and rejected: karakeep is sqlite-only (karakeep issue #1782), uptime-kuma v2 supports
-only sqlite/MariaDB (issue #5674), and the remaining consolidation saving didn't justify
+only sqlite/MariaDB (issue #5674), and the remaining consolidation saving did not justify
 the upgrade-coupling cost.
 
 `N8N_ENCRYPTION_KEY` is load-bearing — it was extracted from the old n8n container
@@ -289,8 +287,8 @@ during the rebuild and n8n credentials are unreadable without it.
 ## Backups
 
 Separate B2 bucket and separate restic repo from homelab. The restic CronJob runs at
-04:00 UTC and backs up `/var/mnt/data/local-path-provisioner` via hostPath, with the same
-7 daily / 4 weekly / 6 monthly retention as homelab, with `--group-by paths`.
+04:00 UTC and backs up `/var/mnt/data/local-path-provisioner` by hostPath, with the same
+7 daily / 4 weekly / 6 monthly retention as homelab, and `--group-by paths`.
 
 That flag is load-bearing: `restic forget` groups by host+paths by default, and every
 CronJob pod has a unique hostname, so each nightly snapshot formed a group of one and the

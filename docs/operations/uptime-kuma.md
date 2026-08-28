@@ -6,10 +6,10 @@ failure that no in-pod probe can. This file is the procedure for maintaining it.
 why the layer exists, and what it still does not catch — stays in
 [monitoring.md](monitoring.md).
 
-**Create monitors by hand in the UI and record them here.** uptime-kuma v2 offers no
-supported programmatic path: monitor CRUD is Socket.IO only, the one API-key-protected HTTP
-route is `/metrics`, the REST API issue (#118) has been open since 2021 with two bridge PRs
-closed unmerged, and the community Python wrapper stops at v1.23.2.
+**Create monitors by hand in the UI and record them here.** uptime-kuma v2 offers no supported
+programmatic path: monitor CRUD is Socket.IO only, the one API-key-protected HTTP route is
+`/metrics`, the REST API issue (#118) has been open since 2021 with two bridge PRs closed
+unmerged, and the community Python wrapper stops at v1.23.2.
 
 To read the monitor inventory, query `kuma.db` read-only:
 
@@ -45,7 +45,7 @@ An Access-protected hostname answers an unauthenticated request with a 302 to th
 login page. At the default `maxredirects: 10`, the monitor follows it, gets 200 from
 Cloudflare's login app, and reports UP while the tunnel, pod and node are all dead.
 
-Two mitigations are in place. Every Access-protected monitor sets `maxredirects: 0`. The four
+Two mitigations are in place: every Access-protected monitor sets `maxredirects: 0`, and the four
 monitors whose Access app demands a credential also send service-token headers, so the request
 reaches the origin.
 
@@ -81,12 +81,12 @@ glob `/foo/*` does not match bare `/foo`, so a bypassed health path needs both d
 
 Every push monitor in this estate is driven by something that holds no Access credential — a
 CronJob inside a cluster, or, for `hermes-app-alive`, a cron job inside the hermes agent on the
-off-cluster VM — so without a bypass the edge answers 302 and no push monitor could ever report UP. An
-Access application named **`uptime-kuma push`** carries that bypass, created
+off-cluster VM — so without a bypass the edge answers 302 and no push monitor could ever report UP.
+An Access application named **`uptime-kuma push`** carries that bypass, created
 **August 26, 2026**. It covers two destinations: `uptime.cynexia.com/api/push/*` and the bare
-`uptime.cynexia.com/api/push`. The wildcard is the load-bearing one — a push URL always carries
-its token as a path segment, so every real request matches it — and the bare form is present
-only because `/foo/*` does not match bare `/foo`, so the pair is written together and neither is
+`uptime.cynexia.com/api/push`. The wildcard is the load-bearing one — a push URL always carries its
+token as a path segment, so every real request matches it — and the bare form is present only
+because `/foo/*` does not match bare `/foo`, so the pair is written together and neither is
 "tidied" away later.
 
 It is attached to the **existing reusable bypass policy**
@@ -172,12 +172,12 @@ from *inside* the VM instead, once a day, by the `hermes-app-alive` push monitor
 
 **Do not "improve" that push monitor into a GET against this hostname.** An HTTP monitor
 is the wrong instrument here for two independent reasons. `GET /health` returns
-`status: ok` straight through the broken-venv failure that is worth catching — the unit
-stays `active` and the endpoint stays green while every chat turn answers
+`status: ok` straight through the broken-venv failure worth catching — the unit stays
+`active` and the endpoint stays green while every chat turn answers
 `AIAgent not available` — so the check would be green over the outage it exists for. And
 the chat path needs a login session, which a monitor cannot perform. The daily check
 sidesteps both by running on the VM: it deep-imports `run_agent` from the shared venv,
-which is the assertion the HTTP surface cannot make.
+the assertion the HTTP surface cannot make.
 
 If a monitor is ever added here anyway, it is not a copy of the `hermes` monitor: this
 Access app authenticates every request with Service Auth, so the monitor must send the
@@ -210,14 +210,13 @@ looks like, because that gate fails OPEN
 
 **The mcp.cynexia.com Access app carries no bypass policy — keep it that way.**
 Unlike the other monitored hostnames, the app holds only the `allow_cynexia_com`
-policy. The edge's 401 does two jobs at once: it is the status this monitor
-pins, and it is what starts every MCP client's OAuth flow — the MCP SDK begins
-OAuth only after a 401, so a bypassed client gets 200 from the origin and no
-flow ever starts. Attaching an IP bypass therefore breaks both: it broke Hermes
-profile OAuth until the bypass was removed on 2026-08-23, and it would let this
-monitor's probe (which egresses from the Hetzner IP) reach the origin, so the
-monitor could never return its pinned 401. Do not re-attach any bypass policy
-to this app.
+policy. The edge's 401 does two jobs: it is the status this monitor pins, and it
+is what starts every MCP client's OAuth flow — the MCP SDK begins OAuth only
+after a 401, so a bypassed client gets 200 from the origin and no flow ever
+starts. An IP bypass breaks both: it broke Hermes profile OAuth until the bypass
+was removed on 2026-08-23, and it would let this monitor's probe (which egresses
+from the Hetzner IP) reach the origin, so the monitor could never return its
+pinned 401. Do not re-attach any bypass policy to this app.
 
 **The monitor must send `{"Accept": "application/json"}` in its Headers field.**
 Access decides browser-vs-client on the `Accept` header: uptime-kuma's default
@@ -226,22 +225,22 @@ and answers `302` to the login page instead of the non-browser `401` —
 verified 2026-08-22 with two curls differing only in that header. Without the
 custom header the monitor stays DOWN forever against a perfectly healthy edge.
 Do not "fix" that by accepting `302` — keep the pinned `["401"]` and fix the
-header instead, so the accepted set keeps meaning "Access challenged a
-non-browser client".
+header, so the accepted set keeps meaning "Access challenged a non-browser
+client".
 
 Accepted residual: the mcp tunnel route and the `influxdb-mcp` HTTP handler have
 no external monitor, so a wedged handler surfaces only when a client fails. A
 service token plus a Service Auth policy would close that gap.
 
-That option stays declined here, but one of its three original reasons no longer
-holds. `hae.cynexia.com` still proves tunnel and cloudflared end to end, and the
-pod still has in-cluster TCP probes. The third reason — that a service token
-means a standing secret in uptime-kuma's config — was overtaken on August 25,
-2026, when the `Uptime` token was introduced for four VPS apps. The estate now
-holds such a secret deliberately: the alternative it replaced granted nine apps
-to every VPS pod and logged nothing, whereas the token opens four apps and logs
-every use, and `uptime.cynexia.com` now sits behind `allow_cynexia_com` so the
-UI that renders the secret is no longer public. Adding the same arrangement to
+That option stays declined, but one of its three original reasons no longer
+holds. Two still do: `hae.cynexia.com` proves tunnel and cloudflared end to end,
+and the pod has in-cluster TCP probes. The third — that a service token means a
+standing secret in uptime-kuma's config — was overtaken on August 25, 2026, when
+the `Uptime` token was introduced for four VPS apps. The estate now holds such a
+secret deliberately: the arrangement it replaced granted nine apps to every VPS
+pod and logged nothing, whereas the token opens four apps and logs every use, and
+`uptime.cynexia.com` now sits behind `allow_cynexia_com` so the UI that renders
+the secret is no longer public. Adding the same arrangement to
 `mcp.cynexia.com` is a live option, not a closed one.
 
 **The `Data MCP` monitor still must not get a token**, whatever is decided about
@@ -261,11 +260,10 @@ Widening a set to swallow whatever appears stops the monitor being a monitor.
 
 A push monitor receives a heartbeat instead of sending a request, which is what lets a job
 inside a cluster drive it without exposing anything. Each token lives in 1Password and reaches
-its manifest through the `op run` + envsubst pipeline; the token is typed `[text]`, because it
-is a tier-2 spam-target identifier and not a secret. Holding one lets a stranger push a
-heartbeat and mask a real failure, and grants nothing else — so it stays out of the public
-repository, needs no rotation, and earns no honesty-box row if it turns up in a transcript or
-a pod log.
+its manifest through the `op run` + envsubst pipeline, typed `[text]` because it is a tier-2
+spam-target identifier and not a secret: holding one lets a stranger push a heartbeat and mask a
+real failure, and grants nothing else. So it stays out of the public repository, needs no
+rotation, and earns no honesty-box row if it turns up in a transcript or a pod log.
 
 There is **no `/start` equivalent** on this API and there must not be a synthetic one: a push
 is a heartbeat carrying a status. The hang bound is the job's own `activeDeadlineSeconds`; the
@@ -281,12 +279,12 @@ below the table — and it needs the same bypass, from further away.
 
 **Some monitors deliberately receive nothing on some runs, so silence is not always a fault.**
 `health-ingest` pushes only when both its buckets are fresh, and `homelab-update-watch` pushes
-nothing when it could not read GitHub. Both are the deliberate equivalent of healthchecks.io's
-`/log` ping, which recorded an event and changed no state; kuma has two states and no third kind,
-so the equivalent of "record nothing" is to send nothing. The consequence is that a monitor which
-has not moved in a while may be working exactly as designed, and its **silence bound is the
-interval plus retry** in the table below — not any per-run signal. Read the last message it did
-receive, and the pod log, before treating a gap as an incident.
+nothing when it could not read GitHub. Both stand in for healthchecks.io's `/log` ping, which
+recorded an event and changed no state; kuma has two states and no third kind, so "record nothing"
+becomes "send nothing". So a monitor that has not moved in a while may be working exactly as
+designed, and its **silence bound is the interval plus retry** in the table below — not any per-run
+signal. Read the last message it did receive, and the pod log, before treating a gap as an
+incident.
 
 **One trap is Python-only and it is silent.** Cloudflare answers urllib's default
 `Python-urllib/3.x` User-Agent with HTTP 403 and `error code: 1010` before the request reaches
@@ -302,18 +300,17 @@ both treat as a failure, and every runner prints a fixed line when its push fail
 whose log carries no push-failure line has already proved the token, the bypass and the monitor.
 Confirming UP in the UI is the second half, not the first.
 
-Creating one is a hand job in the kuma UI — see the note on monitor creation above; kuma v2
-exposes monitor CRUD over Socket.IO only. Set the type to **Push**, take the token from the
-generated push URL — the last path segment, and nothing else — and store it in 1Password. The
-manifest, never the script, assembles the URL: the `env:` block sets
+Create one by hand in the kuma UI — see the note on monitor creation above. Set the type to
+**Push**, take the token from the generated push URL — the last path segment, and nothing else —
+and store it in 1Password. The manifest, never the script, assembles the URL: the `env:` block sets
 `PUSH_URL: "https://uptime.cynexia.com/api/push/${TOKEN_VAR}"`, and only `PUSH_URL` reaches the
 runner. A generated script rides the same envsubst stream as its manifest and envsubst rewrites
 the bare `$NAME` form too, so a script naming the allowlisted variable would publish the token
 inside a ConfigMap; `make check-script-substitution` enforces the rename.
 
-The last column records **per-job semantics**, not a uniform contract: each job decides for
-itself what it pushes and when, and they genuinely differ. Read it per row rather than
-assuming up-on-success everywhere.
+The last column records **per-job semantics**, not a uniform contract: each job decides for itself
+what it pushes and when, and they genuinely differ. Read it per row rather than assuming
+up-on-success everywhere.
 
 | Monitor | Token | Interval / retries | Pushed by, and on what |
 |---|---|---|---|
@@ -337,8 +334,8 @@ from inside a cluster. Three things about it are unlike every other row here.
 
 - **It is the only push monitor driven from outside both clusters.** Every other one is a CronJob
   in a namespace; this is a cron job inside the hermes agent on an off-cluster Debian VM. It relies
-  on the same `/api/push/*` Access bypass, which is what makes that bypass's blast radius wider
-  than "the clusters": remove or narrow it and this monitor goes permanently DOWN over a perfectly
+  on the same `/api/push/*` Access bypass, which is what widens that bypass's blast radius past
+  "the clusters": remove or narrow it and this monitor goes permanently DOWN over a perfectly
   healthy VM, along with every other push monitor here.
 - **Its token lives in the `hermes` vault, not `Homelab`**, because the VM's 1Password service
   account can see only that vault — which is what lets the VM resolve it for itself. Anyone

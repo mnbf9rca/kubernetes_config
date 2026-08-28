@@ -5,8 +5,8 @@ connected to the Omni instance. Everything below was verified end-to-end on a cl
 machine on 2026-08-19.
 
 This repo is public: the Omni service URL and the sign-in identity are **not** written
-here as literal values. They live in 1Password and every command below reads them at
-run time with `op read`, the same convention the rest of the repo uses for secrets.
+here as literal values. They live in 1Password, and every command below reads them at run
+time with `op read`, the convention the rest of the repo uses for secrets.
 
 | What | 1Password reference |
 |---|---|
@@ -34,18 +34,18 @@ rpc error: code = Unavailable desc = connection error: ... dial tcp 127.0.0.1:80
 ```
 
 **`connection refused` on 127.0.0.1:8080 means "there is no omniconfig", not "Omni is
-down".** Check `omnictl config contexts` before you go looking at the Omni instance.
-The same symptom appears if a stale `default` context is the selected one — `omnictl
-config add` does not switch contexts for you, which is why step 2 below is a separate
-command.
+down".** Check `omnictl config contexts` before investigating the Omni instance. The same
+symptom appears if a stale `default` context is the selected one — `omnictl config add`
+does not switch contexts for you, which is why step 2 below is a separate command.
 
 ## Prerequisites
 
 Install the toolchain, then assert it:
 
 ```bash
-brew install siderolabs/tap/omnictl talosctl kubectl kustomize jq direnv gettext 1password-cli
-make check-tools     # kubectl kustomize envsubst op direnv talosctl omnictl jq
+brew install siderolabs/tap/omnictl talosctl kubectl kustomize jq direnv gettext \
+  shellcheck 1password-cli
+make check-tools     # kubectl kustomize envsubst op direnv talosctl omnictl jq shellcheck
 ```
 
 `envsubst` ships in the `gettext` keg and may need `brew link --force gettext` on a
@@ -91,8 +91,8 @@ Nodes are addressed by **node name**, never by IP: `talosctl -n 10.100.0.100 ...
 with `node not found, cannot resolve its management address`, because the node's
 management address is resolved by Omni from the machine's name.
 
-Omitting `--cluster` downloads the generic Omni-wide talosconfig, which
-also works against machines in maintenance mode (useful when a node has no cluster yet).
+Omitting `--cluster` downloads the generic Omni-wide talosconfig, which also works
+against machines in maintenance mode — the case for a node that has no cluster yet.
 
 ## Where the state lands
 
@@ -103,8 +103,8 @@ also works against machines in maintenance mode (useful when a node has no clust
 | `~/.kube/config` | `omnictl kubeconfig --merge` | `cynexia-homelab` / `cynexia-vps` contexts (Omni OIDC auth) |
 | `~/.talos/config` | `omnictl talosconfig --merge` | talosconfig pointing at the Omni proxy |
 
-Both default paths are overridable by env var, which is the clean way to run against a
-second Omni instance without clobbering the primary config:
+Environment variables override both default paths — the clean way to run against a second
+Omni instance without clobbering the primary config:
 
 - `OMNICONFIG` overrides `~/.talos/omni/config` (also `--omniconfig`)
 - `SIDEROV1_KEYS_DIR` overrides `~/.talos/keys` (also `--siderov1-keys-dir`)
@@ -126,12 +126,12 @@ make check-context                       # asserts current-context == cynexia-ho
 
 ## Secrets for the apply workflow
 
-Cluster access alone is not enough to run `make apply-homelab` / `make apply-vps` —
-those need 1Password-backed values. See [apply-workflow.md](apply-workflow.md); the short
-version is `direnv allow` in the repo root, which exports **only**
+Cluster access alone is not enough to run `make apply-homelab` / `make apply-vps` — those
+need 1Password-backed values. Run `direnv allow` in the repo root, which exports **only**
 `OP_SERVICE_ACCOUNT_TOKEN`, then `make require-vars`, which re-enters under `op run` and
 confirms every required variable resolves. Secret values are never exported into your
-shell — the token is the one thing direnv provides.
+shell; the token is the one thing direnv provides. Full detail:
+[apply-workflow.md](apply-workflow.md).
 
 ## Troubleshooting
 

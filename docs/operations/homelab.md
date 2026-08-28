@@ -28,11 +28,12 @@ manifests, so they are deliberately absent from `namespaces.yaml` (kustomize rej
 duplicates). **Those three upstream bases stay unwatched, and the 2026-08-26 Renovate
 widening did not change that.** `cert-manager`, `nfs-csi` and `local-path` are pulled in
 as raw GitHub URLs with the version in the *path*, which the `kustomize` manager does
-not parse; it reads `?ref=` and `images:` transformers, and this tree has neither. The
-manager's entire footprint across the repo is one file — the VPS's
+not parse; it reads `?ref=` and `images:` transformers, and this tree has neither. That
+manager's only footprint in the repo is the VPS's
 `vps/bootstrap/local-path/kustomization.yaml`, pinned `?ref=v0.0.31`. Bumping a homelab
-base is still a hand edit of the URL. `keel`'s namespace **is** declared there, because upstream keel moved to
-Helm-only distribution and `homelab/bootstrap/keel/keel.yaml` is hand-written.
+base is still a hand edit of the URL. `keel`'s namespace **is** declared there, because
+upstream keel moved to Helm-only distribution and `homelab/bootstrap/keel/keel.yaml` is
+hand-written.
 
 ### keel
 
@@ -40,8 +41,8 @@ keel is digest-pinned and carries no keel annotations of its own. A self-updatin
 controller holding cluster-wide read **and write** across every workload kind — its
 ClusterRole grants `get, delete, watch, list, update` on Deployments, DaemonSets,
 StatefulSets, ReplicaSets, ReplicationControllers, Pods, Jobs and CronJobs — is the one
-component where an unattended upstream tag change is a security event rather than a
-convenience, so its bump belongs in a reviewed pull request rather than a six-hour poll.
+component where an unattended tag change is a security event, not a convenience. Its
+bump belongs in a reviewed pull request, not a six-hour poll.
 
 Renovate has watched `homelab/bootstrap/**` since 2026-08-26, when `renovate.json` was
 widened from three namespaces to `homelab/**` and `vps/**`, so keel's own bump now
@@ -50,9 +51,9 @@ arrives as a pull request instead of waiting for someone to remember it.
 scope, and runs in the `diff-homelab`/`apply-homelab` preflight — so if that scope is
 ever narrowed again, the next apply fails rather than the pin going quietly stale.
 
-One thing the widening deliberately did **not** do is let Renovate re-propose keel's
-digest: `homelab/bootstrap/keel/**` is on the `pinDigests: false` packageRule, because
-the image is already pinned by tag and digest by hand.
+The widening deliberately does **not** let Renovate re-propose keel's digest:
+`homelab/bootstrap/keel/**` is on the `pinDigests: false` packageRule, because the image
+is already pinned by tag and digest by hand.
 
 Its RBAC was trimmed on August 26, 2026 (PR #68): no `secrets` rule, no
 `pods/portforward`. Verify keel's permissions with a SelfSubjectAccessReview issued
@@ -83,30 +84,29 @@ dedicated `cynexia-health` tunnel, separate from the VPS cluster's `cynexia-vps`
 
 ### The `ops` namespace
 
-`homelab/ops/` holds work that belongs to the estate rather than to any one application. Today
-that is two CronJobs, both dead-man's-switches over the update path itself:
+`homelab/ops/` holds work that belongs to the estate rather than to any one application:
+two CronJobs, both dead-man's-switches over the update path itself.
 
 - **`update-watch`**, at 06:45Z daily, makes a single unauthenticated GitHub call, counts the
   open Renovate pull requests on this repo, and drives the `homelab-update-watch`
-  uptime-kuma push monitor so an update that has waited past the threshold goes DOWN instead of
-  passing unnoticed. A *waiting* update is UP — the monitor exists to catch a skipped update
-  session, not to nag about the normal state. It pushes **nothing at all** on a run that could
-  not read GitHub, which is what stops "I could not look" reading as "everything is fine". Full
+  uptime-kuma push monitor, so an update that has waited past the threshold goes DOWN instead of
+  passing unnoticed. A *waiting* update is UP — the monitor catches a skipped update
+  session; it does not nag about the normal state. It pushes **nothing at all** on a run that could
+  not read GitHub, which stops "I could not look" reading as "everything is fine". Full
   behaviour and every cause of DOWN:
   [monitoring.md](monitoring.md#the-update-watcher).
 - **`keel-fresh`**, at 07:15Z daily, makes one request to keel's own `/metrics` — a single
   ClusterIP endpoint, `keel.keel.svc.cluster.local:9300`, reached across the namespace boundary
   from `ops`; it scrapes nothing else and holds no cluster-wide read — and pushes the
   `homelab-keel-fresh` uptime-kuma monitor. It is the only thing that would notice keel's
-  registry poll loop had wedged — keel's own probes hit `/healthz`, which stays green while the
-  poll goroutine is dead. Verdict enum, the image floor and why there is no `/start`:
+  registry poll loop had wedged: keel's own probes hit `/healthz`, which stays green while
+  the poll goroutine is dead. Verdict enum, the image floor and why there is no `/start`:
   [monitoring.md](monitoring.md#the-keel-dead-mans-switch).
 
 The half-hour gap is deliberate: the two update-path checks should not alert in the same minute.
 `keel-fresh` keeps two integers of state on a 32Mi `local-path` PVC, `keel-fresh-state` — the
 previous run's process start time and poll counter — which is the only way to assert a counter
-is *increasing*. It still needs no ServiceAccount and no RBAC; its only peers are a ClusterIP in
-the `keel` namespace and `uptime.cynexia.com`.
+is *increasing*. Its only peers are a ClusterIP in the `keel` namespace and `uptime.cynexia.com`.
 
 Three things about this namespace are deliberate and should survive a refactor:
 
@@ -115,14 +115,14 @@ Three things about this namespace are deliberate and should survive a refactor:
   privileged for restic's hostPaths, which an outbound-HTTPS poller has no business inheriting.
   `ops` is PSA baseline, the cluster default, and needs no ServiceAccount and no RBAC.
 - **No keel here.** Every image is version-pinned and Renovate watches this tree, so neither
-  job's own pin is an unwatched image. `make check-renovate-scope` catches it if that scope is
-  ever lost, and since 2026-08-26 it gates: `check-renovate-scope-homelab` runs in the
-  `diff-homelab`/`apply-homelab` preflight, so losing the scope fails the next apply.
-- **Removal is one commit,** but it is a longer list than it was with one job. Drop `- ops` from
+  job's own pin is an unwatched image. Since 2026-08-26 that is gated:
+  `check-renovate-scope-homelab` runs in the `diff-homelab`/`apply-homelab` preflight, so
+  losing the scope fails the next apply.
+- **Removal is one commit,** with a long list in it. Drop `- ops` from
   `homelab/kustomization.yaml`, `rm -r homelab/ops/`, remove the namespace block, remove every
   `OPS_*` variable from `.env.tpl` and from both Makefile lists — `OPS_KUMA_UPDATE_TOKEN` and
   `OPS_KUMA_KEEL_TOKEN`, plus `OPS_HC_UPDATE_UUID` for as long as that retired line is still
-  wired — grep rather than working from a list here,
+  wired; grep rather than working from a list here —
   and from `scripts/check-ping-bodies.py` remove **both** `REQUIRED_TARGETS` entries
   (`update-watch.py` and `keel-fresh.sh`), **every name in that file's `update-watch.py`
   block of `PY_VALUE_ALLOWLIST`** — no count is written here, because it read "eight" while the
@@ -130,9 +130,9 @@ Three things about this namespace are deliberate and should survive a refactor:
   for code that no longer exists — and `PUSH_URL` from `DENY_VARS`. Then apply,
   `kubectl delete namespace ops` — which takes the
   `keel-fresh-state` PVC with it — and delete the `keel` **Service** in the `keel` namespace,
-  which exists only to serve `keel-fresh` and is not removed by deleting the `ops` namespace.
+  which exists only to serve `keel-fresh` and survives deletion of the `ops` namespace.
   Finally retire both instruments: the `homelab-update-watch` *and* `homelab-keel-fresh`
-  uptime-kuma push monitors — both are push monitors since August 26, 2026 — then delete both
+  uptime-kuma push monitors — both push monitors since August 26, 2026 — then delete both
   1Password items.
 
   Removing only `keel-fresh` and keeping `update-watch` is the same list minus the
@@ -159,11 +159,11 @@ NAS side, outside this repo.
 
 Applications' own scheduled backups (sonarr, radarr, emby, sabnzbd) must write zips to
 `/config/Backups/` so restic catches them. The sqlite-quiesce sidecar pattern from
-earlier drafts of the plan is **not** used here — it's redundant when the app's own zip
+earlier drafts of the plan is **not** used here — it is redundant when the app's own zip
 backup already handles DB consistency. (Both restic jobs carry a backup verification
-gate, but with different shapes: the VPS gate checks its quiesce sidecars' snapshots,
-while the homelab gate checks mount identity, tree scale, an expected-artifact list and
-the freshness of the influx dumps and the hermes zip — see
+gate, in different shapes: the VPS gate checks its quiesce sidecars' snapshots, while the
+homelab gate checks mount identity, tree scale, an expected-artifact list and the
+freshness of the influx dumps and the hermes zip — see
 [monitoring.md](monitoring.md#the-backup-verification-gates).)
 
 Until 2026-08 neither restic CronJob reported anywhere and neither had a runtime ceiling,
@@ -193,8 +193,8 @@ gateway's NTP, which surfaces as `time.SyncController` errors that look like a c
 problem and send you debugging the wrong subsystem.
 
 `homelab/talos/machineconfig-patches/305-homelab-lan-network.yaml` therefore puts
-`ens18` on a static address and moves NTP to public servers (time.cloudflare.com /
-time.google.com / pool.ntp.org), so the cluster depends on the gateway for neither. The
+`ens18` on a static address and moves NTP to public servers (time.cloudflare.com,
+time.google.com, pool.ntp.org), so the cluster depends on the gateway for neither. The
 OPNsense Kea reservation is kept as defense in depth.
 
 ## DNS (Route53)
@@ -207,8 +207,8 @@ aws route53 change-resource-record-sets --hosted-zone-id Z3409TNW35PGSS \
   --change-batch '{"Changes":[{"Action":"UPSERT","ResourceRecordSet":{"Name":"<host>.cynexia.net","Type":"A","TTL":60,"ResourceRecords":[{"Value":"10.100.0.100"}]}}]}'
 ```
 
-TTL is 60s, so after a change browsers usually need a hard refresh (Cmd+Shift+R) to stop
-using the cached target.
+TTL is 60s, so after a change browsers need a hard refresh (Cmd+Shift+R) to stop using
+the cached target.
 
 `cynexia.com` is a **different** zone on Cloudflare, used by the VPS cluster and the
 health tunnel. It has nothing to do with Route53.
@@ -266,8 +266,8 @@ change. On the Proxmox host:
 
 ### Hermes VM configuration layout and secrets
 
-The rules that hold for **every** Hermes plugin and profile on VM 103, learned the
-hard way while wiring hindsight (2026-08-24) and binding on any future integration:
+These rules hold for **every** Hermes plugin and profile on VM 103. They were learned
+while wiring hindsight (2026-08-24), and they bind any future integration:
 
 - **Plugin config resolves per `HERMES_HOME`, which makes it per PROFILE.** A profile is
   a separate Hermes home directory, so profile `<name>` reads
@@ -297,7 +297,7 @@ hard way while wiring hindsight (2026-08-24) and binding on any future integrati
   hermes reports that as a config value that quietly stayed unresolved.
 - **Do not trust the dashboard GUI as the writer of record — it fails in both
   directions.** It silently drops some writes: at least one field (the hindsight API
-  server URL) reports saved and is not. It also silently persists too much, writing an
+  server URL) reports saved and is not. It also persists too much, writing an
   API key into the plugin's `config.json` as **cleartext**, which defeats the 1Password
   integration and puts a live credential in the nightly backup zip. After any GUI
   session, read the config file back and delete any secret value you find there. Because
@@ -340,7 +340,7 @@ mirror exist; fetch those rather than searching):
   and the bundled node runtime. It excludes the `hermes-agent/` checkout, `backups/`
   itself (which is why the wrapper stages there — the staged copy can never recurse
   into the next night's zip), `state-snapshots/`, checkpoints, and SQLite sidecar
-  files. Measured 2026-08-24: 203 MB compressed from 572 MB, about 23 seconds.
+  files. Measured 2026-08-24: 203 MB compressed from 572 MB, in about 23 seconds.
 - It is safe against live services: `state.db` is copied with SQLite's `backup()` API,
   so the four systemd user units keep running. Only **restore** requires stopping them.
 - **Never pass `-q`/`--quick`**: it snapshots only `config.yaml`, `state.db`, `.env`,
@@ -524,7 +524,7 @@ everything it calls into (`openai`, `httpx`, the agent itself) lives in
 what the service runs depend on files systemd cannot see.
 
 **Do not give it a venv of its own.** The cohabitation looks like an accident worth
-tidying up, and it is not. `api/agent_runtime.py` imports `run_agent.AIAgent` into the
+tidying up. It is not. `api/agent_runtime.py` imports `run_agent.AIAgent` into the
 server process, and `api/streaming.py` instantiates that class for every chat turn, so the
 WebUI needs hermes-agent's whole dependency tree rather than the two packages its own
 `requirements.txt` names. Splitting the venvs fails, and it fails silently. Measured on
@@ -550,9 +550,9 @@ Upstream's newest tag sits more than 560 commits behind its own deployed master,
 The procedure is a runbook that an agent or the operator follows roughly weekly, with someone watching: [hermes-vm-updates.md](hermes-vm-updates.md).
 Its [Update](hermes-vm-updates.md#update) step fetches `origin/master`, checks the branch out with `git checkout -f -B master origin/master`, and installs `requirements.txt` into the **agent** venv under a constraint file frozen from that same venv moments earlier.
 
-Two consequences of that checkout form are worth knowing before you touch the tree by hand:
+Two consequences of that checkout form matter before you touch the tree by hand:
 
-- **`git checkout master && git pull --ff-only` agrees with it.** The command you already have in your fingers leaves the checkout in the shape the runbook maintains: local `master`, HEAD attached, tracking upstream.
+- **`git checkout master && git pull --ff-only` agrees with it.** That command leaves the checkout in the shape the runbook maintains: local `master`, HEAD attached, tracking upstream.
 - **`-f` force-sets the branch, so uncommitted changes in `/home/hermes/hermes-webui` are discarded.** Do not keep work there. The runbook's preconditions stop on a dirty tree for exactly this reason, and the `-f` states the intent rather than hiding it.
 
 **The constraint file is not decoration.** `pyyaml` and `cryptography` are already hermes-agent dependencies (`pyproject.toml` pins `pyyaml==6.0.3` and `cryptography==50.0.0`), so today the install is a no-op.
@@ -581,7 +581,7 @@ It moves the WebUI alone, so use it only when the agent side is known good — o
 
 Second resort, if the record is missing or names a revision that is itself broken: the
 Hermex repo publishes the upstream commit the app was last validated against as
-`UPSTREAM_TESTED_SHA`. Note the branch is `master`, not `main`, and validate the value
+`UPSTREAM_TESTED_SHA`. The branch is `master`, not `main`. Validate the value
 before it reaches `git` — a 404 returns an HTML error page, and `git checkout ""` on an
 empty variable fails with a confusing pathspec error:
 
@@ -598,7 +598,7 @@ git -C /home/hermes/hermes-webui checkout "$SHA"
 Prefer the `webui_sha` in the pre-run record.
 `UPSTREAM_TESTED_SHA` advances only when the app's own contract
 tests are re-run, so it drifts: on 2026-08-24 it pointed at a commit from 2026-05-17 while
-upstream `master` was three months further on. Rolling back that far means running May
+upstream `master` was three months further on. Rolling back that far runs May
 code against an August `~/.hermes/webui` state directory and an agent that has moved
 underneath it, and upstream documents no backwards state compatibility.
 
@@ -637,9 +637,9 @@ The canonical copy of the script lives in `hermes-vm/` in this repository, not i
 The liveness check has no systemd unit and no environment file: it runs as a `no_agent` cron job inside `hermes-gateway`, and its push token is injected from 1Password at gateway start.
 **Everything outside `~/.hermes` must be reinstalled by hand after a rebuild** — the install runbook is [hermes-vm.md](hermes-vm.md#installing-or-reinstalling).
 
-The entries inside `~/.hermes` come back with the restored archive, and **two of them need looking at rather than trusting**.
+The entries inside `~/.hermes` come back with the restored archive, and **two of them need checking rather than trusting**.
 Run `hermes cron list` after a restore: a liveness job that failed to come back looks exactly like a healthy day until the monitor's heartbeat lapses about 30 hours later.
-`hermes-update.pre-run` is written by the update runbook, so a rebuilt VM inherits whatever rollback target the last update recorded — confirm the revisions it names still exist in both checkouts before trusting it.
+And a rebuilt VM inherits whatever rollback target the last update wrote into `hermes-update.pre-run`, so confirm the revisions it names still exist in both checkouts before trusting it.
 
 #### Rebuild step
 
@@ -783,8 +783,7 @@ starting the services. If migration fails, install the version that took the bac
 
 Services were deployed fresh with empty PVCs; app-level backups were exported from the
 old microk8s cluster through each service's own UI and imported into the new instance
-the same way. No rsync-from-old-cluster data seeding was needed — simpler than the
-original plan.
+the same way. No rsync-from-old-cluster data seeding was needed.
 
 The old microk8s cluster was **decommissioned 2026-07-26** — no overlap concerns
 remain, and any lingering `--context=microk8s` instructions are obsolete.
