@@ -81,9 +81,22 @@ A cluster-template path exists (`talos.version` and `kubernetes.version` on a `k
 Export one with `omnictl cluster template export <cluster> -o <file>` if you want a reviewable diff; otherwise the UI is the working path.
 
 **Neither cluster can use that path as things stand.** Both were created in the web interface rather than from a template, which the cluster resource shows by carrying no template annotation, so `omnictl cluster template sync` is unavailable until template management is adopted.
-Adopting it is a design decision and not a step in an update session, because the exported template inlines the cluster's config patches by `idOverride` — including the four `homelab/talos/machineconfig-patches/` files that `make apply-talos` already owns.
+Adopting it is a design decision and not a step in an update session, because the exported template inlines the cluster's config patches by `idOverride` — including the five `homelab/talos/machineconfig-patches/` files that `make apply-talos` already owns.
 That would give those patches two writers, last write winning, with no guard between the two tools: the concurrent-writer failure this repo has already paid for once.
 Taking it means deciding in the same change which tool owns the patches, and deleting or guarding the other; until somebody does, the web UI is the only upgrade path and Step 4 of the session needs the operator.
+
+**`homelab/talos/` and `vps/talos/` are a subset of the live patch set, not an inventory of it.**
+Omni is the system of record for machine config patches, and these trees hold only the ones this repository authors.
+`make apply-talos` is push-only: it applies each file under `homelab/talos/machineconfig-patches/`, never enumerates what Omni already holds, and never deletes.
+It also covers the homelab alone — there is no VPS equivalent, so the two files under `vps/talos/machineconfig-patches/` reach Omni only through a hand-run `omnictl apply`.
+A patch created in the web interface, or one whose file was deleted here, therefore stays applied and invisible.
+Omni's own patches are recognisable by the `omni.sidero.dev/system-patch:` label — the `400-<cluster>-control-planes-untaint` pair and the per-machine `900-cm-<machine>-kubernetes-upgrade` patches written by `KubernetesUpgradeStatusController` — and they must never be copied into a file here, because a repo copy would collide with a resource Omni rewrites.
+The hand-made ones carry no such label, and those are the ones that need a decision.
+`200-homelab`, which sets the cluster's pod and service subnets, was typed into the cluster-creation form and lived only in Omni until it was codified from the live cluster on August 28, 2026.
+One is still outstanding: `500-7a4333c7-df30-4205-a022-fd93154da992` is a fossil of the pre-SSD kubelet self-bind on `/var/mnt/local-path-provisioner`, whose codified successor was deleted from this repository at `ea0a75c` and never deleted from Omni.
+Nothing mounts at that path today, so it is inert — but a future user volume landing there would reinstate the `EBUSY` upgrade failure that `homelab/bootstrap/local-path/kustomization.yaml` records as fixed.
+Deleting it is the operator's call: `omnictl delete configpatch 500-7a4333c7-df30-4205-a022-fd93154da992` restarts the kubelet, so it belongs in a maintenance window rather than in the middle of an update session.
+Run `omnictl get configpatches` at the start of the next session and reconcile the list against these two trees; anything unaccounted for is either Omni's by its label or a decision waiting to be made.
 
 Editing the `Clusters.omni.sidero.dev` resource directly to change a version is **undocumented**.
 It is mechanically possible and it is not a supported path.

@@ -18,6 +18,8 @@ Kubectl context: `cynexia-homelab`.
 | restic | Nightly CronJob (03:00 UTC) → Backblaze B2 `b2:homelab-restic-d5e15f22`, 7 daily / 4 weekly / 6 monthly. Pings healthchecks.io on start and exit code — see [monitoring.md](monitoring.md#the-restic-ping-wrapper) |
 | jottacloud-backup | Own namespace; rclone Jottacloud → NFS, then kopia → B2 `cloud-files-backup`; reports to the `jottacloud-backup` uptime-kuma push monitor |
 
+Workloads run on the single node because Omni's own system patch `400-homelab-control-planes-untaint` sets `cluster.allowSchedulingOnControlPlanes: true` — the mirror of the VPS twin described in [vps.md](vps.md), labelled `omni.sidero.dev/system-patch:`, so Omni owns it and it must never be copied into a file under `homelab/talos/`.
+
 PSA: the cluster enforces `baseline` by default.
 `traefik` (hostNetwork/hostPort) and `backup` (hostPath) are elevated to `privileged` by labels in `homelab/bootstrap/namespaces.yaml`.
 Any new hostPath/hostNetwork workload needs the same treatment.
