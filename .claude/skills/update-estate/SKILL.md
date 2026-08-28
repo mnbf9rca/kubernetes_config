@@ -28,25 +28,30 @@ When you cannot satisfy one, stop and tell the operator what blocked you.
 1. **Never merge before you have deployed and verified.**
    `master` records what is running, never what is intended.
    The order is always: check out the branch, apply, verify, then merge.
-2. **Read `make diff-<cluster>` in full before every apply.**
+2. **Merge only what this runbook prescribes.**
+   Steps 2, 3 and 4 name it: the Renovate pull requests, the hand-managed pins, the version ledger.
+   Everything the session invents - a runbook correction, a new guard, a rule, a better command - goes on the findings branch and merges once, after review.
+   The test is "did the runbook ask me to make it?", not "is this change good?".
+   A session revises its own conclusions as later work contradicts them, and a mid-session merge forecloses that.
+3. **Read `make diff-<cluster>` in full before every apply.**
    Not the summary - every resource it names.
    A resource in that list your branch never touched is another branch's deployed work about to be reverted.
    **Treat it as a revert until you have proved otherwise**, by finding the branch that deployed it.
-3. **Carry every deployed-but-unmerged branch before you apply.**
+4. **Carry every deployed-but-unmerged branch before you apply.**
    Rebase onto `origin/master`, then read the open pull requests for another branch that is already deployed and touches the same files.
    An apply reconciles the whole rendered tree: every file your branch does not carry is reset to your branch's version, silently, with every job still green.
    This cost a reverted restic gate on August 24, 2026.
-4. **Never bypass the context guards.**
+5. **Never bypass the context guards.**
    Never pass `HOMELAB_CONTEXT=` or `VPS_CONTEXT=` on the command line, and never invoke an `_*-inner` Makefile target directly.
-5. **Never render then apply.**
+6. **Never render then apply.**
    `make build-* > file` writes the literal string `<concealed by 1Password>` into every Secret, and the apply reports success.
    Use `make diff-*` and `make apply-*`, whose pipelines keep real values inside one process.
-6. **Dump before you upgrade anything stateful, and show the dump succeeded.**
+7. **Dump before you upgrade anything stateful, and show the dump succeeded.**
    Then keep going - no per-item pause for approval.
-7. **Squash merges only.**
+8. **Squash merges only.**
    `gh pr merge <n> --squash --delete-branch`.
    Merge commits and rebase merges are disabled on the repository.
-8. **Never print a resolved secret, and never build a ping body from a command's output.**
+9. **Never print a resolved secret, and never build a ping body from a command's output.**
    If a real secret value does reach your output, tell the operator in your next message and add a row to `secrets-to-rotate.md` before doing anything else.
 
 ## Step 0 - Open the session
@@ -175,7 +180,7 @@ The three files below repeat the version inside the URL path, where the manager 
 - [ ] Check each upstream: `gh release list -R <owner>/<repo> --limit 5`.
 - [ ] For each one that moved, branch from `master`, edit **every** occurrence, and read the upstream release notes for anything that is not a version bump.
 - [ ] `make diff-<cluster>` and read it.
-      A base bump changes many resources at once, so this diff is long and gate 2 still applies to every line of it.
+      A base bump changes many resources at once, so this diff is long and gate 3 still applies to every line of it.
 - [ ] `make apply-<cluster>`, then confirm the component is healthy: cert-manager's controller and webhook Ready, the CSI node and controller pods Running, the local-path provisioner Running.
 - [ ] Publish and merge, in that order: `git push -u origin HEAD`, then `gh pr create --fill`, then `gh pr merge <n> --squash --delete-branch` once the apply is verified.
       Nothing on GitHub exists until you push it.
@@ -273,6 +278,8 @@ There is no updater on the VM.
 
 - [ ] Confirm `master` contains everything you deployed: `git status` clean, no unmerged pull request that has been applied.
 - [ ] Count what you did: pull requests merged, pins bumped, and one verdict for the VM.
+- [ ] Say what you left unmerged and why: every pull request held back on a `PENDING` check or a hold you encoded in `renovate.json`, and everything gate 2 put on the findings branch rather than into `master` - a runbook correction, a guard, a rule.
+      The close is where the operator learns that work exists and is waiting for one review.
 - [ ] Ping the `estate-update` check.
       **Every `<...>` below is a placeholder.**
       Replace the two counts with numbers you tallied yourself, and replace the verdict with one value from the enum written inline beside it:
