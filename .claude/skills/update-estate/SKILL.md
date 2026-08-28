@@ -118,13 +118,16 @@ Depth is proportionate - a patch span gets a skim, a major gets a real read, a P
 3. **Declining is a configuration change, not a pull request action.**
    Never close a Renovate pull request by hand, and never leave one open you have decided not to merge.
    Encode the hold in `renovate.json` - an `allowedVersions` cap or a disable, with a `description` carrying the reason and the date - and Renovate withdraws its own pull request.
+   Publish it like the ledger in Step 4: commit on its own branch, `git push -u origin HEAD`, `gh pr create --fill`, squash-merge.
+   There is nothing to apply; the hold takes effect on Renovate's next run after it reaches `master`.
    That recorded reason is what makes question 1 answerable next session.
    Scope the cap deliberately: `<1.42` still takes patches, an exact version freezes the line.
 
 `getmeili/meilisearch` in `vps/workloads/karakeep.yaml` is the worked example.
 Question 1: karakeep's own compose file pins v1.41.0, so the pin is the pairing karakeep tests against, and that reason still stands.
 Question 2 therefore does not arise - and it would not have been cheap, because Meilisearch does not convert its index across that span on startup.
-Question 3: the hold lives in `renovate.json` naming karakeep's pin as the condition, so the pull request withdraws itself and returns when karakeep moves.
+Question 3: the hold lives in `renovate.json`, capping the version and recording karakeep's pin as the reason, so the pull request withdraws itself.
+The cap is static - Renovate does not watch karakeep's compose file, so lifting the hold is a hand edit to `renovate.json` when that pin moves.
 
 **Dump first where the service holds state:**
 
