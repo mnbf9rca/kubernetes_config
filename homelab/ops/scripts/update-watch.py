@@ -11,6 +11,15 @@ one has waited long enough that an update session was plainly skipped, DOWN when
 Renovate itself has gone quiet or is visibly broken, DOWN (through silence) when
 this job stops running.
 
+SINCE 2026-08-28 IT ALSO READS ONE THING OUT OF THE DASHBOARD'S BODY: the
+repository problem Renovate writes when a package lookup fails. An image
+Renovate cannot look up gets no pull request, and every image the update engine
+is forbidden to touch is pinned, so a failed lookup freezes it silently --
+`make check-renovate-scope` still reports it watched, because that guard proves
+the file is in scope and never that the lookup succeeded. Only a COUNT of failed
+lookups reaches the heartbeat: the section names packages, and a package name is
+remote text (rule 4). The lines themselves go to the pod log.
+
 THE FOUR RULES THIS SCRIPT EXISTS TO ENFORCE. Read them before changing anything.
 
   1. "I COULD NOT LOOK" IS NEVER "EVERYTHING IS FINE". A rate limit, a 404, a
@@ -136,6 +145,7 @@ V_UPDATES_PENDING = "updates-pending"
 V_RENOVATE_STALE = "renovate-stale"
 V_DASHBOARD_MISSING = "dashboard-missing"
 V_CONFIG_ERROR = "renovate-config-error"
+V_LOOKUP_FAILED = "renovate-lookup-failed"
 V_RATE_LIMITED = "rate-limited"
 V_SECONDARY_LIMIT = "secondary-limit"
 V_REPO_UNREACHABLE = "repo-unreachable"
@@ -143,15 +153,17 @@ V_API_ERROR = "api-error"
 
 VERDICTS = frozenset({
     V_OK, V_UPDATES_WAITING, V_UPDATES_PENDING, V_RENOVATE_STALE,
-    V_DASHBOARD_MISSING, V_CONFIG_ERROR, V_RATE_LIMITED, V_SECONDARY_LIMIT,
-    V_REPO_UNREACHABLE, V_API_ERROR,
+    V_DASHBOARD_MISSING, V_CONFIG_ERROR, V_LOOKUP_FAILED, V_RATE_LIMITED,
+    V_SECONDARY_LIMIT, V_REPO_UNREACHABLE, V_API_ERROR,
 })
 
 # The verdicts that mean "the repo was read successfully". Everything else is
-# indeterminate and pings /log (rule 1).
+# indeterminate and pings /log (rule 1). `renovate-lookup-failed` belongs here
+# and not with the indeterminate ones: the repo WAS read, and the dashboard says
+# in as many words that a lookup failed. That is an answer, not a non-answer.
 DETERMINATE = frozenset({
     V_OK, V_UPDATES_WAITING, V_UPDATES_PENDING, V_RENOVATE_STALE,
-    V_DASHBOARD_MISSING, V_CONFIG_ERROR,
+    V_DASHBOARD_MISSING, V_CONFIG_ERROR, V_LOOKUP_FAILED,
 })
 
 # The determinate verdicts that are GREEN. `updates-waiting` is green on
@@ -202,6 +214,13 @@ NEXT_ACTIONS = {
     V_CONFIG_ERROR:
         "gh issue list -R mnbf9rca/kubernetes_config --author app/renovate"
         " - read it and fix renovate.json",
+    # 109 characters. The fix is nearly always registry authentication, so the
+    # line names the remedy as well as the place: the count says how many
+    # packages, the dashboard says which, and a hostRules entry is what moves
+    # them again.
+    V_LOOKUP_FAILED:
+        "read the Dependency Dashboard repository problems, then add a"
+        " renovate.json hostRules entry for that registry",
     V_RATE_LIMITED:
         "no action for one run - the unauthenticated quota is per IP;"
         " look at the Events log if it repeats",
@@ -409,6 +428,71 @@ def partition(items):
     return pull_requests, dashboard, config_issues
 
 
+# --- the dashboard's repository problems ------------------------------------
+#
+# THE ONE THING READ OUT OF THE DASHBOARD'S MARKDOWN, and the exception is
+# narrow on purpose. Rule 3 refuses to take an INVENTORY from the body -- the
+# dashboard-held checkbox list -- because a reworded body would silently
+# undercount and the count would still be reported as authoritative. This marker
+# is the opposite shape: it can only fail to FIRE. A reword loses one red
+# verdict and nothing else; it cannot turn anything green, because no other
+# verdict consults the body at all.
+#
+# Observed 2026-08-28 on issue 59, which had carried it unnoticed for weeks:
+#
+#   > Renovate failed to look up the following dependencies:
+#   > `Failed to look up docker package ghcr.io/keel-hq/keel: no-result`.
+#   > Files affected: `homelab/bootstrap/keel/keel.yaml`, ...
+#
+# The ITEM pattern requires a datasource word before `package`, so the section's
+# own heading -- "failed to look up the following dependencies" -- does not
+# match it and cannot inflate the count by one.
+LOOKUP_FAILED_SECTION = re.compile(
+    r"failed to look up the following dependencies", re.IGNORECASE)
+LOOKUP_FAILED_ITEM = re.compile(
+    r"Failed to look up\s+\S+\s+package\s", re.IGNORECASE)
+
+
+def count_lookup_failures(dashboard):
+    """How many package lookups the dashboard body reports as failed, or None.
+
+    None means the body carries no lookup-failure section -- NOT zero, which
+    would be a count taken from a section that is not there. A body that is
+    missing or is not a string is None as well: an unread body is never evidence
+    that every lookup succeeded.
+
+    Zero is returned when the section is present but no item line parsed, which
+    is what a Renovate reword looks like. The verdict still fires on it: the
+    section says a lookup failed, and the count is only ever an aid to triage.
+    """
+    body = dashboard.get("body") if isinstance(dashboard, dict) else None
+    if not isinstance(body, str):
+        return None
+    items = LOOKUP_FAILED_ITEM.findall(body)
+    if items:
+        return len(items)
+    if LOOKUP_FAILED_SECTION.search(body):
+        return 0
+    return None
+
+
+def log_lookup_failures(dashboard):
+    """The failed-lookup lines, TO THE POD LOG AND NOWHERE ELSE.
+
+    This is the one place remote dashboard text is printed, and it is the reason
+    the heartbeat can get away with a bare count: the message says how many, the
+    pod log says which packages, and the fix needs the names. Nothing here feeds
+    a sink -- `log` is not one, and putting one of these lines in a body would
+    be rule 4 exactly.
+    """
+    body = dashboard.get("body") if isinstance(dashboard, dict) else None
+    if not isinstance(body, str):
+        return
+    for line in body.splitlines():
+        if LOOKUP_FAILED_ITEM.search(line) or LOOKUP_FAILED_SECTION.search(line):
+            log("dashboard repository problem: " + _clean(line)[:300])
+
+
 def parse_github_time(text):
     """GitHub's ISO-8601 `...Z` timestamps, or None if unparseable."""
     if not isinstance(text, str):
@@ -445,6 +529,13 @@ def decide(pull_requests, dashboard, config_issues, now):
     judged stale before the pull-request rules ever run. Only under a dashboard
     that exists and has moved recently does a pull-request count mean what it
     says.
+
+    A FAILED LOOKUP SITS JUST ABOVE THE PULL-REQUEST RULES, for the same reason
+    a configuration error sits at the top: a dependency Renovate cannot look up
+    proposes nothing, so the pull-request count is an undercount by exactly the
+    frozen images. It is below staleness because a Renovate that has stopped
+    running altogether is the larger fact, and its dashboard's problem section is
+    as stale as the rest of it.
     """
     facts = {"prs_open": len(pull_requests), "config_issues": len(config_issues)}
 
@@ -459,10 +550,18 @@ def decide(pull_requests, dashboard, config_issues, now):
         if ages:
             facts["oldest_pr_days"] = max(ages)
 
+    failures = None
     if dashboard is not None:
         dash_age = age_days(parse_github_time(dashboard.get("updated_at")), now)
         if dash_age is not None:
             facts["dash_age_days"] = dash_age
+        # Recorded whatever the verdict turns out to be: a run that loses the
+        # precedence contest to a configuration error still carries the count,
+        # and the two causes are related often enough to be worth seeing
+        # together.
+        failures = count_lookup_failures(dashboard)
+        if failures is not None:
+            facts["lookup_failures"] = failures
 
     if config_issues:
         return V_CONFIG_ERROR, facts
@@ -482,6 +581,9 @@ def decide(pull_requests, dashboard, config_issues, now):
         return V_API_ERROR, facts
     if int(dash_age) > RENOVATE_ALIVE_MAX_DAYS:
         return V_RENOVATE_STALE, facts
+
+    if failures is not None:
+        return V_LOOKUP_FAILED, facts
 
     if pull_requests:
         # An open pull request is normal; an OLD one means a session was
@@ -593,6 +695,10 @@ def main():
 
     pull_requests, dashboard, config_issues = partition(items)
     verdict, facts = decide(pull_requests, dashboard, config_issues, now)
+    if dashboard is not None:
+        # Unconditional, not gated on the verdict: a lookup failure under a
+        # configuration error is exactly the run where the names are wanted.
+        log_lookup_failures(dashboard)
     log("read %d open issue(s): verdict %s" % (len(items), verdict))
     return verdict, facts, len(items)
 
@@ -625,6 +731,7 @@ def build_message(verdict, facts, run_epoch):
     oldest_pr_days = int(facts.get("oldest_pr_days", -1))
     dash_age_days = int(facts.get("dash_age_days", -1))
     config_issues = int(facts.get("config_issues", -1))
+    lookup_failures = int(facts.get("lookup_failures", -1))
     http = int(facts.get("http", -1))
 
     hc_summary(verdict)
@@ -655,6 +762,15 @@ def build_message(verdict, facts, run_epoch):
     # Then the counters, most-acted-on first. On the three longest `next=`
     # strings the cut reaches the tail of this group; every one of them is in
     # the pod log's full body, which is where triage starts.
+    #
+    # `lookup_failures=` HEADS THE GROUP, ahead even of `prs_open=`, and only a
+    # run that found the section emits it at all. Its `next=` is 109 characters,
+    # which leaves about 40 after `verdict=` and `run_epoch=`, so anywhere
+    # further down this group it would be cut from the one message it exists
+    # for. Every run that saw no repository problem omits it, so heading the
+    # group costs the other verdicts nothing.
+    if lookup_failures >= 0:
+        hc_emit("lookup_failures=%d" % lookup_failures)
     if prs_open >= 0:
         hc_emit("prs_open=%d" % prs_open)
     if oldest_pr_days >= 0:

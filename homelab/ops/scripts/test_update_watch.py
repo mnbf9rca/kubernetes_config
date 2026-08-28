@@ -25,6 +25,10 @@ exactly like a healthy estate.
     `RENOVATE_ALIVE_MAX_DAYS`, a missing dashboard and a configuration error --
     and must ignore human issues and human pull requests. A young pull request
     is GREEN, which is the point of the relaxed threshold.
+  * `count_lookup_failures` must find the dashboard's repository-problems
+    section without letting a package name reach the heartbeat, and must return
+    None rather than zero for a body it did not read -- an unread body is never
+    evidence that every lookup succeeded.
 
 No network and no push: these exercise return values only and never call the
 `hc_emit`/`hc_summary` sinks, so no test-local name can teach the ping-body
@@ -74,6 +78,32 @@ def dashboard(days_ago=6):
 def config_error():
     return {"number": 99, "title": "Action Required: Fix Renovate Configuration",
             "user": {"login": "renovate[bot]"}, "updated_at": stamp(0)}
+
+
+def dashboard_with_lookup_failure(days_ago=6,
+                                  packages=("ghcr.io/keel-hq/keel",)):
+    """The dashboard as it looked on issue 59, August 28, 2026.
+
+    Renovate writes the repository problem into the body as a blockquote and
+    lists each failed lookup in backticks. The package name is an ordinary
+    identifier and is fine in a test file; what must never happen is one
+    reaching the heartbeat, which `test_no_package_name_reaches_the_heartbeat`
+    below is the guard for.
+    """
+    issue = dashboard(days_ago)
+    listed = ", ".join(
+        "`Failed to look up docker package %s: no-result`" % name
+        for name in packages)
+    issue["body"] = (
+        "> [!WARNING]\n"
+        "> Renovate failed to look up the following dependencies: %s.\n"
+        ">\n"
+        "> Files affected: `homelab/bootstrap/keel/keel.yaml`\n"
+        "\n"
+        "## Pending Approval\n"
+        "\n"
+        "- [ ] <!-- approve-branch=x -->Update something\n" % listed)
+    return issue
 
 
 def human_issue():
@@ -145,7 +175,7 @@ class TestClassify(unittest.TestCase):
         for verdict in (uw.V_OK, uw.V_UPDATES_WAITING):
             self.assertEqual(uw.ping_suffix(verdict), "0", verdict)
         for verdict in (uw.V_UPDATES_PENDING, uw.V_DASHBOARD_MISSING,
-                        uw.V_CONFIG_ERROR):
+                        uw.V_CONFIG_ERROR, uw.V_LOOKUP_FAILED):
             self.assertEqual(uw.ping_suffix(verdict), "fail", verdict)
 
 
@@ -213,7 +243,7 @@ class TestDecide(unittest.TestCase):
 
     def test_every_verdict_decide_can_return_is_in_the_enum(self):
         for items in ([], [dashboard()], [dashboard(), bot_pr(1)],
-                      [config_error()]):
+                      [config_error()], [dashboard_with_lookup_failure()]):
             verdict, _ = self.decide(items)
             self.assertIn(verdict, uw.VERDICTS)
 
@@ -251,11 +281,12 @@ class TestNextActions(unittest.TestCase):
                 # spelling across the estate is worth keeping.
                 self.assertNotIn("confirm", action.lower())
 
-    def test_the_four_red_verdicts_name_a_command_or_a_place_to_look(self):
-        # The intended signal and the three liveness failures are the ones an
+    def test_the_five_red_verdicts_name_a_command_or_a_place_to_look(self):
+        # The intended signal and the four Renovate failures are the ones an
         # operator acts on, so each must point somewhere specific. Renamed from
-        # "three" when `renovate-stale` joined them: an unasserted literal is
-        # one a reword can silently gut.
+        # "three" when `renovate-stale` joined them and from "four" when
+        # `renovate-lookup-failed` did: an unasserted literal is one a reword
+        # can silently gut.
         self.assertIn("gh pr list", uw.NEXT_ACTIONS[uw.V_UPDATES_PENDING])
         self.assertIn("apply-homelab", uw.NEXT_ACTIONS[uw.V_UPDATES_PENDING])
         self.assertIn("Mend job log", uw.NEXT_ACTIONS[uw.V_RENOVATE_STALE])
@@ -263,6 +294,9 @@ class TestNextActions(unittest.TestCase):
                       uw.NEXT_ACTIONS[uw.V_RENOVATE_STALE])
         self.assertIn("installations", uw.NEXT_ACTIONS[uw.V_DASHBOARD_MISSING])
         self.assertIn("gh issue list", uw.NEXT_ACTIONS[uw.V_CONFIG_ERROR])
+        self.assertIn("Dependency Dashboard",
+                      uw.NEXT_ACTIONS[uw.V_LOOKUP_FAILED])
+        self.assertIn("hostRules", uw.NEXT_ACTIONS[uw.V_LOOKUP_FAILED])
 
     def test_an_unknown_verdict_still_gets_a_literal(self):
         # Unreachable while the map is complete, but the invariant that `next=`
@@ -510,6 +544,172 @@ class TestRenovateLiveness(unittest.TestCase):
             self.assertFalse(hasattr(uw, name), name)
 
 
+class TestLookupFailures(unittest.TestCase):
+    """The dashboard's repository problems, as a determinate red.
+
+    THE GAP THIS CLOSES. Renovate reported `Failed to look up docker package
+    ghcr.io/keel-hq/keel` on the dependency dashboard for weeks and nothing
+    noticed: the watcher counted pull requests and identified the dashboard by
+    title, and a problem inside the body is neither. Both keel images are
+    digest-pinned so that the update engine cannot update itself, which makes
+    Renovate the only thing that can move them -- and a failed lookup opens no
+    pull request, so the frozen image looks exactly like an up-to-date one.
+
+    Two properties matter more than the count itself. An UNREADABLE dashboard is
+    still indeterminate and still pushes nothing: this reads a body that was
+    successfully fetched, and adds no new way to be wrong about GitHub. And no
+    package NAME ever reaches the heartbeat -- the section is remote text.
+    """
+
+    def setUp(self):
+        self.now = datetime(2026, 8, 26, 12, 0, tzinfo=timezone.utc)
+        uw.SUMMARY[0] = DEFAULT_SUMMARY
+        del uw.BODY_LINES[:]
+
+    tearDown = setUp
+
+    def _dash(self, days_old=1, **kwargs):
+        issue = dashboard_with_lookup_failure(**kwargs)
+        moved = self.now - timedelta(days=days_old)
+        issue["updated_at"] = moved.strftime("%Y-%m-%dT%H:%M:%SZ")
+        return issue
+
+    def _plain_dash(self, days_old=1):
+        moved = self.now - timedelta(days=days_old)
+        return {"user": {"login": uw.RENOVATE_LOGIN},
+                "title": uw.DASHBOARD_TITLE,
+                "updated_at": moved.strftime("%Y-%m-%dT%H:%M:%SZ")}
+
+    def test_the_observed_body_is_a_determinate_red_with_a_count(self):
+        verdict, facts = uw.decide([], self._dash(), [], self.now)
+        self.assertEqual(verdict, uw.V_LOOKUP_FAILED)
+        self.assertEqual(facts["lookup_failures"], 1)
+        self.assertEqual(uw.push_status(verdict), "down")
+
+    def test_each_failed_package_is_counted_once(self):
+        dash = self._dash(packages=("ghcr.io/keel-hq/keel",
+                                    "docker.io/library/redis"))
+        _, facts = uw.decide([], dash, [], self.now)
+        self.assertEqual(facts["lookup_failures"], 2)
+
+    def test_the_section_heading_does_not_inflate_the_count(self):
+        # "Renovate failed to look up the following dependencies" contains the
+        # same words as an item line. The item pattern requires a datasource
+        # word before `package`, so the heading is not counted as a failure --
+        # a count of 2 for one failed package would be the regression.
+        self.assertEqual(uw.count_lookup_failures(self._dash()), 1)
+
+    def test_a_dashboard_with_no_problem_section_is_not_a_zero(self):
+        # None, never 0: a count taken from a section that is not there.
+        self.assertIsNone(uw.count_lookup_failures(self._plain_dash()))
+        verdict, facts = uw.decide([], self._plain_dash(), [], self.now)
+        self.assertEqual(verdict, uw.V_OK)
+        self.assertNotIn("lookup_failures", facts)
+
+    def test_an_unread_body_is_never_evidence_that_lookups_succeed(self):
+        for body in (None, 42, ["not", "a", "string"]):
+            with self.subTest(body=body):
+                dash = self._plain_dash()
+                dash["body"] = body
+                self.assertIsNone(uw.count_lookup_failures(dash))
+        self.assertIsNone(uw.count_lookup_failures(None))
+        self.assertIsNone(uw.count_lookup_failures("not a dict"))
+
+    def test_a_reworded_item_line_still_fires_on_the_section(self):
+        # The failure direction that matters: the marker can only fail to FIRE.
+        # A section whose items Renovate has reworded still goes red, with a
+        # count of 0 saying "the section is there, the lines did not parse".
+        dash = self._plain_dash()
+        dash["body"] = ("> Renovate failed to look up the following"
+                        " dependencies: something new.\n")
+        verdict, facts = uw.decide([], dash, [], self.now)
+        self.assertEqual(verdict, uw.V_LOOKUP_FAILED)
+        self.assertEqual(facts["lookup_failures"], 0)
+
+    def test_it_outranks_the_green_pull_request_verdicts(self):
+        # A dependency Renovate cannot look up proposes nothing, so the
+        # pull-request count is an undercount by exactly the frozen images.
+        # `updates-waiting` is GREEN, so precedence here decides the colour.
+        pr = {"user": {"login": uw.RENOVATE_LOGIN},
+              "pull_request": {"url": "x"}, "number": 101,
+              "created_at": "2026-08-25T12:00:00Z"}
+        verdict, facts = uw.decide([pr], self._dash(), [], self.now)
+        self.assertEqual(verdict, uw.V_LOOKUP_FAILED)
+        self.assertEqual(facts["prs_open"], 1)
+
+    def test_staleness_outranks_it_and_a_config_error_outranks_both(self):
+        stale = self._dash(days_old=uw.RENOVATE_ALIVE_MAX_DAYS + 1)
+        verdict, facts = uw.decide([], stale, [], self.now)
+        self.assertEqual(verdict, uw.V_RENOVATE_STALE)
+        # The count is recorded whichever verdict wins the contest.
+        self.assertEqual(facts["lookup_failures"], 1)
+        config = [{"user": {"login": uw.RENOVATE_LOGIN},
+                   "title": "Action Required"}]
+        verdict, facts = uw.decide([], self._dash(), config, self.now)
+        self.assertEqual(verdict, uw.V_CONFIG_ERROR)
+        self.assertEqual(facts["lookup_failures"], 1)
+
+    def test_it_is_determinate_and_red(self):
+        self.assertIn(uw.V_LOOKUP_FAILED, uw.VERDICTS)
+        self.assertIn(uw.V_LOOKUP_FAILED, uw.DETERMINATE)
+        self.assertNotIn(uw.V_LOOKUP_FAILED, uw.GREEN)
+        self.assertEqual(uw.ping_suffix(uw.V_LOOKUP_FAILED), "fail")
+
+    def test_an_unreadable_dashboard_is_still_indeterminate(self):
+        # THE CONTRACT THIS CHANGE MUST NOT TOUCH. Reading the body adds no new
+        # way to be wrong about GitHub: a body is only read once the issue list
+        # came back, and an unparseable dashboard timestamp is still
+        # `api-error`, which pushes nothing.
+        dash = self._dash()
+        dash["updated_at"] = "not-a-timestamp"
+        verdict, _ = uw.decide([], dash, [], self.now)
+        self.assertEqual(verdict, uw.V_API_ERROR)
+        self.assertIsNone(uw.push_status(verdict))
+
+    def test_no_package_name_reaches_the_heartbeat(self):
+        # RULE 4. The body names packages; only the count is emitted.
+        _, facts = uw.decide([], self._dash(), [], self.now)
+        msg = uw.build_message(uw.V_LOOKUP_FAILED, facts, 1787776469)
+        self.assertNotIn("keel", msg)
+        self.assertNotIn("Failed to look up", msg)
+        self.assertIn("lookup_failures=1", msg)
+
+    def test_the_count_survives_the_cut_on_its_own_verdict(self):
+        # `next=` for this verdict is 109 characters, over half the budget, so
+        # the count heads the counter group. Asserted with the widest realistic
+        # fact set, which is where a token further down the group is lost.
+        facts = {"prs_open": 3, "oldest_pr": 58, "oldest_pr_days": 48,
+                 "dash_age_days": 2, "config_issues": 0, "http": 404,
+                 "lookup_failures": 11}
+        msg = uw.build_message(uw.V_LOOKUP_FAILED, facts, 1787776469)
+        self.assertLessEqual(len(msg), uw.MSG_LIMIT)
+        self.assertIn("lookup_failures=11", msg)
+        self.assertIn("next=" + uw.next_action_for(uw.V_LOOKUP_FAILED), msg)
+
+    def test_the_failed_lines_go_to_the_pod_log(self):
+        # The other half of the rule-4 trade: the message says how many, the
+        # pod log says which, and the fix needs the names.
+        logged = []
+        real_log = uw.log
+        uw.log = logged.append
+        try:
+            uw.log_lookup_failures(self._dash())
+        finally:
+            uw.log = real_log
+        self.assertTrue(any("ghcr.io/keel-hq/keel" in line for line in logged))
+        self.assertTrue(all(len(line) <= 340 for line in logged))
+
+    def test_a_plain_dashboard_logs_nothing(self):
+        logged = []
+        real_log = uw.log
+        uw.log = logged.append
+        try:
+            uw.log_lookup_failures(self._plain_dash())
+        finally:
+            uw.log = real_log
+        self.assertEqual(logged, [])
+
+
 class TestKumaPush(unittest.TestCase):
     """`log` means SEND NOTHING, and that is the whole migration risk.
 
@@ -686,8 +886,11 @@ class TestMessageBudget(unittest.TestCase):
     """
 
     # The widest realistic fact set: every optional field present and wide.
+    # `lookup_failures` is in it because the set has to stay the widest one --
+    # a field left out here is a field the budget is never tested against.
     FACTS = {"prs_open": 3, "oldest_pr": 58, "oldest_pr_days": 48,
-             "dash_age_days": 2, "config_issues": 0, "http": 404}
+             "dash_age_days": 2, "config_issues": 0, "http": 404,
+             "lookup_failures": 11}
 
     RUN_EPOCH = 1787776469
 
