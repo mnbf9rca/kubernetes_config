@@ -445,7 +445,7 @@ The leading hypothesis for the one case seen here is registry authentication on 
 The heartbeat carries `lookup_failures=`, a count and nothing else: a package name is remote text and rule 4 keeps it out of the message.
 The pod log carries the full lines on every run, and that is where the names are.
 The count heads the counter group rather than trailing it, because this verdict's `next=` is 109 characters, which with `verdict=` and `run_epoch=` leaves 34 characters — past the second counter it would be cut from the one message it exists for.
-`lookup_failures=0` means the section is there but its item lines did not parse — what a Renovate reword looks like — and the verdict fires anyway, because the section itself is the evidence.
+`lookup_failures=0` means the section is there but its item lines did not parse — what a Renovate reword looks like — and the verdict fires anyway, because the section itself is the evidence; a zero also arises from a body carrying only the `Package lookup failures` summary bullet and no per-package lines, which is the likelier route when `suppressNotifications` hides the warning blockquote.
 It is evaluated above the pull-request rules and below staleness: a dependency that cannot be looked up proposes nothing, so the pull-request count is an undercount by exactly the frozen images, while a Renovate that has stopped running at all is the larger fact and its dashboard is as stale as the rest of it.
 A body this job could not read is not a lookup failure and never becomes one — it reads the body only when the issue list came back, so nothing here weakens the indeterminate contract above.
 

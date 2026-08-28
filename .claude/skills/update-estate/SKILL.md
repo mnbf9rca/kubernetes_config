@@ -176,7 +176,7 @@ Do not hand-roll a substitute dump.
       kubectl -n backup delete job restic-init
 
       The quoting is required - zsh globs the unquoted `[?(...)]` and the command exits 1 before kubectl runs.
-      Deleting it once it has finished - `Complete` or `Failed`, and with `backoffLimit: 0` a failed Job blocks the apply identically - is safe here: `restic-init.sh` probes the repository before initialising, so the re-run the next apply triggers is a no-op.
+      Deleting it once it has finished - `Complete` or `Failed`, since a `Failed` Job still inside its TTL window blocks the apply identically - is safe here: `restic-init.sh` probes the repository before initialising, so the re-run the next apply triggers is a no-op.
 - [ ] `make apply-homelab` or `make apply-vps`.
 - [ ] Wait for the rollout and then verify by hand, from the table below.
 - [ ] `git push --force-with-lease`.
@@ -347,7 +347,8 @@ There is no updater on the VM.
 - [ ] Count what you did: pull requests merged, pins bumped, and one verdict for the VM.
 - [ ] Say what you left unmerged and why: every pull request held back on a `PENDING` check or a hold you encoded in `renovate.json`, and everything gate 2 put on the findings branch rather than into `master` - a runbook correction, a guard, a rule.
       The close is where the operator learns that work exists and is waiting for one review.
-- [ ] Push the findings branch and open one pull request for it: `git push -u origin HEAD`, then `gh pr create --fill`.
+- [ ] Push the findings branch and open one pull request for it: `git checkout <findings-branch>`, then `git push -u origin HEAD`, then `gh pr create --fill`.
+      Check the branch out first - the session reaches this step on `master`, so a bare `git push -u origin HEAD` pushes `master` and the findings never leave your disk.
       It merges in a later session, because the deploy-then-merge extension wants the prose exercised first - but nothing on GitHub exists until you push it.
 - [ ] Ping the `estate-update` check.
       **Every `<...>` below is a placeholder.**

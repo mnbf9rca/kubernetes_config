@@ -216,7 +216,7 @@ The rules that must not be broken:
   Two kinds of image sit outside that, and the guard treats them differently.
   An image from a **remote base** is named by no file here, so nothing can edit the reference — it moves only when the base's own ref moves.
   `check-renovate-scope` prints those as advisories.
-  That is not the same as unreachable: `vps/bootstrap/local-path/kustomization.yaml` pins its base as `?ref=v0.0.31`, which the `kustomize` manager parses, so Renovate proposes that bump even though the image itself is still reported advisory.
+  That is not the same as unreachable: `vps/bootstrap/local-path/kustomization.yaml` pins its base as `?ref=v0.0.37`, which the `kustomize` manager parses, so Renovate proposes that bump even though the image itself is still reported advisory.
   An image **embedded inside another resource** — local-path-provisioner ships its helper Pod as a block scalar in a ConfigMap — the guard cannot see at all, so it says nothing about it: silence, not an advisory.
   Everything else hard-fails, so a new pinned image that nothing is configured to watch cannot reach a cluster.
   **In scope is not the same as watched, and `check-renovate-scope` only proves the first.**
