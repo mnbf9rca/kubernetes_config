@@ -275,7 +275,7 @@ Do not carry a remembered number: the VPS control plane grew from one node to th
       `manifest-sync` defaults to `--dry-run` true and prints what it would do.
       Read it in full, then apply what suits this cluster with `--dry-run=false`.
       The UI equivalent is **Bootstrap Manifests** in the left navigation.
-      Both clusters carried a backlog of 21 out-of-sync objects on August 28, 2026, from before any of this, so expect the first run to be long.
+      A non-zero `outofsync` after a Kubernetes upgrade means the data-plane components - kube-proxy, the CNI and CoreDNS - have not moved with the control plane, so read it as a version gap rather than a queue and sync it in the session that created it: [Bootstrap manifests](../../../docs/operations/estate-updates.md#bootstrap-manifests), which also carries the one-liner that collapses the backlog to the lines that actually differ.
       Do not run `talosctl get manifests -o yaml` unfiltered to inspect the sources - it embeds the bootstrap-token Secret.
 - [ ] Verify: `kubectl --context <ctx> get nodes -o wide` shows the new versions and the node `Ready`; every namespace's pods return to Running.
 - [ ] Update the version ledger in `docs/operations/estate-updates.md` - the versions, the control-plane counts and node names, and the "Confirmed" date, even when nothing moved.
