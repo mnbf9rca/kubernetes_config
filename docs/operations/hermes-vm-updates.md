@@ -23,8 +23,7 @@ git -C ~/.hermes/hermes-agent status --porcelain
 git -C ~/hermes-webui status --porcelain
 # A COMMITTED local patch leaves both of those empty, so this is the only precondition that
 # sees one. Read it as yes/no, never as a count to reason from: the clone is shallow, and a
-# stale origin/main can only inflate it. Non-zero means stop and follow the patch-file
-# pattern below.
+# stale origin/main can only inflate it. Non-zero means stop and follow the routing below.
 git -C ~/.hermes/hermes-agent rev-list --count origin/main..HEAD
 # The estate's only alarm on a dead apt timer, and it fires only here. Two commands, not
 # chained: chained, a missing stamp short-circuits and says nothing. Both must be quiet.
@@ -34,17 +33,22 @@ df -h /home     # 1 GiB free
 date -u         # not within 90 minutes of 04:45 UTC: the reboot kills the session mid-run
 ```
 
-**[VM]** A non-zero count is a local patch the operator committed on the VM, and it is the one thing in this procedure genuinely at risk.
-Stop, and carry it across in a file rather than trusting the updater with it:
+**[VM]** A non-zero count usually means a local patch the operator committed on the VM, and that patch is the one thing in this procedure genuinely at risk.
+The count can also fire without one: a shallow graft or a stale `origin/main` inflates it and never deflates it, so the tripwire cannot miss a patch but can raise a false alarm.
+Read `git log --oneline origin/main..HEAD` before choosing — the same inflatable range, read for whose commits are in it rather than for a number.
+Nothing of the operator's in that list means the count is an artifact, and the update proceeds as written below.
+Commits authored on the VM mean stop, and carry them across in files rather than trusting the updater with them:
 
-1. `git format-patch -1 <sha>` into `~/.hermes/local-patches/`, copy the file off the VM, and compare the checksums at both ends.
-   The file is the insurance, and it survives any stash, merge, abort or reset.
-2. `git reset --hard HEAD~1`, so the branch fast-forwards and reapplying the patch becomes an explicit step rather than something the updater does or does not do.
-3. Take the update as written below.
-4. `git apply --check`, then `git am`.
-5. Verify the patched behaviour in [Verify](#verify).
-
-The rollback record below then carries the patch file's path, its checksum and the reset target as well, so it describes the local patch and not only the upstream state.
+1. **[laptop]** Find the boundary at the forge, which has the whole history: `gh api repos/NousResearch/hermes-agent/commits/<sha>` returns 404 for a commit only the VM has, so run it against the shas that log listed.
+   The oldest commit it 404s on is the first local commit, and the upstream commit beneath that one is both the patch-set boundary and the reset target.
+2. `git format-patch -o ~/.hermes/local-patches/ <first-local-commit>^..HEAD`, copy the files off the VM, and compare the checksums at both ends.
+   The `-o` is load-bearing: bare `format-patch` writes to the current directory, not the one this prose names.
+   The files are the insurance, and they survive any stash, merge, abort or reset.
+3. `git reset --hard <reset-target>` — the upstream sha from step 1, not `HEAD~1`, which drops exactly one commit however many there are.
+   Confirm `git -C ~/.hermes/hermes-agent rev-parse HEAD` reads that sha, so the update fast-forwards rather than merging, and reapplying the patches becomes an explicit step rather than something the updater does or does not do.
+4. Take the update as written below.
+5. `git apply --check` each patch, then `git am` over them in their numbered order.
+6. Verify the patched behaviour in [Verify](#verify).
 
 **[VM]** Write the rollback record.
 It is the rollback target, and it has to outlive a session the reboot can kill:
@@ -84,9 +88,9 @@ Do not substitute a commit-log grep for breaking-change markers: a sampled week 
 
 ```sh
 # What the span touches. The compare API caps at 250 commits and 300 files, so on a long
-# span read total_commits and the file list as a floor, not an inventory. With a local patch
-# on top, agent_sha is a commit the forge does not have and returns 404: compare from the
-# upstream commit beneath it, which is the reset target.
+# span read total_commits and the file list as a floor, not an inventory. agent_sha must be a
+# commit the forge has; the patch-file remedy resets there first, so it normally is. A local
+# commit returns 404 - compare from the upstream commit beneath it.
 gh api repos/NousResearch/hermes-agent/compare/<agent_sha>...<target_sha> \
   --jq '.total_commits, (.files[].filename)'
 gh api repos/NousResearch/hermes-agent/releases \
@@ -96,7 +100,7 @@ gh api repos/NousResearch/hermes-agent/releases \
 **The sha is the identity; the version string is not.**
 `hermes` reports `v0.20.6 latest` and the update log ends with `Update complete! (v0.20.6)` while the tree runs 253 commits past that tag, because the semver is carried in the source and moves only when upstream cuts a release.
 Treat it as a lower bound on what is installed: two machines reporting the same version can run materially different code.
-Never measure ancestry in the VM's clone either — it is shallow, with 54 graft points on August 27, 2026, so `merge-base` and `rev-list` answer there with artifacts.
+Never measure ancestry in the VM's clone beyond the yes/no in the [preconditions](#preconditions) — it is shallow, with 54 graft points on August 27, 2026, so `merge-base` and `rev-list` answer there with artifacts.
 Ask the forge, which has the whole history.
 
 **Pause signals.**
@@ -214,10 +218,10 @@ systemctl --user restart hermes-gateway hermes-gateway-emh hermes-gateway-hal \
   hermes-dashboard hermes-webui
 ```
 
-Then read `git -C ~/.hermes/hermes-agent stash list`: an entry there is work that was serving before the run.
+Then read `git -C ~/.hermes/hermes-agent stash list`: an entry may be work that was serving before this run, or may predate it.
 Whether `hermes update` puts a stash back is unsettled — this runbook once said nothing pops them, while the `--keep-stash` help implies the default reapplies them — so rely on neither answer.
 Read the working tree to find out what is actually there, and restore the entry by hand if it is not.
-The patch file from the [preconditions](#preconditions) is the insurance against losing local work; the stash is not.
+The patch files from the [preconditions](#preconditions) are the insurance against losing local work; the stash is not.
 
 **[VM]** To restore state, which discards everything that happened after the snapshot was taken:
 
