@@ -462,3 +462,64 @@ The change is left in place; the operator did not ask for a revert, and the cont
 The point is recorded so the process is fixed rather than the commit.
 
 **Proposed fix:** add that rule to `AGENTS.md` alongside the deploy-then-merge rules, and to the skill's Step 6, which currently counts what the session did without saying what it may merge.
+
+## 18. The Hermes VM tracks a moving `main`, and the installed commit no longer exists upstream
+
+Step 5 was deferred rather than run.
+The reasons are worth separating, because only the first is temporary.
+
+### The pause signal that stopped it
+
+`firecrawl-anydoc==0.2.4` is a new dependency in the incoming code, published on August 27, 2026 — under a day old when read.
+The runbook's pause signals include a dependency under 14 days old, so the procedure stops there by design.
+
+The other three signals were clear: the Python floor is unchanged, the `hindsight-client` pin is unchanged, and `_config_version` is 39 on both the installed and incoming sides.
+
+The package is not obscure — it is Firecrawl's document-to-Markdown converter, with 14 prior releases — and upstream pinned it exactly while exempting it from their own 14-day quarantine, reasoning that "the pin bump WAS the review" and that quarantine "adds zero float protection to an exact pin".
+
+That reasoning is half right and the missing half is why the signal matters.
+An exact pin does remove drift: the version installed is the version reviewed.
+But a quarantine also buys time for a bad release to be discovered by other people before you install it, and against a package published twenty hours ago an exact pin gives none of that, because the pinned version is itself the unvetted one.
+This VM holds credentials, including the 1Password integration.
+
+### The structural problem underneath
+
+`hermes update` installs `origin/main`, not a release.
+At the time of the session, `origin/main` was 253 commits ahead of the `v2026.8.27` tag that publishes Hermes Agent v0.20.6.
+So the release bodies the runbook sends you to read describe code that stops 253 commits short of what would land.
+
+Worse, **the installed commit does not exist upstream**.
+GitHub answers 422, "No commit found for SHA", for `9b1b144c9de7983a4a0f3a17d33a78d385637978`, which is what the VM is running.
+Upstream rewrites `main` and the commit has been orphaned.
+Three things follow:
+
+1. The deployed code cannot be looked up, diffed or reproduced from upstream.
+2. The rollback record's `agent_sha` is restorable only from the VM's own local clone. Re-clone that directory, or lose the VM's disk, and the rollback target no longer exists anywhere.
+3. Change analysis against release notes is structurally unsound, not merely incomplete.
+
+### Why it cannot simply be pinned
+
+`hermes update`'s only targeting flag is `--branch NAME`, which takes a branch, not a tag or an arbitrary ref.
+Upstream maintains no release branch: of 1,657 branches, the only release-shaped one is `release/v0.15.0-strip-gui`, stale since v0.15.
+The v0.20.6 release publishes no build assets, only GitHub's generated source tarball.
+`hermes-agent` is on PyPI but at 0.19.0, behind the installed 0.20.6, so that channel would move the VM backwards.
+
+### The routes, and what each costs
+
+- **Bypass the updater**, checking out the tag and installing by hand.
+  Gains reproducibility, and loses the pre-update backup zip that is the only rollback for forward-only state migrations, the configuration migration prompts, the drain-first restarts and the stash handling.
+  The runbook rests entirely on `hermes update`, so this hand-rolls the riskiest step to fix a bookkeeping problem.
+- **Ask upstream** for a maintained release branch, or for `hermes update` to accept a tag or ref.
+  Cheap to write, unknown timeline, and publishing it needs the operator's approval.
+- **Stay on `main` and make the sha durable.**
+  This closes the hole that actually bites: keep the VM's clone and never re-clone it, or push each installed sha to a private fork, so the rollback target survives independently of that one directory.
+  It does not give a named release, and it is the only one of the three with no downside.
+
+**Proposed fix:** treat the mechanism question as its own decision, like the cluster-template one, rather than changing it mid-session.
+Take the durable-sha hardening independently, because it is cheap and the current state has no rollback that survives losing one directory.
+Then re-run Step 5 once `firecrawl-anydoc` clears 14 days.
+
+**State of the VM:** unchanged.
+Preconditions all passed — both trees clean, apt stamp present and fresh, 5.2 GiB free on `/home`, lingering enabled, and the time far from the 04:45 UTC reboot window.
+The rollback record was written to `~/.hermes/hermes-update.pre-run` with `agent_sha=9b1b144c`, `agent_branch=main`, `webui_sha=e168b67e` and `client_version=0.6.1`.
+Nothing was updated, restarted or installed.
