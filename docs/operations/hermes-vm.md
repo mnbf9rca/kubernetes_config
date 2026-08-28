@@ -307,19 +307,17 @@ The VM has no MTA, so `unattended-upgrades` mail would be a silent failure; the 
 The check used to be a systemd user timer with a service unit and an environment file holding the push URL.
 Three things changed with it, and two of them cost something.
 
-**Gained: the default gateway is now exercised.** A beat cannot arrive unless `hermes-gateway`'s scheduler ran a subprocess, so a wedged-but-running default gateway — invisible to every check on this page before — now shows up as silence.
+**Gained: the default gateway is now exercised** — the detail is in [step 5](#5-create-the-cron-job) and [what the daily check does not watch](#what-the-daily-check-does-not-watch).
 
 **Gained: nothing holding the token is installed on this VM.** The old environment file lived under `~/.hermes` and rode the nightly `hermes backup` zip to the `hermes-dumps` PVC and on to B2.
 The token now arrives injected at gateway start and exists only in memory.
-That is hygiene rather than incident response.
-The token is a **tier-2 spam-target identifier**, not a secret: holding it lets a stranger report a heartbeat and mask a genuine failure, and grants nothing else, so it needs no rotation and earns no honesty-box row.
+That is hygiene rather than incident response: the push token is a tier-2 spam-target identifier, not a secret, so its old exposure needs no rotation and no honesty-box row.
 
 **Cost: the hang bound is weaker.** The service unit set `TimeoutStartSec=120`, so a wedged run failed rather than sitting there.
 A no-agent cron subprocess is bounded instead by the scheduler's `script_timeout_seconds`, which defaults to **3600** (`hermes_cli/config_defaults.py`, overridable through `cron.script_timeout_seconds` or `HERMES_CRON_SCRIPT_TIMEOUT`) — an hour rather than two minutes, but bounded, and far inside the monitor's 24-hour heartbeat.
 Every command in the script that reaches the network carries its own `-m 15`, so the residual exposure is a wedged `systemctl` or a wedged Python import rather than an unbounded wait.
 
-**Cost: the schedule is agent state.** A systemd timer is a file this repository owns and an install copies.
-A cron job lives in the agent's store, so it can be lost to a restore without anything saying so — see the last bullet above.
+**Cost: the schedule is agent state** — a systemd timer is a file this repository owns; a cron job is not. The detail, and `hermes cron list` as the check, is in [what the daily check does not watch](#what-the-daily-check-does-not-watch).
 
 ## Facts about this VM
 

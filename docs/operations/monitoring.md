@@ -471,9 +471,9 @@ Management API does not expose the report frequency and nothing here can check i
 while `homelab-update-watch` went red on any open pull request, because a nag over a permanently
 red check trains the operator to ignore it. That reason is gone twice over: the 45-day threshold
 removed the permanent red, and `homelab-update-watch` is no longer on this account at all. What
-the nag reaches now is the two restic checks, `vps-uptime-kuma-alive` and `estate-update`, and
-`hermes-update` once it exists — none of which has a normally-red steady state, so a daily reminder
-is signal. **It does not reach the push monitors**: kuma's own notifications are configured per
+the nag reaches now is the two restic checks, `vps-uptime-kuma-alive`, `estate-update` and
+`hermes-update` — none of which has a normally-red steady state, so a daily reminder is signal.
+**It does not reach the push monitors**: kuma's own notifications are configured per
 monitor inside kuma, and it has no equivalent digest. A push monitor that goes DOWN alerts once on
 the flip and then stays quiet.
 
@@ -848,9 +848,9 @@ command; a one-off needs nothing.
 ### Checks in the account that this repo does not ping
 
 The Management API returned 19 checks when it was last counted, on 2026-08-26. Four of those are
-the table above — `hermes-update`, its fifth row, is created by hand during the VM install and did
-not exist at that count; nine are the retired checks this repo no longer pings, which stay until
-the operator deletes them by hand and are named in the migration paragraph above; and six belong to
+in the table above (`hermes-update`, its fifth row, was created later, at VM install, and did not
+exist at that count). Nine are the retired checks this repo no longer pings, which stay until the
+operator deletes them by hand and are named in the migration paragraph above, and six belong to
 the operator — `adsb.cynexia.net`, `pve3.cynexia.net`, `fs.cynexia.net`,
 `tailscale unattended upgrades`, `Home Assistant`, `upsd.cynexia.net` — pinged from Proxmox hosts,
 Home Assistant and host cron, and deliberately outside this repo. Once the nine go the count is 10,

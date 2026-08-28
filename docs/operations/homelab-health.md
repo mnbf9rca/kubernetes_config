@@ -30,8 +30,6 @@ PSA warnings — a hardening pass to `restricted` is a queued follow-up.
 
 ### Pins that carry a reason
 
-- **Pomerium `v0.33.0`** — HISTORICAL: removed 2026-08-22 (replaced by Cloudflare
-  Access Managed OAuth). The pin reasoning is preserved in git history.
 - **`garmin-grafana` is digest-pinned to a main-branch build**
   (`thisisarpanghosh/garmin-fetch-data@sha256:8b7955d3...`), not a tagged release.
   Release `v0.5.0` crashes with an `AttributeError` on `client.profile` when
@@ -554,7 +552,7 @@ read-only.
 Two bookkeeping measurements share the bucket: `ingest_status` (one point per committed
 chunk) and `ingest_gap` (see below).
 
-### Why the script is Python, and a file rather than an inline string
+### Why the script is Python
 
 Scheduled work in this repo defaults to POSIX `sh` in a mounted script file. This job is
 Python, for three reasons, each a failure mode this repo has already hit:

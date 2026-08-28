@@ -133,7 +133,7 @@ Full mechanics, target-by-target reference and failure modes:
   sessions share that checkout at once, so its current branch is not yours to assume: run
   `git branch --show-current`, confirm it, and only then commit. A guidance edit that day
   landed on another agent's branch because the shared checkout had been switched
-  mid-flight. `op run` works from a worktree, so using one costs nothing.
+  mid-flight.
 - **Deploy, then merge.** A PR branch is applied to the cluster and verified healthy
   **before** the PR merges: `master` records what has been successfully deployed, never
   intent. Apply from the branch checkout (the preflight guards still run), confirm the
@@ -270,10 +270,10 @@ Full mechanics, target-by-target reference and failure modes:
   `timeZone: "UTC"` and `activeDeadlineSeconds` (with `concurrencyPolicy: Forbid`, one
   hung run silently blocks every later run), plus `startingDeadlineSeconds` where a missed
   window must be retried rather than dropped. **New scheduled work drives an uptime-kuma
-  PUSH monitor, not a healthchecks.io check**: only five checks remain there — the two
-  restic jobs, whose multi-line bodies are the triage runbook, `vps-uptime-kuma-alive`, and
-  the hand-pinged `estate-update` and `hermes-update`. Everything else pushes, as of
-  2026-08-26.
+  PUSH monitor, not a healthchecks.io check** (migrated 2026-08-26). Five checks remain at
+  healthchecks.io; the inventory, and each check's reason for keeping its slot, is the
+  table in `docs/operations/monitoring.md` — read that rather than an enumeration here,
+  which drifted once already.
   The default contract for a new job is **`up` on exit 0 and `down` otherwise**, from an
   EXIT trap in the shell runners — the two hindsight jobs, `influx-backup`, `hermes-pull`
   and both `keel-fresh` jobs — or, in Python, from a module-level `try`/`except` that
@@ -377,7 +377,8 @@ Full mechanics, target-by-target reference and failure modes:
   stopped switching on the cluster nobody looked at.
   `make check-keel-fresh-parity` enforces it by masking a short, stated list of sanctioned
   differences — the copy notes, `IMAGE_FLOOR`, the schedule, the monitor name, the two
-  paths, the `nodeSelector`, the token variable — and requiring the rest to be identical.
+  paths, the `nodeSelector`, the 1Password vault path, the token variable — and requiring
+  the rest to be identical.
   Editing either copy means editing both; genuinely per-cluster behaviour means a new rule
   in that guard, in the same commit, with its reason written down. Every rule's span is
   **bounded to comment lines plus the line it names**: an earlier `IMAGE_FLOOR` rule used
