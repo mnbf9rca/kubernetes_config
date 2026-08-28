@@ -67,10 +67,12 @@ metadata:
   # trusting this note.
   #
   # Moving it is not a tag edit. Meilisearch does not convert a v1.41 index on
-  # startup, so the upgrade needs a one-time `--upgrade-db` argument on this
-  # container, removed in a follow-up once the index is converted. The
-  # alternative is dropping the volume and letting karakeep rebuild the index,
-  # which the operator has accepted: it holds a few thousand pages.
+  # startup, so the upgrade needs a one-time in-place upgrade argument on this
+  # container — `--upgrade-db` on a v1.51-or-later target,
+  # `--experimental-dumpless-upgrade` below that — removed in a follow-up once
+  # the index is converted. The alternative is dropping the volume and letting
+  # karakeep rebuild the index, which the operator has accepted: it holds a few
+  # thousand pages.
 spec:
   replicas: 1
   selector:
