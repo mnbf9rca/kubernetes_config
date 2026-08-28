@@ -296,7 +296,15 @@ class TestNextActions(unittest.TestCase):
         self.assertIn("gh issue list", uw.NEXT_ACTIONS[uw.V_CONFIG_ERROR])
         self.assertIn("Dependency Dashboard",
                       uw.NEXT_ACTIONS[uw.V_LOOKUP_FAILED])
-        self.assertIn("hostRules", uw.NEXT_ACTIONS[uw.V_LOOKUP_FAILED])
+        # Two places to read and no remedy: the one case diagnosed ended at
+        # Mend's own package cache, which no repo edit reaches, and the next
+        # one will not be the same. A reword back to a `hostRules` remedy
+        # would ship a wrong action on a phone alert, and that is the
+        # regression these lines catch.
+        self.assertIn("Mend", uw.NEXT_ACTIONS[uw.V_LOOKUP_FAILED])
+        self.assertIn("run log", uw.NEXT_ACTIONS[uw.V_LOOKUP_FAILED])
+        self.assertNotIn("hostRules", uw.NEXT_ACTIONS[uw.V_LOOKUP_FAILED])
+        self.assertEqual(len(uw.NEXT_ACTIONS[uw.V_LOOKUP_FAILED]), 103)
 
     def test_an_unknown_verdict_still_gets_a_literal(self):
         # Unreachable while the map is complete, but the invariant that `next=`
@@ -709,7 +717,7 @@ class TestLookupFailures(unittest.TestCase):
         self.assertIn("lookup_failures=1", msg)
 
     def test_the_count_survives_the_cut_on_its_own_verdict(self):
-        # `next=` for this verdict is 109 characters, over half the budget, so
+        # `next=` for this verdict is 103 characters, over half the budget, so
         # the count heads the counter group. Asserted with the widest realistic
         # fact set, which is where a token further down the group is lost.
         facts = {"prs_open": 3, "oldest_pr": 58, "oldest_pr_days": 48,

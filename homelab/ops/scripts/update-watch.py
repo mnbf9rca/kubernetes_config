@@ -215,13 +215,19 @@ NEXT_ACTIONS = {
     V_CONFIG_ERROR:
         "gh issue list -R mnbf9rca/kubernetes_config --author app/renovate"
         " - read it and fix renovate.json",
-    # 109 characters. The likeliest fix is a registry `hostRules` entry, so the
-    # line names the remedy as well as the place: the count says how many
-    # packages, the dashboard says which, and a hostRules entry is what moves
-    # them again.
+    # 103 characters. The line names two places to read and NO remedy, and the
+    # missing remedy is deliberate. One dashboard warning covers failures with
+    # nothing in common, so the remedy is whatever that run's log shows. The
+    # one case diagnosed (the keel images, August 28, 2026) ruled out repo
+    # config, registry authentication and runner memory in turn, and ended at
+    # a stale negative entry in Mend's own shared package cache: the failing
+    # lookup issues no HTTP request at all. Evicting that is a support ticket
+    # to Mend, and nothing in this repo reaches it -- the cache key is registry
+    # plus package name -- so it is not an action to put on a phone alert. The
+    # count says how many packages, the dashboard says which, the log says why.
     V_LOOKUP_FAILED:
-        "read the Dependency Dashboard repository problems, then add a"
-        " renovate.json hostRules entry for that registry",
+        "read the Dependency Dashboard repository problems, then the Mend"
+        " run log for the failing lookup's cause",
     V_RATE_LIMITED:
         "no action for one run - the unauthenticated quota is per IP;"
         " look at the Events log if it repeats",
@@ -780,8 +786,8 @@ def build_message(verdict, facts, run_epoch):
     # the pod log's full body, which is where triage starts.
     #
     # `lookup_failures=` HEADS THE GROUP, ahead even of `prs_open=`, and only a
-    # run that found the section emits it at all. Its `next=` is 109 characters,
-    # which with `verdict=` and `run_epoch=` leaves 34 characters, so past the
+    # run that found the section emits it at all. Its `next=` is 103 characters,
+    # which with `verdict=` and `run_epoch=` leaves 40 characters, so past the
     # second counter it would be cut from the one message it exists for. Every
     # run that saw no repository problem omits it, so heading the group costs
     # the other verdicts nothing.
