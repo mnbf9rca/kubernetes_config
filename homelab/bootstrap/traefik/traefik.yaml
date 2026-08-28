@@ -94,7 +94,7 @@ spec:
       terminationGracePeriodSeconds: 30
       containers:
         - name: traefik
-          image: traefik:v3.3
+          image: traefik:v3.3@sha256:2cd5cc75530c8d07ae0587c743d23eb30cae2436d07017a5ff78498b1a43d09f
           # A pinned tag with nothing rewriting it in place: `Always` bought a
           # registry round trip per pod start and, with keel gone, nothing else.
           imagePullPolicy: IfNotPresent
