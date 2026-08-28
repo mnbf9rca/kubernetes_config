@@ -168,6 +168,7 @@ The rules that must not be broken:
   **Read the vendor's own manifests first** — an upstream that pins the component tells you the pin is deliberate, and an upstream that floats it tells you the version is not load-bearing.
   For a PostgreSQL extension, the upgrade scripts settle it: an empty script means the release changed only the library, so the fix is already live and the update is a relabel.
   Record which of the two it was, because the next reader inherits the same question.
+  The worked case, the command and the estate's decision on it are step 5 of the upgrade runbook in `docs/operations/hindsight.md`.
 - **Read a PR's status checks before merging it, and treat a check that has not reported as a refusal.**
   `renovate.json` sets `minimumReleaseAge` to `3 days`, so every Renovate pull request carries a `renovate/stability-days` check that is `PENDING` until the release is three days old.
   The check is the whole of the stability policy — nothing on the repository enforces it — so merging past a `PENDING` one silently discards the wait the policy exists to impose.
