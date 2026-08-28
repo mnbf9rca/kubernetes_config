@@ -516,6 +516,11 @@ The runbook sends you to the release bodies, but `hermes update` installs `origi
 The notes stop 253 commits short of what lands.
 It cannot simply be pinned: `--branch` takes a branch, upstream maintains no release branch — of 1,657 branches the only release-shaped one is `release/v0.15.0-strip-gui`, stale since v0.15 — and PyPI's `hermes-agent` is at 0.19.0, behind the installed version.
 
+The version string makes this easy to miss.
+`hermes` reports `v0.20.6 latest`, and the update log ends with `Update complete! (v0.20.6)`, while the installed tree is 253 commits past the `v0.20.6` tag.
+The semver is carried in the source and only moves when upstream cuts a release, so it reads like a release identity and is not one: two machines can both report `v0.20.6` and run materially different code.
+**The sha is the only identity.** Treat the displayed version as a lower bound on what is installed, never as a description of it.
+
 **The patch's own tests cannot be run on the VM.**
 `pytest` is not in the runtime venv, and installing it would move the agent's dependencies, which the runbook warns against.
 The three behaviours were verified by importing `_send_imap_id` directly and asserting against mock connections, which is what the tests do.
