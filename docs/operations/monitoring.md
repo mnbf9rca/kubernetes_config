@@ -445,7 +445,9 @@ An image Renovate cannot look up gets no pull request, so a failed lookup freeze
 Not repo configuration; not registry authentication, because sibling `ghcr.io` packages token-fetch and pull manifests normally seconds later in the same runs that fail on `ghcr.io/keel-hq/keel`; and not runner memory, because the second run completed at 1.8GB of the runner's 3.0GB cap and failed identically.
 What both logs show is that the keel lookup fails **before the `ghcr.io` host queue is created** and issues **no HTTP request at all**.
 A `no-result` returned without a network request is being served from Mend's shared package cache at the datasource layer.
-**The remedy is a Mend support ticket asking them to evict that entry**, and there is no repo-side cache-bust: the cache key derives from registry plus package name, so nothing this repo can edit reaches it — a `hostRules` entry in `renovate.json` least of all.
+That is a known, acknowledged upstream bug: Renovate's docker `getTags()` caches a `null` result unconditionally under a key with no tenant isolation (`registryHost:repository`), so one tenant's bad credential poisons the entry for every tenant, and reads short-circuit before any HTTP — renovatebot discussion 45249, fix pending in pull requests 45348 and 45409.
+**The workable remedy is repeated reruns from the Dependency Dashboard's own checkbox**, spread over hours: the poisoned entry's TTL is 30 minutes, and a run landing in an expired window looks the package up anonymously, succeeds, and writes the good tag list back for everyone — until the next poisoner.
+There is no repo-side cache-bust (the key derives from registry plus package name, so nothing this repo can edit reaches it — a `hostRules` entry in `renovate.json` least of all) and Mend documents no cache-eviction procedure.
 A new instance of this verdict still starts at the run log.
 This diagnosis belongs to one package, and the same one-line dashboard warning covers failures with nothing in common.
 The heartbeat carries `lookup_failures=`, a count and nothing else: a package name is remote text and rule 4 keeps it out of the message.
