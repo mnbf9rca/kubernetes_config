@@ -137,25 +137,50 @@ Do not hand-roll a substitute dump.
 
 **The per-pull-request loop:**
 
+- [ ] Read this pull request's status checks first, before you spend an apply on it:
+
+      gh pr view <n> --repo mnbf9rca/kubernetes_config --json statusCheckRollup
+
+      A `PENDING` or failing `renovate/stability-days` means the release is younger than `minimumReleaseAge` and this pull request is **not this session's work**: leave it open, do not apply it, and name it at the close.
+      Nothing on the repository enforces the check, so reading it is the whole of the control - the rule is in `AGENTS.md`.
 - [ ] `kubectl config use-context cynexia-homelab` or `kubectl config use-context cynexia-vps`, matching the cluster this pull request touches.
       The Makefile's `check-context` and `check-vps-context` guards read `kubectl config current-context` and refuse otherwise, and the loop alternates between clusters.
-- [ ] `gh pr checkout <n>`, then `git rebase origin/master`.
+- [ ] Give this pull request its own worktree and work it there:
+
+      git worktree add ../kubernetes_config-worktrees/pr-<n> --detach
+      cd ../kubernetes_config-worktrees/pr-<n> && gh pr checkout <n> && git rebase origin/master
+
       Merge in any other deployed-but-unmerged branch you identified in Step 1.
+      Every `make` target works from a worktree: `op run` reads `OP_SERVICE_ACCOUNT_TOKEN` out of the shell environment, so there is no `direnv allow` to repeat.
 - [ ] Take the dump if the table above calls for one.
       Print the result.
       A failed dump ends this pull request - move to the next one and report it at the close.
 - [ ] `make diff-homelab` or `make diff-vps`.
       **Read every resource it names.**
       Confirm only the image lines you expect have moved.
-      Apply gate 2 to anything else.
+      Apply gate 3 to anything else.
+- [ ] If this pull request changes any `*-init-job.yaml`, clear the completed Job before you apply.
+      A Job's `spec.template` is immutable and `restic-init` sets `ttlSecondsAfterFinished: 86400`, so for a day after any apply recreates it, a second apply that moves its image fails on that one resource - and `kubectl apply` continues past the failure, leaving the tree half-updated with a non-zero exit as the only sign (the TTL rule in `AGENTS.md`).
+      A session that applies twice in one afternoon hits this; one that runs every 4 to 6 weeks finds the Job already collected:
+
+      kubectl -n backup get job restic-init -o custom-columns=NAME:.metadata.name,IMAGE:.spec.template.spec.containers[0].image
+      kubectl -n backup delete job restic-init
+
+      Deleting it once it reports `Complete=True` is safe here: `restic-init.sh` probes the repository before initialising, so a re-run is a no-op.
 - [ ] `make apply-homelab` or `make apply-vps`.
 - [ ] Wait for the rollout and then verify by hand, from the table below.
 - [ ] `git push --force-with-lease`.
       The rebase rewrote the branch, so the pull request head must be updated before you merge - otherwise `gh pr merge` merges the tree you did not deploy, `master` never receives the work you carried, and the next session's apply reverts it.
       That is the August 24, 2026 incident, reached by procedure rather than by accident.
       Renovate may reset or recreate a branch you force-pushed; that is normal and costs nothing, because the merge lands first.
-- [ ] `gh pr merge <n> --squash --delete-branch`.
-- [ ] `git checkout master && git pull --ff-only`.
+- [ ] `gh pr merge <n> --squash --delete-branch`, run from **outside this pull request's worktree** - the main checkout, or any other worktree.
+      `gh` checks out the default branch as its own local cleanup step, so from inside the pull request's worktree it prints `failed to run git: fatal: 'master' is already used by worktree at <path>` **after the merge has already succeeded**.
+      That message reads like a failed merge and invites a retry, at the one point in the session where `master` and the cluster are meant to agree.
+- [ ] Confirm the outcome from the API rather than from the exit status:
+
+      gh pr view <n> --repo mnbf9rca/kubernetes_config --json state,mergedAt
+
+- [ ] `git worktree remove ../kubernetes_config-worktrees/pr-<n>`, delete the local branch, then `git checkout master && git pull --ff-only`.
 
 **Verify by triggering the job, not by waiting for its schedule.**
 Use a timestamped name so the Job never collides, and let its own `ttlSecondsAfterFinished` collect it:
