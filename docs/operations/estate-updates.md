@@ -80,6 +80,11 @@ The documented mechanism is the Omni web UI: **Clusters → the cluster → Upda
 A cluster-template path exists (`talos.version` and `kubernetes.version` on a `kind: Cluster` document, applied with `omnictl cluster template diff -f <file>` then `omnictl cluster template sync -f <file>`), but this repo keeps no template file — `homelab/talos/` and `vps/talos/` hold machine config patches only.
 Export one with `omnictl cluster template export <cluster> -o <file>` if you want a reviewable diff; otherwise the UI is the working path.
 
+**Neither cluster can use that path as things stand.** Both were created in the web interface rather than from a template, which the cluster resource shows by carrying no template annotation, so `omnictl cluster template sync` is unavailable until template management is adopted.
+Adopting it is a design decision and not a step in an update session, because the exported template inlines the cluster's config patches by `idOverride` — including the four `homelab/talos/machineconfig-patches/` files that `make apply-talos` already owns.
+That would give those patches two writers, last write winning, with no guard between the two tools: the concurrent-writer failure this repo has already paid for once.
+Taking it means deciding in the same change which tool owns the patches, and deleting or guarding the other; until somebody does, the web UI is the only upgrade path and Step 4 of the session needs the operator.
+
 Editing the `Clusters.omni.sidero.dev` resource directly to change a version is **undocumented**.
 It is mechanically possible and it is not a supported path.
 Do not.
@@ -110,6 +115,15 @@ Earlier Kubernetes upgrades had moved the control plane and left these behind, b
 
 One minor of skew between kube-proxy and the API server is the edge of what upstream supports, so the next upgrade would have taken it out of support.
 Both clusters were synced on August 28, 2026 and now report `outofsync: 0`, with kube-proxy v1.36.4, CoreDNS v1.14.6 and Flannel 0.28.8.
+
+**Read the distinct changed lines rather than paging through the objects**, which is what turned a count that looked like drift into a version gap:
+
+```bash
+omnictl cluster kubernetes manifest-sync <cluster> 2>&1 | grep -E '^[-+][^-+]' | sort -u
+```
+
+That collapses the whole backlog to the set of things that actually differ, which is where the image versions are.
+Then read the dry run in full before applying, because the one-liner discards the object each line belongs to.
 
 So read the count as a version gap, not a queue of formatting changes, and sync it in the session that creates it.
 Applying restarts kube-proxy, the CNI and DNS, so verify service networking afterwards rather than assuming: on the single-node homelab this is a brief outage, and on the VPS it rolls.
