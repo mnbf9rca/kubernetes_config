@@ -37,7 +37,23 @@ metadata:
     keel.sh/trigger: poll
     keel.sh/pollSchedule: "@every 24h"
 spec:
-  replicas: 1
+  # Two replicas since the 2026-08-26 three-node expansion. cloudflared is the
+  # cluster's ONLY ingress, so a single replica meant every hostname went dark
+  # for the length of a node reboot. Cloudflare supports several connectors
+  # sharing one named tunnel and one credentials file; both pods read the same
+  # cloudflared-credentials Secret and the same cloudflared-config ConfigMap.
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      # Surge-only. maxUnavailable: 0 means a rollout never drops below two
+      # serving connectors, and maxSurge: 1 gives it a third pod to start
+      # first. With required anti-affinity that surge pod needs a third free
+      # node — so while one node is down for a reboot, a rollout STALLS with a
+      # Pending pod instead of shedding a live one. Stalling is the failure
+      # mode to want here.
+      maxSurge: 1
+      maxUnavailable: 0
   selector:
     matchLabels:
       app: cloudflared
@@ -46,6 +62,17 @@ spec:
       labels:
         app: cloudflared
     spec:
+      affinity:
+        podAntiAffinity:
+          # REQUIRED, not preferred. A preferred rule lets both replicas land
+          # on one node under scheduling pressure, which reproduces the exact
+          # single-point-of-failure the second replica removes — and does it
+          # silently, because the Deployment still reports 2/2 ready.
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchLabels:
+                  app: cloudflared
+              topologyKey: kubernetes.io/hostname
       containers:
         - name: cloudflared
           image: cloudflare/cloudflared:latest
@@ -97,3 +124,20 @@ spec:
         - name: creds
           secret:
             secretName: cloudflared-credentials
+---
+# A node drain is how a rolling Talos or Kubernetes upgrade evicts pods, and
+# the whole point of the three-node control plane is that those upgrades roll.
+# Without this budget a drain can evict the only cloudflared pod it happens to
+# find, and with two replicas on two nodes an operator draining both in quick
+# succession takes the tunnel down entirely. minAvailable: 1 makes the second
+# drain block until a replacement is Ready.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: cloudflared
+  namespace: vps
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: cloudflared
