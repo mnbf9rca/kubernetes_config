@@ -317,8 +317,8 @@ while wiring hindsight (2026-08-24), and they bind any future integration:
   plugins; provider tools are appended to the agent afterwards and never appear in either
   listing. Verify a plugin tool by asking the agent to call it, never by listing.
 
-Service-specific wiring lives in that service's runbook (for example
-`docs/operations/hindsight.md`); this section is the layout contract they share.
+This section is the single copy of that contract.
+A service runbook carries only its own wiring and points back here for the shared rules rather than restating them — `docs/operations/hindsight.md` is the worked example.
 
 ### Hermes VM backup and restore
 
