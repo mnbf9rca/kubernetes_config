@@ -50,7 +50,7 @@ When you cannot satisfy one, stop and tell the operator what blocked you.
 7. **Dump before you upgrade anything stateful, and show the dump succeeded.**
    Then keep going - no per-item pause for approval.
 8. **Squash merges only.**
-   `gh pr merge <n> --squash --delete-branch`.
+   `gh pr merge <n> --squash --delete-branch`, run from outside the pull request's worktree.
    Merge commits and rebase merges are disabled on the repository.
 9. **Never print a resolved secret, and never build a ping body from a command's output.**
    If a real secret value does reach your output, tell the operator in your next message and add a row to `secrets-to-rotate.md` before doing anything else.
@@ -174,14 +174,16 @@ Do not hand-roll a substitute dump.
       The rebase rewrote the branch, so the pull request head must be updated before you merge - otherwise `gh pr merge` merges the tree you did not deploy, `master` never receives the work you carried, and the next session's apply reverts it.
       That is the August 24, 2026 incident, reached by procedure rather than by accident.
       Renovate may reset or recreate a branch you force-pushed; that is normal and costs nothing, because the merge lands first.
-- [ ] `gh pr merge <n> --squash --delete-branch`, run from **outside this pull request's worktree** - the main checkout, or any other worktree.
-      `gh` checks out the default branch as its own local cleanup step, so from inside the pull request's worktree it prints `failed to run git: fatal: 'master' is already used by worktree at <path>` **after the merge has already succeeded**.
-      That message reads like a failed merge and invites a retry, at the one point in the session where `master` and the cluster are meant to agree.
+- [ ] Free the branch before you merge: return to the **main checkout**, then `git worktree remove ../kubernetes_config-worktrees/pr-<n>`.
+      Both halves of the merge need this.
+      `gh` checks out the default branch as its own cleanup step, which fails with `fatal: 'master' is already used by worktree at <path>`; and `--delete-branch` runs `git branch -D`, which git refuses for a branch a worktree still has checked out, so `gh` exits non-zero with `failed to delete local branch <b>` **after the merge has already succeeded**.
+      Either message reads like a failed merge and invites a retry, at the one point in the session where `master` and the cluster are meant to agree.
+- [ ] `gh pr merge <n> --squash --delete-branch`, from the main checkout.
 - [ ] Confirm the outcome from the API rather than from the exit status:
 
       gh pr view <n> --repo mnbf9rca/kubernetes_config --json state,mergedAt
 
-- [ ] `git worktree remove ../kubernetes_config-worktrees/pr-<n>`, delete the local branch, then `git checkout master && git pull --ff-only`.
+- [ ] `git checkout master && git pull --ff-only`.
 
 **Verify by triggering the job, not by waiting for its schedule.**
 Use a timestamped name so the Job never collides, and let its own `ttlSecondsAfterFinished` collect it:
