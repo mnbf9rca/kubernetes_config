@@ -216,3 +216,50 @@ Meilisearch will not convert a v1.41 index on startup: it needs a one-time `--up
 Rebuilding the index from karakeep is the alternative, and the operator has said that is acceptable.
 
 Correct the manifest comment at the same time: it says the workload is pinned to v1.41.0 and predicts a restart loop, and both halves need rewriting once the version moves.
+
+## 10. A restic image bump fails the apply while the `restic-init` Job still exists
+
+Pull request 76 moved `restic/restic` from `0.17.3` to `0.19.1` in four files, two of which are `restic-init-job.yaml` on each cluster.
+`make apply-homelab` failed:
+
+    The Job "restic-init" is invalid: spec.template: Invalid value: {...}: field is immutable
+    make: *** [Makefile:723: apply-homelab] Error 2
+
+A Job's `spec.template` is immutable, and `restic-init` carries `ttlSecondsAfterFinished: 86400`.
+So for the 24 hours after any apply recreates it, a second apply that changes its image fails on that resource.
+Every other resource applied, and the CronJob image moved, so the cluster was left half-updated until the Job was deleted and the apply repeated.
+
+This session hit it because it applied twice in one afternoon: the first apply, for pull request 58, recreated `restic-init` at `0.17.3`, and pull request 76 then tried to change it inside the TTL window.
+A session spaced four to six weeks apart usually finds the Job already collected and never sees this.
+That is what makes it worth writing down: it appears only when the estate is being worked hard, which is exactly when a half-applied tree is least likely to be noticed.
+
+`AGENTS.md` documents the failure mode and names deleting the stale Job as the recovery.
+The skill does not mention it, and the skill is what an agent reads during the session.
+
+**Proposed fix:** add a step to the skill's Step 2 loop.
+Before applying a pull request that changes any `*-init-job.yaml`, check for a live Job with the old spec and delete it if it has completed:
+
+    kubectl -n backup get job restic-init -o custom-columns=NAME:.metadata.name,IMAGE:.spec.template.spec.containers[0].image
+    kubectl -n backup delete job restic-init
+
+Deleting a Job that reports `Complete=True` is safe here, because `restic-init.sh` probes the repository before initializing and a re-run is a no-op.
+
+## 11. The local-path provisioner base now ships probes the repository's own rule rejects
+
+Pull request 72 moved the VPS local-path provisioner base from `v0.0.31` to `v0.0.37`.
+The release notes named no behavior change, but the rendered diff added three probes to the provisioner Deployment: a liveness, a readiness and a startup probe, each with `timeoutSeconds: 1`.
+
+`AGENTS.md` states that every probe must set `timeoutSeconds`, because the one-second default produces false positives on a loaded node.
+The upstream base sets it explicitly to that same one second, which satisfies the letter of the rule and defeats its purpose.
+`AGENTS.md` also restricts liveness probes to cases where a restart is a safe remedy, and notes that everything here is single-replica, so an over-eager liveness probe manufactures an outage.
+
+The provisioner is stateless, so a restart is safe, and the rollout was clean with no restarts.
+The exposure is a one-second timeout on a small shared VPS: a slow response makes the liveness probe restart the only storage provisioner on the cluster, which stalls volume provisioning.
+
+**Proposed fix:** decide whether to accept upstream's probes or patch them.
+The kustomization already carries patches for the helper-pod hostPath volumes, so raising `timeoutSeconds` on the three probes is a small addition in the same file.
+Whichever is chosen, write the reason down, because the next base bump will present the same diff and the reader needs to know it was considered.
+
+A second, smaller point from the same pull request: the helper-pod image inside the ConfigMap changed from `busybox` to `docker.io/library/busybox`.
+It is still an untagged reference, which means `:latest`, and it is embedded in a block scalar where `check-renovate-scope` cannot see it at all.
+That is pre-existing and documented, not caused by this bump.
