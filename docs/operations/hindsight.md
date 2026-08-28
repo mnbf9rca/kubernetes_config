@@ -64,8 +64,28 @@ Then, by hand.
    A changed resource this branch never touched is a revert until you prove otherwise.
 3. `make apply-homelab`.
 4. `kubectl -n hindsight rollout status deploy/hindsight --timeout=600s`.
-5. Watch the startup probe settle, then run `hermes memory status` on VM 103.
-6. **Prove one Hermes memory write still lands.**
+5. **If the `pgvector/pgvector` image moved, update the extension to match it.**
+   The image ships the pgvector shared library and its SQL scripts, but the `vector` extension inside the database keeps the version it was created with.
+   Hindsight creates it with a bare `CREATE EXTENSION vector` and never updates it, and upstream pins no version at all — their compose files use an unpinned `pgvector/pgvector:pg<major>` tag.
+   So nothing moves the catalog version except this step:
+
+   ```sh
+   kubectl -n hindsight exec deploy/hindsight-postgres -c postgres -- \
+     psql -U hindsight -d hindsight -tAc "ALTER EXTENSION vector UPDATE;"
+   kubectl -n hindsight exec deploy/hindsight-postgres -c postgres -- \
+     psql -U hindsight -d hindsight -tAc \
+     "SELECT e.extversion, a.default_version FROM pg_extension e JOIN pg_available_extensions a ON a.name=e.extname WHERE e.extname='vector';"
+   ```
+
+   The two values must match when it finishes.
+
+   **This is about keeping the catalog honest, not about applying fixes.**
+   pgvector's fixes live in the shared library, so they arrive with the image and are active as soon as the pod restarts — the HNSW vacuuming corruption fix in 0.8.3 among them.
+   Every upgrade script from `vector--0.8.0--0.8.1.sql` to `vector--0.8.5--0.8.6.sql` is 153 bytes holding only the psql guard line, so across that range the `ALTER` executes nothing and relabels `extversion`.
+   Run it anyway, every time, because `vector--0.8.6--0.8.7.sql` is 11,833 bytes: releases do eventually add SQL objects, and a label left several versions behind turns the next real upgrade into a gap somebody has to research before they dare run it.
+   Done on August 28, 2026 to close a 0.8.1 to 0.8.6 gap.
+6. Watch the startup probe settle, then run `hermes memory status` on VM 103.
+7. **Prove one Hermes memory write still lands.**
    The canary proves the *server*; it says nothing about the agent's client, which is a different library talking to the same API.
    On VM 103, take one chat turn against the default gateway — the command is in [the update runbook's Verify step](hermes-vm-updates.md#verify) — then read that gateway's journal for the write behind it:
 
@@ -75,10 +95,10 @@ Then, by hand.
 
    A `401`, a timeout or a schema complaint here, with the canary green, points at the client rather than the server.
    The write is on a background path the chat response does not wait for, so a 200 from the chat turn proves nothing on its own.
-7. `git push --force-with-lease`.
+8. `git push --force-with-lease`.
    The rebase in step 1 rewrote the branch, so the pull request head must be updated before you merge — otherwise `gh pr merge` merges the tree you did not deploy, and the carried work never reaches `master`.
    Renovate may reset or recreate a branch you force-pushed; that is its normal behaviour and costs nothing here, because the merge lands first.
-8. Only now: `gh pr merge <n> --squash --delete-branch`, then `git checkout master && git pull`.
+9. Only now: `gh pr merge <n> --squash --delete-branch`, then `git checkout master && git pull`.
 
 **Server and client move independently, and the skew is accepted.**
 The VM's `hindsight-client` is never pinned by this estate — see [The client on the hermes VM](#the-client-on-the-hermes-vm) — so a server bump moves the server alone, and the client moves only when hermes-agent's own pin moves.
