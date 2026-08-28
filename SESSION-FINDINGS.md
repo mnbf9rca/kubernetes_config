@@ -177,11 +177,13 @@ The next release does add SQL objects.
 Once 0.8.7 ships, a database still labelled 0.8.1 needs an `ALTER` that replays five empty scripts and then a real one, and anybody looking at the version gap has to redo this analysis to know whether it is safe.
 Keeping the label current makes the eventual real upgrade a single visible step.
 
-**Proposed fix:** run `ALTER EXTENSION vector UPDATE` once, as a catalog relabel with no SQL to execute.
-Then add it to the hindsight upgrade runbook in `docs/operations/hindsight.md`, after the rollout and before the canary, so the label tracks the image from now on.
-Note in that runbook that the fixes ship in the library and arrive with the image, so the `ALTER` is about keeping the catalog honest rather than about applying fixes.
+**CLOSED on August 28, 2026.**
+`ALTER EXTENSION vector UPDATE` was run against the `hindsight` database and the extension now reports `installed=0.8.6 available=0.8.6`.
+The canary passed afterwards, with `retain_http=200`, `recall_http=200` and one result.
+The step is now part of the upgrade runbook in `docs/operations/hindsight.md`, as step 5, merged in pull request 86.
 
-The pre-upgrade dump `pre-upgrade-20260828153152` covers it, though an empty upgrade script needs no rollback.
+Nothing remains to do here.
+The heading is kept so the next reader does not repeat the research.
 
 ## 8. Renovate splits the keel-fresh pair into two pull requests, which the parity guard forbids
 
