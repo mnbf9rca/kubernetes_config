@@ -80,7 +80,8 @@ The documented mechanism is the Omni web UI: **Clusters → the cluster → Upda
 A cluster-template path exists (`talos.version` and `kubernetes.version` on a `kind: Cluster` document, applied with `omnictl cluster template diff -f <file>` then `omnictl cluster template sync -f <file>`), but this repo keeps no template file — `homelab/talos/` and `vps/talos/` hold machine config patches only.
 Export one with `omnictl cluster template export <cluster> -o <file>` if you want a reviewable diff; otherwise the UI is the working path.
 
-**Neither cluster can use that path as things stand.** Both were created in the web interface rather than from a template, which the cluster resource shows by carrying no template annotation, so `omnictl cluster template sync` is unavailable until template management is adopted.
+**Do not take that path.** Both clusters were created in the web interface rather than from a template, which the cluster resource shows by carrying no template annotation.
+Sidero documents export-then-`omnictl cluster template sync` as the way to move such a cluster onto template management, so running `sync` against one is not an update step — it is the adoption decision itself, taken by running a command.
 Adopting it is a design decision and not a step in an update session, because the exported template inlines the cluster's config patches by `idOverride` — including the five `homelab/talos/machineconfig-patches/` files that `make apply-talos` already owns.
 That would give those patches two writers, last write winning, with no guard between the two tools: the concurrent-writer failure this repo has already paid for once.
 Taking it means deciding in the same change which tool owns the patches, and deleting or guarding the other; until somebody does, the web UI is the only upgrade path and Step 4 of the session needs the operator.
