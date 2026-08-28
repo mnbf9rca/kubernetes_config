@@ -20,7 +20,8 @@ kind: Kustomization
 #
 # Re-check issue 9031 at the next update session before taking v1.21. If it is
 # still open, the 1.20 line remains the better trade and there will be a newer
-# patch on it by then.
+# patch on it by then. When 9031 closes and this cluster takes v1.21 or later,
+# delete this block in the same commit as the version bump.
 
 resources:
   - https://github.com/cert-manager/cert-manager/releases/download/v1.20.3/cert-manager.yaml
