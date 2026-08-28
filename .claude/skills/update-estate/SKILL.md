@@ -93,6 +93,35 @@ When you cannot satisfy one, stop and tell the operator what blocked you.
 Work them one at a time, oldest first.
 Nothing here waits for per-item approval.
 
+**Two pull requests can be individually invalid, and then "one at a time" is the wrong instruction.**
+`make check-keel-fresh-parity` requires `homelab/ops/keel-fresh.yaml` and `vps/ops/keel-fresh.yaml` to stay identical outside a stated list, and it has no per-cluster half - so an image bump that arrives as one pull request per copy makes *either one alone* refuse `apply-homelab` and `apply-vps` both.
+Renovate split exactly that on August 28, 2026.
+When a guard rejects two open pull requests taken singly: build one branch carrying both changes, confirm the guard passes, apply to each cluster and verify, then push and merge the two back to back.
+**Never close either one unmerged** - that is unsupported and snoozes the update-watch monitor.
+Any future enforced copy pair inherits this shape.
+
+**Read the change before you take it.**
+This applies to the pinned set only: keel-floating workloads are keel's by the two-modes rule and stay unread.
+Depth is proportionate - a patch span gets a skim, a major gets a real read, a PostgreSQL major stays refused.
+
+1. **Why is this pinned where it is?**
+   The repository first: the comment on the line, the docs, `git log -L` over it.
+   Where the reason was never written down, the vendor's release notes across the span are where it usually lives - a breaking change immediately above the pin is probably the reason it sits there, and probably still standing.
+2. **What changed across the span?**
+   Ask this only once the pin has no standing reason to hold.
+   Read for work the tag edit cannot do itself: a migration, a component versioned inside the stored data, a renamed setting, a manual step named in a release body.
+   Handle each one or record it.
+3. **Declining is a configuration change, not a pull request action.**
+   Never close a Renovate pull request by hand, and never leave one open you have decided not to merge.
+   Encode the hold in `renovate.json` - an `allowedVersions` cap or a disable, with a `description` carrying the reason and the date - and Renovate withdraws its own pull request.
+   That recorded reason is what makes question 1 answerable next session.
+   Scope the cap deliberately: `<1.42` still takes patches, an exact version freezes the line.
+
+`getmeili/meilisearch` in `vps/workloads/karakeep.yaml` is the worked example.
+Question 1: karakeep's own compose file pins v1.41.0, so the pin is the pairing karakeep tests against, and that reason still stands.
+Question 2 therefore does not arise - and it would not have been cheap, because Meilisearch does not convert its index across that span on startup.
+Question 3: the hold lives in `renovate.json` naming karakeep's pin as the condition, so the pull request withdraws itself and returns when karakeep moves.
+
 **Dump first where the service holds state:**
 
 | The pull request touches | Take the dump with |
