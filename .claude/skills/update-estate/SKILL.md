@@ -38,9 +38,11 @@ When you cannot satisfy one, stop and tell the operator what blocked you.
    Not the summary - every resource it names.
    A resource in that list your branch never touched is another branch's deployed work about to be reverted.
    **Treat it as a revert until you have proved otherwise**, by finding the branch that deployed it.
-   Read it through the two filter pipelines in `AGENTS.md` ("An agent reads a diff through a filter") - one prints the resource list, the other the body with base64 Secret values masked - which is how you read every line without a resolved secret landing in the transcript.
+   Read it through the two filter pipelines in `AGENTS.md` ("An agent reads a diff through a filter") - one prints the resource list, the other the body with long base64-looking values masked.
+   `kubectl diff` redacts Secret `data` itself and `op run` masks plaintext, so the pipelines are a reading aid and a second line of defence rather than the protection.
 4. **Carry every deployed-but-unmerged branch before you apply.**
-   Rebase onto `origin/master`, then read the open pull requests for another branch that is already deployed and touches the same files.
+   `git fetch origin`, rebase onto `origin/master`, then read the open pull requests for another branch that is already deployed and touches the same files.
+   Without the fetch the rebase is a no-op against a stale remote-tracking ref.
    An apply reconciles the whole rendered tree: every file your branch does not carry is reset to your branch's version, silently, with every job still green.
    This cost a reverted restic gate on August 24, 2026.
 5. **Never bypass the context guards.**
