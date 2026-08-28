@@ -169,7 +169,7 @@ The three files below repeat the version inside the URL path, where the manager 
 | File | Upstream repository | Occurrences |
 |---|---|---|
 | `homelab/bootstrap/local-path/kustomization.yaml` | `rancher/local-path-provisioner` | 1 |
-| `homelab/bootstrap/nfs-csi/kustomization.yaml` | `kubernetes-csi/csi-driver-nfs` | 4 URLs, each naming the version **twice** |
+| `homelab/bootstrap/nfs-csi/kustomization.yaml` | `kubernetes-csi/csi-driver-nfs` | 9 — four URLs naming it **twice** each, and a comment |
 | `homelab/bootstrap/cert-manager/kustomization.yaml` | `cert-manager/cert-manager` | 2 — the URL and a comment |
 
 - [ ] Check each upstream: `gh release list -R <owner>/<repo> --limit 5`.
