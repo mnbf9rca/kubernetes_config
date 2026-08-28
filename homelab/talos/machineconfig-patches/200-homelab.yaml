@@ -2,9 +2,11 @@
 # August 28, 2026. The patch was typed into Omni's cluster-creation form on
 # 2026-04-11 and had existed only in Omni ever since: neither CIDR appeared in
 # any committed file, so a rebuild from this repository would silently have come
-# up on Talos's defaults and moved every hard-coded service address. Pod and
-# service CIDRs cannot be changed on a live cluster, which makes this the least
-# recoverable piece of Talos configuration here.
+# up on Talos's default service subnet `10.96.0.0/12`, which spans
+# 10.96.0.0-10.111.255.255 and therefore contains the 10.100.0.0/24 LAN this
+# cluster's node (10.100.0.100) and its gateway/nameserver (10.100.0.1) sit on.
+# Pod and service CIDRs cannot be changed on a live cluster, which makes this the
+# least recoverable piece of Talos configuration here.
 #
 # The id below is the live patch's own id, not a new one: `make apply-talos`
 # calls `omnictl apply` per file, so reusing it overwrites the existing resource
