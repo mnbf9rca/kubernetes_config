@@ -168,14 +168,15 @@ Do not hand-roll a substitute dump.
       **Read every resource it names.**
       Confirm only the image lines you expect have moved.
       Apply gate 3 to anything else.
-- [ ] If this pull request changes any `*-init-job.yaml`, clear the completed Job before you apply.
+- [ ] If this pull request changes a standalone `kind: Job` - not a CronJob; today that is `homelab/backup/restic-init-job.yaml` and `vps/backup/restic-init-job.yaml` - clear the completed Job before you apply.
       A Job's `spec.template` is immutable and `restic-init` sets `ttlSecondsAfterFinished: 86400`, so for a day after any apply recreates it, a second apply that moves its image fails on that one resource - and `kubectl apply` continues past the failure, leaving the tree half-updated with a non-zero exit as the only sign (the TTL rule in `AGENTS.md`).
       A session that applies twice in one afternoon hits this; one that runs every 4 to 6 weeks finds the Job already collected:
 
-      kubectl -n backup get job restic-init -o custom-columns=NAME:.metadata.name,IMAGE:.spec.template.spec.containers[0].image
+      kubectl -n backup get job restic-init -o 'custom-columns=NAME:.metadata.name,COMPLETE:.status.conditions[?(@.type=="Complete")].status,IMAGE:.spec.template.spec.containers[0].image'
       kubectl -n backup delete job restic-init
 
-      Deleting it once it reports `Complete=True` is safe here: `restic-init.sh` probes the repository before initialising, so a re-run is a no-op.
+      The quoting is required - zsh globs the unquoted `[?(...)]` and the command exits 1 before kubectl runs.
+      Deleting it once it has finished - `Complete` or `Failed`, and with `backoffLimit: 0` a failed Job blocks the apply identically - is safe here: `restic-init.sh` probes the repository before initialising, so the re-run the next apply triggers is a no-op.
 - [ ] `make apply-homelab` or `make apply-vps`.
 - [ ] Wait for the rollout and then verify by hand, from the table below.
 - [ ] `git push --force-with-lease`.
