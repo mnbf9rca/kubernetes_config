@@ -220,17 +220,48 @@ Full mechanics, target-by-target reference and failure modes:
   four `alpine:3.20` quiesce sidecars and both `postgres:16-alpine` containers. They
   still get version bumps, so nothing is broken; they arrive without a digest.
   That is the accepted cost of a path-scoped rule, not an oversight.
+- **New machinery earns its place or it does not ship.** A resource, a probe, a check or a
+  verification step is justified only if it (a) serves the application, (b) protects against
+  lockout or data loss, or (c) feeds detection machinery that already exists. Everything
+  else is ceremony — cut it while you write it. Four questions decide the common cases; all
+  four fired on the one-day pinepods deployment (2026-08-27):
+  1. **Does an existing dead-man's-switch already alert on this?** Then do not add a step
+     that re-confirms it. A gate on next-morning restic confirmation detected nothing the
+     gate's own alert would not, and the overnight wait held a deployed-but-unmerged branch
+     open — the last-apply-wins window above. **The deploy-then-merge gate is workload
+     health, not a backup cycle.**
+  2. **Has the helper exactly one consumer and the app's own lifecycle?** Then it is a
+     second container in the app's pod, not a Deployment plus Service plus DNS name: folding
+     a single-consumer Valkey cache back in deleted two resources and a probe and lost
+     nothing.
+  3. **Can this acceptance criterion fail at runtime?** One that can only fail if you
+     mis-edit the files you just reviewed is reading your own diff — delete it. "Port 8042
+     is unreachable from outside" asserted the absence of config the design never wrote.
+  4. **Does a constant encode a count taken from somewhere else?** Re-derive it from that
+     source rather than from your model of it, and confirm it against the live value after
+     the apply. `IMAGE_FLOOR` counts deduplicated images across every container of every
+     keel-annotated workload, so one two-container workload moves it by two.
+- **A design review needs a seat whose only brief is deletion.** Brief one reviewer to hunt
+  for machinery that exists to feel rigorous and name both what to delete and what of value
+  is lost, then verify each finding adversarially — tell the verifier that "protects against
+  neither lockout nor data loss" argues **for** the finding. That seat found four deletions
+  two other reviewers missed (2026-08-27); the spec or plan's own author cannot fill it.
 - **Probes: readiness on every long-running container that serves traffic; liveness only
   where that probe can actually detect the failure *and* a restart is a safe remedy**
   (everything here is single-replica, so an over-eager liveness probe manufactures
   outages). **Always set
   `timeoutSeconds`** — the 1s default false-positives on a loaded node. **Probe the data
   plane, not a control-plane health endpoint**: the vendor-documented probe would have
-  stayed green through the 2026-08-18 Pomerium wedge. **Never probe a backup/quiesce
-  sidecar at all** — readiness drops the Pod from its EndpointSlice and liveness gets there
-  through CrashLoopBackOff, so a backup fault takes the application offline; detect those at
-  the artifact instead. Reasoning, per-service targets and the failures probes *don't*
-  catch: `docs/operations/monitoring.md`.
+  stayed green through the 2026-08-18 Pomerium wedge. **Read the endpoint's handler at
+  source before wiring any probe to it**: an endpoint that returns 200 unconditionally and
+  puts its verdict in the body detects nothing a restart fixes, yet still times out during a
+  database incident and restarts the single replica for a fault no restart repairs
+  (2026-08-27). Assert on real health fields in the body from a kuma keyword monitor
+  instead. **Never probe a sidecar at all** — backup/quiesce container and single-consumer
+  cache alike — because readiness drops the Pod from its EndpointSlice and liveness gets
+  there through CrashLoopBackOff, so one sidecar fault takes the application offline; detect
+  a backup fault at the artifact instead. Reasoning, per-service targets and the failures
+  probes *don't* catch: `docs/operations/monitoring.md`.
 - **Scheduled work gets a dead-man's-switch, not a probe.** Every CronJob sets
   `timeZone: "UTC"` and `activeDeadlineSeconds` (with `concurrencyPolicy: Forbid`, one
   hung run silently blocks every later run), plus `startingDeadlineSeconds` where a missed
