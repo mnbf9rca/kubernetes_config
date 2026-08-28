@@ -1,7 +1,7 @@
 # Documentation
 
-Operational documentation for this repo. `AGENTS.md` at the repo root holds background
-and conventions only — everything cluster-specific or procedural lives here.
+Operational documentation for this repo.
+`AGENTS.md` at the repo root holds background and conventions only — everything cluster-specific or procedural lives here.
 
 | Document | Covers |
 |---|---|
@@ -14,5 +14,4 @@ and conventions only — everything cluster-specific or procedural lives here.
 | [operations/monitoring.md](operations/monitoring.md) | How failures get noticed: the triage table, the four detection layers, probe policy and inventory, CronJob deadlines, the backup verification gates, the four healthchecks.io checks and the ten uptime-kuma push monitors, the disclosure rules for both, and what none of it catches |
 | [operations/uptime-kuma.md](operations/uptime-kuma.md) | Layer 3/4 runbook: creating uptime-kuma monitors by hand, per-monitor HTTP settings, the Cloudflare Access trap, the self-monitor |
 
-`docs/superpowers/` is gitignored — local-only specs and implementation plans, not part
-of this tree.
+`docs/superpowers/` is gitignored — local-only specs and implementation plans, not part of this tree.

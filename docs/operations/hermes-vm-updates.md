@@ -29,7 +29,8 @@ df -h /home     # 1 GiB free
 date -u         # not within 90 minutes of 04:45 UTC: the reboot kills the session mid-run
 ```
 
-**[VM]** Write the rollback record. It is the rollback target, and it has to outlive a session the reboot can kill:
+**[VM]** Write the rollback record.
+It is the rollback target, and it has to outlive a session the reboot can kill:
 
 ```sh
 printf 'agent_sha=%s\nagent_branch=%s\nwebui_sha=%s\nclient_version=%s\n' \
@@ -58,14 +59,16 @@ git -C ~/.hermes/hermes-agent show origin/main:hermes_cli/config_defaults.py \
   | grep -n '_config_version'
 ```
 
-**[laptop]** Read the release bodies for the incoming range. Do not substitute a commit-log grep for breaking-change markers: a sampled week held 1,687 commits and zero of them, so that check reports all-clear forever.
+**[laptop]** Read the release bodies for the incoming range.
+Do not substitute a commit-log grep for breaking-change markers: a sampled week held 1,687 commits and zero of them, so that check reports all-clear forever.
 
 ```sh
 gh api repos/NousResearch/hermes-agent/releases \
   --jq '.[] | "== \(.tag_name) \(.published_at)\n\(.body)"'
 ```
 
-**Pause signals.** Stop and read first when: the Python floor moves; the `hindsight-client` pin changes ([hindsight.md](hindsight.md#the-client-on-the-hermes-vm)); `_config_version` jumps by more than one, or a release names a configuration *floor* or touches the update mechanism; a dependency is under 14 days old.
+**Pause signals.**
+Stop and read first when: the Python floor moves; the `hindsight-client` pin changes ([hindsight.md](hindsight.md#the-client-on-the-hermes-vm)); `_config_version` jumps by more than one, or a release names a configuration *floor* or touches the update mechanism; a dependency is under 14 days old.
 
 ## Update
 
@@ -83,7 +86,8 @@ systemctl --user reset-failed hermes-update-manual 2>/dev/null; true
 
 Passed if `ActiveState=inactive`, `Result=success` and `ExecMainStatus=0`; `--collect` is omitted deliberately, because it destroys a failed unit and `systemctl show` then answers with defaults that read exactly like that triple.
 
-**[VM]** Confirm the snapshot exists before going further. It is the only route back from a forward-only migration, and upstream's backup path warns and continues on its own failures, so nothing else will tell you whether one was written:
+**[VM]** Confirm the snapshot exists before going further.
+It is the only route back from a forward-only migration, and upstream's backup path warns and continues on its own failures, so nothing else will tell you whether one was written:
 
 ```sh
 ls -lt ~/.hermes/backups/pre-update-*.zip | head -1
