@@ -404,3 +404,33 @@ A patch created in the web interface, like the `500-` one, is invisible to every
 **Proposed fix:** read the three unaccounted-for patches, decide for each whether it belongs in the repository or is Omni's to own, and write the answer down.
 `200-homelab` and the untaint patches look like Omni's cluster-creation defaults, which would make them Omni's; the `500-` user-defined patch is the one that needs a real decision.
 Then state in `docs/operations/estate-updates.md` that `homelab/talos/` is a subset, or make it complete.
+
+## 16. The bootstrap manifest backlog was a version gap, not a long list — the skill still says otherwise
+
+Step 4 of the skill says of the manifest backlog:
+
+> Both clusters carried a backlog of 21 out-of-sync objects on August 28, 2026, from before any of this, so expect the first run to be long.
+
+That frames the count as a queue whose only cost is reading time.
+It was not.
+
+Reading the dry run showed kube-proxy running **v1.35.3** on homelab and **v1.35.2** on the VPS against a control plane that had just moved to **v1.36.4**, with CoreDNS on v1.13.2 and Flannel on v0.27.4.
+Earlier Kubernetes upgrades had moved the control plane and left the bootstrap manifests behind, because Omni holds them back by design and nothing had ever applied them.
+One minor of skew between kube-proxy and the API server is the edge of what upstream supports, so the next upgrade would have taken it out of support.
+
+Both clusters were synced during this session and now report `outofsync: 0`, running kube-proxy v1.36.4, CoreDNS v1.14.6 and Flannel 0.28.8.
+
+**Already fixed in the reference doc.**
+`docs/operations/estate-updates.md` now says to read the count as a version gap rather than a queue, to sync it in the session that creates it, and to verify service networking afterwards because the sync restarts kube-proxy, the CNI and DNS.
+That merged as pull request 87.
+
+**Still to fix:** the sentence quoted above, at `.claude/skills/update-estate/SKILL.md` line 219.
+It is now both stale and misleading — the backlog is cleared, and "expect the first run to be long" is the wrong thing to expect.
+Replace it with a pointer to the reference doc's bootstrap-manifest section, and say that a non-zero count after a Kubernetes upgrade means the data-plane components have not moved with the control plane.
+
+A note on why this one was nearly missed: the count alone looks like drift, and the skill's own wording invited reading it that way.
+What made the difference was listing the distinct changed lines rather than paging through 21 objects:
+
+    omnictl cluster kubernetes manifest-sync <cluster> 2>&1 | grep -E '^[-+][^-+]' | sort -u
+
+That collapses the whole backlog to the set of things that actually differ, which is where the image versions were.
