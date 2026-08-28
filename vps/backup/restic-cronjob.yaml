@@ -59,7 +59,7 @@ spec:
             - name: restic
               # Pinned to match homelab. Was :latest — an unpinned backup tool
               # is a silent-change surface on the one job you cannot re-run.
-              image: restic/restic:0.17.3
+              image: restic/restic:0.19.1@sha256:136600b6ff6843d61d355f7f71f460a166429f35de6fd11b568fece3c9a4d510
               # The script is vps/backup/scripts/restic-backup.sh, mounted at
               # /scripts by the configMapGenerator in this directory's
               # kustomization.yaml. The backup verification gate lives in
