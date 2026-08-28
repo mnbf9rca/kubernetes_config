@@ -185,7 +185,7 @@ The three files below repeat the version inside the URL path, where the manager 
 Skip this step for a cluster whose etcd backup failed the Step 0 assertion.
 
 **Read the control-plane count out of the ledger in [estate-updates.md](../../../docs/operations/estate-updates.md#the-version-ledger) before you plan an upgrade, and confirm it against the cluster.**
-Do not carry a remembered number: the VPS control plane was one node and is planned to become three, and the count decides what kind of operation this is.
+Do not carry a remembered number: the VPS control plane grew from one node to three, and the count decides what kind of operation this is.
 
     kubectl --context <ctx> get nodes -l node-role.kubernetes.io/control-plane
 
@@ -216,7 +216,7 @@ Do not carry a remembered number: the VPS control plane was one node and is plan
       `manifest-sync` defaults to `--dry-run` true and prints what it would do.
       Read it in full, then apply what suits this cluster with `--dry-run=false`.
       The UI equivalent is **Bootstrap Manifests** in the left navigation.
-      Both clusters carried a backlog of 21 out-of-sync objects on August 26, 2026, from before any of this, so expect the first run to be long.
+      Both clusters carried a backlog of 21 out-of-sync objects on August 28, 2026, from before any of this, so expect the first run to be long.
       Do not run `talosctl get manifests -o yaml` unfiltered to inspect the sources - it embeds the bootstrap-token Secret.
 - [ ] Verify: `kubectl --context <ctx> get nodes -o wide` shows the new versions and the node `Ready`; every namespace's pods return to Running.
 - [ ] Update the version ledger in `docs/operations/estate-updates.md` - the versions, the control-plane counts and node names, and the "Confirmed" date, even when nothing moved.
