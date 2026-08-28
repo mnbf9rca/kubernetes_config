@@ -66,3 +66,21 @@ patches:
           pod-security.kubernetes.io/enforce: privileged
           pod-security.kubernetes.io/audit: privileged
           pod-security.kubernetes.io/warn: privileged
+
+  # Same three probes, same reason as
+  # vps/bootstrap/local-path/kustomization.yaml — the v0.0.37 base sets no
+  # timeoutSeconds.
+  - target:
+      kind: Deployment
+      name: local-path-provisioner
+      namespace: local-path-storage
+    patch: |-
+      - op: add
+        path: /spec/template/spec/containers/0/livenessProbe/timeoutSeconds
+        value: 5
+      - op: add
+        path: /spec/template/spec/containers/0/readinessProbe/timeoutSeconds
+        value: 5
+      - op: add
+        path: /spec/template/spec/containers/0/startupProbe/timeoutSeconds
+        value: 5
