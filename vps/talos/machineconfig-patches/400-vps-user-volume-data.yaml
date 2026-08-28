@@ -11,7 +11,7 @@
 #   sdb   80 GB  virtio  Volume          <-- selected
 #
 # SCOPE: this patch is labelled to ONE machine, not to the cluster. Since the
-# 2026-08-26 expansion to three control planes, the other two nodes are CX23s
+# 2026-08-28 expansion to three control planes, the other two nodes are CX23s
 # with no Hetzner Cloud Volume attached, and a cluster-scoped UserVolumeConfig
 # would push a disk selector at them that matches nothing. If the Cloud Volume
 # is ever moved or a second one is attached, add a SECOND patch file with that

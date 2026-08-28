@@ -216,18 +216,18 @@ The anti-affinity is `required` rather than `preferred` deliberately: a `preferr
 lets both replicas land on one node under scheduling pressure, reproducing the single
 point of failure while the Deployment still reports 2/2 ready.
 
-Both halves of that were exercised on August 28, 2026 and the tunnel never dropped a
-request. A `talosctl reboot` of a replica's node makes no eviction call, so the
-PodDisruptionBudget is never consulted; what happened instead is that Talos stopped the
-pod gracefully, it went `Succeeded`, and the ReplicaSet placed a replacement on the third
-node within about ninety seconds — the 300-second `node.kubernetes.io/unreachable`
-toleration never came into it, because the node shut down cleanly rather than
-disappearing. A `kubectl drain` of a different replica's node is the case that does
-exercise the budget: the eviction went through the API, the budget held the surviving
-replica serving, and required anti-affinity left exactly one node the replacement could
-land on. Terminated pods from a reboot linger in `Completed` rather than being cleaned up,
-so a stale `0/1 Completed` cloudflared pod beside two `Running` ones is expected and is
-not a fault.
+Both halves of that were exercised on August 28, 2026 and every one of the 309
+one-second probe samples returned 200. A `talosctl reboot` of a replica's node makes no
+eviction call, so the PodDisruptionBudget is never consulted; what happened instead is
+that Talos stopped the pod gracefully, it went `Succeeded`, and the ReplicaSet placed a
+replacement on the third node within about ninety seconds — the 300-second
+`node.kubernetes.io/unreachable` toleration never came into it, because the node shut
+down cleanly rather than disappearing. A `kubectl drain` of a different replica's node is
+the case that does exercise the budget: the eviction went through the API, the budget
+held the surviving replica serving, and required anti-affinity left exactly one node the
+replacement could land on. Terminated pods from a reboot linger in `Completed` rather
+than being cleaned up, so a stale `0/1 Completed` cloudflared pod beside two `Running`
+ones is expected and is not a fault.
 
 To verify the tunnel survives a node reboot, probe an **Access-bypassed** path — a
 protected hostname answers `302` from the Cloudflare login page whether the origin is

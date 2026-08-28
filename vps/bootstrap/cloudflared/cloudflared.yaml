@@ -37,7 +37,7 @@ metadata:
     keel.sh/trigger: poll
     keel.sh/pollSchedule: "@every 24h"
 spec:
-  # Two replicas since the 2026-08-26 three-node expansion. cloudflared is the
+  # Two replicas since the 2026-08-28 three-node expansion. cloudflared is the
   # cluster's ONLY ingress, so a single replica meant every hostname went dark
   # for the length of a node reboot. Cloudflare supports several connectors
   # sharing one named tunnel and one credentials file; both pods read the same

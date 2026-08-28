@@ -18,7 +18,7 @@ patches:
           pod-security.kubernetes.io/enforce: privileged
           pod-security.kubernetes.io/audit: privileged
           pod-security.kubernetes.io/warn: privileged
-  # Since the 2026-08-26 three-node expansion, /var/mnt/data only exists on
+  # Since the 2026-08-28 three-node expansion, /var/mnt/data only exists on
   # ubuntu-16gb-fsn1-2 — it is the Talos user volume backed by the Hetzner
   # Cloud Volume, and it is the only path the nightly restic job backs up.
   # The other two control planes are CX23s with no Cloud Volume.

@@ -29,7 +29,7 @@ spec:
           # The `data` hostPath below is /var/mnt/data/local-path-provisioner,
           # which is the Talos user volume on the Hetzner Cloud Volume — and
           # that volume is attached to exactly one machine. Since the
-          # 2026-08-26 three-node expansion this pod would otherwise be
+          # 2026-08-28 three-node expansion this pod would otherwise be
           # schedulable onto a CX23 that has no such path.
           #
           # `type: Directory` on the mount means an unpinned pod on the wrong
