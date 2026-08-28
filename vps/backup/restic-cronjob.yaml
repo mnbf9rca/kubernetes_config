@@ -26,6 +26,23 @@ spec:
       ttlSecondsAfterFinished: 259200
       template:
         spec:
+          # The `data` hostPath below is /var/mnt/data/local-path-provisioner,
+          # which is the Talos user volume on the Hetzner Cloud Volume — and
+          # that volume is attached to exactly one machine. Since the
+          # 2026-08-26 three-node expansion this pod would otherwise be
+          # schedulable onto a CX23 that has no such path.
+          #
+          # `type: Directory` on the mount means an unpinned pod on the wrong
+          # node fails to start rather than backing up an empty tree, so this
+          # selector converts a nightly hard failure into no failure at all. It
+          # is NOT the thing that prevents backing up nothing — the hostPath
+          # type is. Do not remove either one.
+          #
+          # If this node is ever rebuilt under a different name, the pod goes
+          # Pending, the job hits activeDeadlineSeconds, and the missing
+          # healthchecks.io start ping alarms. Loud, by design.
+          nodeSelector:
+            kubernetes.io/hostname: ubuntu-16gb-fsn1-2
           restartPolicy: Never
           # No terminationGracePeriodSeconds override. A longer grace period is
           # only useful if the process can act on SIGTERM, and this one cannot:
