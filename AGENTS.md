@@ -128,6 +128,31 @@ The rules that must not be broken:
   Reading a procedure proves only that it parses; running it is what finds the step that names a file that moved, the assertion that cannot be satisfied from the tool available, the count that is wrong.
   A prose change that has only been read is intent, and `master` does not record intent.
   Merge it when the session that exercised it is finished, so the corrections it turned up land on the same branch rather than in a follow-up PR.
+- **A branch held open across a session is rebased before every commit to it, not only before an apply.**
+  A branch that lacks a commit presents its absence as a deletion, so a stale branch is a revert of everything merged since it was cut — documentation-only branches included, because merging one still rewrites the files it is behind on.
+  The rebase-before-apply rule does not cover this: a branch that never reaches a cluster still reaches `master`.
+  The check is one command, read before you commit and again before you merge:
+
+      git diff --stat origin/master..HEAD
+
+  It must name only the files that branch exists to change.
+  Any other file is a revert until proven otherwise, exactly as in `make diff-<cluster>`.
+  On 2026-08-28 a findings branch held open across one session drifted eleven merges behind, and its diff named 22 workload files it had never touched.
+- **An image tag is not always the whole version. Ask what the image installed into the data.**
+  A container image bump replaces the binary and nothing else.
+  Anything the software wrote *into its own data* on first start keeps the version it was written with, and no image bump moves it.
+  A PostgreSQL extension is the case this estate has: `pgvector` ships its shared library in the image, but the `vector` entry in `pg_extension` keeps whatever `CREATE EXTENSION` recorded, and only `ALTER EXTENSION ... UPDATE` moves it.
+  Hindsight ran the 0.8.6 library against a 0.8.1 catalog entry for as long as nobody looked.
+  The same shape applies to any in-database component versioned separately from its image, and to on-disk schema versions generally.
+  When a stateful image moves, ask what version the data claims, and compare the two:
+
+      kubectl -n <ns> exec deploy/<db> -c postgres -- psql -U <user> -d <db> -tAc \
+        "SELECT extname, extversion FROM pg_extension;"
+
+  Then find out whether the gap matters before acting.
+  **Read the vendor's own manifests first** — an upstream that pins the component tells you the pin is deliberate, and an upstream that floats it tells you the version is not load-bearing.
+  For a PostgreSQL extension, the upgrade scripts settle it: an empty script means the release changed only the library, so the fix is already live and the update is a relabel.
+  Record which of the two it was, because the next reader inherits the same question.
 - **Read a PR's status checks before merging it, and treat a check that has not reported as a refusal.**
   `renovate.json` sets `minimumReleaseAge` to `3 days`, so every Renovate pull request carries a `renovate/stability-days` check that is `PENDING` until the release is three days old.
   The check is the whole of the stability policy — nothing on the repository enforces it — so merging past a `PENDING` one silently discards the wait the policy exists to impose.

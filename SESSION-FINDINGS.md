@@ -326,3 +326,32 @@ The patch delivers the security fix with no new known issues.
 **Proposed fix:** take v1.21 at the next session, once the crash-loop in issue 9031 is closed upstream.
 Check that issue first.
 If it is still open, staying on the 1.20 line is still the better trade, and there will be a v1.20.4 by then.
+
+## 13. A side branch held open across a session goes stale and silently becomes a revert
+
+This branch was cut from `master` at the start of the session, before any pull request had merged, and kept open to collect findings.
+By the time the operator asked whether the record was complete, `master` had moved on by eleven merges and this branch had not.
+
+`git diff origin/master..HEAD` showed 24 files changed.
+Two were the findings work.
+The other 22 were every image bump the session had merged, shown at their old values, because a branch that lacks a commit presents its absence as a deletion.
+Merging it in that state would have reverted the whole session: seven Renovate pull requests, three bootstrap pins, and the hindsight runbook step.
+Every job would have stayed green.
+
+This is the August 24, 2026 incident's exact shape, reached from the other direction.
+That one was an apply from a stale branch.
+This one would have been a merge from a stale branch, which is worse, because `master` is supposed to be the record of what is deployed.
+
+**Why the existing rules did not catch it.**
+`AGENTS.md` requires a rebase onto `origin/master` before an apply, and the skill's gate 3 says the same.
+Both are written for a branch you are about to deploy.
+This branch was never going to be applied to a cluster, so neither rule pointed at it, and the instruction to hold it unmerged made it look inert.
+A branch holding only documentation still reverts code if it is behind.
+
+It was found by accident, in response to a question about whether the findings were complete, not by any check.
+
+**Proposed fix.**
+State in `AGENTS.md` that a branch held open across a session is rebased onto `origin/master` before every commit to it, not only before an apply, and that `git diff origin/master..HEAD` is read as the check: it must name only the files that branch is meant to change.
+Any other file is a revert waiting to happen.
+
+The general rule underneath: a long-lived branch is dangerous in proportion to how long it is held, and holding one is a decision to re-check it, not a decision to ignore it.
