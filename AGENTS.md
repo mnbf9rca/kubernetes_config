@@ -87,21 +87,31 @@ The rules that must not be broken:
   (`len=${#ACME_EMAIL}` returning 24 was a coincidence — that value is genuinely 24 characters.)
   The real hazard is therefore rendering to a file — and `build-*` is already wrapped in `op run` by the Makefile, so no extra wrapper is needed to hit it: `make build-homelab > out.yaml` writes `<concealed by 1Password>` into the Secrets and `kubectl apply -f out.yaml` stores the mask.
   **Never render-then-apply**; `diff-*`/`apply-*` keep the stream inside the child, where values are real.
-  Redirecting a diff is the **mirror hazard**: `kubectl diff` prints Secret data as base64, which the mask does not recognise, so `make diff-<cluster> > out.diff` writes the **real** values to disk — never redirect `diff-*` either.
+  **Never redirect `diff-*` either** — but not for the reason this file used to give.
+  `kubectl diff` redacts a Secret's `data` itself, so a redirected diff is not the plaintext dump once claimed here.
+  What neither mechanism covers is the residual: encoded or JSON-escaped secret material carried by a resource that is *not* a Secret, which kubectl does not redact and `op run`'s literal-plaintext match does not catch.
+  A file on disk is where that residual gets committed or pasted, so the ban stands as defence in depth, and it also covers a future regression in kubectl's own redaction.
   Detail: `docs/operations/apply-workflow.md`.
 - **An agent reads a diff through a filter, because its terminal is a transcript.**
   Two standing rules collide on `diff-*`: read every resource the diff names, and never print a resolved secret.
-  `kubectl diff` prints Secret `data:` as base64, and an agent's terminal output is a conversation transcript that persists, so the human rule "read it on screen and move on" does not carry over.
-  Pipe it — a pipe keeps the values inside the process group and never writes them to disk, which is what makes this different from the redirect the rule above forbids.
+  An agent's terminal output is a conversation transcript that persists, so the human rule "read it on screen and move on" does not carry over.
+  Two mechanisms already do the protecting, and neither of them is the filter.
+  `kubectl diff` redacts a v1 Secret's `data` itself — `--show-secrets` defaults to false and no target here passes it — so a changed Secret prints `*** (before)` / `*** (after)` and never its values; the `stringData` manifests in this repo are covered too, because the comparison runs on server-side objects where `stringData` has already been folded into `data`.
+  `op run` masks verbatim plaintext everywhere else in the stream.
+  The residual is secret material that is neither: encoded or JSON-escaped, and carried by a resource that is not a Secret.
+  The mechanism block above `diff-homelab` in the `Makefile` sets out what each one covers.
+  The pipelines below are a reading aid and a second line of defence, not the protection.
   To get the resource list, which is what the `/update-estate` skill's read-the-diff gate is actually about:
 
       make diff-homelab 2>&1 | grep -E '^diff -u -N' | sed -E 's#.*/(LIVE|MERGED)-[0-9]+/##' | awk '{print $NF}' | sort -u
 
-  To read the body with base64 values masked:
+  An empty list means the tree agrees with the cluster only if the guards' `OK:` lines went past first — `2>&1 | grep` discards a guard's failure text and the pipe discards make's exit status — so on an empty list re-read it through the masking pipeline below, which passes error text through.
+  To read the body, with long base64-looking values masked:
 
       make diff-homelab 2>&1 | sed -E 's/^([-+ ]?[[:space:]]*[A-Za-z0-9_.-]+:[[:space:]]+)[A-Za-z0-9+/=]{24,}[[:space:]]*$/\1<redacted-base64>/'
 
-  The mask leaves image references intact, because a tag or a `sha256:` digest contains `.` and `:` and so does not match the pattern.
+  Two things that mask does not do: it does not touch a value shorter than 24 characters, and it only sees a single `key: value` line, so a block-scalar payload such as the `last-applied-configuration` annotation passes through untouched.
+  It leaves image references intact, because every image reference in this repo carries a tag or an `@sha256:` digest and so misses the pattern — by convention, not by guarantee.
   Neither command redirects, and neither may be changed into one.
 - **`ENVSUBST_VARS` is an explicit allowlist, passed single-quoted.**
   Never call envsubst without one: with no allowlist it eats every `${VAR}` in the stream, including shell variables inside upstream manifests (`$VOL_DIR` in local-path-provisioner's helper pod); with double quotes the shell expands the tokens before envsubst sees them.

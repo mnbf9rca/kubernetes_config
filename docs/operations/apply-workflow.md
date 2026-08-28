@@ -83,11 +83,14 @@ The same applies to `tee`, and to copying a rendered manifest out of terminal sc
 
 `diff-*` and `apply-*` are safe because they keep the rendered stream **inside** the `op run` child and pipe it straight into kubectl, so real values never cross stdout and masking never sees them.
 **Render-then-apply is the risky shape; the one-step pipeline is not.**
-But **redirecting a diff is the mirror hazard**: `kubectl diff` prints Secret data as base64, which the mask does not recognise, so `make diff-homelab > out.diff` writes the real values to disk where `build-*` would have written the placeholder.
-Never redirect `diff-*` either.
+**Never redirect `diff-*` either** — but not for the reason once given here.
+`kubectl diff` redacts a Secret's `data` itself (`--show-secrets` defaults to false and no target here passes it), so `make diff-homelab > out.diff` does not write the Secret values to disk.
+What neither mechanism covers is the residual: encoded or JSON-escaped secret material carried by a resource that is *not* a Secret, which kubectl does not redact and `op run`'s literal-plaintext match does not catch.
+A file on disk is where that residual gets committed or pasted, so the ban stands as defence in depth, and it also covers a future regression in kubectl's own redaction.
+The mechanism block above `diff-homelab` in the `Makefile` sets out what each one covers.
 `op run --no-masking` exists and is deliberately not used: an unmasked render is a secret-shaped file on disk waiting to be committed or pasted.
 
-One consequence worth knowing: because `kubectl diff` prints whole manifests, a change to a secret **value** shows as *no change* on screen — both sides mask to the same string.
+One consequence worth knowing: a changed Secret prints `*** (before)` / `*** (after)`, so the diff tells you **that** it changed and never **what** it changed to.
 The server-side comparison and the apply both use the real value.
 To confirm a specific secret landed, read it back with `kubectl -n <ns> get secret <name> -o jsonpath=...`.
 
