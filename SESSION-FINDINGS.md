@@ -355,3 +355,52 @@ State in `AGENTS.md` that a branch held open across a session is rebased onto `o
 Any other file is a revert waiting to happen.
 
 The general rule underneath: a long-lived branch is dangerous in proportion to how long it is held, and holding one is a decision to re-check it, not a decision to ignore it.
+
+## 14. Step 4 cannot be done from the CLI, and the template alternative has a cost
+
+`omnictl` exposes no upgrade command.
+Its `cluster` subcommands are `delete`, `import`, `kubernetes`, `lock`, `machine`, `secret`, `status`, `template` and `unlock`, and the `kubernetes` group holds only `manifest-sync` and `upgrade-pre-checks`.
+The skill is right that the upgrade happens in the Omni web interface.
+
+Both clusters were created in the web interface rather than from a template, which the cluster resource shows by carrying no template annotation.
+So `omnictl cluster template sync`, which is the documented way to change versions from the CLI, is not available without first adopting template management.
+
+**Adopting it would put two writers on the same config patches.**
+`omnictl cluster template export --cluster homelab` produces a 3,441-byte template holding no secrets and no URLs, and exporting changes nothing: the cluster stayed at metadata version 39, last updated August 21, 2026.
+But the template inlines the cluster's config patches by `idOverride`, and four of them are the files this repository already manages through `make apply-talos`:
+
+- `305-homelab-lan-network`
+- `310-homelab-storage-network`
+- `320-homelab-tailscale-extension`
+- `400-homelab-user-volume-ssd`
+
+After a sync those patches have two sources of truth, with last write winning and no guard between the two tools.
+That is the concurrent-branch hazard this repository already knows, spread across `make apply-talos` and `omnictl cluster template sync`.
+
+**The documentation does not answer the lifecycle questions.**
+Sidero's cluster-template reference covers syntax and schema only.
+It does not say whether the web interface becomes read-only for a template-managed cluster, whether adoption is reversible, or how a change made outside the template is reconciled.
+The page on exporting a template from a UI-created cluster carries no warnings at all.
+
+**Proposed fix:** treat adopting cluster templates as its own design decision, not an update-session step.
+If it is taken, the same commit must delete `homelab/talos/machineconfig-patches/` and the `apply-talos` target, or state which tool owns patches and add a guard, because leaving both is the failure this repository has already paid for once.
+Until then, the skill's instruction to use the web interface stands, and Step 4 needs the operator.
+
+## 15. Omni holds config patches this repository has no file for
+
+Exporting the template surfaced drift that nothing was watching.
+`omnictl get configpatches` lists patches for homelab that `homelab/talos/machineconfig-patches/` does not contain:
+
+- `200-homelab`
+- `400-homelab-control-planes-untaint`
+- `500-7a4333c7-df30-4205-a022-fd93154da992`, which Omni labels "User defined patch"
+
+The VPS has the matching `400-vps-control-planes-untaint`, and both clusters carry Omni's own generated `900-cm-<machine>-kubernetes-upgrade` patches, which are Omni's to manage and are not drift.
+
+The repository's four homelab patch files are real and applied.
+The point is that they are not the whole picture, so `homelab/talos/` cannot be read as a description of the cluster's Talos configuration.
+A patch created in the web interface, like the `500-` one, is invisible to every guard here and would be silently reverted by anything that ever reconciles the full set.
+
+**Proposed fix:** read the three unaccounted-for patches, decide for each whether it belongs in the repository or is Omni's to own, and write the answer down.
+`200-homelab` and the untaint patches look like Omni's cluster-creation defaults, which would make them Omni's; the `500-` user-defined patch is the one that needs a real decision.
+Then state in `docs/operations/estate-updates.md` that `homelab/talos/` is a subset, or make it complete.
