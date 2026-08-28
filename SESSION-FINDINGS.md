@@ -463,63 +463,67 @@ The point is recorded so the process is fixed rather than the commit.
 
 **Proposed fix:** add that rule to `AGENTS.md` alongside the deploy-then-merge rules, and to the skill's Step 6, which currently counts what the session did without saying what it may merge.
 
-## 18. The Hermes VM tracks a moving `main`, and the installed commit no longer exists upstream
+## 18. The Hermes VM update: a local patch the preconditions cannot see
 
-Step 5 was deferred rather than run.
-The reasons are worth separating, because only the first is temporary.
+Step 5 completed. The VM now runs Hermes Agent v0.20.6 at upstream `baa344dee7`, with the operator's local patch reapplied on top as `023a9770fa`.
+Four things came out of it.
 
-### The pause signal that stopped it
+### A correction to this document's own first draft
 
-`firecrawl-anydoc==0.2.4` is a new dependency in the incoming code, published on August 27, 2026 — under a day old when read.
-The runbook's pause signals include a dependency under 14 days old, so the procedure stops there by design.
+An earlier version of this finding claimed the installed commit `9b1b144c` "does not exist upstream" because "upstream rewrites `main` and the commit has been orphaned".
+That was wrong, and the operator identified it: `9b1b144c` was **the operator's own local patch**, authored and committed by `Debian <hermes@hermes.cynexia.net>` on the VM.
+The commit beneath it, `42ac29eacc`, exists upstream fine.
 
-The other three signals were clear: the Python floor is unchanged, the `hindsight-client` pin is unchanged, and `_config_version` is 39 on both the installed and incoming sides.
+The reasoning that produced the wrong claim is worth keeping.
+The clone is shallow — 54 graft points, with `HEAD` reaching 2 commits locally and `origin/main` reaching 1 — so every local ancestry measurement was meaningless: `merge-base` found nothing and the `rev-list` counts were artifacts.
+**Never reason about ancestry from a shallow clone.** Ask the forge, which has the full history.
 
-The package is not obscure — it is Firecrawl's document-to-Markdown converter, with 14 prior releases — and upstream pinned it exactly while exempting it from their own 14-day quarantine, reasoning that "the pin bump WAS the review" and that quarantine "adds zero float protection to an exact pin".
+### The precondition gap, which is the real finding
 
-That reasoning is half right and the missing half is why the signal matters.
-An exact pin does remove drift: the version installed is the version reviewed.
-But a quarantine also buys time for a bad release to be discovered by other people before you install it, and against a package published twenty hours ago an exact pin gives none of that, because the pinned version is itself the unvetted one.
-This VM holds credentials, including the 1Password integration.
+The runbook's preconditions check `git status --porcelain` on both trees.
+A *committed* local patch leaves that output empty, so every precondition passed while the one thing genuinely at risk was invisible.
+The patch was 20 lines in `plugins/platforms/email/adapter.py` plus 51 lines of tests, fixing a real bug: Purelymail answers an unsolicited IMAP `ID` command with `* BYE Unknown command.` and drops the connection, which `imaplib` surfaces one command later as a misleading `SELECT` failure.
+Upstream still has that bug — its `_send_imap_id` sends `ID` unconditionally and only catches the failure afterwards, which is too late.
 
-### The structural problem underneath
+Left alone the updater would probably not have destroyed it: it tries `merge --ff-only`, falls back to `merge --no-edit`, and aborts on conflict, though a `reset --hard origin/<branch>` path exists elsewhere in `update_cmd.py`.
+The point is that nobody would have been asked.
 
-`hermes update` installs `origin/main`, not a release.
-At the time of the session, `origin/main` was 253 commits ahead of the `v2026.8.27` tag that publishes Hermes Agent v0.20.6.
-So the release bodies the runbook sends you to read describe code that stops 253 commits short of what would land.
+**Proposed fix:** add to the preconditions, and stop if it is non-zero:
 
-Worse, **the installed commit does not exist upstream**.
-GitHub answers 422, "No commit found for SHA", for `9b1b144c9de7983a4a0f3a17d33a78d385637978`, which is what the VM is running.
-Upstream rewrites `main` and the commit has been orphaned.
-Three things follow:
+    git -C ~/.hermes/hermes-agent rev-list --count origin/main..HEAD
 
-1. The deployed code cannot be looked up, diffed or reproduced from upstream.
-2. The rollback record's `agent_sha` is restorable only from the VM's own local clone. Re-clone that directory, or lose the VM's disk, and the rollback target no longer exists anywhere.
-3. Change analysis against release notes is structurally unsound, not merely incomplete.
+### What was done instead, which is the pattern to reuse
 
-### Why it cannot simply be pinned
+1. `git format-patch -1 <sha>` into `~/.hermes/local-patches/`, copied off the VM, both checksums compared.
+   The patch file is the insurance and survives any stash, merge, abort or hard reset.
+2. `git reset --hard HEAD~1`, so the branch fast-forwards cleanly and the merge becomes explicit rather than implicit.
+3. The update, per the runbook.
+4. `git apply --check`, then `git am`.
+   It applied cleanly.
+5. Behaviour verified against the updated code.
 
-`hermes update`'s only targeting flag is `--branch NAME`, which takes a branch, not a tag or an arbitrary ref.
-Upstream maintains no release branch: of 1,657 branches, the only release-shaped one is `release/v0.15.0-strip-gui`, stale since v0.15.
-The v0.20.6 release publishes no build assets, only GitHub's generated source tarball.
-`hermes-agent` is on PyPI but at 0.19.0, behind the installed 0.20.6, so that channel would move the VM backwards.
+The patch file, its checksum and the reset target were appended to `~/.hermes/hermes-update.pre-run`, so the rollback record describes the local patch as well as the upstream state.
 
-### The routes, and what each costs
+### Three smaller things
 
-- **Bypass the updater**, checking out the tag and installing by hand.
-  Gains reproducibility, and loses the pre-update backup zip that is the only rollback for forward-only state migrations, the configuration migration prompts, the drain-first restarts and the stash handling.
-  The runbook rests entirely on `hermes update`, so this hand-rolls the riskiest step to fix a bookkeeping problem.
-- **Ask upstream** for a maintained release branch, or for `hermes update` to accept a tag or ref.
-  Cheap to write, unknown timeline, and publishing it needs the operator's approval.
-- **Stay on `main` and make the sha durable.**
-  This closes the hole that actually bites: keep the VM's clone and never re-clone it, or push each installed sha to a private fork, so the rollback target survives independently of that one directory.
-  It does not give a named release, and it is the only one of the three with no downside.
+**The stash semantics are documented twice, contradictorily.**
+The runbook says "`hermes update` stashes local changes and nothing pops them".
+The `--keep-stash` help says that flag exists to *stop* it re-applying local changes, which implies the default restores them.
+One is wrong. This session avoided depending on either by holding the patch in a file.
 
-**Proposed fix:** treat the mechanism question as its own decision, like the cluster-template one, rather than changing it mid-session.
-Take the durable-sha hardening independently, because it is cheap and the current state has no rollback that survives losing one directory.
-Then re-run Step 5 once `firecrawl-anydoc` clears 14 days.
+**Change analysis points at the wrong thing.**
+The runbook sends you to the release bodies, but `hermes update` installs `origin/main`, which was 253 commits ahead of the `v2026.8.27` tag that publishes v0.20.6.
+The notes stop 253 commits short of what lands.
+It cannot simply be pinned: `--branch` takes a branch, upstream maintains no release branch — of 1,657 branches the only release-shaped one is `release/v0.15.0-strip-gui`, stale since v0.15 — and PyPI's `hermes-agent` is at 0.19.0, behind the installed version.
 
-**State of the VM:** unchanged.
-Preconditions all passed — both trees clean, apt stamp present and fresh, 5.2 GiB free on `/home`, lingering enabled, and the time far from the 04:45 UTC reboot window.
-The rollback record was written to `~/.hermes/hermes-update.pre-run` with `agent_sha=9b1b144c`, `agent_branch=main`, `webui_sha=e168b67e` and `client_version=0.6.1`.
-Nothing was updated, restarted or installed.
+**The patch's own tests cannot be run on the VM.**
+`pytest` is not in the runtime venv, and installing it would move the agent's dependencies, which the runbook warns against.
+The three behaviours were verified by importing `_send_imap_id` directly and asserting against mock connections, which is what the tests do.
+Worth stating in the runbook, so the next agent does not install pytest to find out.
+
+### The pause signal
+
+`firecrawl-anydoc==0.2.4`, published under a day earlier, tripped the "dependency under 14 days old" signal.
+The concern was raised and the operator, having logged the upstream bug and patch, directed the update to proceed.
+Recorded because the signal fired correctly and the override was deliberate, which is the outcome the signal is for.
+
