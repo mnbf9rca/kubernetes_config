@@ -194,7 +194,7 @@ The rules that must not be broken:
 - Every new Deployment must include the full keel annotation set above — **except** in the `health`, `ops`, `hindsight` and `backup` namespaces, which explicitly forbid keel, and **except keel itself**, which is digest-pinned on both clusters so the update engine cannot update itself (`homelab/bootstrap/keel/keel.yaml`, `vps/bootstrap/keel/keel.yaml`).
   The rule that decides which mode a workload is in: **floating tag means keel; pinned tag means Renovate; never both.**
   `match-tag: "true"` on a pinned tag only refreshes the digest, so a semver pin carrying keel annotations is frozen while looking covered.
-- **Every pinned image in both clusters is watched, and keeping it that way is a standing obligation.**
+- **Every pinned image in both clusters is inside Renovate's scope, and keeping it that way is a standing obligation.**
   `renovate.json` scopes Renovate to `homelab/**` and `vps/**` as of 2026-08-26, so every version- or digest-pinned image in either tree — `health`, `ops`, `hindsight`, `backup`, keel itself, traefik and the VPS workloads alike — gets its bump as a pull request (`docs/operations/homelab-health.md`, `docs/operations/homelab.md`, `docs/operations/hindsight.md`).
   Two kinds of image sit outside that, and the guard treats them differently.
   An image from a **remote base** is named by no file here, so nothing can edit the reference — it moves only when the base's own ref moves.
@@ -202,6 +202,12 @@ The rules that must not be broken:
   That is not the same as unreachable: `vps/bootstrap/local-path/kustomization.yaml` pins its base as `?ref=v0.0.31`, which the `kustomize` manager parses, so Renovate proposes that bump even though the image itself is still reported advisory.
   An image **embedded inside another resource** — local-path-provisioner ships its helper Pod as a block scalar in a ConfigMap — the guard cannot see at all, so it says nothing about it: silence, not an advisory.
   Everything else hard-fails, so a new pinned image that nothing watches cannot reach a cluster.
+  **In scope is not the same as watched, and `check-renovate-scope` only proves the first.**
+  The guard's claim is structural — this image is named by a file inside `kubernetes.managerFilePatterns` and outside `ignorePaths` — and that claim stays true while the lookup behind it fails.
+  Both keel images are the case in hand: correctly scoped, digest-pinned so that only Renovate can move them, and reported on the dependency dashboard on 2026-08-28 as `Failed to look up docker package ghcr.io/keel-hq/keel: no-result`.
+  Nothing could have proposed a keel advisory, and every guard was green.
+  The residual is read by hand: the **repository problems** block at the top of the Renovate dependency dashboard issue names every dependency whose lookup failed.
+  Read it in each estate-update session, and never read a passing `check-renovate-scope` as evidence that a bump would arrive.
   `hindsight` is the sharpest case: it runs Alembic migrations on startup against the store holding an agent's memory, and those migrations are forward-only, so the pre-upgrade dump is the only rollback.
   `make hindsight-upgrade` takes it.
   `health` is the same shape in miniature — a Grafana major migrates `grafana.db` in place on first start, so a tag revert is not a rollback there either; `make health-upgrade` takes that dump, and it covers the InfluxDB export in the same Job.
