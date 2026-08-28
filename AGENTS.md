@@ -128,6 +128,7 @@ The rules that must not be broken:
   Reading a procedure proves only that it parses; running it is what finds the step that names a file that moved, the assertion that cannot be satisfied from the tool available, the count that is wrong.
   A prose change that has only been read is intent, and `master` does not record intent.
   Merge it when the session that exercised it is finished, so the corrections it turned up land on the same branch rather than in a follow-up PR.
+  It follows that a session driven by a runbook merges only what that runbook prescribes: everything the session invents — a runbook correction, a guard, a rule — goes on the findings branch and merges once, after review, and the test is "did the runbook ask me to make it?", not "is it good?".
 - **A branch held open across a session is rebased before every commit to it, not only before an apply.**
   A branch that lacks a commit presents its absence as a deletion, so a stale branch is a revert of everything merged since it was cut — documentation-only branches included, because merging one still rewrites the files it is behind on.
   The rebase-before-apply rule does not cover this: a branch that never reaches a cluster still reaches `master`.
