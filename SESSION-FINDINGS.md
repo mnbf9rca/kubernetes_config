@@ -172,3 +172,34 @@ Each pull request merged normally, so neither had to be closed unmerged, which i
 First, stop Renovate splitting them: add a `packageRules` entry in `renovate.json` grouping `homelab/ops/keel-fresh.yaml` and `vps/ops/keel-fresh.yaml` under one `groupName`, so the pair arrives as a single pull request.
 Second, describe the general case in the skill's Step 2: when two open pull requests are individually invalid under a guard, deploy a branch carrying both, then merge them back to back.
 Any future enforced copy pair inherits the same problem.
+
+## 9. Pull request 75 needs a database upgrade flag, and was left open
+
+Pull request 75 moves `getmeili/meilisearch` from `v1.41.0` to `v1.53.1` in `vps/workloads/karakeep.yaml`.
+This session applied and merged every other Renovate pull request and left this one open.
+
+**Why it is not a tag edit.**
+Meilisearch does not upgrade its own database across that distance on startup.
+Its documentation states that `--upgrade-db` performs an in-place upgrade and has existed since v1.51, and that `--experimental-dumpless-upgrade` is the equivalent for earlier targets.
+Without one of them, the upgrade path is a dump and a restore.
+The Deployment sets no `args` and no `command`, so applying the bump as it stands starts a v1.53.1 binary against a v1.41.0 index with no upgrade instruction.
+The likely result is a Meilisearch that will not start, which takes karakeep's search offline until the tag is reverted.
+The volume is a `PersistentVolumeClaim`, so a failed start does not destroy the index.
+
+**A second reason, already written into the manifest.**
+The container carries a comment warning that from v1.43.0, a successful `POST /tasks/compact` puts `/health` into a `mustRestart` state, and instructing the reader to re-check upstream before accepting a bump past that version.
+This session checked.
+Meilisearch pull request 6346, merged on April 22, 2026, made that change deliberately, so that Meilisearch Cloud restarts an instance after compaction.
+It is intended behavior and there is nothing upstream to wait for.
+
+Nothing in this repository calls `/tasks/compact`, and the endpoint is an administrative operation rather than something karakeep issues, so the estate does not trigger it today.
+The manifest's comment predicts a "liveness restart loop", and that reading is worth revisiting: the flag is reset when the process restarts, so a compaction produces one restart, which is what upstream intends the probe to do.
+A loop needs compaction to re-run on every start, which nothing here does.
+
+**Proposed fix, needing a decision.**
+Decide the upgrade mechanism first.
+The smaller option is a one-time `--upgrade-db` argument on the container, applied with the bump and removed in a follow-up once the index has been converted.
+The larger option is a dump and restore, which the runbook's table currently does not require for this workload.
+Either way, take a restic snapshot of the `karakeep-meilisearch` volume first, because the nightly sweep is the only floor this workload has.
+
+Then correct the manifest comment: it says the workload is pinned to v1.41.0 and predicts a restart loop, and both halves need rewriting once the version moves.
