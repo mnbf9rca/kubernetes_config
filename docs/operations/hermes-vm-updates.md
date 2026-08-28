@@ -29,7 +29,8 @@ df -h /home     # 1 GiB free
 date -u         # not within 90 minutes of 04:45 UTC: the reboot kills the session mid-run
 ```
 
-**[VM]** Write the rollback record. It is the rollback target, and it has to outlive a session the reboot can kill:
+**[VM]** Write the rollback record.
+It is the rollback target, and it has to outlive a session the reboot can kill:
 
 ```sh
 printf 'agent_sha=%s\nagent_branch=%s\nwebui_sha=%s\nclient_version=%s\n' \
@@ -58,14 +59,16 @@ git -C ~/.hermes/hermes-agent show origin/main:hermes_cli/config_defaults.py \
   | grep -n '_config_version'
 ```
 
-**[laptop]** Read the release bodies for the incoming range. Do not substitute a commit-log grep for breaking-change markers: a sampled week held 1,687 commits and zero of them, so that check reports all-clear forever.
+**[laptop]** Read the release bodies for the incoming range.
+Do not substitute a commit-log grep for breaking-change markers: a sampled week held 1,687 commits and zero of them, so that check reports all-clear forever.
 
 ```sh
 gh api repos/NousResearch/hermes-agent/releases \
   --jq '.[] | "== \(.tag_name) \(.published_at)\n\(.body)"'
 ```
 
-**Pause signals.** Stop and read first when: the Python floor moves; the `hindsight-client` pin changes ([hindsight.md](hindsight.md#the-client-on-the-hermes-vm)); `_config_version` jumps by more than one, or a release names a configuration *floor* or touches the update mechanism; a dependency is under 14 days old.
+**Pause signals.**
+Stop and read first when: the Python floor moves; the `hindsight-client` pin changes ([hindsight.md](hindsight.md#the-client-on-the-hermes-vm)); `_config_version` jumps by more than one, or a release names a configuration *floor* or touches the update mechanism; a dependency is under 14 days old.
 
 ## Update
 
@@ -83,7 +86,8 @@ systemctl --user reset-failed hermes-update-manual 2>/dev/null; true
 
 Passed if `ActiveState=inactive`, `Result=success` and `ExecMainStatus=0`; `--collect` is omitted deliberately, because it destroys a failed unit and `systemctl show` then answers with defaults that read exactly like that triple.
 
-**[VM]** Confirm the snapshot exists before going further. It is the only route back from a forward-only migration, and upstream's backup path warns and continues on its own failures, so nothing else will tell you whether one was written:
+**[VM]** Confirm the snapshot exists before going further.
+It is the only route back from a forward-only migration, and upstream's backup path warns and continues on its own failures, so nothing else will tell you whether one was written:
 
 ```sh
 ls -lt ~/.hermes/backups/pre-update-*.zip | head -1
@@ -105,15 +109,6 @@ $V/pip install -r ~/hermes-webui/requirements.txt -c /tmp/constraints.txt &&
 rm /tmp/constraints.txt &&
 systemctl --user restart hermes-gateway hermes-gateway-emh hermes-gateway-hal \
   hermes-dashboard hermes-webui
-```
-
-**[VM]** Until the IMAP ID capability gate lands upstream, re-apply it: the update resets `main` and silently drops the local commit carrying it, and without it Purelymail kills every agent-mail connection with a misleading `[Email] IMAP connection failed: command: SELECT => Unknown command.` that names neither ID nor the cause.
-Skip this step only when `_send_imap_id` in `plugins/platforms/email/adapter.py` already checks `imap.capabilities` after the update.
-
-```sh
-grep -n 'capabilities' ~/.hermes/hermes-agent/plugins/platforms/email/adapter.py  # empty = gate missing
-git -C ~/.hermes/hermes-agent cherry-pick e04d498bad  # branch test/imap-id-capability-gating; patch copy at ~/purelymail-imap-id.patch
-systemctl --user restart hermes-gateway hermes-gateway-emh hermes-gateway-hal
 ```
 
 ## Verify
