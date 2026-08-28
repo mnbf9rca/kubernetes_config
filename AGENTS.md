@@ -176,6 +176,7 @@ The rules that must not be broken:
       gh pr view <n> --repo mnbf9rca/kubernetes_config --json statusCheckRollup
 
   A `PENDING` or failing check means the pull request is not this session's work: leave it open and say so at the close.
+  This repository runs no CI, so a pull request with no checks at all is the normal case for human and agent work and has nothing to wait for; the rule bites on a check that exists and has not gone green.
   Deploy-then-merge does not override this — a pull request can be applied and healthy and still be too young to merge.
 - **Concurrent deployed-but-unmerged branches are last-apply-wins on shared files.**
   An apply reconciles the whole rendered tree, so every file the applying branch does not carry is reset to that branch's version — another branch's already-deployed change included, silently, with every job still green.
