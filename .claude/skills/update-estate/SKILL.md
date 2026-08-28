@@ -260,6 +260,7 @@ Do not carry a remembered number: the VPS control plane grew from one node to th
 
     kubectl --context <ctx> get nodes -l node-role.kubernetes.io/control-plane
 
+- [ ] `omnictl get configpatches` - reconcile against `homelab/talos/` and `vps/talos/`; see [estate-updates.md](../../../docs/operations/estate-updates.md#upgrading-talos-and-kubernetes-through-omni).
 - [ ] Read the current versions and what Omni will allow:
 
       omnictl get clusters -o json | jq '{id:.metadata.id, talos:.spec.talosversion, k8s:.spec.kubernetesversion}'
