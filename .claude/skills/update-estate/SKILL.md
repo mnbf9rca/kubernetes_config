@@ -149,16 +149,18 @@ Do not hand-roll a substitute dump.
       gh pr view <n> --repo mnbf9rca/kubernetes_config --json statusCheckRollup
 
       A `PENDING` or failing `renovate/stability-days` means the release is younger than `minimumReleaseAge` and this pull request is **not this session's work**: leave it open, do not apply it, and name it at the close.
-      Nothing on the repository enforces the check, so reading it is the whole of the control - the rule is in `AGENTS.md`.
+      The rule is in `AGENTS.md` (read a pull request's status checks before merging).
+- [ ] Answer the three questions above for this pull request before you spend a worktree on it.
+      Record the answer; where a limb declines the bump, encode the hold in `renovate.json` and move on.
 - [ ] `kubectl config use-context cynexia-homelab` or `kubectl config use-context cynexia-vps`, matching the cluster this pull request touches.
       The Makefile's `check-context` and `check-vps-context` guards read `kubectl config current-context` and refuse otherwise, and the loop alternates between clusters.
 - [ ] Give this pull request its own worktree and work it there:
 
       git worktree add ../kubernetes_config-worktrees/pr-<n> --detach
-      cd ../kubernetes_config-worktrees/pr-<n> && gh pr checkout <n> && git rebase origin/master
+      cd ../kubernetes_config-worktrees/pr-<n> && gh pr checkout <n> && git fetch origin && git rebase origin/master
 
       Merge in any other deployed-but-unmerged branch you identified in Step 1.
-      Every `make` target works from a worktree: `op run` reads `OP_SERVICE_ACCOUNT_TOKEN` out of the shell environment, so there is no `direnv allow` to repeat.
+      Every `make` target works from a worktree: `op run` reads `OP_SERVICE_ACCOUNT_TOKEN` out of the shell environment - if direnv reports `.envrc is blocked` on entering the new worktree, run `direnv allow` there once.
 - [ ] Take the dump if the table above calls for one.
       Print the result.
       A failed dump ends this pull request - move to the next one and report it at the close.
