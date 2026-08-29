@@ -2,7 +2,7 @@
 
 VM 103 (`hermes.cynexia.net`) runs the Hermes agent, its three gateway profiles, the dashboard and the WebUI the Hermex iOS app talks to.
 It is not a Kubernetes cluster, so none of this repository's cluster machinery reaches it.
-What it has instead lives in `hermes-vm/`: a daily liveness check and the `unattended-upgrades` configuration.
+What it has instead lives in `hermes-vm/`: a daily liveness check, a weekly docker-sandbox refresh and the `unattended-upgrades` configuration.
 
 This page covers that machinery — how to read it, how to install it — and the VM facts that keep being rediscovered.
 Updating the application stack is a separate procedure: [hermes-vm-updates.md](hermes-vm-updates.md).
@@ -11,8 +11,8 @@ The canonical copy of every file named here is in `hermes-vm/`.
 The VM holds installed copies.
 Edit the repository, then reinstall.
 
-**Only two things run on a schedule here, and only one of them is systemd's.**
-`unattended-upgrades` patches Debian security-only overnight and reboots at 04:45 UTC; the `hermes-app-alive` **cron job inside the default gateway** pushes a liveness verdict at 05:45 UTC.
+**Only three things run on a schedule here, and only one of them is systemd's.**
+`unattended-upgrades` patches Debian security-only overnight and reboots at 04:45 UTC; the `hermes-app-alive` **cron job inside the default gateway** pushes a liveness verdict at 05:45 UTC; and `hermes-sandbox-refresh`, a cron job in the same place, replaces stale docker sandbox containers at 05:15 UTC on Sundays.
 Nothing under `hermes-vm/` is scheduled by systemd any more — the `systemd/` directory and its two units were deleted on August 27, 2026.
 Application updates never run on a schedule at all.
 
@@ -60,9 +60,9 @@ The traceback goes to the journal and never near the pushed message, which carri
 ## Installing or reinstalling
 
 A VM rebuild must repeat all of this.
-The nightly `hermes backup` zip covers `~/.hermes`, so it carries the profile config — the token injection in step 4 — and the cron store from step 5.
-The script lives at `~/.hermes/scripts/`, so it rides that zip too: script and cron store are backed up and restored together.
-That coupling is the right one, because the store names the script by bare filename, so a restore bringing back one without the other would leave a job pointing at nothing.
+The nightly `hermes backup` zip covers `~/.hermes`, so it carries the profile config — the token injection in step 4 — and the cron store holding both jobs, from steps 5 and 6.
+Both scripts live at `~/.hermes/scripts/`, so they ride that zip too: scripts and cron store are backed up and restored together.
+That coupling is the right one, because the store names each script by bare filename, so a restore bringing back one without the other would leave a job pointing at nothing.
 Only the four apt files sit outside the zip, and they are rebuild territory.
 **Do not trust the restored cron store without looking**: `hermes cron list` after a rebuild, because a check that quietly failed to come back looks exactly like a healthy day until the heartbeat lapses.
 
@@ -74,10 +74,11 @@ make check-vm-scripts
 
 This is the **only** thing that ever lints these files: it runs in no preflight, this repository has no CI, and nothing runs it on a schedule.
 This procedure is its only caller; the update runbook never invokes it.
+It covers both scripts under `hermes-vm/scripts/` — `hermes-app-alive.sh` from step 2 and `hermes-sandbox-refresh.sh` from step 6.
 
-### 2. Install the script
+### 2. Install the daily check's script
 
-One file, and the only thing this install copies to the VM.
+One file; the refresh script in [step 6](#6-install-the-sandbox-refresh-job) is the only other thing this install copies to the VM.
 
 ```sh
 scp hermes-vm/scripts/hermes-app-alive.sh \
@@ -87,7 +88,7 @@ ssh hermes@hermes.cynexia.net 'chmod 0755 /home/hermes/.hermes/scripts/hermes-ap
 
 **The directory is not a preference.**
 `hermes cron create --script` takes a bare filename resolved under `$HERMES_HOME/scripts/` and rejects an absolute path outright, so a copy installed anywhere else can be run by hand but cannot be scheduled at all.
-Step 5 depends on this.
+Steps 5 and 6 both depend on this.
 **Keep exactly one copy.**
 An earlier draft of this page installed to `/home/hermes/bin`; two copies is a parity trap in which the file the scheduler runs and the file an operator edits are different files, and nothing says so.
 
@@ -133,7 +134,7 @@ The cron subprocess sanitiser in `tools/environments/local.py` (`_sanitize_subpr
 `HERMES_APP_ALIVE_PUSH_TOKEN` belongs to no registry, so it passes through to the script.
 Renaming it into any of those shapes removes it silently, and the check then fails its first line every day.
 
-### 5. Create the cron job
+### 5. Create the daily check's cron job
 
 The check runs as a **`no_agent`** cron job: the scheduler runs the script on schedule and delivers its stdout directly, skipping the agent entirely, so it costs **zero model tokens**.
 
@@ -168,7 +169,61 @@ Two things follow from the job living inside the agent rather than in systemd:
   A job lost to a rebuild, a restore or a hand edit produces silence, and silence is not reported until the monitor's 24-hour heartbeat and 6-hour retry lapse.
   `hermes cron list` is the check; run it after any restore.
 
-### 6. Create the `hermes-update` check
+### 6. Install the sandbox refresh job
+
+The weekly job that replaces stale docker sandbox containers, so the pinned devcontainer image a live sandbox is running does not drift behind the tag it was pulled from.
+It is a second `no_agent` cron job in the same store as step 5, and it needs no monitor, no token and no vault item.
+
+```sh
+scp hermes-vm/scripts/hermes-sandbox-refresh.sh \
+  hermes@hermes.cynexia.net:/home/hermes/.hermes/scripts/hermes-sandbox-refresh.sh
+ssh hermes@hermes.cynexia.net 'chmod 0755 /home/hermes/.hermes/scripts/hermes-sandbox-refresh.sh'
+```
+
+```sh
+/home/hermes/.local/bin/hermes cron create --name hermes-sandbox-refresh \
+  --no-agent \
+  --script hermes-sandbox-refresh.sh \
+  --deliver local \
+  '15 5 * * 0'
+```
+
+The four details under step 5 apply unchanged — the schedule is positional, `--script` takes a bare filename, `--no-agent` is spelled as it looks, and `--deliver local` is written out rather than left to the default.
+`local` carries more weight here than it does there: this job pushes to nothing at all, so its stdout summary is only ever read out of the run record, and any delivery target would put that summary into a chat every Sunday.
+
+Then run it once and read the result, because the run record is the only place a `no_agent` run reports:
+
+```sh
+/home/hermes/.local/bin/hermes cron run <job_id>
+/home/hermes/.local/bin/hermes cron runs <job_id>
+```
+
+A run that finds nothing stale is the normal result and a pass, not a no-op to investigate.
+
+**What the job does, and what it refuses to do.**
+It reads the docker-backend profiles out of the live config, so no profile is named in it and `hal` joins on its own the day it migrates.
+It `docker pull`s each distinct pinned image on **every** run: there is deliberately no global "the digest has not moved, exit early", because comparing per container is what lets a container skipped one Sunday be replaced the next.
+Then, per container found by its `hermes-profile` label, it compares the container's image id with the pulled tag's.
+A container whose id matches is left alone.
+A stale container that is **not running** is removed outright — the 04:45 reboot leaves sandboxes `exited` exactly when the Sunday run fires, and an exited container is not busy.
+A stale container that **is** running is removed only when its profile is idle.
+It finishes with a dangling-image prune, `until=168h`.
+**Any read that fails anywhere means skip, never remove.**
+
+**Idle is a conjunction, and `active_agents` alone is not it.**
+The dashboard API at `http://127.0.0.1:9119/api/status?profile=<p>` is read as busy unless `gateway_running` is true, `gateway_state` is `running`, `gateway_busy` is false, and `active_agents` **and** `active_sessions` are both zero.
+`active_agents` is a per-turn flag: on a profile in the middle of a long task it reads 0 between turns, and a 55-second zero window was measured on a busy profile on August 29, 2026.
+That verdict is then ANDed with `docker top` showing nothing beyond the container's own init, because background terminal processes run inside the sandbox and are deliberately not counted in `active_agents`.
+
+**The job does not see itself as busy.**
+A `no_agent` run creates no session row and does not bump the persisted `active_agents` — read in the source on August 29, 2026 — but that is an upstream implementation detail rather than a contract, and a chat turn ending on the wrong side of the read can still leave a stale +1.
+Both of those fail in the same direction — a false *busy* — so the job skips and tries again next Sunday.
+
+**Nothing watches this job, by design.**
+It pushes to no monitor: a stale sandbox image is neither lockout nor data loss, and the containment boundary is the host kernel rather than the sandbox userland.
+Its own death is caught by the update runbook's precondition on its last run ([Preconditions](hermes-vm-updates.md#preconditions)), at that runbook's cadence.
+
+### 7. Create the `hermes-update` check
 
 Create a healthchecks.io check named `hermes-update` by hand in the UI — period **10 days**, grace **4 days** — and store its ping UUID at `op://Homelab/hermes-update/healthcheck-uuid`, typed `[text]`.
 Nothing in this estate creates that check, that item or that field, and the update runbook's [Report step](hermes-vm-updates.md#report) reads the reference directly, so an absent field fails the `op read` at the end of an otherwise successful update.
@@ -178,7 +233,7 @@ Nothing on the VM ever needs this reference: the ping is sent from the operator'
 The cadence allows one skipped week against a roughly weekly runbook before it alarms.
 A ping UUID is a tier-2 spam-target identifier rather than a secret, which is why the field is `[text]` — but it belongs in 1Password and never in this repository.
 
-### 7. Install `unattended-upgrades`
+### 8. Install `unattended-upgrades`
 
 Four files, and **two of them do not install where they live in the repository**:
 
@@ -196,7 +251,7 @@ Copy them one at a time, or the schedule stays at Debian's default and nothing s
 sudo systemctl daemon-reload
 ```
 
-### 8. Verify the install
+### 9. Verify the install
 
 Check each of these once.
 Every one of them fails silently if it is wrong.
@@ -251,8 +306,8 @@ Every one of them fails silently if it is wrong.
    timedatectl | grep 'Time zone'
    ```
 
-6. **The cron job exists and its next run is 05:45 UTC.**
-   The job lives in the agent's own store, so nothing in this repository proves it is there:
+6. **Both cron jobs exist, and their next runs are 05:45 daily and 05:15 on Sunday.**
+   The jobs live in the agent's own store, so nothing in this repository proves they are there:
 
    ```sh
    hermes cron list
@@ -309,9 +364,10 @@ Do not delete it as redundant.
 | 03:30 (+0–10 min) | `apt-daily.timer` refreshes the package lists | `unattended-upgrade` installs only from the cache and never refreshes the lists itself |
 | 04:00 (+0–10 min) | `apt-daily-upgrade.timer` runs `unattended-upgrade` | Leaves a 35-minute margin before the reboot |
 | 04:45 | Automatic reboot | Reboot is **on**, by operator decision, August 26, 2026 |
+| 05:15, Sundays only | `hermes-sandbox-refresh`, as a cron job inside the default gateway | **Between** the reboot window and the daily check: the reboot has already left the sandboxes `exited`, which is the cheapest state to replace them in, and the removals are done before anything reports on the VM. Weekly, because the pinned image moves only when Microsoft rebuilds the tag |
 | 05:45 | `hermes-app-alive`, as a cron job inside the default gateway | **One hour** after the reboot, so the reboot has finished and the lingering user units have come back before anything looks at them |
 
-The 05:45 row is the only one with no jitter: it is a cron expression in the agent's scheduler rather than a systemd timer, and neither `RandomizedDelaySec` nor `Persistent=` applies to it.
+The two cron rows are the only ones with no jitter: they are cron expressions in the agent's scheduler rather than systemd timers, and neither `RandomizedDelaySec` nor `Persistent=` applies to them.
 Catch-up after a missed window comes from the scheduler's ticker picking up past-due jobs instead.
 
 Both apt drop-ins set `FixedRandomDelay=true`, so the offset is derived from the machine ID and unit name rather than re-rolled nightly.
@@ -330,7 +386,7 @@ If `systemctl list-timers` shows the upgrade starting late, look at the refresh 
 
 There is no `-success` file and nothing creates one.
 `unattended-upgrade` writes `/var/lib/apt/periodic/unattended-upgrades-stamp` for itself in `write_stamp_file()`, and it writes it on a run that found **nothing to do** just as readily as on one that installed everything.
-It writes it on a `--dry-run` too, so a dry run is never a way to inspect the stamp — see step 8 of the install.
+It writes it on a `--dry-run` too, so a dry run is never a way to inspect the stamp — see step 9 of the install.
 The other files in that directory belong to `apt.systemd.daily` and are not this.
 
 So the stamp proves the timer fired, not that anything was patched.
@@ -374,13 +430,21 @@ The VM has no MTA, so `unattended-upgrades` mail would be a silent failure; the 
   The job is agent state rather than a file this repository installs, so a rebuild, a restore or a hand edit can drop it.
   Nothing notices until the monitor's heartbeat lapses about 30 hours later, and the report then reads as "no beat at all" — indistinguishable from a VM that is off.
   `hermes cron list` is the only positive proof it is still there.
+- **The docker sandboxes, and the image they are running.**
+  The check runs on the host and says nothing about the containers the `default` and `emh` terminals work inside, including whether their image is still the one the pinned tag now resolves to.
+  `hermes-sandbox-refresh` is what moves them, it pushes to no monitor, and the thing that notices it has stopped is the update runbook's precondition on its last run ([Preconditions](hermes-vm-updates.md#preconditions)).
+  So detection latency for a stale sandbox image is the update cadence, about a week, and that is accepted: a stale sandbox userland is neither lockout nor data loss, and the containment boundary is the host kernel, which `unattended-upgrades` patches nightly.
+  A check on the age of the running image was considered and rejected — a healthy refresh job against a quiet upstream reads identically to a dead one.
+- **The refresh job going missing.**
+  Same shape as the daily check's own job, and the same store, but with no heartbeat behind it at all: nothing lapses, so the only detection is the same update-runbook precondition, reading the job's last run.
+  `hermes cron list` remains the only positive proof the job exists.
 
 ## What moving the check inside hermes traded
 
 The check used to be a systemd user timer with a service unit and an environment file holding the push URL.
 Three things changed with it, and two of them cost something.
 
-**Gained: the default gateway is now exercised** — the detail is in [step 5](#5-create-the-cron-job) and [what the daily check does not watch](#what-the-daily-check-does-not-watch).
+**Gained: the default gateway is now exercised** — the detail is in [step 5](#5-create-the-daily-checks-cron-job) and [what the daily check does not watch](#what-the-daily-check-does-not-watch).
 
 **Gained: nothing holding the token is installed on this VM.**
 The old environment file lived under `~/.hermes` and rode the nightly `hermes backup` zip to the `hermes-dumps` PVC and on to B2.
@@ -422,6 +486,61 @@ Firewalling 8787, 9119 and 8642 down to the cluster egress address is the obviou
 **`/p/<profile>/` routing exists but is inert.**
 The routes are registered unconditionally, and the prefix is **discarded** while `gateway.multiplex_profiles` is off — which it is.
 So `/p/anything/…` reaches the default profile, and anything probing a gateway should use the unprefixed path.
+
+**`/var/lib/docker` is a disk of its own, and nothing backs it up.**
+A second 125 GiB thin-provisioned virtio-scsi disk (SCSI 1, discard and SSD emulation on) was added to VM 103 on August 29, 2026, formatted `mkfs.ext4 -m 0 -L dockerdata` and mounted at `/var/lib/docker` from `/etc/fstab` by UUID, with `defaults,nofail,x-systemd.device-timeout=30s 0 2`.
+Three of those choices are deliberate and should survive a rebuild.
+`nofail` with the 30-second device timeout keeps a dead data disk from hanging the boot: the VM must come back without docker rather than not come back.
+`-m 0` drops the 5% root reserve, which exists to keep a full root filesystem usable and buys nothing on a disk holding only images and containers.
+And **Proxmox Backup is off for this disk**, because everything on it is re-pullable — images come from a registry, and a sandbox container is recreated on demand.
+The durable sandbox state is not here: it is under `~/.hermes` on the root disk, which the nightly zip covers.
+
+The old `/var/lib/docker` was empty when the new disk was mounted, so nothing was migrated onto it.
+It had held one thing: **open-webui**, installed on June 26, 2026 as an undocumented experiment — a generic chat frontend pointed at the default profile's API server on 8642 and exposed on the LAN on port 3000, in no tunnel ingress and in no backup.
+Its container, image and `open-webui-data` volume were removed on August 29, 2026, and the volume's contents went with it, deliberately.
+
+The daemon is the rootful system one on the default context, with its root directory at `/var/lib/docker`.
+There is no rootless install and no second context.
+
+### The docker terminal sandboxes
+
+Verified live on August 29, 2026.
+
+The `default` and `emh` profiles run their terminal tool inside docker containers rather than on the host.
+`hal` is still `local`: it was mid long-task when the other two were switched, and **migrating it is an open item** — the same five settings, then a restart of `hermes-gateway-hal`.
+
+The settings are per profile, applied with `hermes config set` and `hermes -p emh config set`:
+
+| Setting | Value |
+|---|---|
+| `terminal.backend` | `docker` |
+| `terminal.docker_image` | `mcr.microsoft.com/devcontainers/python:3.14-trixie` |
+| `terminal.docker_run_as_host_user` | `true`, so the exec runs as uid 1000, the host `hermes` user |
+| `terminal.docker_volumes` | `["<profile workspace>:/workspace"]` |
+| `terminal.cwd` | `/workspace` |
+
+The default profile's workspace is `/home/hermes/.hermes/workspace`, created for this; `emh`'s is `/home/hermes/.hermes/profiles/emh/workspace`.
+A settings change takes effect when that profile's gateway is restarted.
+
+**Containers are created lazily, per (profile, task-id), so one profile can own several at once.**
+Each is named `hermes-<hex>` and labelled `hermes-profile:<name>` and `hermes-task-id:<id>`.
+The label is what tooling selects on; the name carries nothing.
+Hermes mounts the profile workspace at `/workspace`, along with skills, caches and attachments — and a **host-backed home**: `/home/hermes/.hermes/sandboxes/docker/<task-id>/home` is mounted as `/root` in the container and is writable at host uid 1000.
+
+**`/workspace` and that home are the only durable paths.**
+Anything written elsewhere in the container filesystem is lost when the container is recreated, so a user-level package install that lands under the mounted home survives a recreation and one that lands in `/usr` does not.
+Both durable paths sit under `~/.hermes`, so both ride the nightly `hermes backup` zip.
+
+**`docker rm -f` on a sandbox is safe while its profile is idle**, verified by removing one and letting it come back.
+The next terminal call builds a new container from the local image, with no gateway restart involved.
+That is also the whole of the image-update mechanism: a `docker pull` never touches an existing container, so **removal and recreation is the update**, which is what `hermes-sandbox-refresh` exists to do.
+
+**The pin is a tag rather than a digest, deliberately.**
+Microsoft rebuilds `3.14-trixie` with security patches, and the weekly pull-and-replace is how those arrive.
+The sandbox userland is hygiene, not the containment boundary — the boundary is the host kernel and runc, patched nightly by `unattended-upgrades`.
+
+**`no_agent` cron scripts are unaffected by any of this.**
+The scheduler runs them as plain host subprocesses (`subprocess.Popen` in `cron/scheduler.py`), so `hermes-app-alive` still runs on the host and reports on the host whatever a profile's terminal backend is set to.
 
 ### `hermes` CLI spellings
 

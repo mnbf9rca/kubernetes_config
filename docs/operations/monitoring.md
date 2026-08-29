@@ -286,7 +286,7 @@ One check over both would go green on a session that updated the clusters and ne
 The 10-day period against a roughly weekly cadence, with 4 days of grace, allows one skipped week before it alarms.
 It is pinged from the laptop rather than the VM because the UUID lives at `op://Homelab/hermes-update/healthcheck-uuid`, and the VM's 1Password service account can see only the `hermes` vault — the same constraint that puts `estate-update` on the laptop.
 
-`hermes-update` is also the only row here that no manifest in this repository creates: the check and its 1Password field are made by hand, as step 4 of [the VM install](hermes-vm.md#installing-or-reinstalling).
+`hermes-update` is also the only row here that no manifest in this repository creates: the check and its 1Password field are made by hand, as step 7 of [the VM install](hermes-vm.md#installing-or-reinstalling).
 
 **Two of the jobs this repo pings send `/start` and an exit code** — the two restic CronJobs, and since the migration they are the only ones that do.
 Nothing replaced that pattern for everyone else, because the kuma push API has nothing to replace it with: a push is a heartbeat carrying a status, so there is no start signal to send.
