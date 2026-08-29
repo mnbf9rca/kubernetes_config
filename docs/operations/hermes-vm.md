@@ -201,7 +201,7 @@ Then run it once and read the result, because the run record is the only place a
 A run that finds nothing stale is the normal result and a pass, not a no-op to investigate.
 
 **What the job does, and what it refuses to do.**
-It reads the docker-backend profiles out of the live config, so no profile is named in it and `hal` joins on its own the day it migrates.
+It reads the docker-backend profiles out of the live config, so no profile is named in it — which is how `hal` joined on the day it migrated, with no edit here.
 It `docker pull`s each distinct pinned image on **every** run: there is deliberately no global "the digest has not moved, exit early", because comparing per container is what lets a container skipped one Sunday be replaced the next.
 Then, per container found by its `hermes-profile` label, it compares the container's image id with the pulled tag's.
 A container whose id matches is left alone.
@@ -506,10 +506,10 @@ There is no rootless install and no second context.
 
 Verified live on August 29, 2026.
 
-The `default` and `emh` profiles run their terminal tool inside docker containers rather than on the host.
-`hal` is still `local`: it was mid long-task when the other two were switched, and **migrating it is an open item** — the same five settings, then a restart of `hermes-gateway-hal`.
+All three profiles run their terminal tool inside docker containers rather than on the host.
+`default` and `emh` switched in the morning; `hal` followed the same day once its long-running task finished, and the refresh job picked it up from the live config with no edit anywhere (`profiles=3` on its next run).
 
-The settings are per profile, applied with `hermes config set` and `hermes -p emh config set`:
+The settings are per profile, applied with `hermes config set` and `hermes -p <profile> config set`:
 
 | Setting | Value |
 |---|---|
