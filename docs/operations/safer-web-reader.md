@@ -16,7 +16,7 @@ Everything else about the VM is in [hermes-vm.md](hermes-vm.md), and the update 
 | The board | slug `safer_web_reader`, at `~/.hermes/kanban/boards/safer_web_reader/kanban.db` | The request queue |
 | The persona | `SOUL.md` in the profile home | Carries the whole worker protocol; canonical copy at `hermes-vm/profiles/safer_web_reader/SOUL.md` |
 | The broker plugin | `<profile home>/plugins/safer-reader-broker/` | Two tools; canonical copy at `hermes-vm/plugins/safer-reader-broker/` |
-| Worker logs | `hermes kanban --board safer_web_reader log <task>` | Where every failure is read |
+| Worker logs | `~/.hermes/kanban/boards/safer_web_reader/logs/<task>.log`, or `hermes kanban --board safer_web_reader log <task>` | Where every failure is read. The CLI spelling is confirmed at verification; read the file directly if it does not hold |
 
 The profile's own gateway is **stopped, deliberately**.
 The kanban dispatcher runs inside a gateway under a machine-global advisory lock at `~/.hermes/kanban/.dispatcher.lock`, held by `hermes-gateway-emh.service`, and it enumerates every non-archived board on each 60-second tick.
@@ -174,6 +174,7 @@ The dispatcher force-appends the entire `kanban` toolset to every worker it spaw
 Measured live against this profile, `platform_toolsets.cli: [web]` resolves to `['kanban', 'web']` and the worker receives the pin `kanban,web`.
 The subtraction is what removes it, and nothing else does.
 Hermes has no per-tool disable for built-in tools, which is why the choice was all twelve kanban tools or none, and why the broker exists.
+The broker's two tools register into the **existing `web` toolset** rather than one of their own, which is what makes `platform_toolsets.cli: [web]` deliver all four — and which means disabling or renaming `web` silently takes the broker with the fetch tools.
 
 **The web path is the Nous managed Tool Gateway, not direct Firecrawl.**
 `use_gateway: true` beside a backend name maps the whole selection to `nous` at read time regardless of the name key, so both `web_search` and `web_extract` leave the host to `https://firecrawl-gateway.nousresearch.com`.
@@ -184,7 +185,7 @@ Both capabilities are therefore off-LAN, and nothing local serves either — whi
 `HERMES_ALLOW_PRIVATE_URLS` exists as an environment override and outranks the YAML, so the posture that counts is the effective one inside the worker process.
 
 The model credential is the one accepted residual on the "no secrets" rule.
-Creating a profile seeds an `auth.json` into its home, and this profile's carries the same `openai-codex` credential `emh` holds.
+This profile's `auth.json` carries the same `openai-codex` credential `emh` holds.
 The containment target is the tool surface, not the key: nothing the reader can call reads that file.
 
 ## The broker
@@ -233,7 +234,7 @@ That obligation lives in the Verify step of [hermes-vm-updates.md](hermes-vm-upd
 
 Everything else about the broker fails closed and reads the same way.
 It depends on six underscore-prefixed helpers in `tools/kanban_tools.py`, one private module global, and three public-looking functions, none of which carries an upstream stability promise on a host that updates roughly weekly.
-A rename, a moved helper, a changed signature, a split `web` toolset or a change to plugin discovery all produce the same symptom: the task ends `blocked` with the cause in the per-task worker log, read with `hermes kanban --board safer_web_reader log <task>`.
+A rename, a moved helper, a changed signature, a split `web` toolset or a change to plugin discovery all produce the same symptom: the task ends `blocked` with the cause in the per-task worker log at `~/.hermes/kanban/boards/safer_web_reader/logs/<task>.log`, or through `hermes kanban --board safer_web_reader log <task>`.
 A plugin load failure logs one warning line carrying the exception text and no traceback, so re-run the dispatch with `HERMES_PLUGINS_DEBUG=1` in the environment when that one line is not enough.
 
 ## Verification record
@@ -258,6 +259,7 @@ The containment does not depend on it passing, and no model can be relied on to 
 
 One thing that would make check 1 read differently without anything being wrong: Tool Search progressive disclosure replaces plugin tools with `tool_search`, `tool_describe` and `tool_call` bridges once the deferrable surface grows past roughly a tenth of the context window.
 Two small schemas will not come close, but it targets precisely the tools this design adds, so read a bridged list as that rather than as a loss — and note that the in-process guard soft-fails under bridging, leaving the recorded list as the only detector.
+`multi_tool_use.parallel` is the other name likely to turn up in a list the model reports of itself: it is a wire artefact of parallel tool calling rather than a tool, and it is not a widening.
 Take the list from a dispatched worker's own report, not from `hermes tools list`, which omits the dispatcher-injected toolset.
 
 ## What nothing watches
