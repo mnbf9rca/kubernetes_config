@@ -149,16 +149,18 @@ platform_idle() {
 # gateway reports itself idle (confirmed in source). Removing the container
 # under it would kill that work silently, so the container is asked directly.
 #
-# The devcontainers image idles with EXACTLY ONE process, so `docker top` on an
-# idle sandbox prints its header and one row: two non-blank lines. Anything else
-# - more rows, no rows, an error from a container that stopped between the list
-# and this call - is busy.
+# An idle sandbox holds EXACTLY TWO processes - `/sbin/docker-init -- sleep
+# infinity` and the `sleep infinity` it supervises - so `docker top` prints its
+# header and two rows: THREE non-blank lines (verified live 2026-08-29; a first
+# draft assumed one process and would have read every idle container as busy).
+# Anything else - more rows, fewer, an error from a container that stopped
+# between the list and this call - is busy.
 container_idle() {
   _ci_id=$1
   _ci_top=$(timeout "$DOCKER_TIMEOUT" docker top "$_ci_id" 2>/dev/null) || return 1
   _ci_lines=$(printf '%s\n' "$_ci_top" | awk 'NF > 0 { c = c + 1 } END { print c + 0 }')
   case "$_ci_lines" in ''|*[!0-9]*) return 1 ;; esac
-  [ "$_ci_lines" -eq 2 ]
+  [ "$_ci_lines" -eq 3 ]
 }
 
 # ---- removal ---------------------------------------------------------------
