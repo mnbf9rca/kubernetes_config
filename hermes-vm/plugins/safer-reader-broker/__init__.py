@@ -197,6 +197,23 @@ def _own_task_id(tool_name):
     return tid, None
 
 
+def _close_quietly(conn):
+    """Close the board connection. A failure closing it must change no answer.
+
+    This is the whole of the post-write-raise fix, and it is a function rather
+    than a ``finally: conn.close()`` for one reason: a bare close inside a
+    ``try`` hands its own exception to that ``try``'s handler, so a connection
+    that fails to close AFTER ``complete_task`` has returned True turns a
+    completed task into an error the model then retries. Swallowing the failure
+    here is right because there is nothing else to do with it -- the write has
+    already committed or already not, and the operator's copy is the log line.
+    """
+    try:
+        conn.close()
+    except Exception:  # noqa: BLE001 -- deliberately swallowed, see above
+        logger.exception("safer-reader-broker: closing the board connection failed")
+
+
 def _rejection(detail):
     """Build the one envelope-rejection message, with upstream's retry framing.
 
@@ -230,25 +247,32 @@ def handle_task(args, **kwargs):
     tid, scope_err = _own_task_id("safer_reader_task")
     if scope_err:
         return scope_err
-    # The read and the connection close both sit inside the try; the response
-    # is built after it, so nothing raised on the way out can replace a result
-    # the model needs. Nothing here mutates the board, but the same shape as
-    # handle_complete is worth more than the two lines it costs.
+    # Each guarded region covers exactly one call that can fail meaningfully,
+    # and the close goes through _close_quietly, which raises nothing. So the
+    # response below is reachable whatever happens on the way out. Nothing here
+    # mutates the board, so the shape is not load-bearing for the read tool --
+    # it matches handle_complete, where it is.
     try:
         kb, conn = _connect()
-        try:
-            task = kb.get_task(conn, tid)
-        finally:
-            conn.close()
     except Exception:  # noqa: BLE001 -- a tool handler returns, never raises
         # The exception text is for the worker log, never for the model: it can
         # carry a board path or a database message the reader has no business
         # seeing, and the model can do nothing with it either way.
+        logger.exception("safer_reader_task could not connect to the board")
+        return tool_error(
+            "safer_reader_task could not open the board; the cause is in the "
+            "worker log."
+        )
+    try:
+        task = kb.get_task(conn, tid)
+    except Exception:  # noqa: BLE001 -- a tool handler returns, never raises
         logger.exception("safer_reader_task failed")
         return tool_error(
             "safer_reader_task failed to read the task; the cause is in the "
             "worker log."
         )
+    finally:
+        _close_quietly(conn)
     if task is None:
         return tool_error("safer_reader_task: task {0} not found".format(tid))
     return json.dumps(
@@ -310,33 +334,41 @@ def handle_complete(args, **kwargs):
         )
 
     metadata = _stamp_worker_session_metadata(tid, None)
-    # The write and the connection close are inside the try; the success
-    # response is built and returned outside it. Anything raised on the way
-    # out -- a failing conn.close() above all -- would otherwise replace the
-    # success return with an error, and the model would retry a task that is
-    # already done. After complete_task returns True the board has changed, so
-    # the only honest reply is success.
+    # NOTHING RAISED AFTER complete_task MAY REACH A HANDLER THAT RETURNS AN
+    # ERROR. Once that call has returned True the board has changed, and an
+    # error return would have the model retry a task that is already done. Two
+    # things give that property: the second try guards exactly the one call
+    # that can fail meaningfully, and the close runs through _close_quietly,
+    # which raises nothing. The success line below is therefore unreachable by
+    # any post-write raise, and json.dumps over three scalars cannot raise
+    # either. Widening either try back over the close would undo this.
     try:
         kb, conn = _connect()
-        try:
-            ok = kb.complete_task(
-                conn,
-                tid,
-                result=envelope,
-                metadata=metadata,
-                expected_run_id=run_id,
-            )
-        finally:
-            conn.close()
     except Exception:  # noqa: BLE001 -- a tool handler returns, never raises
         # Log the cause; do not hand it to the model. A database message can
         # name the board file, and the model can act on none of it.
+        logger.exception("safer_reader_complete could not connect to the board")
+        return tool_error(
+            "safer_reader_complete could not open the board, so nothing was "
+            "written; the cause is in the worker log."
+        )
+    try:
+        ok = kb.complete_task(
+            conn,
+            tid,
+            result=envelope,
+            metadata=metadata,
+            expected_run_id=run_id,
+        )
+    except Exception:  # noqa: BLE001 -- a tool handler returns, never raises
         logger.exception("safer_reader_complete failed")
         return tool_error(
             "safer_reader_complete failed to write to the board; the cause is "
             "in the worker log. The task may or may not have been completed, "
             "so do not assume either."
         )
+    finally:
+        _close_quietly(conn)
     if not ok:
         return tool_error(
             "safer_reader_complete: could not complete {0} (unknown id, "

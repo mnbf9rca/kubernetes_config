@@ -401,6 +401,157 @@ class TestContainmentGuard(unittest.TestCase):
             self.assertIsNone(broker._containment_check("safer_reader_task"))
 
 
+class _ClosingConn(object):
+    """A board connection whose `close()` raises, which is the whole point."""
+
+    def __init__(self, raise_on_close=True):
+        self.raise_on_close = raise_on_close
+        self.closed = False
+
+    def close(self):
+        self.closed = True
+        if self.raise_on_close:
+            raise RuntimeError("the board connection failed while closing")
+
+
+class _FakeKb(object):
+    """Just enough of `hermes_cli.kanban_db` for the two handlers' one call each."""
+
+    def __init__(self, complete_result=True, raises=None):
+        self.complete_result = complete_result
+        self.raises = raises
+        self.complete_calls = []
+
+    def complete_task(self, conn, task_id, **kwargs):
+        self.complete_calls.append((task_id, kwargs))
+        if self.raises is not None:
+            raise self.raises
+        return self.complete_result
+
+    def get_task(self, conn, task_id):
+        if self.raises is not None:
+            raise self.raises
+        return types.SimpleNamespace(id=task_id, title="A title", body="A body")
+
+
+class TestPostWriteFailures(unittest.TestCase):
+    """A failure AFTER the write must not turn a completed task into an error.
+
+    THE REGRESSION THIS EXISTS FOR: with the close inside the same `try` as
+    `complete_task`, a connection that failed while closing -- after the write
+    had committed -- returned an error, and the model retried a task that was
+    already done. The property being locked down is that the success return is
+    unreachable by any post-write raise.
+
+    These tests replace the six kanban helpers on the broker module with
+    functions of their own, so the handler's control flow runs end to end
+    against a fake board. They assert the plugin's own flow and nothing about
+    Hermes: what `complete_task` does with its arguments is the live
+    verification items' business, not a fake's.
+    """
+
+    PATCHED = (
+        "_connect",
+        "_default_task_id",
+        "_enforce_worker_task_ownership",
+        "_reject_delegated_child_mutation",
+        "_stamp_worker_session_metadata",
+        "_worker_run_id",
+    )
+    ENVELOPE = '{"status": "OK", "answer": "done", "sources": [], "quotes": []}'
+
+    def setUp(self):
+        stub_model_tools._last_resolved_tool_names = [
+            "web_search",
+            "web_extract",
+            "safer_reader_task",
+            "safer_reader_complete",
+        ]
+        self._saved = {name: getattr(broker, name) for name in self.PATCHED}
+        self.conn = _ClosingConn()
+        self.kb = _FakeKb()
+        broker._connect = lambda board=None: (self.kb, self.conn)
+        broker._default_task_id = lambda arg: "t_fixture"
+        broker._enforce_worker_task_ownership = lambda tid: None
+        broker._reject_delegated_child_mutation = lambda tool: None
+        broker._stamp_worker_session_metadata = lambda tid, meta: meta
+        broker._worker_run_id = lambda tid: 7
+
+    def tearDown(self):
+        for name, value in self._saved.items():
+            setattr(broker, name, value)
+        stub_model_tools._last_resolved_tool_names = []
+
+    def test_a_failing_close_does_not_replace_the_success_return(self):
+        with self.assertLogs(broker.logger, level="ERROR"):
+            result = json.loads(broker.handle_complete({"envelope": self.ENVELOPE}))
+        self.assertTrue(self.conn.closed)
+        self.assertTrue(result.get("ok"))
+        self.assertEqual(result.get("task_id"), "t_fixture")
+        self.assertEqual(result.get("run_id"), 7)
+        self.assertNotIn("error", result)
+
+    def test_the_write_still_happened_exactly_once(self):
+        with self.assertLogs(broker.logger, level="ERROR"):
+            broker.handle_complete({"envelope": self.ENVELOPE})
+        self.assertEqual(len(self.kb.complete_calls), 1)
+        task_id, kwargs = self.kb.complete_calls[0]
+        self.assertEqual(task_id, "t_fixture")
+        self.assertEqual(kwargs["expected_run_id"], 7)
+        self.assertEqual(kwargs["result"], self.ENVELOPE)
+
+    def test_a_failing_close_does_not_replace_the_read_result(self):
+        with self.assertLogs(broker.logger, level="ERROR"):
+            result = json.loads(broker.handle_task({}))
+        self.assertTrue(self.conn.closed)
+        self.assertEqual(result.get("title"), "A title")
+        self.assertEqual(result.get("body"), "A body")
+
+    def test_a_clean_close_returns_success_and_logs_nothing(self):
+        self.conn.raise_on_close = False
+        result = json.loads(broker.handle_complete({"envelope": self.ENVELOPE}))
+        self.assertTrue(result.get("ok"))
+        self.assertTrue(self.conn.closed)
+
+    def test_a_failing_write_is_still_an_error_and_still_closes(self):
+        self.kb.raises = RuntimeError("database is locked")
+        with self.assertLogs(broker.logger, level="ERROR"):
+            result = json.loads(broker.handle_complete({"envelope": self.ENVELOPE}))
+        self.assertIn("error", result)
+        self.assertIn("worker log", result["error"])
+        self.assertNotIn("database is locked", result["error"])
+        self.assertTrue(self.conn.closed)
+
+    def test_complete_task_returning_false_is_an_error_naming_the_task(self):
+        self.kb.complete_result = False
+        with self.assertLogs(broker.logger, level="ERROR"):
+            result = json.loads(broker.handle_complete({"envelope": self.ENVELOPE}))
+        self.assertIn("t_fixture", result["error"])
+
+    def test_a_connect_failure_says_nothing_was_written(self):
+        def _boom(board=None):
+            raise RuntimeError("no such board file")
+
+        broker._connect = _boom
+        with self.assertLogs(broker.logger, level="ERROR"):
+            result = json.loads(broker.handle_complete({"envelope": self.ENVELOPE}))
+        self.assertIn("nothing was written", result["error"])
+        self.assertNotIn("no such board file", result["error"])
+
+    def test_a_bad_envelope_never_reaches_the_board(self):
+        result = json.loads(broker.handle_complete({"envelope": "not json"}))
+        self.assertIn("still in-flight", result["error"])
+        self.assertEqual(self.kb.complete_calls, [])
+        self.assertFalse(self.conn.closed)
+
+    def test_a_missing_run_id_never_reaches_the_board(self):
+        broker._worker_run_id = lambda tid: None
+        result = json.loads(broker.handle_complete({"envelope": self.ENVELOPE}))
+        self.assertIn("HERMES_KANBAN_RUN_ID", result["error"])
+        self.assertEqual(self.kb.complete_calls, [])
+        self.assertFalse(self.conn.closed)
+
+
 class TestRejectionFraming(unittest.TestCase):
     """Every envelope rejection keeps upstream's still-in-flight framing."""
 
