@@ -62,7 +62,7 @@ kubernetes_config/
 │   └── backup/               # restic init Job + nightly CronJob (hostPath /var/mnt/ssd/local-path-provisioner)
 ├── vps/                      # Hetzner Talos cluster, same sub-layout (bootstrap/secrets/workloads/backup/ops/talos)
 ├── hermes-vm/                # files that live on the hermes VM, not in a cluster
-│   ├── scripts/              # the daily alive check — the tree's one script, run by a hermes cron job
+│   ├── scripts/              # the daily alive check + the weekly sandbox refresh, both hermes cron jobs
 │   └── etc/                  # unattended-upgrades config + the two apt timer drop-ins
 ├── scripts/                  # repo-level helpers (karakeep tags, FreshRSS WebSub status, the check-* guards)
 ├── legacy-microk8s/          # frozen reference copies of the old microk8s manifests
@@ -287,10 +287,10 @@ The rules that must not be broken:
   Everything else about the VM — lingering, the daily liveness check, the install, `unattended-upgrades` — is in `docs/operations/hermes-vm.md`.
   The wrapper that used to automate updates, with its two test harnesses, its systemd unit and its root-owned entry point, was deleted on 2026-08-27.
   Building it back is a design change and needs the operator, not a tidy-up.
-  **Nothing under `hermes-vm/` is scheduled by systemd any more**: the `systemd/` directory was deleted on 2026-08-27 and the daily liveness check now runs as a hermes `no_agent` cron job inside the default gateway.
-  That job is a read-only check and is not a precedent for scheduling updates.
+  **Nothing under `hermes-vm/` is scheduled by systemd any more**: the `systemd/` directory was deleted on 2026-08-27, and both scheduled scripts — the daily liveness check and, since 2026-08-29, the weekly docker-sandbox refresh — run as hermes `no_agent` cron jobs inside the default gateway.
+  The liveness check is read-only; the sandbox refresh pulls the pinned terminal image and removes idle stale containers, a mechanical judgement-free job, and neither is a precedent for scheduling `hermes update` itself.
   **Nothing mechanical guards runbook prose**, which is why its disclosure rules are written into the steps they govern rather than referenced.
-  The files that remain under `hermes-vm/` are not rendered by kustomize, so `make check-script-lint` cannot see them — `make check-vm-scripts` is their guard, and it is `shellcheck -s sh` over `hermes-vm/scripts/hermes-app-alive.sh` plus `scripts/check-ping-bodies.py hermes-vm`.
+  The files that remain under `hermes-vm/` are not rendered by kustomize, so `make check-script-lint` cannot see them — `make check-vm-scripts` is their guard, and it is `shellcheck -s sh` over every `*.sh` under `hermes-vm/scripts/` (the daily alive check and, since 2026-08-29, the weekly docker-sandbox refresh) plus `scripts/check-ping-bodies.py hermes-vm`.
   It runs in **no** preflight and there is no CI, so nothing runs it automatically: it is step 1 of the install procedure in `docs/operations/hermes-vm.md`, and the update runbook never calls it.
   Run it by hand after touching anything under `hermes-vm/`, and before copying any of it to the VM.
 - **A new InfluxDB bucket in the `health` namespace means three edits, not one:** create it (a `make health-influx-*-bootstrap` target), add it to the explicit `for B in ...` list in `homelab/health/scripts/influx-export-lp.sh`, **and** raise `LP_EXPECTED` in `homelab/health/scripts/influx-backup.sh`, which is the denominator of the `buckets=n/m` the heartbeat carries.

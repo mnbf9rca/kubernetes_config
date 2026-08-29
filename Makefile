@@ -399,7 +399,12 @@ check-renovate-scope-vps:
 # the same two guarantees through its own target — shellcheck as POSIX sh, and
 # the ping-body leak guard pointed at the hermes-vm root.
 #
-# ONE SCRIPT IS LINTED, because one is all the hermes-vm tree carries. Updating
+# EVERY *.sh UNDER hermes-vm/scripts/ IS LINTED — the daily alive check and the
+# weekly sandbox refresh as of 2026-08-29 — via a glob, so a third script is
+# covered the day it lands. A glob that matches nothing would report OK having
+# checked nothing, but the ping-body guard on the next line hard-fails if
+# hermes-app-alive.sh goes missing (it is in that guard's REQUIRED_TARGETS), so
+# the tree cannot silently move out from under this target. Updating
 # the Hermes app stack is not a script here at all: it is a runbook an agent (or
 # the operator) executes about weekly, docs/operations/hermes-vm-updates.md.
 # The update wrapper that used to live beside the alive check, along with its
@@ -416,7 +421,7 @@ check-renovate-scope-vps:
 # by hand before anything under hermes-vm/ is copied to the VM.
 .PHONY: check-vm-scripts
 check-vm-scripts:
-	@shellcheck -s sh hermes-vm/scripts/hermes-app-alive.sh
+	@shellcheck -s sh hermes-vm/scripts/*.sh
 	@scripts/check-ping-bodies.py hermes-vm
 	@echo "OK: hermes-vm scripts lint clean and ping-body safe"
 

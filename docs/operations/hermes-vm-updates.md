@@ -29,6 +29,14 @@ git -C ~/.hermes/hermes-agent rev-list --count origin/main..HEAD
 # chained: chained, a missing stamp short-circuits and says nothing. Both must be quiet.
 test -f /var/lib/apt/periodic/unattended-upgrades-stamp || echo 'STAMP MISSING - STOP'
 find /var/lib/apt/periodic/unattended-upgrades-stamp -mtime +14 2>/dev/null
+# The weekly docker-sandbox refresh pushes to no monitor, so its failure mode is silence and
+# this is its only alarm. Two commands, not chained: take the hermes-sandbox-refresh job id
+# from the first, read its runs with the second. Stop if the last SCHEDULED run is over 14
+# days old or failed - a hand-triggered run records source=direct and proves nothing about
+# the schedule. Absent from `cron list` means the job was dropped: reinstall it, hermes-vm.md
+# step 6.
+/home/hermes/.local/bin/hermes cron list
+/home/hermes/.local/bin/hermes cron runs <hermes-sandbox-refresh job_id>
 df -h /home     # 1 GiB free
 date -u         # not within 90 minutes of 04:45 UTC: the reboot kills the session mid-run
 ```
@@ -146,6 +154,8 @@ rm /tmp/constraints.txt &&
 systemctl --user restart hermes-gateway hermes-gateway-emh hermes-gateway-hal \
   hermes-dashboard hermes-webui
 ```
+
+**The restart does not touch the docker terminal sandboxes**, which keep running the image they were created from; replacing a stale one is `hermes-sandbox-refresh`'s business and never this runbook's ([hermes-vm.md](hermes-vm.md#the-docker-terminal-sandboxes)).
 
 ## Verify
 
