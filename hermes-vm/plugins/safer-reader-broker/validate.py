@@ -11,7 +11,8 @@ implemented in the order they are numbered there:
   1. the argument is a string of at most 65,536 bytes of UTF-8;
   2. it parses as JSON and the result is an object;
   3. ``status`` is present and is exactly ``OK`` or ``UNASSESSED``;
-  4. no control characters other than ``\\n`` and ``\\t``.
+  4. no control characters other than ``\\n`` and ``\\t``, and no Unicode
+     bidirectional controls.
 
 Rule 1 runs before parsing and, in the handler, before a database connection
 opens, so it bounds what can reach the board's SQLite file.
@@ -19,11 +20,17 @@ opens, so it bounds what can reach the board's SQLite file.
 Rule 4 is a repertoire rule rather than a shape rule, and it is checked in two
 places for one reason: ``json.loads`` already rejects a RAW control character
 inside a string, but it happily decodes a ``\\u001b`` escape into the parsed
-value. So the raw envelope is scanned (which also covers control characters
-outside strings, in the whitespace between tokens) and every decoded string --
-object keys included -- is scanned as well. Without the second scan an
-otherwise rules-valid envelope carries ANSI escape sequences into
-``tasks.result`` and out to the operator's terminal and dashboard.
+value. So the raw envelope is scanned (which also covers characters outside
+strings, in the whitespace between tokens) and every decoded string -- object
+keys included -- is scanned as well. Without the second scan an otherwise
+rules-valid envelope carries ANSI escape sequences into ``tasks.result`` and
+out to the operator's terminal and dashboard.
+
+The nine Unicode bidirectional controls are refused by the same scan, for the
+same reason and by operator adjudication: they are category Cf rather than Cc,
+so "control character" does not reach them on the letter of the rule, but a
+right-to-left override reorders what a human reads off the dashboard, which is
+precisely the asset rule 4 protects.
 
 Everything else the envelope claims is the consumer's to validate. The broker
 does not check that ``sources`` were fetched, that ``quotes`` appear in them,
@@ -43,6 +50,18 @@ ALLOWED_STATUSES = ("OK", "UNASSESSED")
 # The two control characters a research answer legitimately contains.
 ALLOWED_CONTROL_CHARS = ("\n", "\t")
 
+# The nine Unicode bidirectional controls: U+202A..U+202E (the LRE/RLE/PDF/
+# LRO/RLO block) and U+2066..U+2069 (the LRI/RLI/FSI/PDI isolates). Category
+# Cf, not Cc, so the control-character range below does not reach them and they
+# are named separately.
+#
+# Built from code points rather than written as literals on purpose: a literal
+# right-to-left override in this file would reorder the line in every editor
+# that renders it, which is the exact trick being refused.
+BIDI_CONTROL_CHARS = frozenset(
+    [chr(cp) for cp in list(range(0x202A, 0x202F)) + list(range(0x2066, 0x206A))]
+)
+
 
 class EnvelopeError(ValueError):
     """A rules violation. The message names the failing rule.
@@ -52,16 +71,22 @@ class EnvelopeError(ValueError):
     """
 
 
-def _first_control_char(text):
-    """Return the first disallowed control character in ``text``, or None.
+def _first_refused_char(text):
+    """Return the first character rule 4 refuses in ``text``, or None.
 
-    Control character means Unicode category Cc -- U+0000..U+001F and
-    U+007F..U+009F -- minus the two allowed above. That is the definition the
-    rule names, and it is deliberately not widened to format characters.
+    Two families, both of which reach a human reading the dashboard rather than
+    a machine parsing the envelope:
+
+    * control characters -- Unicode category Cc, U+0000..U+001F and
+      U+007F..U+009F -- minus the newline and tab a research answer needs;
+    * the nine bidirectional controls, which are category Cf and so are named
+      in their own set above.
     """
     for char in text:
         if char in ALLOWED_CONTROL_CHARS:
             continue
+        if char in BIDI_CONTROL_CHARS:
+            return char
         code = ord(char)
         if code <= 0x1F or 0x7F <= code <= 0x9F:
             return char
@@ -125,17 +150,17 @@ def validate_envelope(envelope):
             )
         )
 
-    # Rule 4 -- no control characters, raw or escaped.
-    bad = _first_control_char(envelope)
+    # Rule 4 -- no control or bidirectional characters, raw or escaped.
+    bad = _first_refused_char(envelope)
     if bad is None:
         for text in _walk_strings(parsed):
-            bad = _first_control_char(text)
+            bad = _first_refused_char(text)
             if bad is not None:
                 break
     if bad is not None:
         raise EnvelopeError(
-            "rule 4: envelope contains control character U+{0:04X}; only "
-            "newline and tab are allowed".format(ord(bad))
+            "rule 4: envelope contains U+{0:04X}, a control or bidirectional "
+            "character; of these only newline and tab are allowed".format(ord(bad))
         )
 
     return parsed

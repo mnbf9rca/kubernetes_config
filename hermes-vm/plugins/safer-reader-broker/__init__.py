@@ -116,17 +116,31 @@ def _containment_check(tool_name):
 
     Two opposite behaviours, both deliberate:
 
-    * the symbol missing is a SOFT fail -- one log line and carry on. The guard
-      is defence in depth behind the recorded tool-list diff, and an upstream
-      rename must not take completion down with it;
-    * the symbol present and showing an unexpected tool is a HARD refusal. The
+    * a list this guard cannot trust is a SOFT fail -- one log line and carry
+      on. The guard is defence in depth behind the recorded tool-list diff, and
+      neither an upstream rename nor a stale global may take completion down;
+    * a trustworthy list showing an unexpected tool is a HARD refusal. The
       operator then sees it the first time a task runs, rather than whenever
       somebody next remembers a checklist.
 
-    The refusal is on ANY widening rather than on a ``kanban_`` prefix: the
-    routes that can widen this surface are not all kanban ones. A future
-    release letting the force-append survive ``disabled_toolsets``, and the
-    ``_RECENTLY_SHIPPED_TOOLSETS`` path, are the two known ones.
+    THREE STATES ARE UNTRUSTWORTHY, and only the third is obvious:
+
+    1. the symbol is absent -- an upstream rename;
+    2. the list is empty -- the module global is initialised to ``[]``, so
+       "empty" is the never-populated state and NOT a four-tool surface. A
+       plain ``is None`` test would sail past it and report containment intact
+       on the strength of a list nobody ever wrote;
+    3. the list does not contain the running tool's own name. A tool the model
+       just called is in the surface the model was served, by construction, so
+       its absence proves the global is stale (or belongs to another process's
+       computation) rather than proving anything about containment.
+
+    Only a populated list that names this tool is evidence, and only then is an
+    unexpected name a refusal. The refusal is on ANY widening rather than on a
+    ``kanban_`` prefix: the routes that can widen this surface are not all
+    kanban ones. A future release letting the force-append survive
+    ``disabled_toolsets``, and the ``_RECENTLY_SHIPPED_TOOLSETS`` path, are the
+    two known ones.
     """
     resolved = getattr(model_tools, "_last_resolved_tool_names", None)
     if resolved is None:
@@ -134,6 +148,25 @@ def _containment_check(tool_name):
             "safer-reader-broker: model_tools._last_resolved_tool_names is "
             "missing, so %s ran without the containment guard; the recorded "
             "tool-list diff is now the only detector",
+            tool_name,
+        )
+        return None
+    if not resolved:
+        logger.warning(
+            "safer-reader-broker: model_tools._last_resolved_tool_names is "
+            "empty, which is its never-populated initial value, so %s ran "
+            "without the containment guard; the recorded tool-list diff is "
+            "now the only detector",
+            tool_name,
+        )
+        return None
+    if tool_name not in resolved:
+        logger.warning(
+            "safer-reader-broker: model_tools._last_resolved_tool_names does "
+            "not contain %s, which the model has just called, so the list is "
+            "stale and %s ran without the containment guard; the recorded "
+            "tool-list diff is now the only detector",
+            tool_name,
             tool_name,
         )
         return None
@@ -164,6 +197,22 @@ def _own_task_id(tool_name):
     return tid, None
 
 
+def _rejection(detail):
+    """Build the one envelope-rejection message, with upstream's retry framing.
+
+    The trailing two sentences are copied from upstream's
+    ``HallucinatedCardsError`` reply, which spells out "still in-flight ...
+    retry" precisely because a model reading a bare tool error often treats it
+    as terminal and stops. Every rejection path here shares them, so no path
+    can quietly lose them.
+    """
+    return (
+        "safer_reader_complete rejected the envelope {0}. Your task is still "
+        "in-flight (no state change). Fix the envelope and call "
+        "safer_reader_complete again.".format(detail)
+    )
+
+
 def handle_task(args, **kwargs):
     """Return this worker's own task title and body, and nothing else.
 
@@ -181,21 +230,31 @@ def handle_task(args, **kwargs):
     tid, scope_err = _own_task_id("safer_reader_task")
     if scope_err:
         return scope_err
+    # The read and the connection close both sit inside the try; the response
+    # is built after it, so nothing raised on the way out can replace a result
+    # the model needs. Nothing here mutates the board, but the same shape as
+    # handle_complete is worth more than the two lines it costs.
     try:
         kb, conn = _connect()
         try:
             task = kb.get_task(conn, tid)
-            if task is None:
-                return tool_error("safer_reader_task: task {0} not found".format(tid))
-            return json.dumps(
-                {"ok": True, "title": task.title, "body": task.body or ""},
-                ensure_ascii=False,
-            )
         finally:
             conn.close()
-    except Exception as exc:  # noqa: BLE001 -- a tool handler returns, never raises
+    except Exception:  # noqa: BLE001 -- a tool handler returns, never raises
+        # The exception text is for the worker log, never for the model: it can
+        # carry a board path or a database message the reader has no business
+        # seeing, and the model can do nothing with it either way.
         logger.exception("safer_reader_task failed")
-        return tool_error("safer_reader_task: {0}".format(exc))
+        return tool_error(
+            "safer_reader_task failed to read the task; the cause is in the "
+            "worker log."
+        )
+    if task is None:
+        return tool_error("safer_reader_task: task {0} not found".format(tid))
+    return json.dumps(
+        {"ok": True, "title": task.title, "body": task.body or ""},
+        ensure_ascii=False,
+    )
 
 
 def handle_complete(args, **kwargs):
@@ -203,9 +262,8 @@ def handle_complete(args, **kwargs):
 
     Validation runs before any connection opens, so a rejection is never a
     partial write: the task is untouched and the model can correct the envelope
-    inside the same run. The retry framing in the rejection is copied from
-    upstream's ``HallucinatedCardsError`` reply, which spells it out because a
-    model reading a bare tool error often treats it as terminal and stops.
+    inside the same run. Every rejection goes through :func:`_rejection`, which
+    carries the retry framing.
     """
     guard_err = _containment_check("safer_reader_complete")
     if guard_err:
@@ -218,10 +276,20 @@ def handle_complete(args, **kwargs):
     try:
         validate.validate_envelope(envelope)
     except validate.EnvelopeError as exc:
+        return tool_error(_rejection("-- {0}".format(exc)))
+    except Exception:  # noqa: BLE001 -- see below
+        # Not every refusal arrives as an EnvelopeError. A deeply nested
+        # envelope raises RecursionError out of json.loads, and out of
+        # _walk_strings on the decoded value; anything else the validator
+        # manages to raise lands here too. Left uncaught it would escape to
+        # registry.dispatch, which reports a tool failure WITHOUT the
+        # still-in-flight framing -- and a model reading a bare failure treats
+        # it as terminal and stops, on a task nothing has written to. So it is
+        # a rejection like any other, with the cause kept in the log.
+        logger.exception("safer_reader_complete: envelope validation raised")
         return tool_error(
-            "safer_reader_complete rejected the envelope -- {0}. Your task is "
-            "still in-flight (no state change). Fix the envelope and call "
-            "safer_reader_complete again.".format(exc)
+            _rejection("-- it could not be validated; the cause is in the "
+                       "worker log. Send a simpler, shallower envelope")
         )
 
     tid, scope_err = _own_task_id("safer_reader_complete")
@@ -242,6 +310,12 @@ def handle_complete(args, **kwargs):
         )
 
     metadata = _stamp_worker_session_metadata(tid, None)
+    # The write and the connection close are inside the try; the success
+    # response is built and returned outside it. Anything raised on the way
+    # out -- a failing conn.close() above all -- would otherwise replace the
+    # success return with an error, and the model would retry a task that is
+    # already done. After complete_task returns True the board has changed, so
+    # the only honest reply is success.
     try:
         kb, conn = _connect()
         try:
@@ -252,17 +326,23 @@ def handle_complete(args, **kwargs):
                 metadata=metadata,
                 expected_run_id=run_id,
             )
-            if not ok:
-                return tool_error(
-                    "safer_reader_complete: could not complete {0} (unknown "
-                    "id, already terminal, or a different run holds it)".format(tid)
-                )
-            return json.dumps({"ok": True, "task_id": tid, "run_id": run_id})
         finally:
             conn.close()
-    except Exception as exc:  # noqa: BLE001 -- a tool handler returns, never raises
+    except Exception:  # noqa: BLE001 -- a tool handler returns, never raises
+        # Log the cause; do not hand it to the model. A database message can
+        # name the board file, and the model can act on none of it.
         logger.exception("safer_reader_complete failed")
-        return tool_error("safer_reader_complete: {0}".format(exc))
+        return tool_error(
+            "safer_reader_complete failed to write to the board; the cause is "
+            "in the worker log. The task may or may not have been completed, "
+            "so do not assume either."
+        )
+    if not ok:
+        return tool_error(
+            "safer_reader_complete: could not complete {0} (unknown id, "
+            "already terminal, or a different run holds it)".format(tid)
+        )
+    return json.dumps({"ok": True, "task_id": tid, "run_id": run_id})
 
 
 def register(ctx) -> None:
