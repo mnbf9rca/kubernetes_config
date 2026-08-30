@@ -180,7 +180,7 @@ The dispatcher force-appends the entire `kanban` toolset to every worker it spaw
 Measured live against this profile, `platform_toolsets.cli: [web]` resolves to `['kanban', 'web']` and the worker receives the pin `kanban,web`.
 The subtraction is what removes it, and nothing else does.
 Hermes has no per-tool disable for built-in tools, which is why the choice was all twelve kanban tools or none, and why the broker exists.
-The broker's two tools register into the **existing `web` toolset** rather than one of their own, which is what makes `platform_toolsets.cli: [web]` deliver all four — and which means disabling or renaming `web` silently takes the broker with the fetch tools.
+The broker's two tools register into the **existing `web` toolset** rather than one of their own, which is what makes `platform_toolsets.cli: [web]` deliver all four — and which means disabling or renaming `web` takes the broker with the fetch tools, with no warning at edit time.
 
 **The web path is the Nous managed Tool Gateway, not direct Firecrawl.**
 `use_gateway: true` beside a backend name maps the whole selection to `nous` at read time regardless of the name key, so both `web_search` and `web_extract` leave the host to `https://firecrawl-gateway.nousresearch.com`.

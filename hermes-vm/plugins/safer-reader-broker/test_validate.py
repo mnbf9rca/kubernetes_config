@@ -55,10 +55,11 @@ def _load_broker_against_stubs():
     they need a test, and a test that only runs on the VM is a test nobody runs.
 
     The stubs are the thinnest thing that lets the module body execute: they
-    are NOT a model of Hermes and nothing below calls through them. The
-    handlers are not exercised here; a stubbed `complete_task` would assert
-    against my own stub rather than against the board, which is exactly what
-    the live verification items are for.
+    are NOT a model of Hermes, and nothing calls through the six
+    `_unreachable_stub`s -- each raises if it is reached. The handler tests
+    below do run the handlers, against per-test replacements they install
+    themselves; what they cannot do is assert against a real board, which is
+    exactly what the live verification items are for.
 
     The module is loaded as a package with `submodule_search_locations` set,
     which is how Hermes's own plugin loader does it, so the `from . import
@@ -271,7 +272,14 @@ class TestRule4ControlCharacters(unittest.TestCase):
 
 
 class TestValidEnvelopes(unittest.TestCase):
-    """The two shapes the profile is expected to produce."""
+    """Two envelopes the validator must accept, not two the profile should send.
+
+    These are deliberately looser than the SOUL.md contract: the OK envelope
+    carries bare-string quotes and a null `reason`, neither of which the profile
+    is meant to produce. The validator's job is to stop the shapes the broker
+    cannot safely hand to the board, and these are not those, so it accepts
+    them -- that gap between the two contracts is what these cases pin down.
+    """
 
     def test_a_full_ok_envelope(self):
         envelope = (
@@ -509,7 +517,8 @@ class TestPostWriteFailures(unittest.TestCase):
 
     def test_a_clean_close_returns_success_and_logs_nothing(self):
         self.conn.raise_on_close = False
-        result = json.loads(broker.handle_complete({"envelope": self.ENVELOPE}))
+        with self.assertNoLogs(broker.logger):
+            result = json.loads(broker.handle_complete({"envelope": self.ENVELOPE}))
         self.assertTrue(result.get("ok"))
         self.assertTrue(self.conn.closed)
 
