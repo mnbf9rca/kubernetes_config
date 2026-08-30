@@ -111,6 +111,18 @@ A trusted-code fetch ledger is the documented upgrade path if mechanically verif
 Task-specific schemas — per-domain fields, a fixed set of headings — live inside `answer`, described by the requester's own instruction.
 An absent, malformed or `UNASSESSED` result is reported conservatively by the requester.
 
+### Invoking the reader from another agent
+
+A requester files a task on the `safer_web_reader` board assigned to the `safer_web_reader` profile — `kanban_create` from an agent whose profile carries the kanban toolset, or `hermes kanban --board safer_web_reader create "<title>" --assignee safer_web_reader --body "<instruction + URLs>"` from a shell — then reads the completion with `kanban_show` once the dispatcher has run it.
+The body carries everything: the instruction, any answer shape wanted inside `answer`, and the source URLs.
+
+**Requester-side validation is two layers, and skipping the outer one mis-scores every result.**
+The reader always returns its five-key envelope; a requester's own schema arrives wrapped inside `answer`, never at the top level.
+Validate the envelope first (`status: UNASSESSED` or a malformed envelope is the transport-level fail-closed), then unwrap `answer` and validate the requested shape, where a domain-level verdict such as `risk: unassessed` lives.
+
+The worked requester workflow — kanban enablement for an orchestrator profile, the card template, and the post-completion validation checklist — lives as the `untrusted-web-content-analysis` skill in the `hal` profile on VM 103, exercised live on August 30, 2026.
+That skill is HAL's own state and rides the nightly `hermes backup` zip, not this repository.
+
 ### What a requester sees when a run goes wrong
 
 The broker validates the envelope before it opens a database connection, so a rejected envelope leaves the task untouched and in flight, and the reader can correct it inside the same run.
@@ -134,7 +146,7 @@ A widened list is a silent containment loss: every task still completes and ever
 |---|---|
 | Hermes release at deployment | `v0.20.6 (2026.8.27)`, upstream `23bae43c`, install dir `/home/hermes/.hermes/hermes-agent` |
 | Config version | 39 |
-| Model | `gpt-5.6-sol` via provider `openai-codex`, mirroring `emh` |
+| Model | `gpt-5.6-sol` through provider `openai-codex`, mirroring `emh` |
 | Memory | Off — external provider none, `memory.memory_enabled` and `memory.user_profile_enabled` both false |
 | Skills, MCP servers | None reach the worker: 82 bundled skills were synced into the profile home at creation, but no skills toolset survives the pin, and no MCP server is configured |
 | 1Password secrets | None: the profile has no `secrets.onepassword.env`, and a `-p safer_web_reader` invocation prints no `1Password: applied N secrets` line at all |
