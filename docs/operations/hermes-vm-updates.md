@@ -183,6 +183,8 @@ journalctl --user -u hermes-gateway --since '10 min ago' | grep '1Password: appl
 
 The `applied N secrets` line is fail-open: after a restart, a drop from its previous value means the secrets provider failed silently.
 
+**[VM]** After the update — and after any `hermes import` that touches the `safer_web_reader` profile — dispatch one task on that board and diff the reader's live worker tool list against the four recorded in [safer-web-reader.md](safer-web-reader.md#the-tool-surface-which-is-the-whole-of-the-containment), because a widened list there is a silent containment loss that every task completing normally will hide.
+
 If you reapplied a local patch, verify its behaviour here by importing the touched module in the venv's interpreter and asserting against it directly.
 Do not run the patch's own tests: `pytest` is not in the runtime venv, and installing it moves the agent's dependencies, which is the hazard the constrained WebUI install above exists to avoid.
 

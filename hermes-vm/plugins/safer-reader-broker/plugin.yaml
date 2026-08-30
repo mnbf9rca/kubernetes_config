@@ -1,0 +1,7 @@
+name: safer-reader-broker
+version: 1.0.0
+description: "Task read and completion broker for the quarantined safer_web_reader profile. Two tools, both scoped to the worker's own task by environment. Exists so the kanban toolset can be disabled wholesale for this profile."
+author: cynexia
+provides_tools:
+  - safer_reader_task
+  - safer_reader_complete

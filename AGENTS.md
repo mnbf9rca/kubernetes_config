@@ -20,6 +20,7 @@ Cluster-specific detail, runbooks and procedures live under `docs/`, referenced 
 | `docs/operations/estate-updates.md` | How the estate gets patched: the two update modes, the Talos/Kubernetes version ledger, the advisory feeds and the out-of-band rule, the hand-managed kustomize pins, and the Omni etcd-backup mechanism. The Hermes VM step is `docs/operations/hermes-vm-updates.md`; the session that does the work is the `/update-estate` skill |
 | `docs/operations/hermes-vm.md` | The Hermes VM itself: lingering, triaging a DOWN `hermes-app-alive`, installing the kept components, `unattended-upgrades` with its automatic reboot, what the daily check does not watch, the trade the in-gateway cron job makes, and the VM's own facts |
 | `docs/operations/hermes-vm-updates.md` | The update runbook for the Hermes application stack, run by an agent or the operator roughly weekly: preconditions, change analysis, the detached update, verification, the report ping, and manual rollback. Steps and latent hazards only — everything observable at failure time is left to the agent running it |
+| `docs/operations/safer-web-reader.md` | The quarantined web-reader profile and its completion broker: the four-tool surface, the envelope contract, the deployed configuration baseline, and its verification record |
 
 Design documents and implementation plans are local-only under the gitignored `docs/superpowers/` tree (`specs/2026-04-11-talos-homelab-rebuild-design.md`, `plans/2026-04-11-talos-homelab-rebuild.md`).
 
@@ -63,7 +64,10 @@ kubernetes_config/
 ├── vps/                      # Hetzner Talos cluster, same sub-layout (bootstrap/secrets/workloads/backup/ops/talos)
 ├── hermes-vm/                # files that live on the hermes VM, not in a cluster
 │   ├── scripts/              # the daily alive check + the weekly sandbox refresh, both hermes cron jobs
-│   └── etc/                  # unattended-upgrades config + the two apt timer drop-ins
+│   ├── etc/                  # unattended-upgrades config + the two apt timer drop-ins
+│   ├── plugins/              # canonical copies of the profile-scoped Hermes plugins (safer-reader-broker + its test)
+│   ├── profiles/             # canonical copies of the per-profile SOUL.md personas
+│   └── skills/               # canonical copies of promoted Hermes skills (untrusted-web-content-analysis)
 ├── scripts/                  # repo-level helpers (karakeep tags, FreshRSS WebSub status, the check-* guards)
 ├── legacy-microk8s/          # frozen reference copies of the old microk8s manifests
 └── no_longer_used/           # retired manifests kept for reference
