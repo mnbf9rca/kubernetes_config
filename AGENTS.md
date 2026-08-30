@@ -66,7 +66,8 @@ kubernetes_config/
 │   ├── scripts/              # the daily alive check + the weekly sandbox refresh, both hermes cron jobs
 │   ├── etc/                  # unattended-upgrades config + the two apt timer drop-ins
 │   ├── plugins/              # canonical copies of the profile-scoped Hermes plugins (safer-reader-broker + its test)
-│   └── profiles/             # canonical copies of the per-profile SOUL.md personas
+│   ├── profiles/             # canonical copies of the per-profile SOUL.md personas
+│   └── skills/               # canonical copies of promoted Hermes skills (untrusted-web-content-analysis)
 ├── scripts/                  # repo-level helpers (karakeep tags, FreshRSS WebSub status, the check-* guards)
 ├── legacy-microk8s/          # frozen reference copies of the old microk8s manifests
 └── no_longer_used/           # retired manifests kept for reference

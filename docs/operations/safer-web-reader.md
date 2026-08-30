@@ -120,8 +120,8 @@ The body carries everything: the instruction, any answer shape wanted inside `an
 The reader always returns its five-key envelope; a requester's own schema arrives wrapped inside `answer`, never at the top level.
 Validate the envelope first (`status: UNASSESSED` or a malformed envelope is the transport-level fail-closed), then unwrap `answer` and validate the requested shape, where a domain-level verdict such as `risk: unassessed` lives.
 
-The worked requester workflow — kanban enablement for an orchestrator profile, the card template, and the post-completion validation checklist — lives as the `untrusted-web-content-analysis` skill in the `hal` profile on VM 103, exercised live on August 30, 2026.
-That skill is HAL's own state and rides the nightly `hermes backup` zip, not this repository.
+The worked requester workflow — kanban enablement for an orchestrator profile, the card template, and the post-completion validation checklist — is the `untrusted-web-content-analysis` skill, promoted into the shared Hermes skill library on August 30, 2026 so every profile receives it, and exercised live the same day.
+Its canonical copy is `hermes-vm/skills/security/untrusted-web-content-analysis/` in this repository; the authoritative VM copy sits as an untracked file inside the Hermes checkout at `~/.hermes/hermes-agent/skills/security/`, which survives `hermes update` but not a hand-run `git clean -fdx` there — re-seed from the repo copy if it vanishes.
 
 ### What a requester sees when a run goes wrong
 
