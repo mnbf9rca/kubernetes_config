@@ -18,7 +18,7 @@ Cluster-specific detail, runbooks and procedures live under `docs/`, referenced 
 | `docs/operations/uptime-kuma.md` | Layer 3/4 runbook: creating uptime-kuma monitors by hand, per-monitor HTTP settings, the Cloudflare Access trap, the push monitors driven from inside the clusters (and the one driven from the hermes VM) and the bypass they need, the self-monitor |
 | `docs/operations/hindsight.md` | The `hindsight` namespace: the self-hosted memory backend for the Hermes profiles — topology, auth, the canary, upgrade and restore runbooks, the restore drill, key rotation, and the removal path |
 | `docs/operations/estate-updates.md` | How the estate gets patched: the two update modes, the Talos/Kubernetes version ledger, the advisory feeds and the out-of-band rule, the hand-managed kustomize pins, and the Omni etcd-backup mechanism. The Hermes VM step is `docs/operations/hermes-vm-updates.md`; the session that does the work is the `/update-estate` skill |
-| `docs/operations/hermes-vm.md` | The Hermes VM itself: lingering, triaging a DOWN `hermes-app-alive`, installing the kept components, `unattended-upgrades` with its automatic reboot, what the daily check does not watch, the trade the in-gateway cron job makes, and the VM's own facts |
+| `docs/operations/hermes-vm.md` | The Hermes VM itself: lingering, triaging a DOWN `hermes-app-alive`, installing the kept components, `unattended-upgrades` with its automatic reboot, what the daily check does not watch, the trade the in-gateway cron job makes, the docker terminal sandboxes with their managed scope and per-profile mounts, and the VM's own facts |
 | `docs/operations/hermes-vm-updates.md` | The update runbook for the Hermes application stack, run by an agent or the operator roughly weekly: preconditions, change analysis, the detached update, verification, the report ping, and manual rollback. Steps and latent hazards only — everything observable at failure time is left to the agent running it |
 | `docs/operations/safer-web-reader.md` | The quarantined web-reader profile and its completion broker: the four-tool surface, the envelope contract, the deployed configuration baseline, and its verification record |
 
@@ -63,8 +63,8 @@ kubernetes_config/
 │   └── backup/               # restic init Job + nightly CronJob (hostPath /var/mnt/ssd/local-path-provisioner)
 ├── vps/                      # Hetzner Talos cluster, same sub-layout (bootstrap/secrets/workloads/backup/ops/talos)
 ├── hermes-vm/                # files that live on the hermes VM, not in a cluster
-│   ├── scripts/              # the daily alive check + the weekly sandbox refresh, both hermes cron jobs
-│   ├── etc/                  # unattended-upgrades config + the two apt timer drop-ins
+│   ├── scripts/              # the daily alive check + the weekly sandbox refresh (both hermes cron jobs) + the hand-run profile docker setup helper
+│   ├── etc/                  # unattended-upgrades config + the two apt timer drop-ins + the managed-scope hermes config (/etc/hermes/config.yaml)
 │   ├── plugins/              # canonical copies of the profile-scoped Hermes plugins (safer-reader-broker + its test)
 │   ├── profiles/             # canonical copies of the per-profile SOUL.md personas
 │   └── skills/               # canonical copies of promoted Hermes skills (untrusted-web-content-analysis)
@@ -294,7 +294,7 @@ The rules that must not be broken:
   **Nothing under `hermes-vm/` is scheduled by systemd any more**: the `systemd/` directory was deleted on 2026-08-27, and both scheduled scripts — the daily liveness check and, since 2026-08-29, the weekly docker-sandbox refresh — run as hermes `no_agent` cron jobs inside the default gateway.
   The liveness check is read-only; the sandbox refresh pulls the pinned terminal image and removes idle stale containers, a mechanical judgement-free job, and neither is a precedent for scheduling `hermes update` itself.
   **Nothing mechanical guards runbook prose**, which is why its disclosure rules are written into the steps they govern rather than referenced.
-  The files that remain under `hermes-vm/` are not rendered by kustomize, so `make check-script-lint` cannot see them — `make check-vm-scripts` is their guard, and it is `shellcheck -s sh` over every `*.sh` under `hermes-vm/scripts/` (the daily alive check and, since 2026-08-29, the weekly docker-sandbox refresh) plus `scripts/check-ping-bodies.py hermes-vm`.
+  The files that remain under `hermes-vm/` are not rendered by kustomize, so `make check-script-lint` cannot see them — `make check-vm-scripts` is their guard, and it is `shellcheck -s sh` over every `*.sh` under `hermes-vm/scripts/` (the daily alive check; since 2026-08-29 the weekly docker-sandbox refresh; and since 2026-08-31 `hermes-profile-docker-setup.sh`, which is run by hand per new profile and is on no schedule) plus `scripts/check-ping-bodies.py hermes-vm`.
   It runs in **no** preflight and there is no CI, so nothing runs it automatically: it is step 1 of the install procedure in `docs/operations/hermes-vm.md`, and the update runbook never calls it.
   Run it by hand after touching anything under `hermes-vm/`, and before copying any of it to the VM.
 - **A new InfluxDB bucket in the `health` namespace means three edits, not one:** create it (a `make health-influx-*-bootstrap` target), add it to the explicit `for B in ...` list in `homelab/health/scripts/influx-export-lp.sh`, **and** raise `LP_EXPECTED` in `homelab/health/scripts/influx-backup.sh`, which is the denominator of the `buckets=n/m` the heartbeat carries.

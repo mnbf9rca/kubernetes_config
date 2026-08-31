@@ -1,0 +1,12 @@
+# Managed scope: pinned for EVERY Hermes profile on this VM, current and future.
+# Copy of record: hermes-vm/etc/hermes/config.yaml in the kubernetes_config repo.
+# These keys WIN over per-profile config.yaml; `hermes config set` refuses to change them (sudo edits here only).
+# terminal.docker_volumes is deliberately NOT pinned: it stays per-profile so only
+# default/emh/hal carry the shared WebUI attachments mount (see hermes-vm docs; remove
+# that mount when hermes-webui PR #7022 is deployed). Profiles without docker_volumes
+# get the platform auto-mounted per-profile sandbox workspace.
+terminal:
+  backend: docker
+  docker_image: mcr.microsoft.com/devcontainers/python:3.14-trixie
+  docker_run_as_host_user: true
+  cwd: /workspace

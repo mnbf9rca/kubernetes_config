@@ -157,6 +157,26 @@ systemctl --user restart hermes-gateway hermes-gateway-emh hermes-gateway-hal \
 
 **The restart does not touch the docker terminal sandboxes**, which keep running the image they were created from; replacing a stale one is `hermes-sandbox-refresh`'s business and never this runbook's ([hermes-vm.md](hermes-vm.md#the-docker-terminal-sandboxes)).
 
+### The WebUI attachments mount comes out when #6939 lands
+
+**[laptop]** The `default`, `emh` and `hal` profiles each mount `/home/hermes/.hermes/webui/attachments` into their sandboxes read-only, as a stopgap for hermes-webui saving chat uploads to one directory shared by every profile.
+Read the WebUI span you just pulled for the fix — upstream issue [#6939](https://github.com/nesquena/hermes-webui/issues/6939), open as pull request [#7022](https://github.com/nesquena/hermes-webui/pull/7022):
+
+```sh
+gh api repos/nesquena/hermes-webui/compare/<webui_sha>...<webui_target_sha> --jq '.commits[].commit.message' \
+  | grep -Ei '6939|7022|attachment'
+```
+
+If the fix is in, uploads move to the profile's own `cache/documents/webui-attachments/<session>/`, which hermes mounts already, and the shared mount becomes an unnecessary cross-profile read.
+Remove it in the same session:
+
+1. **[VM]** For each of `default`, `emh` and `hal`, read `hermes -p <profile> config get terminal.docker_volumes`, then set the list again without the attachments entry, keeping the other two.
+   `default` takes no `-p`.
+2. **[VM]** Restart the three gateways and `hermes-webui`, then upload a file in the WebUI and have the agent read it back, because the new path is the only thing proving the fix is live.
+3. **[laptop]** Delete this step, the entry from the table in [hermes-vm.md](hermes-vm.md#the-docker-terminal-sandboxes), and the mount from `hermes-vm/scripts/hermes-profile-docker-setup.sh`.
+
+An empty grep means the stopgap stays; say so in the session's close rather than leaving it unmentioned.
+
 ## Verify
 
 **[VM]** Any failure sends you to [Rollback](#rollback).
