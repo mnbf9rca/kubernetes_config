@@ -1,8 +1,8 @@
 # The Hermes VM
 
-VM 103 (`hermes.cynexia.net`) runs the Hermes agent, its three gateway profiles, the dashboard and the WebUI the Hermex iOS app talks to.
+VM 103 (`hermes.cynexia.net`) runs the Hermes agent, its four always-on gateway profiles, the dashboard and the WebUI the Hermex iOS app talks to.
 It is not a Kubernetes cluster, so none of this repository's cluster machinery reaches it.
-What it has instead lives in `hermes-vm/`: a daily liveness check, a weekly docker-sandbox refresh and the `unattended-upgrades` configuration.
+What it has instead lives in `hermes-vm/`: a daily liveness check, a weekly docker-sandbox refresh, a hand-run helper that finishes a new profile's docker setup, the managed-scope Hermes config and the `unattended-upgrades` configuration.
 
 This page covers that machinery — how to read it, how to install it — and the VM facts that keep being rediscovered.
 Updating the application stack is a separate procedure: [hermes-vm-updates.md](hermes-vm-updates.md).
@@ -24,7 +24,7 @@ loginctl show-user hermes -p Linger        # must print Linger=yes
 ```
 
 Without lingering, the `hermes` user manager stops when the last session ends.
-All five hermes user units die at the next reboot — **and the daily check dies with them**, because it runs as a cron job inside `hermes-gateway` rather than on a timer of its own.
+Every hermes user unit dies at the next reboot — **and the daily check dies with them**, because it runs as a cron job inside `hermes-gateway` rather than on a timer of its own.
 
 That is the nastiest failure mode here: **the monitor that would report the outage is itself down.**
 Nothing pushes, so uptime-kuma sees silence rather than a `down`, and `hermes-app-alive` stays green until its 24-hour heartbeat and 6-hour retry expire, about 30 hours after the last good beat.
@@ -61,9 +61,10 @@ The traceback goes to the journal and never near the pushed message, which carri
 
 A VM rebuild must repeat all of this.
 The nightly `hermes backup` zip covers `~/.hermes`, so it carries the profile config — the token injection in step 4 — and the cron store holding both jobs, from steps 5 and 6.
-Both scripts live at `~/.hermes/scripts/`, so they ride that zip too: scripts and cron store are backed up and restored together.
+All three scripts live at `~/.hermes/scripts/`, so they ride that zip too: scripts and cron store are backed up and restored together.
 That coupling is the right one, because the store names each script by bare filename, so a restore bringing back one without the other would leave a job pointing at nothing.
-Only the four apt files sit outside the zip, and they are rebuild territory.
+The four apt files and `/etc/hermes/config.yaml` sit outside the zip, and they are rebuild territory.
+**A rebuild that skips `/etc/hermes/config.yaml` runs every profile's terminal tool on the host instead of in a container, and nothing reports it.**
 **Do not trust the restored cron store without looking**: `hermes cron list` after a rebuild, because a check that quietly failed to come back looks exactly like a healthy day until the heartbeat lapses.
 
 ### 1. Lint first
@@ -74,11 +75,11 @@ make check-vm-scripts
 
 This is the **only** thing that ever lints these files: it runs in no preflight, this repository has no CI, and nothing runs it on a schedule.
 This procedure is its only caller; the update runbook never invokes it.
-It covers both scripts under `hermes-vm/scripts/` — `hermes-app-alive.sh` from step 2 and `hermes-sandbox-refresh.sh` from step 6.
+It covers all three scripts under `hermes-vm/scripts/` — `hermes-app-alive.sh` from step 2, `hermes-sandbox-refresh.sh` from step 6, and `hermes-profile-docker-setup.sh` from [step 7](#7-pin-the-docker-terminal-backend).
 
 ### 2. Install the daily check's script
 
-One file; the refresh script in [step 6](#6-install-the-sandbox-refresh-job) is the only other thing this install copies to the VM.
+One file; the other two this install copies to the VM are the refresh script in [step 6](#6-install-the-sandbox-refresh-job) and the profile helper in [step 7](#7-pin-the-docker-terminal-backend).
 
 ```sh
 scp hermes-vm/scripts/hermes-app-alive.sh \
@@ -201,7 +202,7 @@ Then run it once and read the result, because the run record is the only place a
 A run that finds nothing stale is the normal result and a pass, not a no-op to investigate.
 
 **What the job does, and what it refuses to do.**
-It reads the docker-backend profiles out of the live config, so no profile is named in it — which is how `hal` joined on the day it migrated, with no edit here.
+It reads the docker-backend profiles out of the live config, so no profile is named in it — which is how `hal` joined on the day it migrated, and `safer_web_reader` on the day the managed scope pinned it, with no edit here either time.
 It `docker pull`s each distinct pinned image on **every** run: there is deliberately no global "the digest has not moved, exit early", because comparing per container is what lets a container skipped one Sunday be replaced the next.
 Then, per container found by its `hermes-profile` label, it compares the container's image id with the pulled tag's.
 A container whose id matches is left alone.
@@ -223,7 +224,33 @@ Both of those fail in the same direction — a false *busy* — so the job skips
 It pushes to no monitor: a stale sandbox image is neither lockout nor data loss, and the containment boundary is the host kernel rather than the sandbox userland.
 Its own death is caught by the update runbook's precondition on its last run ([Preconditions](hermes-vm-updates.md#preconditions)), at that runbook's cadence.
 
-### 7. Create the `hermes-update` check
+### 7. Pin the docker terminal backend
+
+Two files: the managed-scope config, which is root-owned and pins the backend for every profile, and the helper that finishes a new profile's own configuration.
+What the settings do, and what a sandbox looks like once they are live, is [The docker terminal sandboxes](#the-docker-terminal-sandboxes).
+
+```sh
+ssh hermes@hermes.cynexia.net 'sudo mkdir -p -m 0755 /etc/hermes'
+scp hermes-vm/etc/hermes/config.yaml hermes@hermes.cynexia.net:/tmp/hermes-managed.yaml
+ssh hermes@hermes.cynexia.net 'sudo install -m 0644 -o root -g root /tmp/hermes-managed.yaml /etc/hermes/config.yaml'
+scp hermes-vm/scripts/hermes-profile-docker-setup.sh \
+  hermes@hermes.cynexia.net:/home/hermes/.hermes/scripts/hermes-profile-docker-setup.sh
+ssh hermes@hermes.cynexia.net 'chmod 0755 /home/hermes/.hermes/scripts/hermes-profile-docker-setup.sh'
+```
+
+**The managed scope wins, and that is the point.**
+`/etc/hermes/config.yaml` pins `terminal.backend`, `terminal.docker_image`, `terminal.docker_run_as_host_user` and `terminal.cwd` for every profile on this VM, including profiles that do not exist yet.
+Its values beat a per-profile `config.yaml`, and `hermes config set` refuses to write any key it holds, so changing one means editing that file with `sudo` and restarting the gateways.
+A profile created tomorrow therefore runs its terminal tool in a container without anybody remembering to configure it — which is why the pin is here rather than repeated per profile.
+
+**The repository copy is the only durable record.**
+The nightly `hermes backup` zip covers `~/.hermes` and nothing under `/etc`, and `hermes update` never touches `/etc` either, so this file survives a rebuild only by being copied back from `hermes-vm/etc/hermes/config.yaml`.
+It follows the same pattern as the apt configuration in [step 9](#9-install-unattended-upgrades): repository is the source, the VM holds an installed copy.
+
+**`terminal.docker_volumes` is deliberately not pinned**, because it names per-profile paths and because only some profiles get the shared attachments mount.
+The helper writes those for one profile, and [Creating a profile](#creating-a-profile) is where it is used; the three entries it writes are in [The docker terminal sandboxes](#the-docker-terminal-sandboxes).
+
+### 8. Create the `hermes-update` check
 
 Create a healthchecks.io check named `hermes-update` by hand in the UI — period **10 days**, grace **4 days** — and store its ping UUID at `op://Homelab/hermes-update/healthcheck-uuid`, typed `[text]`.
 Nothing in this estate creates that check, that item or that field, and the update runbook's [Report step](hermes-vm-updates.md#report) reads the reference directly, so an absent field fails the `op read` at the end of an otherwise successful update.
@@ -233,7 +260,7 @@ Nothing on the VM ever needs this reference: the ping is sent from the operator'
 The cadence allows one skipped week against a roughly weekly runbook before it alarms.
 A ping UUID is a tier-2 spam-target identifier rather than a secret, which is why the field is `[text]` — but it belongs in 1Password and never in this repository.
 
-### 8. Install `unattended-upgrades`
+### 9. Install `unattended-upgrades`
 
 Four files, and **two of them do not install where they live in the repository**:
 
@@ -251,7 +278,7 @@ Copy them one at a time, or the schedule stays at Debian's default and nothing s
 sudo systemctl daemon-reload
 ```
 
-### 9. Verify the install
+### 10. Verify the install
 
 Check each of these once.
 Every one of them fails silently if it is wrong.
@@ -334,9 +361,152 @@ Every one of them fails silently if it is wrong.
 
    A **scheduled** run that fails on its first line prints `HERMES_APP_ALIVE_PUSH_TOKEN: not injected …` to the gateway's journal, which is the tell for all three; the same failure from `cron run` prints it into the run record instead.
 
+8. **Every profile resolves its terminal backend to `docker`.**
+   A missing or misplaced `/etc/hermes/config.yaml` leaves the backend at its default and every terminal call then runs on the host, which nothing else on this page detects.
+   Ask each profile what it resolved, rather than reading the file back:
+
+   ```sh
+   /home/hermes/.local/bin/hermes config get terminal.backend
+   /home/hermes/.local/bin/hermes -p emh config get terminal.backend
+   ```
+
 **Expect a reboot the first night after installing.**
 Before the first install the VM has a pending kernel reboot — an uptime over four days and a kernel image in the reboot-required list — and nothing has been arming an automatic reboot, because the drop-in that arms it is part of this install.
 So the first 04:45 window clears that backlog — correct behaviour, not a fault.
+
+## Creating a profile
+
+Adding a Hermes profile to this VM, in order.
+Worked end to end on `web_watcher` on August 31, 2026; every hazard below is one that run met or would have met.
+Only one ordering constraint is real, and it is step 3: **disable the platforms the profile will not use before its gateway starts for the first time.**
+
+Steps 4 to 8 are conditional, and a profile that only answers kanban tasks or WebUI chats needs none of them.
+
+### 1. Create the profile
+
+Create it in the WebUI, choosing a **clean** profile rather than one inheriting the default's configuration.
+`hermes profile create <name>` works too, and seeds every bundled skill pack into `<profile home>/skills/` — 14 of them on August 31, 2026, so read the directory rather than that number.
+Delete the directories the profile does not need, and **keep `<profile home>/skills/.bundled_manifest`** — that file is how `skills_sync` remembers a deletion, so a pack removed with the manifest intact stays removed instead of being restored on the next sync.
+
+### 2. The terminal backend needs nothing
+
+`/etc/hermes/config.yaml` already pins `terminal.backend`, `terminal.docker_image`, `terminal.docker_run_as_host_user` and `terminal.cwd` for every profile, this one included ([step 7 of the install](#7-pin-the-docker-terminal-backend)).
+There is no per-profile terminal setting to copy, and `hermes config set` would refuse it anyway.
+
+### 3. Disable the platforms this profile will not use
+
+**Before the first gateway start:**
+
+```sh
+/home/hermes/.local/bin/hermes -p <name> config set platforms.telegram.enabled false
+/home/hermes/.local/bin/hermes -p <name> config set platforms.api_server.enabled false
+```
+
+**A profile gateway inherits the base `~/.hermes/.env`**, so a profile that has configured nothing still starts with the default profile's platform credentials.
+Left enabled, it connects Telegram with the default profile's token, which the API rejects as `token already in use`, and it binds the default `api_server` port 8642, which fails as `address already in use`.
+Disabling them afterwards fixes it, but the gateway loops on those collisions until you do.
+
+### 4. The mailbox, if the profile will use email
+
+The mailbox has to exist before step 6 can connect to it.
+
+Create `<name>@cynexia.io` at Purelymail.
+That is a manual step in the Purelymail admin today; Purelymail also has an API, and the key and a pointer to its specification are stored at `op://Homelab/purelymail/api_key` and `op://Homelab/purelymail/api_spec`.
+Nothing in this estate automates mailbox creation, and this step is not the place to start: the API is named so a future automation knows where to look.
+
+Then record the credential as a 1Password item, and give the mailbox the password from it:
+
+```sh
+op item create --category login --vault hermes --title purelymail-<name> \
+  --generate-password='letters,digits,symbols,32' \
+  'username[text]=<name>@cynexia.io'
+```
+
+**Type the fields explicitly**, as AGENTS.md requires of every `op item create`: a bare `field=value` is stored **concealed**, and the address is an ordinary identifier rather than a secret, so it is `[text]`.
+Read the generated password back with `op read` when Purelymail asks for it, and never echo it.
+
+**The two vaults differ deliberately.**
+The API key is estate administration and belongs in `Homelab` with the operator's other administrative credentials.
+The per-agent mailbox credential belongs in `hermes`, because that is the only vault the VM's own service account can read — the same reasoning as [step 3 of the install](#3-create-the-monitor-and-store-its-token).
+
+### 5. Secrets, if the profile needs any
+
+```sh
+/home/hermes/.local/bin/hermes -p <name> config set secrets.onepassword.enabled true
+```
+
+Then set `secrets.onepassword.env` to the map of environment-variable name to `op://vault/item/field` reference the profile needs, as [step 4 of the install](#4-inject-the-token-into-the-default-profile) does for the default profile.
+An email profile's map is one entry: `EMAIL_PASSWORD` against `op://hermes/purelymail-<name>/password` from step 4.
+The **operator** adds `OP_SERVICE_ACCOUNT_TOKEN` to the profile's own `.env` by hand; that value goes nowhere else, and no agent handles it.
+
+### 6. The email platform, if wanted
+
+The email adapter reads **`.env` only**.
+Put `EMAIL_ADDRESS`, `EMAIL_IMAP_HOST`, `EMAIL_SMTP_HOST` and `EMAIL_ALLOWED_USERS` in the profile's `.env`, let `EMAIL_PASSWORD` arrive through the 1Password map from step 5, and then:
+
+```sh
+/home/hermes/.local/bin/hermes -p <name> config set platforms.email.enabled true
+```
+
+**Skip `platforms.email.extra`.**
+The adapter does not read it, so setting the address and hosts there is harmless and does nothing — while looking exactly like the configuration that matters.
+
+### 7. The standard docker mounts, for a trusted profile only
+
+```sh
+/home/hermes/.hermes/scripts/hermes-profile-docker-setup.sh <name>
+```
+
+This gives the profile the shared WebUI attachments inbox along with its workspace, so run it only where every profile's uploads may be read — see [The docker terminal sandboxes](#the-docker-terminal-sandboxes) for the three entries and for the [#6939](https://github.com/nesquena/hermes-webui/issues/6939) stopgap that will remove one of them.
+Skip it for an isolated worker, which is the `safer_web_reader` pattern ([safer-web-reader.md](safer-web-reader.md)): that profile deliberately has no `docker_volumes` of its own and takes the platform's per-profile sandbox workspace instead.
+
+**Launching a profile from the WebUI writes those same three entries itself**, into the profile's `config.yaml` and as `TERMINAL_DOCKER_VOLUMES` in its `.env`.
+The helper then finds all three present and writes nothing, which is the intended outcome rather than a sign it failed.
+
+### 8. An always-on gateway, for any messaging platform
+
+A profile with a messaging platform needs a systemd user unit; without one, a gateway started by hand dies at the next reboot, and this VM reboots at 04:45 whenever `unattended-upgrades` installs a kernel.
+
+**The hermes CLI owns these unit files.**
+`refresh_systemd_unit_if_needed` regenerates the unit whenever the installed text differs from what the current install would write, and it runs on `gateway start`, on `gateway restart` and on **every gateway boot** (`hermes_cli/gateway.py`, read on August 31, 2026).
+So a hand edit does not stick, and none should be attempted: `TimeoutStopSec` in particular is derived, not written — `max(60, max(restart_drain_timeout, cron_drain_timeout + 10) + 30)` — so gateways differ from each other because their profiles' drain settings differ, and the CLI's value is the correct one.
+`hermes-gateway-web_watcher.service` carries `TimeoutStopSec=70` against the other three gateways' `210` for exactly that reason, and it stays as the CLI wrote it (operator ruling, August 31, 2026).
+
+Check whether the CLI has already created the unit, because starting a gateway once is enough to make one:
+
+```sh
+ls ~/.config/systemd/user/hermes-gateway-<name>.service
+```
+
+If it exists, there is nothing to write — go straight to enabling it:
+
+```sh
+systemctl --user enable --now hermes-gateway-<name>
+```
+
+If it does not, seed one from an existing gateway's unit, and let the CLI correct it on the first start:
+
+```sh
+sed 's/emh/<name>/g' ~/.config/systemd/user/hermes-gateway-emh.service \
+  > ~/.config/systemd/user/hermes-gateway-<name>.service
+systemctl --user daemon-reload
+systemctl --user enable --now hermes-gateway-<name>
+```
+
+**A new gateway unit is a new thing to watch, and nothing notices that on its own.**
+Add its name to the `UNITS` list in `hermes-vm/scripts/hermes-app-alive.sh`, then re-run `make check-vm-scripts` and reinstall the script ([step 2](#2-install-the-daily-checks-script)) — the expected count is derived from that list, so a unit missing from it is a gateway whose death the daily check reports as healthy.
+The [update runbook](hermes-vm-updates.md) enumerates the units it restarts, so a new gateway belongs in that list too, or `hermes update` leaves it running the old code.
+
+A kanban or WebUI-only worker needs no unit at all: its work runs inside a gateway that already exists.
+
+### 9. Verify
+
+```sh
+tail ~/.hermes/profiles/<name>/logs/gateway.log
+/home/hermes/.local/bin/hermes -p <name> config get terminal.backend
+```
+
+The log shows `✓ <platform> connected` for each platform the profile enabled, or `No messaging platforms enabled` for a worker; `terminal.backend` reads `docker`.
 
 ## unattended-upgrades
 
@@ -386,7 +556,7 @@ If `systemctl list-timers` shows the upgrade starting late, look at the refresh 
 
 There is no `-success` file and nothing creates one.
 `unattended-upgrade` writes `/var/lib/apt/periodic/unattended-upgrades-stamp` for itself in `write_stamp_file()`, and it writes it on a run that found **nothing to do** just as readily as on one that installed everything.
-It writes it on a `--dry-run` too, so a dry run is never a way to inspect the stamp — see step 9 of the install.
+It writes it on a `--dry-run` too, so a dry run is never a way to inspect the stamp — see step 10 of the install.
 The other files in that directory belong to `apt.systemd.daily` and are not this.
 
 So the stamp proves the timer fired, not that anything was patched.
@@ -411,6 +581,10 @@ The VM has no MTA, so `unattended-upgrades` mail would be a silent failure; the 
   `hermes-gateway-emh`, `hermes-gateway-hal` and `hermes-dashboard` still contribute nothing but a `systemctl --user is-active` result.
   The gap is smaller for the dashboard: the `hermes` uptime-kuma monitor probes it externally on `hermes.cynexia.com/api/health`.
   **Nothing external probes the two remaining gateways.**
+- **A gateway unit that is not in the check's `UNITS` list.**
+  The expected count is derived from that list, so a unit missing from it is not half-watched but unwatched, and the check reports `ok` while it is dead.
+  `hermes-gateway-web_watcher` sat in that position for the hours between its creation and the list being extended on August 31, 2026, and the list now names all six units.
+  Adding a gateway means adding its name, which is [step 8 of Creating a profile](#8-an-always-on-gateway-for-any-messaging-platform).
 - **Per-profile state.**
   The check exercises the shared venv and the default profile.
   A fault confined to `emh` or `hal` profile state is invisible to it.
@@ -431,7 +605,7 @@ The VM has no MTA, so `unattended-upgrades` mail would be a silent failure; the 
   Nothing notices until the monitor's heartbeat lapses about 30 hours later, and the report then reads as "no beat at all" — indistinguishable from a VM that is off.
   `hermes cron list` is the only positive proof it is still there.
 - **The docker sandboxes, and the image they are running.**
-  The check runs on the host and says nothing about the containers the `default` and `emh` terminals work inside, including whether their image is still the one the pinned tag now resolves to.
+  The check runs on the host and says nothing about the containers any profile's terminal works inside, including whether their image is still the one the pinned tag now resolves to.
   `hermes-sandbox-refresh` is what moves them, it pushes to no monitor, and the thing that notices it has stopped is the update runbook's precondition on its last run ([Preconditions](hermes-vm-updates.md#preconditions)).
   So detection latency for a stale sandbox image is the update cadence, about a week, and that is accepted: a stale sandbox userland is neither lockout nor data loss, and the containment boundary is the host kernel, which `unattended-upgrades` patches nightly.
   A check on the age of the running image was considered and rejected — a healthy refresh job against a quiet upstream reads identically to a dead one.
@@ -504,23 +678,55 @@ There is no rootless install and no second context.
 
 ### The docker terminal sandboxes
 
-Verified live on August 29, 2026.
+Verified live on August 29, 2026; the managed scope and the attachments mount were added on August 31, 2026.
 
-All three profiles run their terminal tool inside docker containers rather than on the host.
-`default` and `emh` switched in the morning; `hal` followed the same day once its long-running task finished, and the refresh job picked it up from the live config with no edit anywhere (`profiles=3` on its next run).
+**All four profiles run their terminal tool inside docker containers rather than on the host**, and a profile created tomorrow will too.
+`default` and `emh` switched on August 29; `hal` followed the same day once its long-running task finished.
+`safer_web_reader` was still on the default backend until the managed scope pinned it on August 31; all four were read back as `docker` that day, so the refresh job's next run reports `profiles=4` rather than the `profiles=3` it used to.
 
-The settings are per profile, applied with `hermes config set` and `hermes -p <profile> config set`:
+Four settings come from the managed scope at `/etc/hermes/config.yaml` and apply to every profile; the fifth is written per profile:
 
-| Setting | Value |
-|---|---|
-| `terminal.backend` | `docker` |
-| `terminal.docker_image` | `mcr.microsoft.com/devcontainers/python:3.14-trixie` |
-| `terminal.docker_run_as_host_user` | `true`, so the exec runs as uid 1000, the host `hermes` user |
-| `terminal.docker_volumes` | `["<profile workspace>:/workspace"]` |
-| `terminal.cwd` | `/workspace` |
+| Setting | Value | Set where |
+|---|---|---|
+| `terminal.backend` | `docker` | Managed scope |
+| `terminal.docker_image` | `mcr.microsoft.com/devcontainers/python:3.14-trixie` | Managed scope |
+| `terminal.docker_run_as_host_user` | `true`, so the exec runs as uid 1000, the host `hermes` user | Managed scope |
+| `terminal.cwd` | `/workspace` | Managed scope |
+| `terminal.docker_volumes` | Three entries on `default`, `emh` and `hal`; unset on `safer_web_reader` | Per profile, by `hermes -p <profile> config set` or [step 7](#7-pin-the-docker-terminal-backend)'s helper |
 
-The default profile's workspace is `/home/hermes/.hermes/workspace`, created for this; `emh`'s is `/home/hermes/.hermes/profiles/emh/workspace`.
+A managed key beats the same key in a profile's own `config.yaml`, and `hermes config set` refuses to write one, so those four move only through a `sudo` edit of `/etc/hermes/config.yaml`.
+A **bulk** write — the setup wizard, or the dashboard's raw YAML editor — is not refused: `save_config` strips every managed leaf out of it first and prints a `managed setting(s) were not saved` note on stderr, so the rest of the document lands and the pinned keys do not (read in `hermes_cli/config.py` on August 31, 2026).
+The file is root-owned `0644` in a `0755` directory, and it is outside the nightly backup — see [step 7](#7-pin-the-docker-terminal-backend).
+
+The default profile's workspace is `/home/hermes/.hermes/workspace`, created for this; every other profile's is `workspace` inside its own profile home.
 A settings change takes effect when that profile's gateway is restarted.
+
+**`default`, `emh` and `hal` mount three volumes each, and two of them are identity mounts** — the same host path inside the container as outside:
+
+| Entry | Why |
+|---|---|
+| `<workspace>:/workspace` | The sandbox's working directory, matching `terminal.cwd` |
+| `/home/hermes/.hermes/webui/attachments:/home/hermes/.hermes/webui/attachments:ro` | Chat uploads, read-only, at the host path the WebUI pastes into the prompt |
+| `<workspace>:<workspace>` | The workspace again, at the host path the WebUI advertises in its `[Workspace::v1: …]` label |
+
+The identity mounts exist because the WebUI hands the agent **host** paths as text, and a path that does not resolve inside the container is a file the agent cannot read.
+
+**The attachments mount is a stopgap and has an end date.**
+hermes-webui saves a chat upload to `~/.hermes/webui/attachments/<session>/` — one directory shared by every profile, not scoped per profile — and pastes that host path into the prompt, so before this mount a sandboxed agent could not read anything a person uploaded.
+That is upstream issue [#6939](https://github.com/nesquena/hermes-webui/issues/6939), confirmed by the maintainer, and open pull request [#7022](https://github.com/nesquena/hermes-webui/pull/7022) moves uploads into the profile's own `cache/documents/webui-attachments/<session>/`, which hermes already mounts.
+The mount's cost is that every profile's uploads are readable from every sandbox that has it, which is why `safer_web_reader` does not, so it comes out as soon as a hermes-webui update carries the fix.
+Removing it is a step of [the update runbook](hermes-vm-updates.md#the-webui-attachments-mount-comes-out-when-6939-lands).
+
+**The WebUI's "workspace" is a label, not a mount.**
+Each profile has a file-browser root recorded in `{profile home}/webui_state/last_workspace.txt` and `workspaces.json` — `~/.hermes/webui/` for the default profile.
+It scopes the WebUI's own file browser, editor and git panel, and it prepends a `[Workspace::v1: <host path>]` line to the messages that profile sends.
+Nothing mounts it into a container: the label is why the third volume entry above exists, and switching workspaces in the WebUI does not change what a sandbox can see.
+
+**Check that a `${VAR}` placeholder survived a configuration edit made through the WebUI.**
+On August 31, 2026 something resolved the `${EMAIL_PASSWORD}` placeholder behind `mcp_servers.mail.env.MCP_EMAIL_SERVER_PASSWORD` in the `emh` profile's `config.yaml` into the literal password on disk.
+The cause was not pinned down; `hermes config set` was tested and exonerated, which leaves the WebUI's profile-settings save and the `emh` agent itself as the suspects.
+The credential was rotated and the placeholder restored the same day.
+After any configuration change made outside the CLI, `grep -c '\${' <profile home>/config.yaml` and confirm the placeholders are still placeholders.
 
 **Containers are created lazily, per (profile, task-id), so one profile can own several at once.**
 Each is named `hermes-<hex>` and labelled `hermes-profile:<name>` and `hermes-task-id:<id>`.

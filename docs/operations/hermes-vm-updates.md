@@ -7,8 +7,10 @@ Vendor documentation, fetched fresh each session: <https://hermes-agent.nousrese
 **[VM]** blocks run in one `ssh hermes@hermes.cynexia.net` shell held open throughout; **[laptop]** blocks run on the operator's machine.
 `~/.local/bin` is not on the non-interactive ssh PATH, so **always call `/home/hermes/.local/bin/hermes`**.
 
-The five user units, called *the five units* below, are `hermes-gateway`, `hermes-gateway-emh`, `hermes-gateway-hal`, `hermes-dashboard` and `hermes-webui`.
-Two things that will not announce themselves: **`hermes update` restarts only the three gateways**, so the WebUI and the dashboard keep serving the code already in memory until you restart them; and **an import check in a fresh interpreter says nothing about the running WebUI**, which is why the restart comes before Verify.
+The six user units, called *the units* below, are `hermes-gateway`, `hermes-gateway-emh`, `hermes-gateway-hal`, `hermes-gateway-web_watcher`, `hermes-dashboard` and `hermes-webui`.
+The list grows with every always-on gateway profile ([Creating a profile](hermes-vm.md#creating-a-profile)), and a unit missing from the commands below keeps serving the code it started with — so read `systemctl --user list-units 'hermes-*'` rather than trusting this sentence to be current.
+Two things that will not announce themselves: **`hermes update` restarts gateways and neither the WebUI nor the dashboard**, so those two keep serving the code already in memory until you restart them; and **an import check in a fresh interpreter says nothing about the running WebUI**, which is why the restart comes before Verify.
+`hermes update --plan` named three gateways when there were three; whether it picks up one added since is unverified, so the restart below names every unit rather than relying on it.
 
 ## Preconditions
 
@@ -137,7 +139,7 @@ It is the only route back from a forward-only migration, and upstream's backup p
 ls -lt ~/.hermes/backups/pre-update-*.zip | head -1
 ```
 
-**[VM]** The WebUI, then the five units:
+**[VM]** The WebUI, then the units:
 
 ```sh
 V=~/.hermes/hermes-agent/venv/bin
@@ -152,10 +154,30 @@ test -s /tmp/constraints.txt &&
 $V/pip install -r ~/hermes-webui/requirements.txt -c /tmp/constraints.txt &&
 rm /tmp/constraints.txt &&
 systemctl --user restart hermes-gateway hermes-gateway-emh hermes-gateway-hal \
-  hermes-dashboard hermes-webui
+  hermes-gateway-web_watcher hermes-dashboard hermes-webui
 ```
 
 **The restart does not touch the docker terminal sandboxes**, which keep running the image they were created from; replacing a stale one is `hermes-sandbox-refresh`'s business and never this runbook's ([hermes-vm.md](hermes-vm.md#the-docker-terminal-sandboxes)).
+
+### The WebUI attachments mount comes out when #6939 lands
+
+**[laptop]** The `default`, `emh` and `hal` profiles each mount `/home/hermes/.hermes/webui/attachments` into their sandboxes read-only, as a stopgap for hermes-webui saving chat uploads to one directory shared by every profile.
+Read the WebUI span you just pulled for the fix — upstream issue [#6939](https://github.com/nesquena/hermes-webui/issues/6939), open as pull request [#7022](https://github.com/nesquena/hermes-webui/pull/7022):
+
+```sh
+gh api repos/nesquena/hermes-webui/compare/<webui_sha>...<webui_target_sha> --jq '.commits[].commit.message' \
+  | grep -Ei '6939|7022|attachment'
+```
+
+If the fix is in, uploads move to the profile's own `cache/documents/webui-attachments/<session>/`, which hermes mounts already, and the shared mount becomes an unnecessary cross-profile read.
+Remove it in the same session:
+
+1. **[VM]** For each of `default`, `emh` and `hal`, read `hermes -p <profile> config get terminal.docker_volumes`, then set the list again without the attachments entry, keeping the other two.
+   `default` takes no `-p`.
+2. **[VM]** Restart the three gateways and `hermes-webui`, then upload a file in the WebUI and have the agent read it back, because the new path is the only thing proving the fix is live.
+3. **[laptop]** Delete this step, the entry from the table in [hermes-vm.md](hermes-vm.md#the-docker-terminal-sandboxes), and the mount from `hermes-vm/scripts/hermes-profile-docker-setup.sh`.
+
+An empty grep means the stopgap stays; say so in the session's close rather than leaving it unmentioned.
 
 ## Verify
 
@@ -163,7 +185,7 @@ systemctl --user restart hermes-gateway hermes-gateway-emh hermes-gateway-hal \
 
 ```sh
 systemctl --user is-active hermes-gateway hermes-gateway-emh hermes-gateway-hal \
-  hermes-dashboard hermes-webui
+  hermes-gateway-web_watcher hermes-dashboard hermes-webui
 cd /home/hermes && ~/.hermes/hermes-agent/venv/bin/python -c 'import run_agent'
 curl -sS -m 10 -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8787/health
 # One chat turn on the default profile. The key reaches curl through a config file on stdin,
@@ -227,7 +249,7 @@ $V/pip install -r ~/hermes-webui/requirements.txt -c /tmp/constraints.txt &&
 $V/pip install 'hindsight-client==<client_version>' &&
 rm /tmp/constraints.txt &&
 systemctl --user restart hermes-gateway hermes-gateway-emh hermes-gateway-hal \
-  hermes-dashboard hermes-webui
+  hermes-gateway-web_watcher hermes-dashboard hermes-webui
 ```
 
 Then read `git -C ~/.hermes/hermes-agent stash list`: an entry may be work that was serving before this run, or may predate it.
