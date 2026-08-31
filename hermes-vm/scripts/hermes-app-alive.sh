@@ -32,7 +32,7 @@ HERMES_HOME=/home/hermes/.hermes
 AGENT_DIR=$HERMES_HOME/hermes-agent
 VENV=$AGENT_DIR/venv/bin
 WEBUI_HEALTH=http://127.0.0.1:8787/health
-UNITS="hermes-gateway hermes-gateway-emh hermes-gateway-hal hermes-dashboard hermes-webui"
+UNITS="hermes-gateway hermes-gateway-emh hermes-gateway-hal hermes-gateway-web_watcher hermes-dashboard hermes-webui"
 # DERIVED from UNITS, never written beside it.
 #
 # WHAT DERIVING BUYS is the one direction a hand-written count gets wrong in

@@ -467,17 +467,31 @@ The helper then finds all three present and writes nothing, which is the intende
 
 A profile with a messaging platform needs a systemd user unit; without one, a gateway started by hand dies at the next reboot, and this VM reboots at 04:45 whenever `unattended-upgrades` installs a kernel.
 
+**The hermes CLI owns these unit files.**
+`refresh_systemd_unit_if_needed` regenerates the unit whenever the installed text differs from what the current install would write, and it runs on `gateway start`, on `gateway restart` and on **every gateway boot** (`hermes_cli/gateway.py`, read on August 31, 2026).
+So a hand edit does not stick, and none should be attempted: `TimeoutStopSec` in particular is derived, not written — `max(60, max(restart_drain_timeout, cron_drain_timeout + 10) + 30)` — so gateways differ from each other because their profiles' drain settings differ, and the CLI's value is the correct one.
+`hermes-gateway-web_watcher.service` carries `TimeoutStopSec=70` against the other three gateways' `210` for exactly that reason, and it stays as the CLI wrote it (operator ruling, August 31, 2026).
+
+Check whether the CLI has already created the unit, because starting a gateway once is enough to make one:
+
 ```sh
-sed 's/emh/<name>/g' ~/.config/systemd/user/hermes-gateway-emh.service \
-  > ~/.config/systemd/user/hermes-gateway-<name>.service
-diff ~/.config/systemd/user/hermes-gateway-emh.service \
-  ~/.config/systemd/user/hermes-gateway-<name>.service
-systemctl --user daemon-reload
+ls ~/.config/systemd/user/hermes-gateway-<name>.service
+```
+
+If it exists, there is nothing to write — go straight to enabling it:
+
+```sh
 systemctl --user enable --now hermes-gateway-<name>
 ```
 
-**Read that diff before reloading**: only the profile name should differ.
-`hermes-gateway-web_watcher.service` came out of August 31 with `TimeoutStopSec=70` where the other three gateways carry `210`, so its shutdown drain is a third of theirs.
+If it does not, seed one from an existing gateway's unit, and let the CLI correct it on the first start:
+
+```sh
+sed 's/emh/<name>/g' ~/.config/systemd/user/hermes-gateway-emh.service \
+  > ~/.config/systemd/user/hermes-gateway-<name>.service
+systemctl --user daemon-reload
+systemctl --user enable --now hermes-gateway-<name>
+```
 
 **A new gateway unit is a new thing to watch, and nothing notices that on its own.**
 Add its name to the `UNITS` list in `hermes-vm/scripts/hermes-app-alive.sh`, then re-run `make check-vm-scripts` and reinstall the script ([step 2](#2-install-the-daily-checks-script)) — the expected count is derived from that list, so a unit missing from it is a gateway whose death the daily check reports as healthy.
@@ -569,7 +583,7 @@ The VM has no MTA, so `unattended-upgrades` mail would be a silent failure; the 
   **Nothing external probes the two remaining gateways.**
 - **A gateway unit that is not in the check's `UNITS` list.**
   The expected count is derived from that list, so a unit missing from it is not half-watched but unwatched, and the check reports `ok` while it is dead.
-  `hermes-gateway-web_watcher`, created on August 31, 2026, is in that position: the VM runs six user units and the list names five.
+  `hermes-gateway-web_watcher` sat in that position for the hours between its creation and the list being extended on August 31, 2026, and the list now names all six units.
   Adding a gateway means adding its name, which is [step 8 of Creating a profile](#8-an-always-on-gateway-for-any-messaging-platform).
 - **Per-profile state.**
   The check exercises the shared venv and the default profile.
