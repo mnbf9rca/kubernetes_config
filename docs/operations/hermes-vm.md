@@ -1,6 +1,6 @@
 # The Hermes VM
 
-VM 103 (`hermes.cynexia.net`) runs the Hermes agent, its three gateway profiles, the dashboard and the WebUI the Hermex iOS app talks to.
+VM 103 (`hermes.cynexia.net`) runs the Hermes agent, its four always-on gateway profiles, the dashboard and the WebUI the Hermex iOS app talks to.
 It is not a Kubernetes cluster, so none of this repository's cluster machinery reaches it.
 What it has instead lives in `hermes-vm/`: a daily liveness check, a weekly docker-sandbox refresh, a hand-run helper that finishes a new profile's docker setup, the managed-scope Hermes config and the `unattended-upgrades` configuration.
 
@@ -24,7 +24,7 @@ loginctl show-user hermes -p Linger        # must print Linger=yes
 ```
 
 Without lingering, the `hermes` user manager stops when the last session ends.
-All five hermes user units die at the next reboot — **and the daily check dies with them**, because it runs as a cron job inside `hermes-gateway` rather than on a timer of its own.
+Every hermes user unit dies at the next reboot — **and the daily check dies with them**, because it runs as a cron job inside `hermes-gateway` rather than on a timer of its own.
 
 That is the nastiest failure mode here: **the monitor that would report the outage is itself down.**
 Nothing pushes, so uptime-kuma sees silence rather than a `down`, and `hermes-app-alive` stays green until its 24-hour heartbeat and 6-hour retry expire, about 30 hours after the last good beat.
@@ -248,19 +248,7 @@ The nightly `hermes backup` zip covers `~/.hermes` and nothing under `/etc`, and
 It follows the same pattern as the apt configuration in [step 9](#9-install-unattended-upgrades): repository is the source, the VM holds an installed copy.
 
 **`terminal.docker_volumes` is deliberately not pinned**, because it names per-profile paths and because only some profiles get the shared attachments mount.
-The helper writes it for one profile:
-
-```sh
-/home/hermes/.hermes/scripts/hermes-profile-docker-setup.sh <profile-name>
-```
-
-It refuses `default`, whose workspace is `~/.hermes/workspace` rather than a directory under `profiles/`, and it refuses a profile that has no directory yet — run `hermes profile create <name>` first.
-It appends rather than overwrites: an entry already present is not added twice, entries the profile already has are kept, and a run that finds all three present writes nothing.
-Restart that profile's gateway afterwards, because a settings change takes effect at gateway start.
-
-The three entries it writes, and why the last two repeat a host path, are in [The docker terminal sandboxes](#the-docker-terminal-sandboxes).
-**`safer_web_reader` deliberately has no `docker_volumes` of its own**, so it never receives the attachments mount: its board is a shared inbox for tasks from other agents, and giving it every profile's uploads would widen a profile whose whole design is a narrow tool surface ([safer-web-reader.md](safer-web-reader.md)).
-The platform mounts a per-profile sandbox workspace for it regardless.
+The helper writes those for one profile, and [Creating a profile](#creating-a-profile) is where it is used; the three entries it writes are in [The docker terminal sandboxes](#the-docker-terminal-sandboxes).
 
 ### 8. Create the `hermes-update` check
 
@@ -386,6 +374,126 @@ Every one of them fails silently if it is wrong.
 Before the first install the VM has a pending kernel reboot — an uptime over four days and a kernel image in the reboot-required list — and nothing has been arming an automatic reboot, because the drop-in that arms it is part of this install.
 So the first 04:45 window clears that backlog — correct behaviour, not a fault.
 
+## Creating a profile
+
+Adding a Hermes profile to this VM, in order.
+Worked end to end on `web_watcher` on August 31, 2026; every hazard below is one that run met or would have met.
+Only one ordering constraint is real, and it is step 3: **disable the platforms the profile will not use before its gateway starts for the first time.**
+
+Steps 4 to 8 are conditional, and a profile that only answers kanban tasks or WebUI chats needs none of them.
+
+### 1. Create the profile
+
+Create it in the WebUI, choosing a **clean** profile rather than one inheriting the default's configuration.
+`hermes profile create <name>` works too, and seeds every bundled skill pack into `<profile home>/skills/` — 14 of them on August 31, 2026, so read the directory rather than that number.
+Delete the directories the profile does not need, and **keep `<profile home>/skills/.bundled_manifest`** — that file is how `skills_sync` remembers a deletion, so a pack removed with the manifest intact stays removed instead of being restored on the next sync.
+
+### 2. The terminal backend needs nothing
+
+`/etc/hermes/config.yaml` already pins `terminal.backend`, `terminal.docker_image`, `terminal.docker_run_as_host_user` and `terminal.cwd` for every profile, this one included ([step 7 of the install](#7-pin-the-docker-terminal-backend)).
+There is no per-profile terminal setting to copy, and `hermes config set` would refuse it anyway.
+
+### 3. Disable the platforms this profile will not use
+
+**Before the first gateway start:**
+
+```sh
+/home/hermes/.local/bin/hermes -p <name> config set platforms.telegram.enabled false
+/home/hermes/.local/bin/hermes -p <name> config set platforms.api_server.enabled false
+```
+
+**A profile gateway inherits the base `~/.hermes/.env`**, so a profile that has configured nothing still starts with the default profile's platform credentials.
+Left enabled, it connects Telegram with the default profile's token, which the API rejects as `token already in use`, and it binds the default `api_server` port 8642, which fails as `address already in use`.
+Disabling them afterwards fixes it, but the gateway loops on those collisions until you do.
+
+### 4. The mailbox, if the profile will use email
+
+The mailbox has to exist before step 6 can connect to it.
+
+Create `<name>@cynexia.io` at Purelymail.
+That is a manual step in the Purelymail admin today; Purelymail also has an API, and the key and a pointer to its specification are stored at `op://Homelab/purelymail/api_key` and `op://Homelab/purelymail/api_spec`.
+Nothing in this estate automates mailbox creation, and this step is not the place to start: the API is named so a future automation knows where to look.
+
+Then record the credential as a 1Password item, and give the mailbox the password from it:
+
+```sh
+op item create --category login --vault hermes --title purelymail-<name> \
+  --generate-password='letters,digits,symbols,32' \
+  'username[text]=<name>@cynexia.io'
+```
+
+**Type the fields explicitly**, as AGENTS.md requires of every `op item create`: a bare `field=value` is stored **concealed**, and the address is an ordinary identifier rather than a secret, so it is `[text]`.
+Read the generated password back with `op read` when Purelymail asks for it, and never echo it.
+
+**The two vaults differ deliberately.**
+The API key is estate administration and belongs in `Homelab` with the operator's other administrative credentials.
+The per-agent mailbox credential belongs in `hermes`, because that is the only vault the VM's own service account can read — the same reasoning as [step 3 of the install](#3-create-the-monitor-and-store-its-token).
+
+### 5. Secrets, if the profile needs any
+
+```sh
+/home/hermes/.local/bin/hermes -p <name> config set secrets.onepassword.enabled true
+```
+
+Then set `secrets.onepassword.env` to the map of environment-variable name to `op://vault/item/field` reference the profile needs, as [step 4 of the install](#4-inject-the-token-into-the-default-profile) does for the default profile.
+An email profile's map is one entry: `EMAIL_PASSWORD` against `op://hermes/purelymail-<name>/password` from step 4.
+The **operator** adds `OP_SERVICE_ACCOUNT_TOKEN` to the profile's own `.env` by hand; that value goes nowhere else, and no agent handles it.
+
+### 6. The email platform, if wanted
+
+The email adapter reads **`.env` only**.
+Put `EMAIL_ADDRESS`, `EMAIL_IMAP_HOST`, `EMAIL_SMTP_HOST` and `EMAIL_ALLOWED_USERS` in the profile's `.env`, let `EMAIL_PASSWORD` arrive through the 1Password map from step 5, and then:
+
+```sh
+/home/hermes/.local/bin/hermes -p <name> config set platforms.email.enabled true
+```
+
+**Skip `platforms.email.extra`.**
+The adapter does not read it, so setting the address and hosts there is harmless and does nothing — while looking exactly like the configuration that matters.
+
+### 7. The standard docker mounts, for a trusted profile only
+
+```sh
+/home/hermes/.hermes/scripts/hermes-profile-docker-setup.sh <name>
+```
+
+This gives the profile the shared WebUI attachments inbox along with its workspace, so run it only where every profile's uploads may be read — see [The docker terminal sandboxes](#the-docker-terminal-sandboxes) for the three entries and for the [#6939](https://github.com/nesquena/hermes-webui/issues/6939) stopgap that will remove one of them.
+Skip it for an isolated worker, which is the `safer_web_reader` pattern ([safer-web-reader.md](safer-web-reader.md)): that profile deliberately has no `docker_volumes` of its own and takes the platform's per-profile sandbox workspace instead.
+
+**Launching a profile from the WebUI writes those same three entries itself**, into the profile's `config.yaml` and as `TERMINAL_DOCKER_VOLUMES` in its `.env`.
+The helper then finds all three present and writes nothing, which is the intended outcome rather than a sign it failed.
+
+### 8. An always-on gateway, for any messaging platform
+
+A profile with a messaging platform needs a systemd user unit; without one, a gateway started by hand dies at the next reboot, and this VM reboots at 04:45 whenever `unattended-upgrades` installs a kernel.
+
+```sh
+sed 's/emh/<name>/g' ~/.config/systemd/user/hermes-gateway-emh.service \
+  > ~/.config/systemd/user/hermes-gateway-<name>.service
+diff ~/.config/systemd/user/hermes-gateway-emh.service \
+  ~/.config/systemd/user/hermes-gateway-<name>.service
+systemctl --user daemon-reload
+systemctl --user enable --now hermes-gateway-<name>
+```
+
+**Read that diff before reloading**: only the profile name should differ.
+`hermes-gateway-web_watcher.service` came out of August 31 with `TimeoutStopSec=70` where the other three gateways carry `210`, so its shutdown drain is a third of theirs.
+
+**A new gateway unit is a new thing to watch, and nothing notices that on its own.**
+Add its name to the `UNITS` list in `hermes-vm/scripts/hermes-app-alive.sh`, then re-run `make check-vm-scripts` and reinstall the script ([step 2](#2-install-the-daily-checks-script)) — the expected count is derived from that list, so a unit missing from it is a gateway whose death the daily check reports as healthy.
+The [update runbook](hermes-vm-updates.md) enumerates the units it restarts, so a new gateway belongs in that list too, or `hermes update` leaves it running the old code.
+
+A kanban or WebUI-only worker needs no unit at all: its work runs inside a gateway that already exists.
+
+### 9. Verify
+
+```sh
+tail ~/.hermes/profiles/<name>/logs/gateway.log
+/home/hermes/.local/bin/hermes -p <name> config get terminal.backend
+```
+
+The log shows `✓ <platform> connected` for each platform the profile enabled, or `No messaging platforms enabled` for a worker; `terminal.backend` reads `docker`.
+
 ## unattended-upgrades
 
 Security-only, by the two `Origins-Pattern` entries in `/etc/apt/apt.conf.d/52unattended-upgrades-local`.
@@ -459,6 +567,10 @@ The VM has no MTA, so `unattended-upgrades` mail would be a silent failure; the 
   `hermes-gateway-emh`, `hermes-gateway-hal` and `hermes-dashboard` still contribute nothing but a `systemctl --user is-active` result.
   The gap is smaller for the dashboard: the `hermes` uptime-kuma monitor probes it externally on `hermes.cynexia.com/api/health`.
   **Nothing external probes the two remaining gateways.**
+- **A gateway unit that is not in the check's `UNITS` list.**
+  The expected count is derived from that list, so a unit missing from it is not half-watched but unwatched, and the check reports `ok` while it is dead.
+  `hermes-gateway-web_watcher`, created on August 31, 2026, is in that position: the VM runs six user units and the list names five.
+  Adding a gateway means adding its name, which is [step 8 of Creating a profile](#8-an-always-on-gateway-for-any-messaging-platform).
 - **Per-profile state.**
   The check exercises the shared venv and the default profile.
   A fault confined to `emh` or `hal` profile state is invisible to it.
