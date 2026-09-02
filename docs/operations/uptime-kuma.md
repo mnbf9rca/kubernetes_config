@@ -37,7 +37,7 @@ Skip keyword monitors. uptime-kuma evaluates the keyword only after the status c
 An Access-protected hostname answers an unauthenticated request with a 302 to the Cloudflare login page.
 At the default `maxredirects: 10`, the monitor follows it, gets 200 from Cloudflare's login app, and reports UP while the tunnel, pod and node are all dead.
 
-Two mitigations are in place: every Access-protected monitor sets `maxredirects: 0`, and the four monitors whose Access app demands a credential also send service-token headers, so the request reaches the origin.
+Two mitigations are in place: every Access-protected monitor sets `maxredirects: 0`, and the four monitors whose Access app demands a credential also send service-token headers, so the request reaches the origin (`proxy.cynexia.com` is the deliberate exception — see below).
 
 The `Uptime` service token authenticates against the `service-auth-monitoring` Access policy, which is attached to exactly four apps: `Umami analytics`, `changedetection`, `hermes` and `n8n`.
 The token was created on August 25, 2026 and expires on **August 24, 2031**.

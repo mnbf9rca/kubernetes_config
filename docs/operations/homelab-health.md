@@ -45,7 +45,7 @@ Public `*.cynexia.com` hostnames on this tunnel:
 | `hermes-app.cynexia.com` | `hermes-webui` on the same VM (`hermes.cynexia.net:8787`, off-cluster) — the server the Hermex iOS app talks to, via Cloudflare Access (Service Auth + the same email policy) |
 | `proxy.cynexia.com` | Residential egress proxy for changedetection on the VPS — see [vps.md](vps.md#residential-egress-through-the-homelab) |
 
-`proxy.cynexia.com` is the only **TCP** origin in the ingress block — `tcp://tinyproxy.proxy.svc.cluster.local:8888`, not an HTTP service — and the only one whose origin authenticates nobody at all.
+`proxy.cynexia.com` is the only **TCP** origin in the ingress block — `tcp://tinyproxy.proxy.svc.cluster.local:8888`, not an HTTP service — and, like `mcp.cynexia.com`, it has an origin that authenticates nobody; unlike `mcp`, a naked origin here is an open forward proxy.
 Its Access application, `homelab-proxy`, carries one app-scoped Service Auth policy and nothing else, so a deleted or disabled application publishes an open HTTP proxy on the operator's home connection rather than closing the path.
 
 `hermes.cynexia.com` and `hermes-app.cynexia.com` are the two off-cluster origins on this tunnel: cloudflared proxies both to the hermes VM on the LAN, not to a cluster Service.
