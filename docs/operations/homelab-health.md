@@ -799,7 +799,7 @@ The claude.ai connector is reconnected through the one-time-PIN flow and verifie
 
 **Resolved 2026-08-23:** the Hermes registration failure open on 2026-08-22 had two causes, fixed on successive days: the missing DCR allowlist entry for the Hermes callback (fixed 2026-08-22), then the IP-bypass Access policy suppressing the 401 that bootstraps the OAuth flow (fixed 2026-08-23 by the bypass-policy split — see [MCP behind Cloudflare Access](#mcp-behind-cloudflare-access)).
 
-**Withings, authorized <date of the `--auth` run>:** a Public API integration in the Withings Developer Dashboard's **Development** environment, redirect URI `https://withings.cynexia.net/oauth-callback`, scope `user.metrics,user.activity`.
+**Withings, authorized 2026-09-02:** a Public API integration in the Withings Developer Dashboard's **Development** environment, redirect URI `https://withings.cynexia.net/oauth-callback`, scope `user.metrics,user.activity`.
 The refresh token lives a year and every successful run renews it.
 
 **Tech debt / deferred:**
