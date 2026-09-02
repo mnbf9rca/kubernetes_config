@@ -124,7 +124,7 @@ Homelab health tunnel:
 | `Data MCP` | `https://mcp.cynexia.com/mcp` | `health-data-mcp`: `allow_cynexia_com` | exactly `["401"]` — see below |
 | `hae.cynexia.com` | `https://hae.cynexia.com/` | none | `["401"]` |
 | `hermes` | `https://hermes.cynexia.com/api/health` | `hermes`: `service-auth-monitoring`, `allow_cynexia_com` | `["200-299"]` — see below |
-| `proxy.cynexia.com` | `https://proxy.cynexia.com/` | `homelab-proxy`: `service-auth-homelab-proxy` — send no headers | exactly `["302"]` — see below |
+| `proxy.cynexia.com` | `https://proxy.cynexia.com/` | `homelab-proxy`: `service-auth-homelab-proxy` — send no headers | exactly `["403"]` — see below |
 
 Not Access-protected, and unrelated to either cluster's tunnels:
 
@@ -168,7 +168,9 @@ The monitor sends no service-token headers and sets `maxredirects: 0`, so the ed
 Admitting it would defeat it: the origin is tinyproxy, which authenticates nobody, so a deleted or disabled Access application does not close the hostname — it publishes an open HTTP proxy egressing from the operator's home address.
 This monitor is the only thing in the estate that detects that state, and it detects it by going DOWN when the challenge stops arriving.
 Never widen the set to include `200` or `400`: those are what a naked tinyproxy answers.
-The pinned code is the one observed at rollout on September 2, 2026; if the edge ever changes it, re-confirm with one unauthenticated `curl` and re-pin, rather than widening.
+The pinned code is `403`, observed at rollout on September 2, 2026.
+The `homelab-proxy` Access application has no identity provider attached, so Access has no login flow to redirect an unauthenticated request to and refuses it outright instead of issuing the usual 302.
+If the edge's behaviour ever changes, re-confirm with one unauthenticated `curl` and re-pin, rather than widening.
 
 **`Data MCP` is edge-only, by decision.**
 `mcp.cynexia.com` sits behind Cloudflare Access (Managed OAuth), which answers the unauthenticated probe at the edge, before the tunnel — so this monitor no longer proves the tunnel or the pod.
