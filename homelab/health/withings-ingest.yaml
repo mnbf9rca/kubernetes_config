@@ -118,11 +118,6 @@ spec:
                 # READ AND WRITE on the `withings` bucket: the run's resume
                 # point is max(_time) over it, so this job reads before it
                 # writes. Scoped to that one bucket, like the cloudflare token.
-                #
-                # The `withings-token` key does not exist on health-influxdb
-                # until the operator runs the withings bucket-and-token
-                # bootstrap; until then the pod cannot start, which is the
-                # intended ordering rather than a fault.
                 - name: INFLUX_TOKEN
                   valueFrom: { secretKeyRef: { name: health-influxdb, key: withings-token } }
               volumeMounts:

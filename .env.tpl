@@ -87,13 +87,7 @@ HEALTH_INFLUX_GARMIN_V1_PASSWORD=op://Homelab/health-influxdb/garmin-v1-password
 HEALTH_INFLUX_INGESTER_TOKEN=op://Homelab/health-influxdb/ingester-token
 HEALTH_INFLUX_READ_TOKEN=op://Homelab/health-influxdb/read-token
 HEALTH_INFLUX_CLOUDFLARE_TOKEN=op://Homelab/health-influxdb/cloudflare-token
-# HEALTH_INFLUX_WITHINGS_TOKEN=op://Homelab/health-influxdb/withings-token is
-# deliberately absent until `make health-influx-withings-bootstrap` has minted
-# it and the operator has stored it. `op run` resolves EVERY line in this file
-# on EVERY command, so a reference to a field that does not exist yet fails
-# every build, diff and apply, not just the one that needs it. Uncommenting it
-# is part of the same commit that adds the `withings-token` key to
-# homelab/secrets/health.yaml.
+HEALTH_INFLUX_WITHINGS_TOKEN=op://Homelab/health-influxdb/withings-token
 
 # health namespace — Withings OAuth2 client ("Public API integration",
 # Development environment). The client id is an identifier rather than a
