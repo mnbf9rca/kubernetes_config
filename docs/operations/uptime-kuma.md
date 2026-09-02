@@ -44,6 +44,11 @@ The token was created on August 25, 2026 and expires on **August 24, 2031**.
 On expiry all four monitors fail at once with a 302.
 Four simultaneous reds therefore mean expired or wrong headers, not an outage — check the headers first.
 
+A **second** service token exists and is deliberately separate: `vps-proxy-access`, created September 2, 2026, expiring **September 1, 2031**.
+It is attached to the app-scoped `service-auth-homelab-proxy` policy on the `homelab-proxy` application, which gates `proxy.cynexia.com`, and to nothing else.
+Reusing `Uptime` here would have widened four monitors' credential to cover an open proxy.
+When it expires, the residential egress proxy breaks and every proxied changedetection watch errors — no monitor turns red, because the `proxy.cynexia.com` monitor asserts the Access challenge, which a dead token does not change.
+
 Paste the headers as JSON in the monitor's **Headers** box:
 
 ```json
@@ -119,6 +124,7 @@ Homelab health tunnel:
 | `Data MCP` | `https://mcp.cynexia.com/mcp` | `health-data-mcp`: `allow_cynexia_com` | exactly `["401"]` — see below |
 | `hae.cynexia.com` | `https://hae.cynexia.com/` | none | `["401"]` |
 | `hermes` | `https://hermes.cynexia.com/api/health` | `hermes`: `service-auth-monitoring`, `allow_cynexia_com` | `["200-299"]` — see below |
+| `proxy.cynexia.com` | `https://proxy.cynexia.com/` | `homelab-proxy`: `service-auth-homelab-proxy` — send no headers | exactly `["302"]` — see below |
 
 Not Access-protected, and unrelated to either cluster's tunnels:
 
@@ -156,6 +162,13 @@ Check the headers first; the token expires on August 24, 2031, and its expiry fa
 Do not widen the accepted set to swallow the 302.
 
 `hae.cynexia.com`'s fast 401 is a true end-to-end signal: the hostname has no Access app, so the 401 comes from the origin pod, proving the tunnel, cloudflared and the pod all serve — exactly what was false during the 2026-08-18 Pomerium wedge.
+
+**`proxy.cynexia.com` exists to be refused, and its accepted set must stay pinned.**
+The monitor sends no service-token headers and sets `maxredirects: 0`, so the edge answers it with the Access challenge and it never reaches the origin.
+Admitting it would defeat it: the origin is tinyproxy, which authenticates nobody, so a deleted or disabled Access application does not close the hostname — it publishes an open HTTP proxy egressing from the operator's home address.
+This monitor is the only thing in the estate that detects that state, and it detects it by going DOWN when the challenge stops arriving.
+Never widen the set to include `200` or `400`: those are what a naked tinyproxy answers.
+The pinned code is the one observed at rollout on September 2, 2026; if the edge ever changes it, re-confirm with one unauthenticated `curl` and re-pin, rather than widening.
 
 **`Data MCP` is edge-only, by decision.**
 `mcp.cynexia.com` sits behind Cloudflare Access (Managed OAuth), which answers the unauthenticated probe at the edge, before the tunnel — so this monitor no longer proves the tunnel or the pod.

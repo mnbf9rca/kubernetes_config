@@ -57,10 +57,13 @@ Verify keel's permissions with a SelfSubjectAccessReview issued with keel's own 
 | `backup` | Backup | restic init Job + nightly CronJob (PSA privileged — hostPath) |
 | `health` | Personal health data pipeline | influxdb, apple-health-ingester, garmin-grafana, grafana, influxdb-mcp (behind Cloudflare Access), cloudflared, backup + freshness CronJobs — see [homelab-health.md](homelab-health.md) |
 | `ops` | Cluster-wide operational jobs | `update-watch` and `keel-fresh` CronJobs — see below |
+| `proxy` | Residential egress for changedetection on the VPS | tinyproxy — see [vps.md](vps.md#residential-egress-through-the-homelab) |
 
 Ingress hostnames are `*.cynexia.net` (Route53), Traefik-fronted, LAN/Tailscale only: `sonarr`, `radarr`, `sab`, `hydra`, `emby`, `grafana-health`.
 
-Retired in the rebuild: immich, ollama, open-webui, komga, jellyfin, mylar3, lazylibrarian, caddy, postgresql, **tinyproxy**. cloudflared was retired from the downloads-era stack but is not retired homelab-wide — the `health` namespace runs its own dedicated `cynexia-health` tunnel, separate from the VPS cluster's `cynexia-vps` tunnel.
+Retired in the rebuild: immich, ollama, open-webui, komga, jellyfin, mylar3, lazylibrarian, caddy, postgresql.
+tinyproxy was on that list until September 2, 2026, when it returned in its own `proxy` namespace to serve changedetection on the VPS — see [vps.md](vps.md#residential-egress-through-the-homelab).
+cloudflared was retired from the downloads-era stack but is not retired homelab-wide — the `health` namespace runs its own dedicated `cynexia-health` tunnel, separate from the VPS cluster's `cynexia-vps` tunnel.
 
 ### The `ops` namespace
 

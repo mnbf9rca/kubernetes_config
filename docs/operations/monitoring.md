@@ -16,6 +16,7 @@ Read [What this does not catch](#what-this-does-not-catch) before you trust a gr
 | `hindsight-canary` is DOWN | Read `verdict=`: `retain-failed` is the API, the database or the tenant key; `recall-miss` is the retrieval side. An agent is losing memories right now — [hindsight.md](hindsight.md) |
 | `hermes-update` is red | Nobody pinged it, the only way it goes red: the runbook reports on success and sends nothing on failure. Either no update session ran inside the period, or one ran and stopped before its report step. **Read the mtime of `~/.hermes/hermes-update.pre-run` before its contents** — the runbook's preconditions truncate that file at the start of every session, so a record older than the alarm period is the last *successful* session's and describes that run, not a stalled one. Only in a record written since the alarm do the keys say how far the session got: no `target_sha` means it stopped in change analysis, a `webui_target_sha` means the update itself ran — [the runbook](hermes-vm-updates.md#report) |
 | `hermes-app-alive` is DOWN | Read `verdict=`: `units-down` is the user manager or lingering, `import-failed` is the shared venv, `webui-unreachable` is the WebUI itself. No beat at all means the VM, the timer or the Access bypass — [Reading a DOWN `hermes-app-alive`](hermes-vm.md#reading-a-down-hermes-app-alive) |
+| Proxied changedetection watches error while unproxied ones are fine | The residential egress chain, not the internet. One pod down, or the Access service token gone — the failure table and the per-pod recovery are in [vps.md](vps.md#residential-egress-through-the-homelab) |
 | `disk_pct` is climbing on homelab restic | `local-path` has no quota, so this is the node SSD every workload shares — [the gates](#the-backup-verification-gates) |
 | An uptime-kuma monitor is UP but the service is down | Suspect an Access redirect — [uptime-kuma.md](uptime-kuma.md#the-cloudflare-access-trap) |
 | Everything is green and the data is still wrong | Expected; several probes are shallow by design — [What this does not catch](#what-this-does-not-catch) |
@@ -84,6 +85,7 @@ Defaults, unless a service's entry below says otherwise:
 | postgres (umami) | readiness plain `pg_isready`; liveness and startup as `sh -c 'pg_isready -q …; test $? -lt 2'` | Exit 1 means "rejecting connections during recovery". Liveness and startup count that as alive so recovery can finish; readiness does not, so traffic waits. A plain `pg_isready` liveness kills the postmaster mid-recovery and never converges |
 | keel-fresh | none | Scheduled work. The `vps-keel-fresh` kuma push monitor plus `activeDeadlineSeconds: 300` is the instrument |
 | the 5 quiesce sidecars | none | Deliberate — see below |
+| homelab-proxy (cloudflared) | readiness `tcpSocket` (:8888) | Readiness-only. `access tcp` binds its listener at start and dials Cloudflare only when a client connects, so this proves the process is up and nothing about the path to the homelab. It still keeps a starting pod out of the Service. No liveness: a restart does not repair a broken Access token or a dead tunnel |
 
 ### Homelab cluster
 
@@ -106,6 +108,7 @@ Defaults, unless a service's entry below says otherwise:
 | hindsight control-plane | readiness `/` (:9999) | No liveness: a wedged admin UI is an inconvenience, not an outage, and restarting a single-replica pod over it buys risk for nothing |
 | postgres (hindsight) | readiness plain `pg_isready`; liveness and startup as `sh -c 'pg_isready -q …; test $? -lt 2'` | Copied verbatim from umami-postgres above, and for the same reasons |
 | hindsight-pg-dump, hindsight-canary | none | Scheduled work. `hindsight-pg-dump` and `hindsight-canary` plus their `activeDeadlineSeconds` are the instruments |
+| tinyproxy | readiness `tcpSocket` (:8888) | Readiness-only. A tcpSocket proves the listener bound, which is all it can prove. No liveness: the only fault it detects is a dead process, and a dead process exits the container, which the kubelet restarts anyway |
 
 ## Why the sidecars have no probes
 
