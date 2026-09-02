@@ -88,6 +88,7 @@ REQUIRED_TARGETS = (
     "homelab/health/scripts/influx-backup.sh",
     "homelab/health/scripts/ingest-freshness.sh",
     "homelab/health/scripts/cloudflare-analytics-ingest.py",
+    "homelab/health/scripts/withings-ingest.py",
     "homelab/ops/scripts/update-watch.py",
     "homelab/ops/scripts/keel-fresh.sh",
     "homelab/hindsight/scripts/hindsight-pg-dump.sh",
@@ -183,6 +184,13 @@ PY_VALUE_ALLOWLIST = frozenset({
     # "verdict from a fixed enum" shape this rule already permits. If that map
     # ever gains a formatted string, this entry must come back off the list.
     "next_action",
+    # homelab/health/scripts/withings-ingest.py. Two counters bound to int()
+    # of a value the script counted, and STAGE, a one-element list holding a
+    # member of that script's STAGES enum -- the same "verdict from a fixed
+    # enum" shape as `verdict` and `next_action` above. Nothing Withings or
+    # InfluxDB sent can reach any of them: a response body goes to `log`, which
+    # is not a sink.
+    "groups_total", "points_written", "STAGE",
 })
 
 # Python: calls a sink argument may make. `iso` formats a datetime; `len`, `int`

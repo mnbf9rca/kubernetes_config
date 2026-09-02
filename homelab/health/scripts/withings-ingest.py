@@ -545,3 +545,174 @@ def points(groups):
                 % (esc_tag(PERSON), esc_tag(mtype), esc_tag(deviceid),
                    esc_field(grpid), scaled(value, unit), ts))
     return lines
+
+
+# --- authorization ----------------------------------------------------------
+
+def run_auth():
+    """One-time interactive authorization. The only mode that talks to a human.
+
+    Run from a one-off pod by the operator; see the runbook in
+    docs/operations/homelab-health.md. It pushes NO heartbeat: it is an operator
+    action, not a scheduled run, and a push from it would be a heartbeat for a
+    job that did not run.
+    """
+    client_id = env("WITHINGS_CLIENT_ID")
+    client_secret = env("WITHINGS_CLIENT_SECRET")
+    state = secrets.token_urlsafe(16)
+    url = AUTHORIZE_URL + "?" + urllib.parse.urlencode({
+        "response_type": "code",
+        "client_id": client_id,
+        "scope": SCOPE,
+        "redirect_uri": REDIRECT_URI,
+        "state": state,
+    })
+    log("")
+    log("Open this URL, sign in, approve, then paste the WHOLE redirect URL")
+    log("from the address bar back here. THE CODE LIVES 30 SECONDS, so this")
+    log("prompt must already be waiting before you open the URL.")
+    log("")
+    log(url)
+    log("")
+    pasted = input("redirect URL: ").strip()
+    query = urllib.parse.parse_qs(urllib.parse.urlparse(pasted).query)
+    # Comparing `state` is a real check because the whole URL was pasted, not
+    # just the code: an eyeball comparison is not a check.
+    if query.get("state", [""])[0] != state:
+        log("FATAL: state does not match; nothing written")
+        return 1
+    code = query.get("code", [""])[0]
+    if not code:
+        log("FATAL: no code in that URL; nothing written")
+        return 1
+    body = token_request(client_id, client_secret,
+                         grant_type="authorization_code",
+                         code=code, redirect_uri=REDIRECT_URI)
+    write_state({"refresh_token": body["refresh_token"],
+                 "userid": str(body.get("userid", ""))})
+    # BY SHAPE, NEVER BY VALUE.
+    log("wrote %s (refresh token, userid)" % TOKEN_FILE)
+    return 0
+
+
+# --- main -------------------------------------------------------------------
+
+def main():
+    influx = {
+        "url": os.environ.get(
+            "INFLUX_URL", "http://influxdb.health.svc.cluster.local:8086"),
+        "org": os.environ.get("INFLUX_ORG", "cynexia"),
+        "bucket": os.environ.get("INFLUX_BUCKET", "withings"),
+        "token": env("INFLUX_TOKEN"),
+    }
+    client_id = env("WITHINGS_CLIENT_ID")
+    client_secret = env("WITHINGS_CLIENT_SECRET")
+
+    # 1. READ STATE. A missing or unparseable file is fatal before any network
+    # call: the fix is a re-authorization, not a retry. STAGE is already
+    # `refresh`, because the file IS the refresh credential.
+    try:
+        with open(TOKEN_FILE) as handle:
+            state = json.load(handle)
+        refresh_token = state["refresh_token"]
+        if not refresh_token:
+            raise ValueError("empty refresh_token")
+    except Exception as exc:                       # noqa: BLE001 - classify
+        log("FATAL: no usable token file at %s; re-authorize (%s)"
+            % (TOKEN_FILE, type(exc).__name__))
+        hc_emit("failure=%s" % STAGE[0])
+        return 1
+
+    now = datetime.now(timezone.utc).replace(microsecond=0)
+
+    # 2. READ THE RESUME POINT, BEFORE THE REFRESH, so an InfluxDB outage costs
+    # no token rotation.
+    STAGE[0] = "resume"
+    newest = resume_point(influx)
+    start = window_start(newest, now)
+    if newest is None:
+        log("resume: bucket is empty, seeding from %s" % iso(start))
+    else:
+        log("resume: newest point %s, window starts %s"
+            % (iso(newest), iso(start)))
+
+    # 3. REFRESH.
+    STAGE[0] = "refresh"
+    body = token_request(client_id, client_secret,
+                         grant_type="refresh_token",
+                         refresh_token=refresh_token)
+
+    # 4. PERSIST THE ROTATED TOKEN BEFORE THE NEW ACCESS TOKEN IS USED FOR
+    # ANYTHING. A crash after this is a retry; a crash before it, with the
+    # access token already used, is a permanent unlink only a browser repairs.
+    STAGE[0] = "token_persist"
+    try:
+        write_state({"refresh_token": body["refresh_token"],
+                     "userid": str(body.get("userid", ""))})
+    except Exception as exc:                       # noqa: BLE001 - classify
+        log("FATAL: could not persist token: %s" % type(exc).__name__)
+        log("The OLD refresh token is still on disk and is valid for 8 hours "
+            "from the refresh above. Fix the volume and force a run inside "
+            "that window, or the fix is a browser re-authorization.")
+        hc_emit("failure=%s" % STAGE[0])
+        return 1
+    log("rotated refresh token persisted")
+
+    # 5. FETCH.
+    STAGE[0] = "fetch"
+    groups = fetch_measures(body["access_token"], int(start.timestamp()))
+    groups_total = len(groups)
+    hc_emit("groups=%d" % groups_total)
+
+    # 6. WRITE. There is no watermark to persist, so there is no step after it:
+    # a run either stored points, which moves the resume point by itself, or it
+    # did not, and the next run asks the same question.
+    STAGE[0] = "write"
+    lines = points(groups)
+    points_written = len(lines)
+    hc_emit("points=%d" % points_written)
+    influx_write(influx, lines)
+
+    if groups_total == 0:
+        # A real answer, unlike the Cloudflare job's empty result: Withings
+        # reports a failed call with a non-zero status, so "nothing in the
+        # window" is unambiguous and is a success.
+        log("RUN OK: nothing new")
+    else:
+        log("RUN OK: %d groups, %d points" % (groups_total, points_written))
+    hc_summary("ok")
+    return 0
+
+
+if __name__ == "__main__":
+    # `sys.argv` decides; there is no argument parser for one flag.
+    if "--auth" in sys.argv[1:]:
+        sys.exit(run_auth())
+
+    push = make_pusher(os.environ.get("PUSH_URL", ""))
+    try:
+        rc = main()
+    except SystemExit as exc:
+        rc = exc.code if isinstance(exc.code, int) else 1
+        log("FATAL: exiting %d" % rc)
+        hc_summary("failed")
+        hc_emit("failure=%s" % STAGE[0])
+    except IngestFailed as exc:
+        log("FATAL: %s" % exc)
+        rc = 1
+        hc_summary("failed")
+        hc_emit("failure=%s" % STAGE[0])
+    except Exception as exc:                       # noqa: BLE001 - report, red
+        import traceback
+        traceback.print_exc()
+        # THE CLASS NAME ONLY. repr(exc) is banned because the exception in hand
+        # may carry a response body.
+        log("FATAL: unhandled %s" % type(exc).__name__)
+        rc = 1
+        hc_summary("failed")
+        hc_emit("failure=%s" % STAGE[0])
+        hc_emit("exception=%s" % type(exc).__name__)
+    # EVERY LINE TO THE POD LOG, then the cut-down one-liner to kuma.
+    log("heartbeat message (full):\n" + hc_body())
+    push("up" if rc == 0 else "down", kuma_msg())
+    sys.exit(rc)

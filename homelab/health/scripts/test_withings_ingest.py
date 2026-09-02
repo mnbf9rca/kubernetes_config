@@ -311,5 +311,211 @@ class Points(unittest.TestCase):
                         "measures": [{"type": 1, "value": 1, "unit": 0}]}])
 
 
+class RunOrder(StateDir):
+    """The sequencing rules from the design's data flow.
+
+    Steps 3 and 4 may not be swapped, and step 2 may not move below step 3.
+    """
+
+    def setUp(self):
+        super(RunOrder, self).setUp()
+        self.order = []
+        self.real_env = dict(os.environ)
+        os.environ["INFLUX_TOKEN"] = "influx-token"
+        os.environ["WITHINGS_CLIENT_ID"] = "client-id"
+        os.environ["WITHINGS_CLIENT_SECRET"] = "client-secret"
+        wi.SUMMARY[0] = DEFAULT_SUMMARY
+        del wi.BODY_LINES[:]
+        wi.STAGE[0] = "refresh"
+        self.real_write_state = wi.write_state
+
+    def tearDown(self):
+        super(RunOrder, self).tearDown()
+        wi.write_state = self.real_write_state
+        os.environ.clear()
+        os.environ.update(self.real_env)
+
+    def route(self, write_state_raises=False):
+        """Stub every call, recording the order they arrive in."""
+        def _post(url, body, headers, timeout=None):
+            if "/api/v2/query" in url:
+                self.order.append("resume")
+                return 200, CSV_ONE_ROW
+            if url == wi.WITHINGS_TOKEN_URL:
+                self.order.append("refresh")
+                return 200, json.dumps({"status": 0, "body": {
+                    "access_token": "new-access",
+                    "refresh_token": "new-refresh",
+                    "userid": "42"}})
+            if url == wi.WITHINGS_MEASURE_URL:
+                self.order.append("getmeas")
+                return 200, json.dumps({"status": 0, "body": {
+                    "measuregrps": [{"grpid": 1, "date": 100,
+                                     "deviceid": "d",
+                                     "measures": [{"type": 1, "value": 74850,
+                                                   "unit": -3}]}]}})
+            self.order.append("write")
+            return 204, ""
+        wi.http_post = _post
+
+        real_write_state = wi.write_state
+
+        def _write_state(state):
+            self.order.append("write_state")
+            if write_state_raises:
+                raise OSError("read-only file system")
+            real_write_state(state)
+        wi.write_state = _write_state
+
+    def test_resume_precedes_refresh_and_the_persist_precedes_getmeas(self):
+        self.seed()
+        self.route()
+        self.assertEqual(wi.main(), 0)
+        self.assertEqual(self.order,
+                         ["resume", "refresh", "write_state", "getmeas",
+                          "write"])
+
+    def test_a_failed_persist_stops_the_run_before_any_getmeas(self):
+        # The new access token must not be used: the OLD refresh token is still
+        # on disk and still valid for 8 hours.
+        self.seed()
+        self.route(write_state_raises=True)
+        self.assertEqual(wi.main(), 1)
+        self.assertNotIn("getmeas", self.order)
+        self.assertEqual(wi.STAGE[0], "token_persist")
+        self.assertIn("failure=token_persist", wi.BODY_LINES)
+
+    def test_a_missing_token_file_fails_before_any_network_call(self):
+        self.route()
+        self.assertEqual(wi.main(), 1)
+        self.assertEqual(self.order, [])
+        self.assertEqual(wi.STAGE[0], "refresh")
+
+    def test_an_unparseable_token_file_fails_before_any_network_call(self):
+        with open(wi.TOKEN_FILE, "w") as handle:
+            handle.write("{not json")
+        self.route()
+        self.assertEqual(wi.main(), 1)
+        self.assertEqual(self.order, [])
+
+    def test_a_successful_run_persists_the_rotated_token(self):
+        self.seed()
+        self.route()
+        wi.main()
+        with open(wi.TOKEN_FILE) as handle:
+            self.assertEqual(json.load(handle)["refresh_token"], "new-refresh")
+
+    def test_no_output_carries_the_stored_refresh_token(self):
+        # A failing refresh and a failing fetch, in turn: neither the log nor
+        # the heartbeat may quote the credential on the way out.
+        for failing in ("refresh", "getmeas"):
+            self.seed()
+            del self.logged[:]
+            del wi.BODY_LINES[:]
+
+            def _post(url, body, headers, timeout=None, failing=failing):
+                if "/api/v2/query" in url:
+                    return 200, CSV_ONE_ROW
+                if url == wi.WITHINGS_TOKEN_URL and failing == "refresh":
+                    return 200, json.dumps({"status": 401})
+                if url == wi.WITHINGS_TOKEN_URL:
+                    return 200, json.dumps({"status": 0, "body": {
+                        "access_token": "new-access",
+                        "refresh_token": "new-refresh", "userid": "42"}})
+                return 200, json.dumps({"status": 503})
+            wi.http_post = _post
+            with self.assertRaises(wi.IngestFailed) as caught:
+                wi.main()
+            self.assertNotIn(REAL_TOKEN, str(caught.exception))
+            for line in self.logged + wi.BODY_LINES:
+                self.assertNotIn(REAL_TOKEN, line)
+
+
+class Heartbeat(unittest.TestCase):
+    """Format rules from the design's monitoring section, enforced not trusted."""
+
+    def setUp(self):
+        self.calls = []
+        self._real_urlopen = wi.urllib.request.urlopen
+        wi.urllib.request.urlopen = self._fake
+        self.logged = []
+        self._real_log = wi.log
+        wi.log = self.logged.append
+        wi.SUMMARY[0] = "verdict=failed"
+        del wi.BODY_LINES[:]
+
+    def tearDown(self):
+        wi.urllib.request.urlopen = self._real_urlopen
+        wi.log = self._real_log
+        wi.SUMMARY[0] = "verdict=failed"
+        del wi.BODY_LINES[:]
+
+    def _fake(self, request, data=None, timeout=None):
+        self.calls.append((request.full_url, request))
+
+        class _R:
+            def close(self_inner):
+                pass
+        return _R()
+
+    def test_verdict_is_always_first(self):
+        wi.hc_emit("groups=3")
+        wi.hc_summary("ok")
+        self.assertEqual(wi.hc_body().splitlines()[0], "verdict=ok")
+        self.assertTrue(wi.kuma_msg().startswith("verdict=ok "))
+
+    def test_the_default_verdict_is_a_failure(self):
+        self.assertEqual(DEFAULT_SUMMARY, "verdict=failed")
+        self.assertIn(DEFAULT_SUMMARY.split("=", 1)[1], wi.VERDICTS)
+
+    def test_a_verdict_off_the_enum_is_coerced_to_failed(self):
+        wi.hc_summary("ok - 3 groups")
+        self.assertEqual(wi.SUMMARY[0], "verdict=failed")
+        self.assertTrue(any("VERDICTS" in line for line in self.logged))
+
+    def test_every_failure_token_is_a_member_of_stages(self):
+        for stage in wi.STAGES:
+            del wi.BODY_LINES[:]
+            wi.hc_emit("failure=%s" % stage)
+            token = wi.BODY_LINES[0].split("=", 1)[1]
+            self.assertIn(token, wi.STAGES)
+
+    def test_the_message_is_one_line_printable_and_cut_on_a_boundary(self):
+        wi.hc_summary("ok")
+        for _ in range(60):
+            wi.hc_emit("groups=1234567890")
+        msg = wi.kuma_msg()
+        self.assertLessEqual(len(msg), wi.MSG_LIMIT)
+        self.assertNotIn("\n", msg)
+        for token in msg.split(" "):
+            self.assertRegex(token, r"^[a-z0-9_]+=\S*$", token)
+
+    def test_status_and_message_ride_the_query_string(self):
+        wi.make_pusher("https://uptime.example/api/push/tok")(
+            "up", "verdict=ok groups=2 points=9")
+        url, request = self.calls[0]
+        self.assertIsNone(request.data, "the push is a GET, not a POST")
+        self.assertTrue(url.startswith("https://uptime.example/api/push/tok?"))
+
+    def test_the_user_agent_is_never_urllibs_default(self):
+        wi.make_pusher("https://uptime.example/api/push/tok")("up", "verdict=ok")
+        agent = self.calls[0][1].get_header("User-agent")
+        self.assertTrue(agent)
+        self.assertNotIn("urllib", agent.lower())
+        self.assertEqual(agent, wi.PUSH_USER_AGENT)
+
+    def test_a_push_failure_is_swallowed_and_names_only_the_class(self):
+        def boom(request, data=None, timeout=None):
+            raise wi.IngestFailed("withings said <secret payload>")
+        wi.urllib.request.urlopen = boom
+        wi.make_pusher("https://uptime.example/api/push/s3cr3ttoken")("down")
+        self.assertTrue(self.logged)
+        for line in self.logged:
+            self.assertNotIn("secret payload", line)
+            self.assertNotIn("s3cr3ttoken", line)
+            self.assertNotIn("uptime.example", line)
+            self.assertIn("IngestFailed", line)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
