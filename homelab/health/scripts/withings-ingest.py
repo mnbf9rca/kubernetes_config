@@ -645,6 +645,14 @@ def main():
     # 4. PERSIST THE ROTATED TOKEN BEFORE THE NEW ACCESS TOKEN IS USED FOR
     # ANYTHING. A crash after this is a retry; a crash before it, with the
     # access token already used, is a permanent unlink only a browser repairs.
+    # The 8 hours is Withings' own figure, not an estimate: the developer guide
+    # page "Access and refresh tokens" (developer.withings.com/developer-guide/
+    # v3/integration-guide/public-health-data-api/get-access/
+    # access-and-refresh-tokens-no-recover/) states that the refresh token
+    # rotates on every refresh and that the old one expires 8 hours after the
+    # new one is issued or once the new access token is used, and support
+    # article 360018514178, "API - Improving the refresh token expiration", is
+    # where that grace was introduced.
     STAGE[0] = "token_persist"
     try:
         write_state({"refresh_token": body["refresh_token"],
@@ -667,8 +675,13 @@ def main():
     # 6. WRITE. There is no watermark to persist, so there is no step after it:
     # a run either stored points, which moves the resume point by itself, or it
     # did not, and the next run asks the same question.
-    STAGE[0] = "write"
     lines = points(groups)
+    # THE STAGE MOVES AFTER points() RETURNS, not before it. points() raises on
+    # a malformed getmeas body - a group with no usable date, a measure missing
+    # value, unit or type - and that is a fault in what the fetch returned, so
+    # it must report `failure=fetch`. Setting the stage first attributed a bad
+    # Withings response to InfluxDB.
+    STAGE[0] = "write"
     points_written = len(lines)
     hc_emit("points=%d" % points_written)
     influx_write(influx, lines)

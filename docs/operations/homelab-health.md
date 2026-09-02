@@ -1,6 +1,6 @@
 # Health namespace
 
-Personal health-data pipeline in the homelab cluster: Apple Health + Garmin → InfluxDB → Grafana, plus a Claude MCP connector.
+Personal health-data pipeline in the homelab cluster: Apple Health, Garmin and Withings → InfluxDB → Grafana, plus a Claude MCP connector.
 It was added in Phase 0/1 as its own `health` namespace.
 Manifests live in `homelab/health/`.
 
@@ -173,7 +173,9 @@ Delete it first and you lock Grafana and the connector out until the new Secret 
 
 `make health-influx-withings-bootstrap` does the same job for the `withings` bucket, on the same terms: `-r 0`, an ingest token that reads and writes on that one bucket, and a replacement read token covering all five.
 Run it before the apply that adds `withings` to `influx-export-lp.sh`'s bucket list — that script fails by name on a bucket that does not exist, so the wrong order fails the nightly backup until the bucket appears.
-It prints the ingest token for you to paste into `op://Homelab/health-influxdb/withings-token`; the `.env.tpl` line, the two Makefile variable lists and the `health-influxdb` Secret key that carry it into the cluster are separate hand edits.
+It prints the ingest token for you to paste into `op://Homelab/health-influxdb/withings-token`.
+The tree already carries that Secret key, its `.env.tpl` line and both Makefile variable list entries, so the only thing you create by hand is the vault field itself — and `op run` refuses every build, diff and apply target until it exists.
+Replacing the `read-token` value puts both the `health-influxdb` and `grafana-datasources` Secrets in the next diff, because both render that placeholder; those two are expected and are not reverts.
 
 **Always mint the replacement read token from the newest bucket's target.**
 Each of these targets hard-codes the bucket list its read token covers: `health-influx-bootstrap` mints over three buckets and `health-influx-cloudflare-bootstrap` over four, so re-running either one after the withings bootstrap silently drops `withings` from the read token and Grafana and the MCP connector stop seeing it.
@@ -525,6 +527,7 @@ That last failure is the one this design spends most of its care avoiding.
 
 Withings rotates the refresh token on **every** refresh.
 The old one survives for eight hours after the new one is issued, **or** until the new access token is first used, whichever comes first.
+That is Withings' own figure, not an estimate: the developer guide page [Access and refresh tokens](https://developer.withings.com/developer-guide/v3/integration-guide/public-health-data-api/get-access/access-and-refresh-tokens-no-recover/) states both halves of the rule, and support article 360018514178, "API - Improving the refresh token expiration", is where that grace was introduced.
 
 Three rules follow, and they are the whole of the protection:
 
@@ -591,12 +594,12 @@ The job cannot run until four things exist.
 None of them are created by `make apply-homelab`.
 
 1. **DNS for the callback host.** `withings.cynexia.net`, an A record to `10.100.0.100`. It exists only so the browser lands on something during authorization; Traefik answers 404 with the wildcard certificate and the code is read from the address bar.
-2. **Withings client credentials** in 1Password as `op://Homelab/health-withings/` with `client-id` `[text]`, `client-secret` concealed, and `redirect-uri` `[text]` holding `https://withings.cynexia.net/oauth-callback`. The application is registered as a Public API integration in the Development environment with that redirect URI.
+2. **Withings client credentials** in 1Password as `op://Homelab/health-withings/` with `client-id` `[text]`, `client-secret` concealed, and `redirect-url` `[text]` holding `https://withings.cynexia.net/oauth-callback`. The application is registered as a Public API integration in the Development environment with that redirect URI.
 3. **uptime-kuma push monitor** `withings-ingest`, Push type, 21600s interval with one retry at 7200s. Token into `op://Homelab/health-healthchecks/withings-kuma-push-token`, typed `[text]`.
 4. **InfluxDB bucket and tokens**: `make health-influx-withings-bootstrap`, in a plain terminal. It prints two live tokens, so run it outside an agent session.
 
-The `withings-token` key on the `health-influxdb` Secret, and its `.env.tpl` line, are added by hand once that bootstrap has minted the token.
-Until the key exists the pod cannot start, which is the intended ordering rather than a fault.
+The tree already carries the `withings-token` key on the `health-influxdb` Secret, its `.env.tpl` line and both Makefile variable list entries.
+What has to exist is the vault field the `.env.tpl` line points at, and `op run` refuses every build, diff and apply target until it does.
 
 Then apply, authorize, and force the first run — the section below is the same procedure.
 
@@ -657,10 +660,10 @@ There is no `make` target for this: it needs a browser, a 30-second code window 
            {"name": "state", "persistentVolumeClaim": {"claimName": "withings-tokens"}}
          ]
        }
-     }' -- python3 /app/ingest.py --auth
+     }'
    ```
 
-   The trailing `-- python3 /app/ingest.py --auth` and the override's `command` are the same process; whichever wins produces the same run.
+   The command above carries no trailing arguments, because the override already sets `command`: pass them as well and `kubectl` appends them to that command as `args`, which works only because the script tests for `--auth` anywhere in `sys.argv`.
    The `--auth` run pushes no heartbeat, because it is an operator action rather than a scheduled run.
 
    The pod prints the authorize URL and waits.

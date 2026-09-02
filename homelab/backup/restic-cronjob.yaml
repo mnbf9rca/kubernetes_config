@@ -256,8 +256,10 @@ spec:
                   # a stale one is as bad as a missing one, and only FRESH_ARTIFACTS notices that.
                   #
                   # `withings-tokens` holds two short strings - a refresh token and a userid -
-                  # and renders to roughly 100 bytes. Its floor is therefore 64, NOT the 256
+                  # and measured 83 bytes on 2026-09-02. Its floor is therefore 64, NOT the 256
                   # that `garmin-tokens` carries, which would fail the gate every night.
+                  # That size tracks the length of Withings' own tokens, so a provider change
+                  # that shortened them would fail this row on a perfectly healthy file.
                   #
                   # A RESTORE IS NOT A RECOVERY PATH HERE. The garmin credential this row
                   # mirrors lasts a year; this one rotates every six hours and the previous

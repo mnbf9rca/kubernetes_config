@@ -1460,6 +1460,10 @@ health-influx-bootstrap: check-context
 # superseded auth with `influx auth delete`. Deleting it first locks Grafana and
 # the MCP connector out until the new Secret has actually rolled.
 #
+# PASTE OVER THE EXISTING read-token FIELD'S VALUE. Do not add a second field:
+# a duplicate label makes `op run` ambiguous and breaks every build, diff and
+# apply target.
+#
 # The `pod` helper exports INFLUX_TOKEN from the admin token already present in
 # the influxdb container's own environment. The influx CLI reads INFLUX_TOKEN,
 # not DOCKER_INFLUXDB_INIT_ADMIN_TOKEN, and the CLI config the image writes at
@@ -1511,9 +1515,15 @@ health-influx-cloudflare-bootstrap: check-context
 # point is max(_time) read back out of it.
 #
 # Nothing here writes 1Password. The target PRINTS the ingest token for the
-# operator to paste into op://Homelab/health-influxdb/withings-token; the
-# .env.tpl line, the two Makefile variable lists and the health-influxdb Secret
-# key that carry it into the cluster are separate edits.
+# operator to paste into op://Homelab/health-influxdb/withings-token. The tree
+# already carries that Secret key, its .env.tpl line and both variable list
+# entries in this file, so the only thing created by hand is the vault field
+# itself - and `op run` refuses every build, diff and apply target until it
+# exists.
+#
+# PASTE OVER THE EXISTING read-token FIELD'S VALUE. Do not add a second field:
+# a duplicate label makes `op run` ambiguous and breaks every build, diff and
+# apply target.
 #
 # The read token is REPLACED, not extended: InfluxDB has no way to add a bucket
 # to an existing auth, so Grafana and the MCP connector cannot see `withings`

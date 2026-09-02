@@ -239,7 +239,8 @@ The two newest rows follow the same derivation from a measured seed run: `grafan
 Each has a twin `MIN_BYTES` in the script that writes it — `homelab/health/scripts/grafana-sqlite-backup.py` and `homelab/hindsight/scripts/hindsight-pg-dump.sh` — and the pair must be raised together.
 Live sizes are reported as `grafana_kib=` and `dump_kib=` in their heartbeat messages.
 
-`withings-tokens` sits at 64 B rather than the 256 B its `garmin-tokens` neighbour carries, because that file holds two strings and renders to roughly 100 bytes.
+`withings-tokens` sits at 64 B rather than the 256 B its `garmin-tokens` neighbour carries, because that file holds two strings and measured 83 bytes on September 2, 2026.
+That size tracks the length of Withings' own tokens, so a provider change that shortened them would fail this row on a perfectly healthy file.
 It is also the one row whose artifact cannot usefully be restored: the refresh token rotates every six hours, so the gate detects that the PVC stopped being captured rather than promising a recovery.
 
 `influx-backup` writes the influx dumps *and* the Grafana dump at 02:30Z, 30 minutes before this job, so 30h tolerates one missed run (`health-influx-backup` is the monitor for *that*) and fails on two consecutive misses; `hermes-pull` writes its zip at 02:00Z on the same terms, with `homelab-hermes-pull` as its own first-line check.
