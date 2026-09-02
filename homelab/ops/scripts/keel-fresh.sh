@@ -106,7 +106,8 @@ START_METRIC=process_start_time_seconds
 #
 # Raise it deliberately when the estate grows; a floor that drifts below reality
 # is a check that has stopped checking.
-IMAGE_FLOOR=4
+# 2026-09-02: tinyproxy adds one keel image, so steady state 6 and floor 5.
+IMAGE_FLOOR=5
 
 STATE_DIR=/state
 STATE_FILE=$STATE_DIR/last

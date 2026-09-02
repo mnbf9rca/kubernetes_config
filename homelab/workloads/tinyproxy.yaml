@@ -1,0 +1,108 @@
+---
+# Residential egress proxy for changedetection.io on the VPS. Several watched
+# sites block Hetzner's address ranges, so those fetches leave from the home
+# connection instead: the VPS dials its `homelab-proxy` Service (a
+# `cloudflared access tcp` client), which reaches proxy.cynexia.com on the
+# cynexia-health tunnel, which lands here. The `proxy` namespace is declared
+# in homelab/bootstrap/namespaces.yaml and must exist before this file is
+# applied.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: tinyproxy-config
+  namespace: proxy
+  # This ConfigMap is hand-written, not generated, so it carries no content
+  # hash and editing it does not roll the Deployment: after any change here,
+  # run `kubectl -n proxy rollout restart deploy/tinyproxy`.
+data:
+  # Four directives, all of them doing work. Everything else tinyproxy needs
+  # it already defaults to, and `tinyproxy -d` (the image's CMD) logs to
+  # stdout, so there is no LogFile either.
+  tinyproxy.conf: |
+    Port 8888
+    Listen 0.0.0.0
+    # The only intended client is the cloudflared pod serving the
+    # cynexia-health tunnel, which dials from the homelab pod CIDR.
+    # NetworkPolicy is inert on this cluster (flannel enforces nothing), so
+    # this line is the only in-cluster restriction, and it is coarse: any pod
+    # on the cluster can use the proxy. That grants nothing new, because every
+    # pod here already egresses from the same residential address directly.
+    # The gate that matters is the Cloudflare Access policy on the hostname.
+    Allow 10.244.0.0/16
+    # No Via header. The point of this proxy is to look like an ordinary
+    # residential client to the target site, and `Via: 1.1 tinyproxy`
+    # announces the opposite. ViaProxyName is therefore NOT set: it only
+    # renames a header that is no longer sent.
+    DisableViaHeader Yes
+    # Do NOT add a ConnectPort line. With none, every port is allowed for
+    # CONNECT, and CONNECT is the whole of an HTTPS fetch; a closed list would
+    # silently break any watch on a non-443 port.
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tinyproxy
+  namespace: proxy
+  annotations:
+    # Floating tag, so keel owns the updates. match-tag is REQUIRED: without
+    # it keel silently downgrades to :latest. @every 24h rather than 6h -
+    # this image moved twice in four years.
+    keel.sh/policy: force
+    keel.sh/match-tag: "true"
+    keel.sh/trigger: poll
+    keel.sh/pollSchedule: "@every 24h"
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: tinyproxy } }
+  template:
+    metadata:
+      labels: { app: tinyproxy }
+    spec:
+      # No dnsPolicy override, unlike the linuxserver workloads in
+      # `downloads`. Cluster DNS forwards external names to the node's upstream,
+      # the LAN resolver at 10.100.0.1, so the proxy resolves target hosts
+      # exactly as a machine on the home network would, which keeps geo-DNS
+      # answers consistent with the residential exit address.
+      containers:
+        - name: tinyproxy
+          image: kalaksi/tinyproxy:latest
+          ports:
+            - { name: proxy, containerPort: 8888, protocol: TCP }
+          # Readiness only. It holds the pod out of the Service until the
+          # listener binds, which is all a tcpSocket can prove. NO liveness:
+          # the only fault a tcpSocket detects is a dead process, and a dead
+          # process exits the container, which the kubelet restarts anyway.
+          readinessProbe:
+            tcpSocket: { port: proxy }
+            periodSeconds: 15
+            timeoutSeconds: 3
+            failureThreshold: 3
+          # The two fields that shrink the blast radius of a bug in a C daemon
+          # parsing bytes off the internet. The image already runs as UID 57981
+          # through its own USER directive, and PSA baseline - this cluster's
+          # enforce level - requires neither runAsNonRoot nor a seccomp
+          # profile, so neither is set here.
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: ["ALL"] }
+          resources:
+            requests: { cpu: 50m, memory: 32Mi }
+            limits: { memory: 128Mi }
+          volumeMounts:
+            - name: config
+              mountPath: /etc/tinyproxy/tinyproxy.conf
+              subPath: tinyproxy.conf
+              readOnly: true
+      volumes:
+        - name: config
+          configMap: { name: tinyproxy-config }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: tinyproxy
+  namespace: proxy
+spec:
+  selector: { app: tinyproxy }
+  ports:
+    - { name: proxy, port: 8888, targetPort: proxy, protocol: TCP }

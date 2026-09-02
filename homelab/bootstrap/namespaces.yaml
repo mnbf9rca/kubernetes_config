@@ -74,6 +74,19 @@ metadata:
   # memory, so an unattended auto-update is exactly the failure to design out.
   # Renovate proposes the bumps; `make hindsight-upgrade` takes the dump first.
 ---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: proxy
+  # PSA baseline (cluster default), so no labels. tinyproxy needs no hostPath,
+  # no hostNetwork, no ServiceAccount and no RBAC - only a ClusterIP the
+  # health-namespace cloudflared pod can dial, and ordinary outbound egress.
+  #
+  # keel DOES run here, unlike health, ops, hindsight and backup: this is a
+  # workload namespace, its one image floats and carries the full annotation
+  # set, so its updates arrive on keel's poll and nothing here needs a hand
+  # update.
+---
 # NOTE: cert-manager and local-path-storage namespaces are created by their
 # respective upstream manifests, so they're omitted here (kustomize rejects
 # duplicate resources). keel's namespace IS declared above because
