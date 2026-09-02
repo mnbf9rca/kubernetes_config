@@ -31,7 +31,7 @@ Design documents and implementation plans are local-only under the gitignored `d
 | kubectl context | `cynexia-homelab` | `cynexia-vps` |
 | Omni cluster name | `homelab` | `vps` |
 | Domain | `*.cynexia.net` (Route53) | `*.cynexia.com` (Cloudflare) |
-| Exposure | Private — LAN/Tailscale only, except the `health` namespace's own `cynexia-health` tunnel | Public, through the `cynexia-vps` cloudflared tunnel + Cloudflare Access |
+| Exposure | Private — LAN/Tailscale only, except the `cynexia-health` cloudflared tunnel, run from the `health` namespace | Public, through the `cynexia-vps` cloudflared tunnel + Cloudflare Access |
 | Ingress | Traefik hostNetwork DaemonSet + cert-manager wildcard | cloudflared only (no Traefik, no cert-manager) |
 | Apply | `make apply-homelab` | `make apply-vps` |
 
@@ -120,6 +120,8 @@ The rules that must not be broken:
   Two things that mask does not do: it does not touch a value shorter than 24 characters, and it only sees a single `key: value` line, so a block-scalar payload such as the `last-applied-configuration` annotation passes through untouched.
   It leaves image references intact, because every image reference in this repo carries a tag or an `@sha256:` digest and so misses the pattern — by convention, not by guarantee.
   Neither command redirects, and neither may be changed into one.
+  When a session's tooling refuses either pipeline — the worktree Bash guard did so on 2026-09-02 — read every resource the list names directly instead: the live object with `kubectl get <kind> <name> -n <ns> -o yaml`, plus the branch diff for the file that renders it.
+  Never skip the read, and never redirect to a file.
 - **`ENVSUBST_VARS` is an explicit allowlist, passed single-quoted.**
   Never call envsubst without one: with no allowlist it eats every `${VAR}` in the stream, including shell variables inside upstream manifests (`$VOL_DIR` in local-path-provisioner's helper pod); with double quotes the shell expands the tokens before envsubst sees them.
 - **Adding a secret means four edits:** the `op://` line in `.env.tpl`, the name in `ENVSUBST_VAR_NAMES`, the name in `REQUIRED_VARS`, and the `${VAR}` placeholder in the manifest.

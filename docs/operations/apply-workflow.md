@@ -408,3 +408,6 @@ So decide it by the mechanism rather than by the list:
 
 A resource the diff *does* name is a real change, and the concurrent-branch rule in `AGENTS.md` applies to it: prove which branch deployed it before you accept it.
 Do not go enumerating the class by experiment — the membership moves with every apply, and the rule above does not.
+
+A `restic-init` Job named as a **create** in a `diff-homelab` or `diff-vps` taken more than 24 hours after the last apply is neither drift nor a revert.
+Both clusters set `ttlSecondsAfterFinished: 86400` on that Job, so it is garbage collected a day after it completes and the next diff proposes it again; its script is a no-op when the repository already exists.

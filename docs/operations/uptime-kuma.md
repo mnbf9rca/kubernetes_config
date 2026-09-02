@@ -47,7 +47,7 @@ Four simultaneous reds therefore mean expired or wrong headers, not an outage �
 A **second** service token exists and is deliberately separate: `vps-proxy-access`, created September 2, 2026, expiring **September 1, 2031**.
 It is attached to the app-scoped `service-auth-homelab-proxy` policy on the `homelab-proxy` application, which gates `proxy.cynexia.com`, and to nothing else.
 Reusing `Uptime` here would have widened four monitors' credential to cover an open proxy.
-When it expires, the residential egress proxy breaks and every proxied changedetection watch errors — no monitor turns red, because the `proxy.cynexia.com` monitor asserts the Access challenge, which a dead token does not change.
+When it expires, the residential egress proxy breaks and every proxied changedetection watch errors — no monitor turns red, because the `proxy.cynexia.com` monitor asserts the Access challenge, which a dead token does not change, and that monitor sends no headers at all, so the paste instruction below does not apply to it.
 
 Paste the headers as JSON in the monitor's **Headers** box:
 
