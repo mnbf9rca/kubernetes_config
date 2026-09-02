@@ -367,3 +367,181 @@ def make_pusher(push_url):
             log("uptime-kuma push %r failed (ignored): %s"
                 % (status, type(exc).__name__))
     return push
+
+
+# --- resume point -----------------------------------------------------------
+
+def resume_point(cfg):
+    """Newest point in the bucket, or None if it has never been written.
+
+    DO NOT "tidy" the filter away. This bucket carries a float field, `value`,
+    and a string field, `grpid`, so a bare group() over every field merges
+    tables whose _value types differ and InfluxDB answers `schema collision:
+    cannot group float and string types together`. That error body parses as
+    "no data" to a naive reader, which is how ingest-freshness reported STALE
+    for 25 straight days. Filtering to the one float field before grouping is
+    what makes the merge type-safe, and `_field == "value"` covers every point
+    this job writes.
+
+    NEVER READ _value FROM THESE ROWS. It is a body measurement, and the pod log
+    is not where one belongs. keep() drops it, so the last column is _time.
+    """
+    flux = (
+        'from(bucket:"%s")\n'
+        '  |> range(start: 1970-01-01T00:00:00Z)\n'
+        '  |> filter(fn: (r) => r._field == "value")\n'
+        '  |> group()\n'
+        '  |> max(column: "_time")\n'
+        '  |> keep(columns: ["_time"])\n' % cfg["bucket"]
+    )
+    url = "%s/api/v2/query?org=%s" % (cfg["url"], cfg["org"])
+    headers = {
+        "Authorization": "Token %s" % cfg["token"],
+        "Content-Type": "application/vnd.flux",
+        "Accept": "application/csv",
+    }
+    status, text = http_post(url, flux.encode(), headers, timeout=60)
+    if status < 200 or status >= 300:
+        raise IngestFailed("resume query http %d" % status)
+    # An InfluxDB error arrives as a JSON body even on some 2xx paths.
+    if text.lstrip().startswith("{") and '"code"' in text:
+        raise IngestFailed("resume query returned an InfluxDB error object")
+
+    newest = None
+    for line in text.splitlines():
+        # Annotated CSV data rows start with ",_result,"; annotations start "#".
+        if not line.startswith(",_result,"):
+            continue
+        cell = line.rstrip("\r").split(",")[-1].strip()
+        if not cell:
+            continue
+        try:
+            parsed = datetime.fromisoformat(cell.replace("Z", "+00:00"))
+        except ValueError:
+            raise IngestFailed("resume row has unparseable _time")
+        parsed = parsed.astimezone(timezone.utc)
+        if newest is None or parsed > newest:
+            newest = parsed
+    return newest
+
+
+def window_start(newest, now):
+    """Where this run's lastupdate window begins.
+
+    THE CLAMP TO NOW IS ONE LINE AND IT CLOSES THE ONLY PATH THAT SKIPS DATA. A
+    scale with a wrong clock can write a point dated in the future, which would
+    otherwise push lastupdate past the present and silently skip everything
+    modified in between.
+    """
+    if newest is None:
+        return datetime.fromisoformat(FIRST_RUN_START).replace(
+            tzinfo=timezone.utc)
+    return min(newest, now) - timedelta(seconds=OVERLAP_SECONDS)
+
+
+# --- Withings measures ------------------------------------------------------
+
+def fetch_measures(access_token, lastupdate):
+    """Every measure group modified since `lastupdate`, following `more`.
+
+    `meastypes` is deliberately NOT sent, so every measure group and every type
+    code arrives untouched - including a code newer firmware invents. `category`
+    is 1: real measurements, not user objectives.
+
+    `lastupdate` filters on MODIFICATION time, not measurement date. A weight
+    recorded three days ago and synced this morning is returned, and the point
+    lands at its own measurement date.
+    """
+    groups = []
+    offset = 0
+    for page in range(1, MAX_PAGES + 1):
+        fields = {"action": "getmeas", "category": 1, "lastupdate": lastupdate}
+        if offset:
+            fields["offset"] = offset
+        try:
+            body = withings_post(WITHINGS_MEASURE_URL, fields, access_token)
+        except IngestFailed as exc:
+            raise IngestFailed("getmeas failed at page %d: %s" % (page, exc))
+        page_groups = body.get("measuregrps")
+        if not isinstance(page_groups, list):
+            raise IngestFailed("getmeas page %d has no measuregrps list" % page)
+        log("page %d: %d group(s)" % (page, len(page_groups)))
+        groups.extend(page_groups)
+        if not body.get("more"):
+            return groups
+        offset = body.get("offset") or 0
+    raise IngestFailed("more flag still set after %d pages" % MAX_PAGES)
+
+
+# --- shaping ----------------------------------------------------------------
+
+def scaled(value, unit):
+    """`value * 10 ** unit`, fixed-point and exact.
+
+    Decimal, not float: 74850 at unit -3 is 74.850 kg, and a float multiply
+    renders 74.85000000000001 for some inputs. format(..., "f") is what keeps a
+    large positive unit out of scientific notation, which line protocol would
+    reject.
+    """
+    return format(Decimal(value).scaleb(unit), "f")
+
+
+def esc_field(value):
+    """Escape a quoted string field value: backslash, then double quote.
+
+    `grpid` is a Withings integer today, so this is a guard rather than a
+    transformation - but an unescaped quote would end the field early and the
+    rest of the line would be parsed as something else.
+    """
+    text = "".join(ch for ch in str(value) if ch.isprintable())
+    return text.replace("\\", "\\\\").replace('"', '\\"')
+
+
+def group_date(group):
+    """The group's measurement time, or raise.
+
+    A GROUP WITH NO USABLE `date` IS A FAILED RUN, not a point at epoch 0. The
+    timestamp is the point's identity, so a defaulted one writes a 1970 outlier
+    that every panel shows and that no later run corrects - the same reasoning
+    that makes a measure missing `value` raise below.
+    """
+    try:
+        return int(group["date"])
+    except (KeyError, TypeError, ValueError):
+        raise IngestFailed("measure group is missing a usable date")
+
+
+def points(groups):
+    """Line protocol for every measure, OLDEST FIRST.
+
+    The ordering is load-bearing, not cosmetic: influx_write sends these in
+    batches, so a later batch can fail with earlier ones already durably stored.
+    Oldest-first makes any partial write a PREFIX, which the next run's overlap
+    covers.
+
+    ONE MEASUREMENT WITH A `type` TAG, not one measurement per type. The type
+    space is open - newer hardware adds codes - so an unknown code is one more
+    tag value in a series that already exists, and every panel is a filter on
+    `type`. `grpid` is a FIELD and `deviceid` is a TAG: deviceid has a handful of
+    values for the life of the account, grpid has one per weigh-in forever and as
+    a tag would multiply series cardinality by the number of weigh-ins.
+    """
+    lines = []
+    for group in sorted(groups, key=group_date):
+        ts = group_date(group)
+        grpid = group.get("grpid", "")
+        deviceid = group.get("deviceid") or "unknown"
+        for measure in group.get("measures") or []:
+            try:
+                value = measure["value"]
+                unit = measure["unit"]
+                mtype = measure["type"]
+            except (KeyError, TypeError):
+                raise IngestFailed(
+                    "measure group is missing value, unit or type")
+            lines.append(
+                'withings_measure,person=%s,type=%s,deviceid=%s '
+                'grpid="%s",value=%s %d'
+                % (esc_tag(PERSON), esc_tag(mtype), esc_tag(deviceid),
+                   esc_field(grpid), scaled(value, unit), ts))
+    return lines
