@@ -136,6 +136,12 @@ The rules that must not be broken:
 - **Agent work happens in an isolated git worktree, never in the main checkout** (`.claude/worktrees/` or equivalent; operator ruling, 2026-08-27).
   Several agents and sessions share that checkout at once, so its current branch is not yours to assume: run `git branch --show-current`, confirm it, and only then commit.
   A guidance edit that day landed on another agent's branch because the shared checkout had been switched mid-flight.
+- **The main session is a strict orchestrator.**
+  The operator's session — the main Claude Code context — coordinates and does not do the work.
+  Every task, however small, is dispatched to a subagent or a Workflow: reading a document, setting up a worktree's `direnv allow` and lint baseline, running a command, writing a file, drafting a memo.
+  The main session only classifies the task, dispatches it, relays the result in plain words, asks the operator the decisions and holds the approval gates.
+  Work done in the main session pollutes the coordinating context, slows the loop and duplicates what the agents were dispatched for.
+  Operator ruling, 2026-09-02, after the main session ran a worktree setup and a lint baseline itself while three research agents were already running.
 - **Deploy, then merge.**
   A PR branch is applied to the cluster and verified healthy **before** the PR merges: `master` records what has been successfully deployed, never intent.
   Apply from the branch checkout (the preflight guards still run), confirm the workload is healthy, then the operator merges.
@@ -402,6 +408,8 @@ The rules that must not be broken:
   Do not record repo, cluster, or account state in an agent's private memory system — that hides operational knowledge from the operator, from other agents, and from review.
   Anything worth remembering goes in `docs/` (or this file, per the rule above), where it is versioned, diffable and shared.
   This applies to facts about adjacent infrastructure the repo touches (VMs, DNS, Cloudflare account state), not just the manifests themselves.
+  It covers the operator's working-style preferences and process rulings too: how the operator wants agents to work is never a private-memory entry, it belongs in this file, where every session reads it.
+  Restated on 2026-09-02 after an agent wrote a preference into its memory store despite this bullet.
 
 ## Legacy Reference
 
