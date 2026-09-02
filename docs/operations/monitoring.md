@@ -102,6 +102,7 @@ Defaults, unless a service's entry below says otherwise:
 | jottacloud-backup | none | Its old liveness probe could not fail. `activeDeadlineSeconds: 21600` bounds the run |
 | garmin-grafana | none | It serves nothing. The `health-ingest` push monitor is the correct instrument |
 | cloudflare-analytics | none | Scheduled work. `homelab-cloudflare-analytics` plus `activeDeadlineSeconds: 1200` is the instrument |
+| withings-ingest | none | Scheduled work. `withings-ingest` plus `activeDeadlineSeconds: 900` is the instrument |
 | update-watch | none | Scheduled work. `homelab-update-watch` plus `activeDeadlineSeconds: 300` is the instrument |
 | keel-fresh | none | Scheduled work. The `homelab-keel-fresh` kuma push monitor plus `activeDeadlineSeconds: 300` is the instrument |
 | hindsight api | liveness `/health/live`, readiness and startup `/health` (:8888) | Split on purpose, the same way n8n's is. `/health` is database-gated, so a broken postgres drains traffic; `/health/live` is in-process and never touches the database, so a slow or recovering postgres cannot crashloop the single replica. `/health/live` needs image ≥ 0.9.1 — keep the pin at or above it |
@@ -147,9 +148,9 @@ Generated scripts also pass through envsubst, so run `make check-script-substitu
 | Field | Value | Why |
 |---|---|---|
 | `timeZone: "UTC"` | every job | Otherwise the schedule follows kube-controller-manager's local zone |
-| `startingDeadlineSeconds` | 3600 (update-watch and both clusters' keel-fresh included), except 1800 for cloudflare-analytics, 600 for hindsight-canary, 300 for jottacloud, and unset for `ingest-freshness` | A missed window retries for that long, then drops. `update-watch` takes the 3600 default deliberately: a silently skipped run is the failure it exists to prevent |
-| `activeDeadlineSeconds` | restic 14400, influx-backup 3600, hindsight-pg-dump 3600, hermes-pull 1800, cloudflare-analytics 1200, ingest-freshness 300, update-watch 300, keel-fresh 300 on both clusters, hindsight-canary 300, jottacloud 21600 | With `concurrencyPolicy: Forbid`, one hung run silently blocks every later run |
-| `ttlSecondsAfterFinished` | 259200 on both restic jobs, hermes-pull, cloudflare-analytics, update-watch and both clusters' keel-fresh; 172800 on influx-backup and hindsight-pg-dump; 3600 on hindsight-canary, which runs hourly; 86400 on the rest | A Friday failure on the restic jobs survives until Monday |
+| `startingDeadlineSeconds` | 3600 (update-watch and both clusters' keel-fresh included), except 1800 for cloudflare-analytics and withings-ingest, 600 for hindsight-canary, 300 for jottacloud, and unset for `ingest-freshness` | A missed window retries for that long, then drops. `update-watch` takes the 3600 default deliberately: a silently skipped run is the failure it exists to prevent |
+| `activeDeadlineSeconds` | restic 14400, influx-backup 3600, hindsight-pg-dump 3600, hermes-pull 1800, cloudflare-analytics 1200, withings-ingest 900, ingest-freshness 300, update-watch 300, keel-fresh 300 on both clusters, hindsight-canary 300, jottacloud 21600 | With `concurrencyPolicy: Forbid`, one hung run silently blocks every later run |
+| `ttlSecondsAfterFinished` | 259200 on both restic jobs, hermes-pull, cloudflare-analytics, withings-ingest, update-watch and both clusters' keel-fresh; 172800 on influx-backup and hindsight-pg-dump; 3600 on hindsight-canary, which runs hourly; 86400 on the rest | A Friday failure on the restic jobs survives until Monday |
 | `terminationGracePeriodSeconds` | not set on any job | busybox `ash` runs as PID 1 and never forwards SIGTERM to restic, so a grace period only slows teardown. `restic unlock` at the head of the next run recovers the lock |
 
 Two of those are the hindsight jobs.
@@ -199,7 +200,7 @@ An unparseable `df` reading **fails**, on the same "I could not look" rule as th
 The residual is honest and small: this samples once a night, so a fill faster than a day still lands between runs.
 
 Both promote to failure only when restic itself succeeded, so a real restic failure keeps its own, more specific exit code.
-Both announce their passes (`11/11 artifacts present`, `5/5 newer than 30h`): a gate that prints nothing when happy is indistinguishable from one that never ran.
+Both announce their passes (`12/12 artifacts present`, `5/5 newer than 30h`): a gate that prints nothing when happy is indistinguishable from one that never ran.
 In both, **"I could not look" must never be reported as "everything is fine"** — an unreadable `/data` or an unopenable PVC directory fails the job.
 
 **The one deliberate divergence is that homelab gates the prune**, because pruning is the step that destroys data: failing the job afterwards still alerts, but the seven good daily snapshots are already being expired on schedule while the alert goes unread.
@@ -227,6 +228,7 @@ An explicit list beats a wildcard, which cannot tell "no databases exist" from "
 | homelab | grafana-dump | `/data/pvc-*_health_health-dumps/grafana/*-grafana.db` | ≥200 KiB **and** <30h |
 | homelab | influxdb-bolt | `/data/pvc-*_health_influxdb-data/influxd.bolt` | ≥32 KiB |
 | homelab | garmin-tokens | `/data/pvc-*_health_garmin-tokens/garmin_tokens.json` | ≥256 B |
+| homelab | withings-tokens | `/data/pvc-*_health_withings-tokens/withings_tokens.json` | ≥64 B |
 | homelab | influx-native-dump | `/data/pvc-*_health_health-dumps/native/*` | <30h |
 | homelab | influx-lp-export | `/data/pvc-*_health_health-dumps/lp/*.lp.gz` | <30h |
 | homelab | hermes-zip | `/data/pvc-*_backup_hermes-dumps/hermes-*.zip` | ≥16 MiB **and** <30h |
@@ -236,6 +238,9 @@ Homelab byte floors sit an order of magnitude under observed sizes: they reject 
 The two newest rows follow the same derivation from a measured seed run: `grafana-dump` at 200 KiB, from 2,039,808 B / 273 schema objects on 2026-08-24, and `hindsight-dump` at 4 KiB, from 48,829 B / 23 tables at rollout step 5 the same day.
 Each has a twin `MIN_BYTES` in the script that writes it — `homelab/health/scripts/grafana-sqlite-backup.py` and `homelab/hindsight/scripts/hindsight-pg-dump.sh` — and the pair must be raised together.
 Live sizes are reported as `grafana_kib=` and `dump_kib=` in their heartbeat messages.
+
+`withings-tokens` sits at 64 B rather than the 256 B its `garmin-tokens` neighbour carries, because that file holds two strings and renders to roughly 100 bytes.
+It is also the one row whose artifact cannot usefully be restored: the refresh token rotates every six hours, so the gate detects that the PVC stopped being captured rather than promising a recovery.
 
 `influx-backup` writes the influx dumps *and* the Grafana dump at 02:30Z, 30 minutes before this job, so 30h tolerates one missed run (`health-influx-backup` is the monitor for *that*) and fails on two consecutive misses; `hermes-pull` writes its zip at 02:00Z on the same terms, with `homelab-hermes-pull` as its own first-line check.
 Nothing else is freshness-checked: a deadline on live application state manufactures reds on any file an app happens not to touch for a day.
@@ -588,7 +593,7 @@ Read that as one rule with three outcomes rather than three rules.
 
 Everything that used to be a body line is now printed to the pod log as well — the shell runners as a `detail:` line from the exit trap, the Python jobs as a `heartbeat message (full):` block — so nothing was lost, it moved.
 **Read the pod log first**; the heartbeat history is the fallback, not the record.
-The pod log's window is `ttlSecondsAfterFinished` on the Job, and that varies more than it looks: **3 days** for `cloudflare-analytics`, `hermes-pull`, `update-watch` and both `keel-fresh` jobs; **2 days** for `influx-backup` and `hindsight-pg-dump`; **1 day** for `ingest-freshness` and `jottacloud-backup`; and **1 hour** for `hindsight-canary`, which runs hourly.
+The pod log's window is `ttlSecondsAfterFinished` on the Job, and that varies more than it looks: **3 days** for `cloudflare-analytics`, `withings-ingest`, `hermes-pull`, `update-watch` and both `keel-fresh` jobs; **2 days** for `influx-backup` and `hindsight-pg-dump`; **1 day** for `ingest-freshness` and `jottacloud-backup`; and **1 hour** for `hindsight-canary`, which runs hourly.
 So it is an hour on the canary and no more than three days on anything.
 
 `make check-ping-bodies` enforces all of this.
@@ -658,6 +663,7 @@ It also holds **push monitors**, driven by jobs that send a heartbeat rather tha
 Ten were created on August 26, 2026: `homelab-keel-fresh` and `vps-keel-fresh`, and the eight that took over the routine heartbeats — `health-influx-backup`, `health-ingest`, `homelab-cloudflare-analytics`, `homelab-hermes-pull`, `hindsight-pg-dump`, `hindsight-canary`, `homelab-update-watch` and `jottacloud-backup`.
 An eleventh, **`hermes-app-alive`**, is the one driven from **outside** both clusters: a `no_agent` cron job inside the hermes agent on the off-cluster VM at 05:45 UTC, `up` on exit 0 and `down` otherwise ([hermes-vm.md](hermes-vm.md#reading-a-down-hermes-app-alive)).
 That widens the `/api/push/*` Access bypass's blast radius past "the clusters".
+A twelfth, **`withings-ingest`**, was added on September 2, 2026 for the `withings-ingest` CronJob in `health`.
 Because the healthchecks.io account is capped at 20 checks, new scheduled work takes a push monitor instead.
 Both the roster and the Cloudflare Access bypass that lets a job reach the push endpoint are in **[uptime-kuma.md](uptime-kuma.md#push-monitors)**.
 
@@ -684,7 +690,7 @@ It is a deliberate copy rather than a shared file: a homelab pod holding a VPS k
 
 `vps-keel-fresh` is pushed from the same cluster uptime-kuma runs on, so a VPS-wide outage takes the job and its watcher together.
 That is layer 4's job, not this monitor's: `vps-uptime-kuma-alive` is at healthchecks.io precisely so something outside the VPS notices.
-The same reasoning now covers ten push monitors rather than two, and it is the reason `vps-uptime-kuma-alive` may never move: if kuma dies, every heartbeat in the estate stops arriving and only something outside it can say so.
+The same reasoning now covers twelve push monitors rather than two, and it is the reason `vps-uptime-kuma-alive` may never move: if kuma dies, every heartbeat in the estate stops arriving and only something outside it can say so.
 
 | `verdict=` | Means |
 |---|---|
@@ -756,6 +762,12 @@ The natural home for an etcd-member-count and a node-spread assertion is the `vp
 Note also that the external prober runs **on the VPS storage node**, so it cannot observe a VPS-wide control-plane problem at all.
 
 Queued, not configured: a changedetection `overdue_watches` json-query monitor and a karakeep queue-depth alert; both need an API credential in the monitor.
+
+**Nothing detects a scale that stops syncing to Withings.**
+The `withings-ingest` job runs, fetches zero groups, reports `verdict=ok groups=0` and stays green, because an empty window is a legitimate success — Withings reports a failed call with a non-zero `status`, not with an empty result.
+The `groups=` counter in the heartbeat history is the only signal, and reading it is a human act.
+A freshness check on the bucket would be the detector, and it is deliberately not built until the weighing habit is regular enough for a threshold to mean something.
+Adding `withings` to `ingest-freshness` is the wrong fix: that check pushes `up` only when every bucket it watches is fresh, so a day without a weigh-in would silence the Apple and Garmin signal too.
 
 Snapshot integrity stays partly verified by choice.
 On VPS the `sqlite_master` assertion closes the worst case — a fresh, valid, empty snapshot from a truncated source — by proving a schema exists, not that the data is there; homelab has no equivalent, having no quiesce sidecars to assert against, so its gate stops at shape.

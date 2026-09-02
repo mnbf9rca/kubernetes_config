@@ -163,7 +163,7 @@ It creates `cloudflare` with `-r 0` (infinite retention — expiring the copy wo
 | Token | Paste into | Scope |
 |---|---|---|
 | Cloudflare ingest | `op://Homelab/health-influxdb/cloudflare-token` | read **and** write on `cloudflare` |
-| Replacement read-only | `op://Homelab/health-influxdb/read-token` | read on all four buckets |
+| Replacement read-only | `op://Homelab/health-influxdb/read-token` | read on all four buckets that existed when it was written |
 
 The ingest token needs read as well as write because the job's resume point is `max(_time)` read back out of the bucket.
 
@@ -171,17 +171,28 @@ The read token has to be **replaced**, not amended: InfluxDB offers no way to ad
 Order matters — paste, `make apply-homelab`, restart `grafana` and `influxdb-mcp`, and only **then** `influx auth delete` the superseded auth.
 Delete it first and you lock Grafana and the connector out until the new Secret has rolled.
 
+`make health-influx-withings-bootstrap` does the same job for the `withings` bucket, on the same terms: `-r 0`, an ingest token that reads and writes on that one bucket, and a replacement read token covering all five.
+Run it before the apply that adds `withings` to `influx-export-lp.sh`'s bucket list — that script fails by name on a bucket that does not exist, so the wrong order fails the nightly backup until the bucket appears.
+It prints the ingest token for you to paste into `op://Homelab/health-influxdb/withings-token`; the `.env.tpl` line, the two Makefile variable lists and the `health-influxdb` Secret key that carry it into the cluster are separate hand edits.
+
+**Always mint the replacement read token from the newest bucket's target.**
+Each of these targets hard-codes the bucket list its read token covers: `health-influx-bootstrap` mints over three buckets and `health-influx-cloudflare-bootstrap` over four, so re-running either one after the withings bootstrap silently drops `withings` from the read token and Grafana and the MCP connector stop seeing it.
+
 ## Backups and restore
 
 The `influx-backup` CronJob runs at 02:30 daily, ahead of the 03:00 restic sweep.
 Despite the name it is the whole namespace's logical backup pass, and it writes three things:
 
 - a native `influx backup` (14 generations),
-- a per-bucket, 8-day-windowed line-protocol export (60 generations, gzip), over an **explicit** bucket list: `apple_metrics apple_workouts garmin cloudflare`, and
+- a per-bucket, 8-day-windowed line-protocol export (60 generations, gzip), over an **explicit** bucket list: `apple_metrics apple_workouts garmin cloudflare withings`, and
 - a consistent point-in-time copy of Grafana's SQLite database, `grafana/<date>-grafana.db` (14 generations)
 
 to the `health-dumps` PVC on `local-path`.
 Because that PVC lives on the node's SSD, the existing hostPath restic→B2 CronJob picks it up for free — no separate off-cluster wiring needed.
+
+The `withings-tokens` PVC is captured like every other `local-path` PVC, and its token file is an entry in the homelab restic gate's expected set.
+A restore is not a recovery path for it: the refresh token rotates every six hours, so a snapshot's copy is dead as soon as a later run refreshes, and the recovery is a `--auth` run.
+The row's real job is to detect that the PVC stopped being captured.
 
 ### The Grafana dump
 
@@ -476,6 +487,201 @@ Read the log: it names every chunk, the row count per zone, and the GraphQL budg
 The `avg { sampleInterval }` selection is taken from the GraphQL schema, not from a doc page that spells it out; if Cloudflare names it differently the run fails loudly with the `errors` array in the log, and the fix is one line in `homelab/health/scripts/cloudflare-analytics-ingest.py`.
 It cannot fail silently.
 
+## Withings ingest
+
+`homelab/health/withings-ingest.yaml`.
+Six-hourly CronJob at `22 1,7,13,19 * * *` that pulls one Withings account's measure groups into the `withings` bucket.
+
+The scale produces body-composition detail that Apple Health never receives.
+Weight arrives here and in `apple_metrics`, deliberately, and the two are not deduplicated: the buckets stay separate and a Grafana panel picks the one it wants.
+
+### Shape
+
+| | |
+|---|---|
+| Endpoint | `POST https://wbsapi.withings.net/measure`, `action=getmeas`, `category=1` |
+| Bucket | `withings`, **infinite** retention |
+| Measurement | `withings_measure`; tags `person`, `type`, `deviceid`; fields `grpid` (string) and `value` (float) |
+| Image | `python:3.14-alpine3.22`, digest-pinned to the same reference `cloudflare-analytics` carries. No keel; Renovate proposes bumps under the "health stack" group |
+| Deadlines | `startingDeadlineSeconds: 1800`, `activeDeadlineSeconds: 900`, `ttlSecondsAfterFinished: 259200` |
+| Monitoring | The `withings-ingest` uptime-kuma push monitor: `up` on exit 0, `down` otherwise |
+
+Six-hourly rather than hourly because a scale is used at most a few times a day, and a missed window is picked up whole by the next run.
+
+### Why the script is Python
+
+The same three reasons as `cloudflare-analytics`, each a failure this repo has already hit.
+
+- Withings answers a failed call with HTTP 200 and a non-zero `status` field in the body. Grepping a JSON body in `sh` for that is the shape that made `ingest-freshness` report stale for 25 days.
+- The refresh token must be written atomically before the new access token is used.
+- Measure values arrive as `(value, unit)` pairs needing `10 ** unit` scaling, computed with `decimal.Decimal` so `74850` at unit `-3` renders `74.850` and never `74.85000000000001`.
+
+Two libraries were rejected.
+`aiowithings` does not implement the refresh grant at all — its client takes a callback that must return a valid access token, so you write the refresh POST either way — and it would add an async runtime, `aiohttp` and `yarl` to an image with no pip.
+`withings-sync` flattens its JSON export and drops measure types it does not know, exits 0 on an API error, and overwrites its token file with nulls on a Withings 5xx.
+That last failure is the one this design spends most of its care avoiding.
+
+### The token rule
+
+Withings rotates the refresh token on **every** refresh.
+The old one survives for eight hours after the new one is issued, **or** until the new access token is first used, whichever comes first.
+
+Three rules follow, and they are the whole of the protection:
+
+1. **Persist the rotated token before using the new access token.** A crash in that window is then a retry. Persist last and one becomes a permanent unlink that only a browser repairs.
+2. **Write atomically.** `write_state` is the only code that touches the file. It writes a temporary file in the same directory, `fsync`s it, `os.replace`s it, then `fsync`s the directory. On any exception it unlinks the temporary file and re-raises, so the previous contents stay intact and valid.
+3. **Never write on a bad response.** A non-zero Withings `status`, a non-2xx, a body that is not JSON, or a body missing `access_token` or `refresh_token` all raise before `write_state` is reached.
+
+The access token is never persisted: it lives three hours and is refreshed on every run.
+No token is ever logged — every error path reports a class name and a stage, never a response body.
+The one value the log does name is the **name** of an unset environment variable, printed by the exit handler when `env()` raises, because a pod log reading "exiting 1" against a heartbeat saying `failure=refresh` sends you to a browser re-authorization that fixes nothing.
+
+**A `failure=token_persist` heartbeat is the one thing to act on quickly.**
+It means the refresh succeeded, the new token was lost, and the old one is running down an eight-hour clock.
+Fix the volume and force a run inside that window and nothing is lost; miss it and the fix is a browser re-authorization.
+Every other failure is safe to leave until the next scheduled run.
+
+### The resume point
+
+The data is its own watermark.
+Each run reads `max(_time)` over the `withings` bucket, so the token file holds a credential and nothing else.
+
+```flux
+from(bucket:"withings")
+  |> range(start: 1970-01-01T00:00:00Z)
+  |> filter(fn: (r) => r._field == "value")
+  |> group()
+  |> max(column: "_time")
+  |> keep(columns: ["_time"])
+```
+
+**The `filter` before the `group` is load-bearing and must not be tidied away.**
+This bucket carries a float field, `value`, and a string field, `grpid`, so a bare `group()` over every field merges tables whose `_value` types differ and InfluxDB answers `schema collision: cannot group float and string types together`.
+That error body parses as "no data" to a naive reader.
+
+**A failed query is not an empty one.**
+An empty result means the bucket has never been written and the run seeds from `FIRST_RUN_START` (2009-01-01).
+A non-2xx, a 2xx carrying an InfluxDB error object, or an unparseable `_time` fails the run — treating a broken query as an empty bucket would re-backfill the whole account every six hours.
+
+The query runs **before** the refresh, so an InfluxDB outage costs no token rotation.
+
+The window is `lastupdate = min(max(_time), now) - 7200`.
+`lastupdate` filters on Withings' modification time, not measurement date, so a weight recorded three days ago and synced this morning is returned and lands at its own date.
+The clamp to now is one line and closes the only path that skips data: a scale with a wrong clock can date a point in the future, which would otherwise push `lastupdate` past the present.
+Overlapping windows are harmless, because an InfluxDB write of an identical measurement, tag set, field key and timestamp overwrites rather than adds — so re-running the job is always safe.
+
+### Schema
+
+One measurement with a `type` tag, not one measurement per type.
+The type space is open: newer hardware adds codes, and `meastypes` is deliberately not sent, so an unrecognized code still arrives and is still written.
+With one measurement an unknown code is one more tag value in a series that already exists, and every panel is a filter on `type`.
+
+`grpid` is a field and `deviceid` is a tag.
+`deviceid` has a handful of values for the life of the account; `grpid` has one per weigh-in forever, so as a tag it would multiply series cardinality by the number of weigh-ins.
+
+**There is no `type_name` tag. The numeric code is the data; the name is presentation.**
+Type names live in Grafana as a value mapping on the `type` tag, where a correction costs no redeploy, forks no series, and an unmapped code renders as its number rather than disappearing.
+
+Accepted residual: two groups sharing a measurement date, a type and a device collapse to one series and one timestamp, so the later write wins.
+That needs two weigh-ins recorded at the same second on the same device.
+
+### First-run setup
+
+The job cannot run until four things exist.
+None of them are created by `make apply-homelab`.
+
+1. **DNS for the callback host.** `withings.cynexia.net`, an A record to `10.100.0.100`. It exists only so the browser lands on something during authorization; Traefik answers 404 with the wildcard certificate and the code is read from the address bar.
+2. **Withings client credentials** in 1Password as `op://Homelab/health-withings/` with `client-id` `[text]`, `client-secret` concealed, and `redirect-uri` `[text]` holding `https://withings.cynexia.net/oauth-callback`. The application is registered as a Public API integration in the Development environment with that redirect URI.
+3. **uptime-kuma push monitor** `withings-ingest`, Push type, 21600s interval with one retry at 7200s. Token into `op://Homelab/health-healthchecks/withings-kuma-push-token`, typed `[text]`.
+4. **InfluxDB bucket and tokens**: `make health-influx-withings-bootstrap`, in a plain terminal. It prints two live tokens, so run it outside an agent session.
+
+The `withings-token` key on the `health-influxdb` Secret, and its `.env.tpl` line, are added by hand once that bootstrap has minted the token.
+Until the key exists the pod cannot start, which is the intended ordering rather than a fault.
+
+Then apply, authorize, and force the first run — the section below is the same procedure.
+
+### Re-authorization
+
+The refresh token lives a year and every run renews it, so this is needed only after a full year with no successful run, or after the token file is lost.
+The symptom is a `verdict=failed failure=refresh` heartbeat that repeats on every run.
+
+There is no `make` target for this: it needs a browser, a 30-second code window and a paste, so it is a sequence you run by hand.
+
+1. **Suspend the CronJob**, so a scheduled run cannot land in the middle of the exchange.
+
+   ```bash
+   kubectl -n health patch cronjob withings-ingest -p '{"spec":{"suspend":true}}'
+   ```
+
+   This is not the `garmin-grafana` case.
+   `replicas` is a committed field, so an apply resurrects an uncommitted scale-down; `suspend` is absent from the committed manifest and from its last-applied annotation, so a client-side apply leaves the patched value alone and the CronJob stays suspended across applies.
+   Unsuspending is an explicit act.
+
+2. **Read the live ConfigMap name.** It carries a content hash, so it changes whenever the script does.
+
+   ```bash
+   kubectl -n health get cm -o name | grep withings-ingest-script
+   ```
+
+3. **Authorize.** Substitute that name for `withings-ingest-script-XXXXXXXXXX` below, then run the script interactively in a one-off pod.
+
+   ```bash
+   kubectl -n health run withings-auth --rm -it --restart=Never \
+     --image=python:3.14-alpine3.22@sha256:6b91e66ab2a880ce9ca5a1b91c70f45963ff71ff68268df056336e1a657d5efd \
+     --overrides='{
+       "spec": {
+         "securityContext": {
+           "runAsNonRoot": true, "runAsUser": 65534, "runAsGroup": 65534,
+           "fsGroup": 65534, "seccompProfile": {"type": "RuntimeDefault"}
+         },
+         "containers": [{
+           "name": "withings-auth",
+           "image": "python:3.14-alpine3.22@sha256:6b91e66ab2a880ce9ca5a1b91c70f45963ff71ff68268df056336e1a657d5efd",
+           "command": ["python3", "/app/ingest.py", "--auth"],
+           "stdin": true, "stdinOnce": true, "tty": true,
+           "env": [
+             {"name": "PYTHONUNBUFFERED", "value": "1"},
+             {"name": "PYTHONDONTWRITEBYTECODE", "value": "1"},
+             {"name": "WITHINGS_CLIENT_ID",
+              "valueFrom": {"secretKeyRef": {"name": "health-withings", "key": "client-id"}}},
+             {"name": "WITHINGS_CLIENT_SECRET",
+              "valueFrom": {"secretKeyRef": {"name": "health-withings", "key": "client-secret"}}}
+           ],
+           "volumeMounts": [
+             {"name": "script", "mountPath": "/app", "readOnly": true},
+             {"name": "state", "mountPath": "/state"}
+           ]
+         }],
+         "volumes": [
+           {"name": "script", "configMap": {"name": "withings-ingest-script-XXXXXXXXXX"}},
+           {"name": "state", "persistentVolumeClaim": {"claimName": "withings-tokens"}}
+         ]
+       }
+     }' -- python3 /app/ingest.py --auth
+   ```
+
+   The trailing `-- python3 /app/ingest.py --auth` and the override's `command` are the same process; whichever wins produces the same run.
+   The `--auth` run pushes no heartbeat, because it is an operator action rather than a scheduled run.
+
+   The pod prints the authorize URL and waits.
+   Open it, sign in, approve, and paste the whole redirect URL from the address bar back at the prompt.
+   **The code lives 30 seconds**, so have the terminal at the prompt before you open the URL.
+   On success the pod prints `wrote /state/withings_tokens.json (refresh token, userid)` — the shape, never the value — and exits.
+   A `ConfigMap not found` failure means the hash went stale: re-read the name and re-run.
+
+4. **Unsuspend and force a run.**
+
+   ```bash
+   kubectl -n health patch cronjob withings-ingest -p '{"spec":{"suspend":false}}'
+   kubectl -n health get cronjob withings-ingest
+   kubectl -n health create job --from=cronjob/withings-ingest withings-manual
+   kubectl -n health logs job/withings-manual
+   ```
+
+   `SUSPEND` must read `False`.
+
+Losing the file costs the credential and nothing else: the resume point is in the bucket, so a re-authorization picks up where the data ends rather than replaying the account.
+
 ## Garmin re-authentication (annual)
 
 Tokens on the `garmin-tokens` PVC last roughly a year.
@@ -531,9 +737,10 @@ Pre-restart logs and the pod description are in the 2026-08-18 session scratchpa
 
 ## Monitoring
 
-Three uptime-kuma **push** monitors; tokens in 1Password item `health-healthchecks`.
-They replaced four healthchecks.io checks on August 26, 2026 — the two ingest checks merged, because one CronJob checks both buckets in one process and two monitors would have been one signal counted twice.
+Four uptime-kuma **push** monitors; tokens in 1Password item `health-healthchecks`.
+Three of them replaced four healthchecks.io checks on August 26, 2026 — the two ingest checks merged, because one CronJob checks both buckets in one process and two monitors would have been one signal counted twice.
 The names were kept so the estate reads as one inventory across the change.
+`withings-ingest` replaced nothing; it was created on September 2, 2026 for new scheduled work.
 Roster and per-monitor settings: [uptime-kuma.md](uptime-kuma.md#push-monitors).
 
 | Monitor | Interval / retry | Signals failure by |
@@ -541,8 +748,9 @@ Roster and per-monitor settings: [uptime-kuma.md](uptime-kuma.md#push-monitors).
 | `health-ingest` | 1d / 12h | silence |
 | `health-influx-backup` | 1d / 6h | **a `down` push from an EXIT trap** |
 | `homelab-cloudflare-analytics` | 1h / 2h | **a `down` push from the exit path** |
+| `withings-ingest` | 6h / 2h | **a `down` push from the exit path** |
 
-**`health-ingest` signals failure by silence; the other two do not.**
+**`health-ingest` signals failure by silence; the other three do not.**
 
 - `influx-backup` pushes `up` or `down` from an EXIT trap, so a failure is DOWN within a minute and is distinguishable from a never-scheduled run.
   It did not always: the report used to be the script's last statement under `set -eu`, so a failing prune, a missing ConfigMap key or a dead influxdb pod produced *exactly nothing* until the silence bound expired some 30 hours later.
@@ -556,12 +764,13 @@ Roster and per-monitor settings: [uptime-kuma.md](uptime-kuma.md#push-monitors).
   The pod log carries the full per-bucket verdict and keeps "stale" apart from "query failed", which the monitor's one bit cannot.
 - `cloudflare-analytics` (hourly) is Python and pushes `up` on rc 0 and `down` otherwise, the unrecoverable-gap path included, so a failure is distinguishable from a never-scheduled run without waiting for the silence bound.
   Pushes are best-effort and can never fail the job.
+- `withings-ingest` (every six hours) is Python on the same contract: `up` on rc 0, `down` otherwise, one push per run, never silent. `msg` carries `verdict=` from `ok|failed`, `groups=`, `points=` and, on a failure, `failure=` from a five-member enum naming the stage that died — `resume` and `write` are InfluxDB, `refresh` and `fetch` are Withings, `token_persist` is the volume.
 
-**There is no `/start` equivalent on the push API, and none of these three has one.**
+**There is no `/start` equivalent on the push API, and none of these four has one.**
 A push is a heartbeat carrying a status, so `activeDeadlineSeconds` is the whole of the hang bound and the monitor's interval plus retry is the silence bound.
 
-All three are bounded by `timeZone: "UTC"` and `activeDeadlineSeconds` (3600 for `influx-backup`, 300 for `ingest-freshness`, 1200 for `cloudflare-analytics`) — with `concurrencyPolicy: Forbid` and no deadline, one hung run blocks every subsequent run with nothing alerting.
-`influx-backup` sets `startingDeadlineSeconds: 3600` and `cloudflare-analytics` 1800; `ingest-freshness` deliberately does not, since it runs again in six hours.
+All four are bounded by `timeZone: "UTC"` and `activeDeadlineSeconds` (3600 for `influx-backup`, 300 for `ingest-freshness`, 1200 for `cloudflare-analytics`, 900 for `withings-ingest`) — with `concurrencyPolicy: Forbid` and no deadline, one hung run blocks every subsequent run with nothing alerting.
+`influx-backup` sets `startingDeadlineSeconds: 3600`, `cloudflare-analytics` 1800 and `withings-ingest` 1800; `ingest-freshness` deliberately does not, since it runs again in six hours.
 
 This namespace's monitors watch **data freshness**, not the edge — which is why the 2026-08-18 Pomerium wedge went unnoticed (that proxy has since been removed).
 External availability of `mcp.cynexia.com` and the other tunnel hostnames is layer 3, in [uptime-kuma.md](uptime-kuma.md#monitor-list).
@@ -589,6 +798,9 @@ If a real secret value is ever disclosed, log it in `secrets-to-rotate.md` at th
 The claude.ai connector is reconnected through the one-time-PIN flow and verified 2026-08-22: reads return data.
 
 **Resolved 2026-08-23:** the Hermes registration failure open on 2026-08-22 had two causes, fixed on successive days: the missing DCR allowlist entry for the Hermes callback (fixed 2026-08-22), then the IP-bypass Access policy suppressing the 401 that bootstraps the OAuth flow (fixed 2026-08-23 by the bypass-policy split — see [MCP behind Cloudflare Access](#mcp-behind-cloudflare-access)).
+
+**Withings, authorized <date of the `--auth` run>:** a Public API integration in the Withings Developer Dashboard's **Development** environment, redirect URI `https://withings.cynexia.net/oauth-callback`, scope `user.metrics,user.activity`.
+The refresh token lives a year and every successful run renews it.
 
 **Tech debt / deferred:**
 

@@ -229,7 +229,7 @@ Read the last message it did receive, and the pod log, before treating a gap as 
 
 **One trap is Python-only and it is silent.**
 Cloudflare answers urllib's default `Python-urllib/3.x` User-Agent with HTTP 403 and `error code: 1010` before the request reaches kuma — measured in-cluster on August 26, 2026, where the default agent got 403/1010 and a named one got kuma's own 404 for a bogus token, from the same URL in the same process.
-Both Python jobs therefore set an explicit `User-Agent` on the push and both suites assert it; curl and wget are unaffected.
+All three Python jobs therefore set an explicit `User-Agent` on the push and all three suites assert it; curl and wget are unaffected.
 It matters because a failed push is swallowed by design, so the only symptom would be a monitor that never goes UP.
 
 **A silent runner is proof the heartbeat landed.** kuma answers an unknown or inactive token with `404 {"ok":false,"msg":"Monitor not found or not active."}`, which `curl -f` and busybox `wget` both treat as a failure, and every runner prints a fixed line when its push fails.
@@ -250,6 +250,7 @@ Read it per row rather than assuming up-on-success everywhere.
 | `vps-keel-fresh` | `op://VPS/keel-fresh/kuma-push-token` | 86400s, 1 retry at 21600s | `keel-fresh` CronJob in the VPS `ops` namespace, from an EXIT trap: `up` on exit 0, `down` on any failure. The same contract as the row above, from the cluster this uptime-kuma runs on |
 | `health-influx-backup` | `op://Homelab/health-healthchecks/backup-kuma-push-token` | 86400s, 1 retry at 21600s | `influx-backup` CronJob in `health`, from an EXIT trap: `up` on exit 0, `down` otherwise. `msg` carries `verdict=`, `buckets=n/m` and `grafana_kib=`, plus `failed_step=` and `error=` on a failure |
 | `homelab-cloudflare-analytics` | `op://Homelab/health-healthchecks/cloudflare-kuma-push-token` | 3600s, 1 retry at 7200s | `cloudflare-analytics` CronJob in `health`, Python: `up` on rc 0, `down` otherwise, the unrecoverable-gap path included. `msg` carries `verdict=` from `ok\|incomplete\|gap\|failed`, `chunks=n/m`, `rows=` and `series=` |
+| `withings-ingest` | `op://Homelab/health-healthchecks/withings-kuma-push-token` | 21600s, 1 retry at 7200s | `withings-ingest` CronJob in `health`, Python: `up` on rc 0, `down` otherwise. `msg` carries `verdict=` from `ok\|failed`, `groups=` and `points=`, plus `failure=` from a five-member enum |
 | `health-ingest` | `op://Homelab/health-healthchecks/ingest-kuma-push-token` | 86400s, 1 retry at 43200s | `ingest-freshness` CronJob in `health`, **success only**: `up` when BOTH buckets are under 24h, and **nothing at all** when either is stale or the query failed. One monitor for two buckets because one process checks both. `msg` carries `apple_age_h=` and `garmin_age_h=` on every push — the last message before the silence is what names which path was ageing |
 | `homelab-hermes-pull` | `op://Homelab/hermes-backup/kuma-push-token` | 86400s, 1 retry at 7200s | `hermes-pull` CronJob in `backup`, from an EXIT trap: `up` on exit 0, `down` otherwise. `msg` carries `verdict=`, `zip_kib=` and `sha256_match=yes\|no` |
 | `hindsight-pg-dump` | `op://Homelab/hindsight/kuma-push-token` | 86400s, 1 retry at 7200s | `hindsight-pg-dump` CronJob in `hindsight`, from an EXIT trap: `up` on exit 0, `down` otherwise. `msg` carries `verdict=`, `dump_kib=`, `tables=` and `kept=` |
@@ -258,9 +259,10 @@ Read it per row rather than assuming up-on-success everywhere.
 | `jottacloud-backup` | `op://Homelab/jottacloud-backup/kuma-push-token` | 21600s, 1 retry at 7200s | The `jottacloud-backup-scheduled` CronJob's own image, on success only. This repo does not build that image and does not control the request — see the note below |
 | `hermes-app-alive` | `op://hermes/hermes-app-alive/kuma-push-token` | 86400s, 1 retry at 21600s | A `no_agent` cron job inside `hermes-gateway` on the hermes VM at 05:45 UTC, `up` on exit 0 and `down` on failure, from an EXIT trap |
 
-Each row's interval and retry mirror the period and grace of the healthchecks.io check it replaced, so nothing got quieter or noisier in the move (August 26, 2026).
+Each migrated row's interval and retry mirror the period and grace of the healthchecks.io check it replaced, so nothing got quieter or noisier in the move (August 26, 2026).
+`withings-ingest` replaced nothing: it was created on September 2, 2026 for new scheduled work, and its 21600s interval is its CronJob's own six-hour period.
 
-`hermes-app-alive` is the exception to that sentence, and to the claim above that every push comes from inside a cluster.
+`hermes-app-alive` is the exception to that migration sentence, and to the claim above that every push comes from inside a cluster.
 Three things about it are unlike every other row here.
 
 - **It is the only push monitor driven from outside both clusters.**
