@@ -137,7 +137,7 @@ fatal() {
 # `buckets=5/4` in the heartbeat is the visible tell that a bucket was added
 # there and not here. Adding a bucket is three edits now: create it, list it in
 # influx-export-lp.sh, and raise this.
-LP_EXPECTED=4
+LP_EXPECTED=5
 
 # Message values. `unknown` sentinels so `set -u` cannot bite in the trap if the
 # run dies before a measurement ran, and so a missing measurement reads as

@@ -20,14 +20,15 @@
 # be added here or it is silently never exported — the same class of bug as the
 # VPS gate's expected-set assertion. `cloudflare` therefore requires
 # `make health-influx-cloudflare-bootstrap` to have been run BEFORE the apply
-# that adds it here.
+# that adds it here, and `withings` the same for
+# `make health-influx-withings-bootstrap`.
 set -eu
 
 DATE=$1
 
 START=$(date -d "8 days ago" +%FT%TZ 2>/dev/null || date -v-8d +%FT%TZ)
 
-for B in apple_metrics apple_workouts garmin cloudflare; do
+for B in apple_metrics apple_workouts garmin cloudflare withings; do
   # A pipeline exits with its LAST command status, so a failed
   # `influx bucket list` leaves BID empty and sails past set -e. The explicit
   # test is what turns "bucket does not exist" into a named failure instead of

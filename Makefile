@@ -147,6 +147,7 @@ help:
 	@echo "  route-health-dns  - create/update CNAMEs for every hostname in the health cloudflared ConfigMap"
 	@echo "  health-influx-bootstrap - bootstrap InfluxDB buckets/DBRP mapping/tokens for the health stack"
 	@echo "  health-influx-cloudflare-bootstrap - create the 'cloudflare' bucket + mint its ingest/read tokens"
+	@echo "  health-influx-withings-bootstrap - create the 'withings' bucket + mint its ingest/read tokens"
 	@echo ""
 	@echo "Hindsight namespace targets:"
 	@echo "  hindsight-upgrade - take a verified pre-upgrade pg_dump, then STOP and print the manual half"
@@ -1495,4 +1496,49 @@ health-influx-cloudflare-bootstrap: check-context
 	mint --read-bucket $$CFID --write-bucket $$CFID -d "cloudflare analytics ingest rw"; \
 	echo "--- REPLACEMENT READ TOKEN (paste into op://Homelab/health-influxdb/read-token):"; \
 	mint --read-bucket $$AMID --read-bucket $$AWID --read-bucket $$GID --read-bucket $$CFID -d "mcp+grafana read-only (incl cloudflare)"; \
+	echo "--- then: apply, restart grafana+influxdb-mcp, and only THEN delete the old read-only auth"
+
+# The same target as health-influx-cloudflare-bootstrap with the bucket renamed
+# and one more --read-bucket. RUN IT IN A PLAIN TERMINAL, NOT INSIDE AN AGENT
+# SESSION: it prints two live InfluxDB tokens, and a token printed in a session
+# must be rotated under the `secrets-to-rotate.md` rule. Claude Code's `!`
+# prefix does not help - that still executes in the session and the output still
+# reaches the model.
+#
+# The ingest token is READ AND WRITE on its one bucket, because the job's resume
+# point is max(_time) read back out of it.
+#
+# Nothing here writes 1Password. The target PRINTS the ingest token for the
+# operator to paste into op://Homelab/health-influxdb/withings-token; the
+# .env.tpl line, the two Makefile variable lists and the health-influxdb Secret
+# key that carry it into the cluster are separate edits.
+#
+# The read token is REPLACED, not extended: InfluxDB has no way to add a bucket
+# to an existing auth, so Grafana and the MCP connector cannot see `withings`
+# until read-token is replaced in 1Password. Paste both values, apply, restart
+# grafana and influxdb-mcp, and only THEN delete the superseded auth.
+.PHONY: health-influx-withings-bootstrap
+health-influx-withings-bootstrap: check-context
+	@set -euo pipefail; \
+	$(INFLUX_POD_FN) \
+	bucket_id() { \
+	  id=$$(pod influx bucket list -o cynexia -n "$$1" --hide-headers | awk '{print $$1}'); \
+	  if [ -z "$$id" ]; then echo "FATAL: bucket '$$1' not found in org cynexia" >&2; exit 1; fi; \
+	  printf '%s' "$$id"; \
+	}; \
+	mint() { \
+	  tok=$$(pod influx auth create -o cynexia "$$@" --json | jq -r '.token // empty'); \
+	  if [ -z "$$tok" ]; then echo "FATAL: influx auth create returned no token" >&2; exit 1; fi; \
+	  printf '%s\n' "$$tok"; \
+	}; \
+	pod influx bucket create -n withings -o cynexia -r 0 || true; \
+	WID=$$(bucket_id withings); \
+	CFID=$$(bucket_id cloudflare); \
+	AMID=$$(bucket_id apple_metrics); \
+	AWID=$$(bucket_id apple_workouts); \
+	GID=$$(bucket_id garmin); \
+	echo "--- WITHINGS INGEST TOKEN (paste into op://Homelab/health-influxdb/withings-token):"; \
+	mint --read-bucket $$WID --write-bucket $$WID -d "withings ingest read+write"; \
+	echo "--- REPLACEMENT READ TOKEN (paste into op://Homelab/health-influxdb/read-token):"; \
+	mint --read-bucket $$AMID --read-bucket $$AWID --read-bucket $$GID --read-bucket $$CFID --read-bucket $$WID -d "mcp+grafana read-only (incl withings)"; \
 	echo "--- then: apply, restart grafana+influxdb-mcp, and only THEN delete the old read-only auth"
