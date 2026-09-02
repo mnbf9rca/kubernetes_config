@@ -764,7 +764,7 @@ Roster and per-monitor settings: [uptime-kuma.md](uptime-kuma.md#push-monitors).
   The pod log carries the full per-bucket verdict and keeps "stale" apart from "query failed", which the monitor's one bit cannot.
 - `cloudflare-analytics` (hourly) is Python and pushes `up` on rc 0 and `down` otherwise, the unrecoverable-gap path included, so a failure is distinguishable from a never-scheduled run without waiting for the silence bound.
   Pushes are best-effort and can never fail the job.
-- `withings-ingest` (every six hours) is Python on the same contract: `up` on rc 0, `down` otherwise, one push per run, never silent. `msg` carries `verdict=` from `ok|failed`, `groups=`, `points=` and, on a failure, `failure=` from a five-member enum naming the stage that died — `resume` and `write` are InfluxDB, `refresh` and `fetch` are Withings, `token_persist` is the volume.
+- `withings-ingest` (every six hours) is Python on the same contract: `up` on rc 0, `down` otherwise, one push per run, never silent. `msg` carries `verdict=` from `ok|failed`, `groups=`, `points=` and, on a failure, `failure=` from a five-member enum naming the stage that died — `resume` and `write` are InfluxDB, `refresh` and `fetch` are Withings, `token_persist` is the volume — plus `exception=` after it on an unhandled error.
 
 **There is no `/start` equivalent on the push API, and none of these four has one.**
 A push is a heartbeat carrying a status, so `activeDeadlineSeconds` is the whole of the hang bound and the monitor's interval plus retry is the silence bound.
