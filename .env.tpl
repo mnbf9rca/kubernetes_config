@@ -169,5 +169,12 @@ KARAKEEP_OPENAI_API_KEY=op://VPS/karakeep/openai_secret_key
 # VPS credential, and a shared monitor could not tell the two clusters apart.
 VPS_OPS_KUMA_KEEL_TOKEN=op://VPS/keel-fresh/kuma-push-token
 
+# Cloudflare Access service token for proxy.cynexia.com, the homelab egress
+# proxy hostname. Read by the `homelab-proxy` cloudflared client on this
+# cluster. Token `vps-proxy-access`, expires 2031-09-01 - see
+# docs/operations/uptime-kuma.md.
+VPS_HOMELAB_PROXY_ACCESS_CLIENT_ID=op://VPS/homelab-proxy/access-client-id
+VPS_HOMELAB_PROXY_ACCESS_CLIENT_SECRET=op://VPS/homelab-proxy/access-client-secret
+
 # karakeep admin API key for scripts/karakeep-tag-*.py (NOT used in any manifest — shell env only)
 KARAKEEP_CLEANUP_API_KEY=op://VPS/karakeep/cleanup_api_key
