@@ -591,6 +591,13 @@ Type names live in Grafana as a value mapping on the `type` tag, where a correct
 Accepted residual: two groups sharing a measurement date, a type and a device collapse to one series and one timestamp, so the later write wins.
 That needs two weigh-ins recorded at the same second on the same device.
 
+### Dashboard
+
+Grafana holds a hand-built dashboard at uid `withings`, titled **Withings** and tagged `health`, added September 2, 2026.
+It is **not provisioned from this repo**, by design: it lives in `grafana.db` like every other dashboard here, so the nightly SQLite dump described under [The Grafana dump](#the-grafana-dump) is what captures it.
+Eight stat tiles carry the latest reading for weight, fat ratio, fat mass, muscle mass, hydration, bone mass, heart rate and blood pressure — each over `range(start: 0)`, so a tile is never blank merely because the cuff has not been used inside the dashboard's 90-day window — then time series for the same measures, a collapsed **Other** row holding height, and a table of any type code present in the bucket that no panel covers.
+That last table is the only thing that would notice a code newer firmware invents, and empty is its expected state.
+
 ### First-run setup
 
 The job cannot run until four things exist.
