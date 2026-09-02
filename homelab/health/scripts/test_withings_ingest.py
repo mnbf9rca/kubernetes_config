@@ -15,12 +15,17 @@ in test_cloudflare_analytics_ingest.py, and a second copy of those assertions
 proves nothing about this script. Review them by diffing the two files.
 
 No network, no cluster, no InfluxDB: every call is stubbed by replacing the
-module's `http_post`.
+module's `http_post`. The one exception is the exit-handler test, which runs
+the script as a subprocess because that handler lives under `if __name__ ==
+"__main__"` and no import can reach it - and that run dies on an unset
+variable before it opens a socket.
 """
 import importlib.util
 import json
 import os
 import shutil
+import subprocess
+import sys
 import tempfile
 import unittest
 from urllib.parse import parse_qsl as urllib_parse_qsl
@@ -515,6 +520,24 @@ class Heartbeat(unittest.TestCase):
             self.assertNotIn("s3cr3ttoken", line)
             self.assertNotIn("uptime.example", line)
             self.assertIn("IngestFailed", line)
+
+    def test_an_unset_variable_is_named_in_the_log_on_the_way_out(self):
+        # The module-level exit handler is only reachable by RUNNING the script:
+        # it sits under `if __name__ == "__main__"` and no import executes it.
+        # env() raises SystemExit carrying the NAME of the unset variable, and
+        # dropping that name left an alert reading `failure=refresh`, whose
+        # documented remedy is a browser re-authorization - the wrong repair for
+        # a Secret key that was never wired. This run dies inside env() before
+        # it opens a socket.
+        environ = dict(os.environ)
+        for name in ("INFLUX_TOKEN", "WITHINGS_CLIENT_ID",
+                     "WITHINGS_CLIENT_SECRET", "PUSH_URL"):
+            environ.pop(name, None)
+        done = subprocess.run([sys.executable, _PATH], env=environ,
+                              capture_output=True, text=True)
+        self.assertEqual(done.returncode, 1)
+        self.assertIn("INFLUX_TOKEN", done.stdout)
+        self.assertIn("verdict=failed", done.stdout)
 
 
 if __name__ == "__main__":

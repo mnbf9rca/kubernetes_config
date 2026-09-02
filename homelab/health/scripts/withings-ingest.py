@@ -693,6 +693,16 @@ if __name__ == "__main__":
     try:
         rc = main()
     except SystemExit as exc:
+        # THE NAME, NEVER THE VALUE. env() raises SystemExit carrying a fixed
+        # literal plus the NAME of the unset variable, so this is safe to log
+        # and is the only place it is said. Dropping it left the pod log
+        # reading "exiting 1" while the heartbeat said `failure=refresh`, whose
+        # documented remedy is a browser re-authorization - the wrong repair
+        # for a Secret key that was never wired.
+        # Logged BARE: env() already prefixes its message with "FATAL: ", and
+        # a second one reads as a bug in the reporting rather than the config.
+        if not isinstance(exc.code, int):
+            log(str(exc.code))
         rc = exc.code if isinstance(exc.code, int) else 1
         log("FATAL: exiting %d" % rc)
         hc_summary("failed")
