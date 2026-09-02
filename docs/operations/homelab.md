@@ -55,11 +55,12 @@ Verify keel's permissions with a SelfSubjectAccessReview issued with keel's own 
 | `traefik` | Ingress | Traefik DaemonSet (PSA privileged — hostNetwork) |
 | `keel` | Auto-updates | keel controller |
 | `backup` | Backup | restic init Job + nightly CronJob (PSA privileged — hostPath) |
-| `health` | Personal health data pipeline | influxdb, apple-health-ingester, garmin-grafana, grafana, influxdb-mcp (behind Cloudflare Access), cloudflared, backup + freshness CronJobs — see [homelab-health.md](homelab-health.md) |
+| `health` | Personal health data pipeline | influxdb, apple-health-ingester, garmin-grafana, grafana (also public at `grafana.cynexia.com` behind Cloudflare Access), influxdb-mcp (behind Cloudflare Access), cloudflared, backup + freshness CronJobs — see [homelab-health.md](homelab-health.md) |
 | `ops` | Cluster-wide operational jobs | `update-watch` and `keel-fresh` CronJobs — see below |
 | `proxy` | Residential egress for changedetection on the VPS | tinyproxy — see [vps.md](vps.md#residential-egress-through-the-homelab) |
 
 Ingress hostnames are `*.cynexia.net` (Route53), Traefik-fronted, LAN/Tailscale only: `sonarr`, `radarr`, `sab`, `hydra`, `emby`, `grafana-health`.
+`grafana-health` is the only one of those that is also reachable from outside, on `grafana.cynexia.com` through the homelab cloudflared tunnel behind Cloudflare Access — the Traefik hostname itself stays LAN/Tailscale only.
 
 Retired in the rebuild: immich, ollama, open-webui, komga, jellyfin, mylar3, lazylibrarian, caddy, postgresql.
 tinyproxy was on that list until September 2, 2026, when it returned in its own `proxy` namespace to serve changedetection on the VPS — see [vps.md](vps.md#residential-egress-through-the-homelab).

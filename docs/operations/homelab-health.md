@@ -44,6 +44,7 @@ Public `*.cynexia.com` hostnames on this tunnel:
 | `hermes.cynexia.com` | Hermes agent dashboard on the hermes VM (`hermes.cynexia.net:9119`, off-cluster), via Cloudflare Access (karakeep-style email policy) |
 | `hermes-app.cynexia.com` | `hermes-webui` on the same VM (`hermes.cynexia.net:8787`, off-cluster) — the server the Hermex iOS app talks to, via Cloudflare Access (Service Auth + the same email policy) |
 | `proxy.cynexia.com` | Residential egress proxy for changedetection on the VPS — see [vps.md](vps.md#residential-egress-through-the-homelab) |
+| `grafana.cynexia.com` | Grafana, via Cloudflare Access (Access app `grafana`: `service-auth-monitoring` + `allow_cynexia_com`) — the same instance Traefik serves privately at `grafana-health.cynexia.net`, with Grafana's own admin login as the second gate |
 
 `proxy.cynexia.com` is the only **TCP** origin in the ingress block — `tcp://tinyproxy.proxy.svc.cluster.local:8888`, not an HTTP service — and, like `mcp.cynexia.com`, it has an origin that authenticates nobody; unlike `mcp`, a naked origin here is an open forward proxy.
 Its Access application, `homelab-proxy`, carries one app-scoped Service Auth policy and nothing else, so a deleted or disabled application publishes an open HTTP proxy on the operator's home connection rather than closing the path.
@@ -90,7 +91,9 @@ The desktop/TUI gateway flow binds an ephemeral loopback callback listener **on 
 A failed or abandoned dashboard OAuth attempt blocks retries with HTTP 409 `MCP OAuth for '<name>' is already in progress`.
 That stale flow is in-memory only and self-expires after 15 minutes (`_MCP_DASHBOARD_OAUTH_TTL`); `systemctl --user restart hermes-dashboard` on the VM clears it immediately.
 
-Grafana is **not** on this tunnel — it is private, Traefik-fronted at `grafana-health.cynexia.net` like every other homelab service (LAN/Tailscale only).
+Grafana is on this tunnel at `grafana.cynexia.com`, added September 2, 2026, behind the Access app `grafana` with the two reusable policies `service-auth-monitoring` and `allow_cynexia_com`.
+Its private Traefik hostname `grafana-health.cynexia.net` stays and stays valid: the LAN and Tailscale path is unchanged, and the public hostname reaches the same Service.
+Grafana runs its own admin login behind Access, so the origin is not authless — but the Access app fails open like every other one on this tunnel, so verify the edge challenges an unauthenticated client after any Cloudflare rebuild.
 
 After changing hostnames in `homelab/health/cloudflared.yaml`, every hostname needs a proxied CNAME to `1a4245a3-5264-420c-9893-b45ff25a0214.cfargotunnel.com`.
 `make route-health-dns` mints them all, but it shells out to `cloudflared tunnel route dns`, which needs an **origin certificate** at `~/.cloudflared/cert.pem`.

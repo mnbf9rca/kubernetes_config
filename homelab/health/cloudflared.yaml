@@ -47,6 +47,14 @@ data:
       # connection. It fails open, like every app named in this block.
       - hostname: proxy.cynexia.com
         service: tcp://tinyproxy.proxy.svc.cluster.local:8888
+      # The same Grafana Traefik serves privately at grafana-health.cynexia.net.
+      # Access app "grafana" carries the two reusable policies changedetection
+      # uses: "service-auth-monitoring" (the Uptime service token) and
+      # "allow_cynexia_com" (email domain cynexia.com). Grafana keeps its own
+      # admin login behind that, so this origin is not authless — but the Access
+      # app still fails open, like every other one named in this block.
+      - hostname: grafana.cynexia.com
+        service: http://grafana.health.svc.cluster.local:3000
       - service: http_status:404
 ---
 apiVersion: apps/v1
