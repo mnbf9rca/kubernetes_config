@@ -1,0 +1,141 @@
+---
+# Withings measurements -> InfluxDB.
+#
+# A new Withings scale produces body-composition detail (visceral fat, segmental
+# composition and whatever the next firmware adds) that Apple Health never
+# receives. This CronJob pulls the account's measure groups into the `withings`
+# bucket, infinite retention. Weight arrives here AND in apple_metrics; that is
+# deliberate and is not deduplicated - the two buckets are separate and a
+# Grafana panel picks one.
+#
+# The script is homelab/health/scripts/withings-ingest.py, mounted at
+# /app/ingest.py by the configMapGenerator in this directory's
+# kustomization.yaml. The generated ConfigMap name carries a content hash, so
+# editing the script rolls this CronJob.
+#
+# WHY THIS IS PYTHON AND STDLIB ONLY: the same reasons as cloudflare-analytics.
+# Withings answers a failed call with HTTP 200 and a non-zero `status` field in
+# the body, which is not something to grep for in sh; the refresh token has to
+# be written atomically before the new access token is used; and measure values
+# arrive as (value, unit) pairs needing 10**unit scaling.
+#
+# THE TOKEN FILE IS THE ONLY THING WHOSE LOSS COSTS A BROWSER. Withings rotates
+# the refresh token on EVERY refresh and the old one dies 8 hours later or when
+# the new access token is first used, whichever is first. The script therefore
+# persists the new token BEFORE it uses the new access token, atomically, and
+# never writes the file on a bad response. Those three rules are the protection;
+# a --auth run is the recovery. Restic backs the PVC up nightly, but a RESTORE
+# is not a recovery path here: a snapshot's token dies as soon as a later run
+# refreshes, so a restore yields a usable token only for a loss falling between
+# the 03:00 snapshot and the next successful run.
+#
+# NO KEEL in this namespace: the image is pinned and Renovate proposes bumps
+# under the "health stack" group.
+#
+# NO PROBES. Scheduled work: the instrument is the uptime-kuma push monitor's
+# dead-man's-switch plus activeDeadlineSeconds.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata: { name: withings-tokens, namespace: health }
+spec:
+  accessModes: [ReadWriteOnce]
+  resources: { requests: { storage: 100Mi } }
+  storageClassName: local-path
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: withings-ingest
+  namespace: health
+spec:
+  # Every six hours, at :22 past an odd hour. Minute 22 is used by nothing else
+  # in either cluster, and hours 1/7/13/19 keep this clear of the 02:00-03:00
+  # backup chain (hermes-pull 02:00, hindsight-pg-dump 02:15, influx-backup
+  # 02:30, restic 03:00) and of ingest-freshness at :15 on 0/6/12/18.
+  # Six-hourly rather than hourly because a scale is used at most a few times a
+  # day and a missed window is picked up whole by the next run.
+  schedule: "22 1,7,13,19 * * *"
+  timeZone: "UTC"                 # without this the schedule is read in kube-controller-manager's local zone
+  concurrencyPolicy: Forbid
+  # A missed window is retried for 30 minutes, then dropped. The resume point
+  # is max(_time) over the bucket, so the next run covers the gap by itself.
+  startingDeadlineSeconds: 1800
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      # 1, not 0. A retry is safe by construction: if the refresh succeeded and
+      # the persist did not, the stored token is still the old one and still
+      # valid for 8 hours; if the persist succeeded, the retry refreshes from
+      # the new one. Either way the run is idempotent at the InfluxDB end.
+      backoffLimit: 1
+      # Steady state is three HTTP calls and finishes in seconds. 15 minutes is
+      # sized for the FIRST run, which pages through the whole account history,
+      # and still bounds a wedged socket well inside the 6-hour schedule.
+      activeDeadlineSeconds: 900
+      # 3 days, so a Friday failure is still readable on Monday.
+      ttlSecondsAfterFinished: 259200
+      template:
+        spec:
+          restartPolicy: Never
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65534
+            runAsGroup: 65534
+            # The PVC must be writable by 65534. Same mechanism garmin-grafana
+            # relies on for garmin-tokens on this storage class.
+            fsGroup: 65534
+            seccompProfile: { type: RuntimeDefault }
+          containers:
+            - name: ingest
+              image: python:3.14-alpine3.22@sha256:6b91e66ab2a880ce9ca5a1b91c70f45963ff71ff68268df056336e1a657d5efd
+              command: ["python3", "/app/ingest.py"]
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities: { drop: ["ALL"] }
+              env:
+                # PYTHONDONTWRITEBYTECODE keeps the read-only root filesystem
+                # from producing __pycache__ write errors on every import.
+                - { name: PYTHONDONTWRITEBYTECODE, value: "1" }
+                - { name: PYTHONUNBUFFERED, value: "1" }
+                - { name: INFLUX_URL, value: "http://influxdb.health.svc.cluster.local:8086" }
+                - { name: INFLUX_ORG, value: "cynexia" }
+                - { name: INFLUX_BUCKET, value: "withings" }
+                # uptime-kuma push monitor `withings-ingest`
+                # (op://Homelab/health-healthchecks/withings-kuma-push-token).
+                #
+                # RENAMED AT THIS BOUNDARY. Only PUSH_URL reaches the script,
+                # because a generated script rides the same envsubst stream as
+                # this manifest and envsubst rewrites the bare `$NAME` form too.
+                # `make check-script-substitution` enforces it.
+                - name: PUSH_URL
+                  value: "https://uptime.cynexia.com/api/push/${HEALTH_KUMA_WITHINGS_TOKEN}"
+                - name: WITHINGS_CLIENT_ID
+                  valueFrom: { secretKeyRef: { name: health-withings, key: client-id } }
+                - name: WITHINGS_CLIENT_SECRET
+                  valueFrom: { secretKeyRef: { name: health-withings, key: client-secret } }
+                # READ AND WRITE on the `withings` bucket: the run's resume
+                # point is max(_time) over it, so this job reads before it
+                # writes. Scoped to that one bucket, like the cloudflare token.
+                #
+                # The `withings-token` key does not exist on health-influxdb
+                # until the operator runs the withings bucket-and-token
+                # bootstrap; until then the pod cannot start, which is the
+                # intended ordering rather than a fault.
+                - name: INFLUX_TOKEN
+                  valueFrom: { secretKeyRef: { name: health-influxdb, key: withings-token } }
+              volumeMounts:
+                - { name: script, mountPath: /app, readOnly: true }
+                - { name: state, mountPath: /state }
+                - { name: tmp, mountPath: /tmp }
+              resources:
+                requests: { cpu: 50m, memory: 64Mi }
+                limits: { memory: 256Mi }
+          volumes:
+            - name: script
+              configMap: { name: withings-ingest-script }
+            - name: state
+              persistentVolumeClaim: { claimName: withings-tokens }
+            - name: tmp
+              emptyDir: {}

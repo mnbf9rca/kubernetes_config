@@ -71,6 +71,7 @@ HEALTH_KUMA_CLOUDFLARE_TOKEN=op://Homelab/health-healthchecks/cloudflare-kuma-pu
 # ONE token for both ingest buckets: a single CronJob checks apple and garmin in
 # one process, so two monitors would be one signal counted twice.
 HEALTH_KUMA_INGEST_TOKEN=op://Homelab/health-healthchecks/ingest-kuma-push-token
+HEALTH_KUMA_WITHINGS_TOKEN=op://Homelab/health-healthchecks/withings-kuma-push-token
 
 # health namespace — healthchecks.io ping UUIDs
 HEALTH_HC_APPLE_UUID=op://Homelab/health-healthchecks/apple-uuid
@@ -86,6 +87,21 @@ HEALTH_INFLUX_GARMIN_V1_PASSWORD=op://Homelab/health-influxdb/garmin-v1-password
 HEALTH_INFLUX_INGESTER_TOKEN=op://Homelab/health-influxdb/ingester-token
 HEALTH_INFLUX_READ_TOKEN=op://Homelab/health-influxdb/read-token
 HEALTH_INFLUX_CLOUDFLARE_TOKEN=op://Homelab/health-influxdb/cloudflare-token
+# HEALTH_INFLUX_WITHINGS_TOKEN=op://Homelab/health-influxdb/withings-token is
+# deliberately absent until `make health-influx-withings-bootstrap` has minted
+# it and the operator has stored it. `op run` resolves EVERY line in this file
+# on EVERY command, so a reference to a field that does not exist yet fails
+# every build, diff and apply, not just the one that needs it. Uncommenting it
+# is part of the same commit that adds the `withings-token` key to
+# homelab/secrets/health.yaml.
+
+# health namespace — Withings OAuth2 client ("Public API integration",
+# Development environment). The client id is an identifier rather than a
+# secret, but it identifies the account, so it stays out of this public repo
+# like the Cloudflare zone IDs. The refresh token is NOT here: Withings rotates
+# it on every refresh and it lives on the withings-tokens PVC.
+HEALTH_WITHINGS_CLIENT_ID=op://Homelab/health-withings/client-id
+HEALTH_WITHINGS_CLIENT_SECRET=op://Homelab/health-withings/client-secret
 
 # health namespace — Cloudflare analytics ingest. The API token must carry
 # Zone.Analytics:Read and NOTHING else (the job never writes to Cloudflare).

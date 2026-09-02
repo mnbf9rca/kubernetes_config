@@ -16,6 +16,7 @@ resources:
   - backups.yaml
   - ingest-freshness.yaml
   - cloudflare-analytics.yaml
+  - withings-ingest.yaml
 
 # Scripts that run in this namespace live as real files under scripts/ and reach
 # the cluster through a generator, never as an inline YAML string: a real file
@@ -44,6 +45,12 @@ configMapGenerator:
     namespace: health
     files:
       - ingest.py=scripts/cloudflare-analytics-ingest.py
+  # Same shape as the generator above: `namespace: health` is required, the
+  # content-hash suffix stays on, and the key is the mount filename.
+  - name: withings-ingest-script
+    namespace: health
+    files:
+      - ingest.py=scripts/withings-ingest.py
   # Scheduled-job scripts for this namespace. influx-backup.sh runs in the
   # influx-backup CronJob pod; the two influx-*.sh scripts it ships into the
   # influxdb pod by `sh -c "$(cat ...)"` are keys here too, because the CronJob
