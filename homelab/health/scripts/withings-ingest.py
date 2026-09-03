@@ -93,8 +93,11 @@ SCOPE = "user.metrics,user.activity"
 # or a Grafana query needs no copy of the code table.
 #
 # AN EMPTY UNIT MEANS THE SPEC STATES NONE, AND IS NOT A GUESS TO BE FILLED IN.
-# Seventeen of these 43 codes are unitless there - counted from the table below,
-# not from memory - and the `unit` tag is simply absent on each of them.
+# Twelve of these 43 codes are unitless there - counted from the table below,
+# not from memory - and the `unit` tag is simply absent on each of them. Five
+# more that the spec leaves blank carry an `app-observed` comment instead: the
+# operator read those units off the Withings app itself, which is an
+# observation rather than a guess.
 # A code missing from this table is written unchanged with type_name=unknown -
 # newer firmware invents codes, and dropping one would lose the reading.
 TYPES = {
@@ -130,15 +133,15 @@ TYPES = {
     167: ("nerve_health_score_conductance_feet", ""),
     168: ("extracellular_water", "kg"),
     169: ("intracellular_water", "kg"),
-    170: ("visceral_fat", ""),                  # spec: without unit
-    173: ("fat_free_mass_segments", ""),        # per position
+    170: ("visceral_fat", "index"),             # app-observed 2026-09-03
+    173: ("fat_free_mass_segments", "kg"),      # per position, app-observed 2026-09-03
     174: ("fat_mass_segments", "kg"),           # per position
-    175: ("muscle_mass_segments", ""),          # per position
+    175: ("muscle_mass_segments", "kg"),        # per position, app-observed 2026-09-03
     196: ("nerve_response_score", ""),
     204: ("urinary_ketones", "mmol/L"),
     205: ("urinary_vitamin_c", "mmol/L"),
-    226: ("basal_metabolic_rate", ""),
-    227: ("metabolic_age", ""),
+    226: ("basal_metabolic_rate", "kcal"),      # app-observed 2026-09-03
+    227: ("metabolic_age", "years"),            # app-observed 2026-09-03
     229: ("electrochemical_skin_conductance", ""),
     248: ("urinary_calcium", "mmol/L"),
     249: ("urinary_creatinine", "mmol/L"),

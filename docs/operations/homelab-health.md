@@ -598,7 +598,8 @@ Three further tags ride alongside the numeric code, so an MCP caller or a Grafan
 - `type_name` — the measure's name, or `unknown` for a code the table does not hold.
   An unknown code is still written: dropping one would lose the reading, and newer firmware invents codes.
 - `unit` — the unit the spec itself states, and **absent where the spec states none** rather than guessed.
-  Seventeen of the 43 codes are unitless there, so a query must handle the tag being missing.
+  Twelve of the 43 codes are unitless there, so a query must handle the tag being missing.
+  Five more that the spec leaves blank — 170, 173, 175, 226 and 227 — carry a unit the operator read off the Withings app on 2026-09-03 rather than one the spec states, and an `app-observed 2026-09-03` comment on each `TYPES` line marks which they are.
 - `position` — the measure's `position` field as a string, present only when the measure carries one.
   Types 173, 174 and 175 are segmental: they repeat a type per body position, enumerated 0 to 28.
 

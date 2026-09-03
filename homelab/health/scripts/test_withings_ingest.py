@@ -300,11 +300,12 @@ class Points(unittest.TestCase):
             {"grpid": 7, "date": 200, "deviceid": "dev1",
              "measures": [{"type": 1, "value": 74850, "unit": -3}]},
             {"grpid": 6, "date": 100, "measures":
-                [{"type": 170, "value": 1234, "unit": -2}]},
+                [{"type": 130, "value": 1234, "unit": -2}]},
         ]
         lines = wi.points(groups)
         self.assertEqual(lines, [
-            'withings_measure,person=rob,type=170,type_name=visceral_fat,'
+            'withings_measure,person=rob,type=130,'
+            'type_name=atrial_fibrillation_result,'
             'deviceid=unknown grpid="6",value=12.34 100',
             'withings_measure,person=rob,type=1,type_name=weight,unit=kg,'
             'deviceid=dev1 grpid="7",value=74.850 200',
@@ -318,8 +319,16 @@ class Points(unittest.TestCase):
         self.assertIn(",type_name=heart_pulse,", line)
         self.assertIn(",unit=bpm,", line)
 
+    def test_an_app_observed_unit_is_tagged_like_any_other(self):
+        # The spec leaves 226 blank; the operator read kcal off the app.
+        line = wi.points([{"grpid": 1, "date": 100, "deviceid": "d",
+                           "measures": [{"type": 226, "value": 1700,
+                                         "unit": 0}]}])[0]
+        self.assertIn(",type_name=basal_metabolic_rate,", line)
+        self.assertIn(",unit=kcal,", line)
+
     def test_a_type_the_spec_gives_no_unit_for_carries_no_unit_tag(self):
-        # The spec states no unit for 18 codes; an absent tag beats a guess.
+        # Twelve codes are still blank; an absent tag beats a guess.
         line = wi.points([{"grpid": 1, "date": 100, "deviceid": "d",
                            "measures": [{"type": 130, "value": 0,
                                          "unit": 0}]}])[0]
