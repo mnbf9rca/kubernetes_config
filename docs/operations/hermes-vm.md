@@ -748,6 +748,48 @@ The sandbox userland is hygiene, not the containment boundary — the boundary i
 **`no_agent` cron scripts are unaffected by any of this.**
 The scheduler runs them as plain host subprocesses (`subprocess.Popen` in `cron/scheduler.py`), so `hermes-app-alive` still runs on the host and reports on the host whatever a profile's terminal backend is set to.
 
+### The Home Assistant event feed on `hal`
+
+**`hal` is the only profile that watches Home Assistant, its configuration is agent state, and this repository holds no copy of it.**
+The settings live in `platforms.homeassistant.extra` in `~/.hermes/profiles/hal/config.yaml`, which rides the nightly `hermes backup` zip and is reachable no other way — nothing under `hermes-vm/` is the source for it, and the managed scope at `/etc/hermes/config.yaml` pins only the terminal keys.
+So a change here is made on the VM and recorded here, rather than made in the repository and installed.
+
+**Every watched event is a full agent turn, and every turn is a hindsight retain.**
+`auto_retain` is on with `retain_every_n_turns` at 1, so an occupancy sensor flipping costs a model call and a retain.
+In the week to September 3, 2026 that made `hal` about 99% of hindsight's LLM spend — 6,817 retains against 61 documents.
+
+On **September 3, 2026** the operator emptied the event filters and left the REST tooling alone, so `hal` still acts on Home Assistant when asked and is no longer woken by it:
+
+| Key | Before | After |
+|---|---|---|
+| `watch_domains` | `[climate, binary_sensor, alarm_control_panel, light]` | `[]` |
+| `watch_entities` | absent | `[]` |
+| `watch_all` | absent | `false` |
+
+`ignore_entities` and `cooldown_seconds: 30` were left as they were, and `HASS_URL`/`HASS_TOKEN` still come from 1Password, so the adapter still connects and can still call the REST API.
+The previous file was copied beside it as `config.yaml.2026-09-03.bak`.
+The change takes effect on `systemctl --user restart hermes-gateway-hal.service`, and the adapter says so itself: `No watch_domains, watch_entities, or watch_all configured. All state_changed events will be dropped` is the confirmation to look for, not a fault.
+Retains for the `hermes-hal` bank fell from 35 per hour to nil.
+
+**`enabled: false` under `platforms.homeassistant` does not disable the platform, and it had not.**
+`hal`'s config carried it while the flood was running.
+The gateway's config loader marks an explicit enable or disable only for a **top-level** platform block (`enabled_was_explicit = _cfg_toplevel and "enabled" in platform_cfg`, `gateway/config.py`), so a block nested under `platforms:` never sets that marker, and the later env-driven pass re-enables the platform on the presence of `HASS_TOKEN`.
+Emptying the watch lists is therefore the control that actually holds; the `enabled` key is not.
+The same trap applies to any plugin platform whose token is injected — read the enable state out of the journal after a restart rather than out of the file.
+
+**The 100x resend path was suspected and is not present.**
+Hermes sends only the new turn when hindsight's `/version` reports at or above 0.5.0, and falls back to resending the whole accumulated session otherwise, logging `Falling back to per-process document_id`.
+`https://hindsight.cynexia.net/version` answers `200` with `api_version: 0.9.1` unauthenticated, and that warning appears nowhere in the `hal` gateway journal.
+The retain volume was simply one retain per event turn.
+
+**The default profile carried the same block with no token, and it was removed on September 3, 2026.**
+`~/.hermes/config.yaml` held a `platforms.homeassistant` block with `enabled: true` and the same four watch domains as `hal`, while the default gateway logged no Home Assistant event in 24 hours: nothing injects a Home Assistant token into that profile, so the adapter had nothing to connect to and the block did nothing but describe an intent nobody held.
+All 13 lines were deleted — the `enabled` key, `extra.watch_domains`, `extra.ignore_entities`, `extra.cooldown_seconds` and the eight indexed `watch_domains[n]`/`ignore_entities[n]` duplicates — leaving `platforms:` with `email` alone, so no empty-map question arose.
+The previous file was copied beside it as `config.yaml.2026-09-03.bak`, and the two `${...}` placeholders elsewhere in the file were counted before and after the edit.
+The enable state was read out of the journal rather than the file, as the trap above requires: after `systemctl --user restart hermes-gateway.service` the log says `Gateway running with 3 platform(s)` and connects `email`, `api_server` and `telegram` only.
+Two Home Assistant references were deliberately left alone, because the toolset is still reachable when a session asks for it: `HA_URL` at the top level, and `HA_AUTH_TOKEN` in `secrets.onepassword.env`.
+Later on **September 3, 2026** the operator took those away too, so the default profile now has no Home Assistant access at all: three lines went from `~/.hermes/config.yaml` — the `HA_AUTH_TOKEN: op://hermes/homeassistant/token` entry in `secrets.onepassword.env`, the top-level `HA_URL`, and the `homeassistant` entry in `platform_toolsets.discord`, the only enabled toolset list that carried it — backed up as `config.yaml.2026-09-03b.bak` beside the earlier one, with the two `${...}` placeholders unchanged, and the restarted gateway logging `1Password: applied 9 secrets` where it had said 10 and `Gateway running with 3 platform(s)` as before.
+
 ### `hermes` CLI spellings
 
 Recorded from the August 26, 2026 survey.
