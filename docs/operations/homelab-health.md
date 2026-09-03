@@ -506,7 +506,7 @@ Weight arrives here and in `apple_metrics`, deliberately, and the two are not de
 |---|---|
 | Endpoint | `POST https://wbsapi.withings.net/measure`, `action=getmeas`, `category=1` |
 | Bucket | `withings`, **infinite** retention |
-| Measurement | `withings_measure`; tags `person`, `type`, `type_name`, `deviceid`, plus `unit` and `position` where they apply; fields `grpid` (string) and `value` (float) |
+| Measurement | `withings_measure`; tags `person`, `type`, `type_name`, `deviceid`, plus `unit`, `position` and `position_name` where they apply; fields `grpid` (string) and `value` (float) |
 | Image | `python:3.14-alpine3.22`, digest-pinned to the same reference `cloudflare-analytics` carries. No keel; Renovate proposes bumps under the "health stack" group |
 | Deadlines | `startingDeadlineSeconds: 600`, `activeDeadlineSeconds: 600`, `ttlSecondsAfterFinished: 259200` |
 | Monitoring | The `Withings-ingest` uptime-kuma push monitor: `up` on exit 0, `down` otherwise |
@@ -593,7 +593,7 @@ With one measurement an unknown code is one more tag value in a series that alre
 `grpid` is a field and `deviceid` is a tag.
 `deviceid` has a handful of values for the life of the account; `grpid` has one per weigh-in forever, so as a tag it would multiply series cardinality by the number of weigh-ins.
 
-Three further tags ride alongside the numeric code, so an MCP caller or a Grafana query needs no copy of the code table.
+Four further tags ride alongside the numeric code, so an MCP caller or a Grafana query needs no copy of the code table.
 
 - `type_name` — the measure's name, or `unknown` for a code the table does not hold.
   An unknown code is still written: dropping one would lose the reading, and newer firmware invents codes.
@@ -602,6 +602,7 @@ Three further tags ride alongside the numeric code, so an MCP caller or a Grafan
   Five more that the spec leaves blank — 170, 173, 175, 226 and 227 — carry a unit the operator read off the Withings app on 2026-09-03 rather than one the spec states, and an `app-observed 2026-09-03` comment on each `TYPES` line marks which they are.
 - `position` — the measure's `position` field as a string, present only when the measure carries one.
   Types 173, 174 and 175 are segmental: they repeat a type per body position, enumerated 0 to 28.
+- `position_name` — that position's name, or `unknown` for a code the table does not hold, written beside `position` and absent with it; the enumeration is transcribed into the `POSITIONS` constant from the spec's `components.schemas.measure_object.properties.position`, which lists no code 7.
 
 The source is Withings' own `openapi.yaml` at `developer.withings.com`, `info.version` 2.0, the `meastype` parameter description.
 The table lives as the `TYPES` constant in `homelab/health/scripts/withings-ingest.py`, and each run logs the count of unknown codes it saw to the pod log — a count only, and not to the heartbeat, whose value allowlist admits neither the count nor the codes.

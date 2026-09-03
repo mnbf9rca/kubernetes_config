@@ -350,13 +350,30 @@ class Points(unittest.TestCase):
         line = wi.points([{"grpid": 1, "date": 100, "deviceid": "d",
                            "measures": [{"type": 174, "value": 1234,
                                          "unit": -3, "position": 5}]}])[0]
-        self.assertIn(",position=5 ", line)
+        self.assertIn(",position=5,", line)
+
+    def test_a_segmental_measure_carries_its_position_name(self):
+        # The numeric code alone makes a panel legend unreadable.
+        line = wi.points([{"grpid": 1, "date": 100, "deviceid": "d",
+                           "measures": [{"type": 175, "value": 1234,
+                                         "unit": -3, "position": 10}]}])[0]
+        self.assertIn(",position=10,", line)
+        self.assertIn(",position_name=left_leg ", line)
+
+    def test_a_position_outside_the_table_is_named_unknown(self):
+        # Newer hardware invents positions, exactly as it invents type codes.
+        line = wi.points([{"grpid": 1, "date": 100, "deviceid": "d",
+                           "measures": [{"type": 175, "value": 1234,
+                                         "unit": -3, "position": 99}]}])[0]
+        self.assertIn(",position=99,", line)
+        self.assertIn(",position_name=unknown ", line)
 
     def test_a_measure_without_a_position_carries_no_position_tag(self):
         line = wi.points([{"grpid": 1, "date": 100, "deviceid": "d",
                            "measures": [{"type": 1, "value": 74850,
                                          "unit": -3, "position": None}]}])[0]
         self.assertNotIn("position=", line)
+        self.assertNotIn("position_name", line)
 
     def test_a_tag_value_holding_a_space_is_escaped(self):
         # A raw space would end the tag set and the rest would parse as fields.

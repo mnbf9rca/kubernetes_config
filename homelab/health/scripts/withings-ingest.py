@@ -148,6 +148,43 @@ TYPES = {
     251: ("urinary_calcium_creatinine_ratio", "mmol/mmol"),
 }
 
+# The device position a measure was taken at, verbatim from the Withings spec at
+# components.schemas.measure_object.properties.position. Codes 0-28; the spec
+# lists no 7. Segmental types (173, 174, 175) repeat one type per position, so
+# without a name a panel legend reads as bare integers.
+# A position missing from this table is tagged position_name=unknown and the
+# numeric `position` tag still carries the code, exactly as an unknown type is.
+POSITIONS = {
+    0:  "right_wrist",
+    1:  "left_wrist",
+    2:  "right_arm",
+    3:  "left_arm",
+    4:  "right_foot",
+    5:  "left_foot",
+    6:  "between_legs",
+    8:  "left_part_of_body",
+    9:  "right_part_of_body",
+    10: "left_leg",
+    11: "right_leg",
+    12: "torso",
+    13: "left_hand",
+    14: "right_hand",
+    15: "cardiovascular_aortic_area",
+    16: "cardiovascular_pulmonic_area",
+    17: "cardiovascular_tricuspid_area",
+    18: "cardiovascular_mitral_area",
+    19: "cardiovascular_apex_area",
+    20: "pulmonary_front_upper_right_area",
+    21: "pulmonary_front_upper_left_area",
+    22: "pulmonary_front_bottom_right_area",
+    23: "pulmonary_front_bottom_left_area",
+    24: "pulmonary_back_upper_left_area",
+    25: "pulmonary_back_upper_right_area",
+    26: "pulmonary_back_bottom_left_area",
+    27: "pulmonary_back_bottom_right_area",
+    28: "wide_mode_area",
+}
+
 
 class IngestFailed(Exception):
     """The run did not produce a trustworthy answer.
@@ -588,10 +625,11 @@ def points(groups):
     values for the life of the account, grpid has one per weigh-in forever and as
     a tag would multiply series cardinality by the number of weigh-ins.
 
-    `type_name`, `unit` and `position` ride alongside the numeric `type` so a
-    reader needs no copy of TYPES. `unit` is omitted where the spec states none
-    and `position` where the measure carries none, because an absent tag is
-    honest and a placeholder forks a series for nothing.
+    `type_name`, `unit`, `position` and `position_name` ride alongside the
+    numeric `type` so a reader needs no copy of TYPES or POSITIONS. `unit` is
+    omitted where the spec states none and both position tags where the measure
+    carries none, because an absent tag is honest and a placeholder forks a
+    series for nothing.
     """
     lines = []
     unknown = set()
@@ -617,7 +655,9 @@ def points(groups):
             tags += ",deviceid=%s" % esc_tag(deviceid)
             position = measure.get("position")
             if position is not None:
-                tags += ",position=%s" % esc_tag(position)
+                tags += ",position=%s,position_name=%s" % (
+                    esc_tag(position),
+                    esc_tag(POSITIONS.get(position, "unknown")))
             lines.append('withings_measure,%s grpid="%s",value=%s %d'
                          % (tags, esc_field(grpid), scaled(value, unit), ts))
     # A COUNT, NOT THE CODES, AND THE POD LOG RATHER THAN THE HEARTBEAT: the
