@@ -196,7 +196,8 @@ Use it only for secrets that genuinely can't be single-line; everything else flo
 | `route-vps-dns` | `cloudflared tunnel route dns cynexia-vps <host>` for every hostname in `vps/bootstrap/cloudflared/cloudflared.yaml` |
 | `create-cloudflared-secret` | Imperative Secret creation for the VPS tunnel creds from `op://VPS/cloudflared/credentials-json` |
 
-Targets that read a single field imperatively — `create-jotta-secret`, `create-hermes-ssh-secret`, both `create-*-cloudflared-secret` targets and the `health-influx-*-bootstrap` targets — call `op read` / `op document get` directly rather than going through `op run`; they authenticate with the same service-account token from `.envrc`.
+Targets that read a single field imperatively — `create-jotta-secret`, `create-hermes-ssh-secret`, both `create-*-cloudflared-secret` targets and `health-influx-bootstrap` — call `op read` / `op document get` directly rather than going through `op run`; they authenticate with the same service-account token from `.envrc`.
+`health-influx-cloudflare-bootstrap` touches 1Password not at all, by design: it runs entirely through the in-pod `influx` CLI and `jq`, so the admin token stays inside the cluster instead of landing in this shell's argv where `ps` can read it.
 
 The VPS block is a deliberate copy-paste of the homelab block rather than a parameterised macro — reading `apply-vps` top to bottom is clearer than chasing a generated target, and two clusters is not enough to justify the abstraction.
 
@@ -204,7 +205,7 @@ The VPS block is a deliberate copy-paste of the homelab block rather than a para
 
 | Target | What it does |
 |---|---|
-| `create-health-cloudflared-secret` | Recreates the health tunnel creds Secret via `op document get health-cloudflared` |
+| `create-health-cloudflared-secret` | Recreates the homelab cloudflared tunnel's creds Secret (Cloudflare name `cynexia-health`) via `op document get health-cloudflared` |
 | `route-health-dns` | CNAMEs for every hostname in `homelab/health/cloudflared.yaml` onto the `cynexia-health` tunnel |
 | `health-influx-bootstrap` | InfluxDB buckets, v1 DBRP mapping, v1-compat auth user, and the two scoped tokens — see [homelab-health.md](homelab-health.md) |
 | `health-influx-cloudflare-bootstrap` | Creates the `cloudflare` bucket and mints its ingest token plus a replacement read token covering all four buckets. Prints both for pasting into 1Password; applies nothing |
@@ -283,7 +284,7 @@ Failing an apply on somebody else's manifest produces a gate people route around
 Ownership is therefore established *before* any verdict, not only before the scope one: a remote base that ever shipped keel annotations on a pinned tag would otherwise hard-fail an apply over a manifest this repo cannot edit.
 
 **The ownership lookup is confined to the cluster being analysed**, and that confinement is load-bearing.
-Both trees name `restic/restic:0.17.3` and the same keel digest, so a repo-wide lookup lets a watched homelab file vouch for a VPS container nothing watches.
+Both trees name `restic/restic:0.19.1` and the same keel digest, so a repo-wide lookup lets a watched homelab file vouch for a VPS container nothing watches.
 Simulated with scope widened to `homelab/**` alone, a repo-wide lookup dropped the VPS render from nine findings to six — `restic-backup`, `restic-init` and `keel` all fell silent while `vps/backup/*.yaml` and `vps/bootstrap/keel/keel.yaml` were still genuinely unwatched.
 The lookup also compares extracted image values rather than searching raw file text, because a substring search matches prose (`restic/restic:0.17.3` appears in three comment sentences in `homelab/backup/restic-cronjob.yaml`) and has no right boundary (`alpine:3.2` would be "owned" by any file naming `alpine:3.20`).
 

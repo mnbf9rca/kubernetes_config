@@ -10,27 +10,33 @@ To read the monitor inventory, query `kuma.db` read-only:
 
 ```bash
 kubectl -n vps exec deploy/uptime-kuma -- \
-  sqlite3 -readonly /app/data/kuma.db 'select name, url, type, active from monitor'
+  sqlite3 -readonly /app/data/kuma.db \
+  'select id, name, type, url, interval, maxretries, retry_interval, accepted_statuscodes_json, parent, active from monitor order by id'
 ```
 
 **`/metrics` omits monitors created after the process started, until it restarts.**
 Using `/metrics` as an inventory produces a wrong answer; `kuma.db` is the reliable source.
-The quiesce sidecar backs up `kuma.db` nightly, so a rebuild restores the monitors.
+The pod's `sqlite-snapshot` sidecar writes `kuma.db.restic` beside the database every 12 hours (`sleep 43200` in `vps/workloads/scripts/sqlite-snapshot.sh`), and the nightly `restic-backup` CronJob captures it, so a rebuild restores the monitors.
 
 ## Settings for every HTTP monitor
 
 | Field | Value | Why |
 |---|---|---|
-| Monitor type | HTTP(s) | — |
-| Heartbeat interval | 60s | `blog.cynexia.com` uses 15s; every other monitor uses 60s |
+| Monitor type | HTTP(s) | Use the `Keyword` or `JSON Query` variant only where the body carries the verdict — see below |
+| Heartbeat interval | 60s | The `blog.cynexia.com` group and its `blog.cynexia.com homepage` monitor use 15s; every other monitor uses 60s |
 | Retries | 3 | The default of 0 alerts on a single blip |
-| Heartbeat retry interval | 60s | — |
+| Heartbeat retry interval | 60s | `blog.cynexia.com homepage` uses 5s |
 | Request timeout | 20s | Separates "slow" from "wedged" |
 | Max redirects | **0** | Defeats the Access trap below. Required on every Access-protected monitor; the monitors on hosts with no Access app keep the default |
 | Accepted status codes | per monitor | — |
 | Certificate expiry, ignore TLS | defaults | TLS terminates at the Cloudflare edge |
 
-Skip keyword monitors. uptime-kuma evaluates the keyword only after the status check passes, so a keyword adds nothing, and `saveErrorResponse` already captures Cloudflare's error body into the alert, which makes a `1033` diagnosable.
+The retries and timeout rows are the standard, not the current state: on September 3, 2026, fourteen of the seventeen HTTP monitors still run at 0 retries and uptime-kuma's 48s default timeout.
+The operator sets both fields by hand in each monitor's UI page, so the gap closes one monitor at a time.
+
+Reach for a keyword or JSON-query monitor only when the status code cannot fail on its own.
+uptime-kuma evaluates the keyword after the status check passes, so against an origin that returns 5xx or a Cloudflare `1033` it adds nothing — `saveErrorResponse` already captures the error body into the alert, which makes a `1033` diagnosable.
+It earns its place against an origin that answers 200 while broken, which is what `blog database status` and the two `api.recordwell.app` monitors assert.
 
 ## The Cloudflare Access trap
 
@@ -101,8 +107,26 @@ A `302` on the push path means the bypass is missing, scoped to the wrong destin
 Each path mirrors the service's in-pod probe target, so a monitor failing while the probe passes isolates the fault to the tunnel or the edge.
 `uptime.cynexia.com` is absent on purpose: uptime-kuma checking its own hostname reports nothing it can deliver.
 
-Monitor names below match `kuma.db` as of August 25, 2026.
+Monitor names below match `kuma.db` as of September 3, 2026.
 The Access column names the application that answers the URL and the policies attached to it, so you can tell a credential fault from an outage without opening the dashboard.
+
+### Groups
+
+A group is a container, not a check: it sends no request, and the `https://` stored against it is a placeholder rather than a broken URL.
+Eight groups hold the tree.
+
+| Group | What it holds |
+|---|---|
+| `VPS apps` | The five Access-protected VPS monitors |
+| `homelab apps` | The homelab tunnel's HTTP monitors, plus the `Hermes` group |
+| `Hermes` | `hermes API`, `hermes-app-alive` and `hindsight-canary` — the Hermes stack and the memory backend it reads |
+| `health data` | `Data MCP`, `hae.cynexia.com` and the `health` namespace's push monitors |
+| `Backups` | `health-influx-backup`, `homelab-hermes-pull`, `hindsight-pg-dump` and `jottacloud-backup` |
+| `Updates` | `homelab-keel-fresh`, `vps-keel-fresh` and `homelab-update-watch` |
+| `blog.cynexia.com` | `blog.cynexia.com homepage` and `blog database status` |
+| `recordwell` | `recordwell.app website`, `auth API live` and `Auth API health` |
+
+`family-foqos.app` and `vps-uptime-kuma-alive` sit outside every group.
 
 VPS cluster, Access-protected:
 
@@ -117,17 +141,17 @@ VPS cluster, Access-protected:
 The first three carry the service-token headers.
 The last two must not: their apps admit anonymous requests, and adding headers there would imply a credential that nothing checks.
 
-Homelab health tunnel:
+Homelab cloudflared tunnel (Cloudflare name `cynexia-health`):
 
 | Monitor | URL | Access app and policies | Accepted status codes |
 |---|---|---|---|
 | `Data MCP` | `https://mcp.cynexia.com/mcp` | `health-data-mcp`: `allow_cynexia_com` | exactly `["401"]` — see below |
 | `hae.cynexia.com` | `https://hae.cynexia.com/` | none | `["401"]` |
-| `hermes` | `https://hermes.cynexia.com/api/health` | `hermes`: `service-auth-monitoring`, `allow_cynexia_com` | `["200-299"]` — see below |
+| `hermes API` | `https://hermes.cynexia.com/api/health` | `hermes`: `service-auth-monitoring`, `allow_cynexia_com` | `["200-299"]` — see below |
 | `proxy.cynexia.com` | `https://proxy.cynexia.com/` | `homelab-proxy`: `service-auth-homelab-proxy` — send no headers | exactly `["403"]` — see below |
 | `grafana.cynexia.com` | `https://grafana.cynexia.com/api/health` | `grafana`: `service-auth-monitoring`, `allow_cynexia_com` | `["200-299"]` — see below |
 
-`hermes` and `grafana.cynexia.com` carry the service-token headers; `Data MCP`, `hae.cynexia.com` and `proxy.cynexia.com` must not.
+`hermes API` and `grafana.cynexia.com` carry the service-token headers; `Data MCP`, `hae.cynexia.com` and `proxy.cynexia.com` must not.
 The `grafana.cynexia.com` hostname was published on September 2, 2026 and its monitor is created by hand from this row, so it is the one entry here that postdates the August 25, 2026 `kuma.db` reading above.
 
 **Point the Grafana monitor at `/api/health`, not at `/`.**
@@ -138,20 +162,20 @@ It is also Grafana's in-pod probe target, which is what every other row here mir
 
 Not Access-protected, and unrelated to either cluster's tunnels:
 
-| Monitor | URL | Note |
+| Monitor | URL | Type and note |
 |---|---|---|
-| `blog.cynexia.com` | `https://blog.cynexia.com` | 15s interval, the only monitor that departs from 60s |
-| `family-foqos.app` | `https://family-foqos.app` | — |
-| `recordwell.app website` | `https://recordwell.app/` | — |
-| `Auth API health` | `https://api.recordwell.app/health/ready` | — |
-| `auth API live` | `https://api.recordwell.app/health/live` | — |
-| `recordwell` | `https://` | **Broken.** The URL is a bare scheme with no host. Fix it or delete the monitor |
+| `blog.cynexia.com homepage` | `https://blog.cynexia.com` | HTTP(s). 15s interval with one retry after 5s, the only monitor that departs from 60s |
+| `blog database status` | `https://blog.cynexia.com/_emdash/api/setup/status` | Keyword, matching `"needsSetup":false`, accepting exactly `["200"]` — the endpoint answers 200 either way, so the keyword is the whole check |
+| `family-foqos.app` | `https://family-foqos.app` | HTTP(s) |
+| `recordwell.app website` | `https://recordwell.app/` | HTTP(s) |
+| `Auth API health` | `https://api.recordwell.app/health/ready` | JSON query, asserting `$.status` equals `ok` |
+| `auth API live` | `https://api.recordwell.app/health/live` | JSON query, asserting `$.status` equals `ok` |
 
-The `hermes` monitor probes the Hermes dashboard on the hermes VM — the tunnel's one off-cluster origin.
+The `hermes API` monitor probes the Hermes dashboard on the hermes VM — the tunnel's one off-cluster origin.
 A 200 proves edge, tunnel, cloudflared and the dashboard process end to end.
 `/api/health` is on the dashboard's unauthenticated allowlist, so the origin asks for nothing; the credential this monitor needs is the one Access asks for.
 
-The health tunnel publishes a fourth hostname, `hermes-app.cynexia.com` (hermes-webui, for the Hermex iOS app).
+The homelab cloudflared tunnel also publishes `hermes-app.cynexia.com` (hermes-webui, for the Hermex iOS app).
 **That hostname still has no monitor, by decision.**
 What changed on August 26, 2026 is that the service behind it is now checked from *inside* the VM instead, once a day, by the `hermes-app-alive` push monitor below.
 
@@ -161,7 +185,7 @@ An HTTP monitor is the wrong instrument here for two independent reasons.
 And the chat path needs a login session, which a monitor cannot perform.
 The daily check sidesteps both by running on the VM: it deep-imports `run_agent` from the shared venv, the assertion the HTTP surface cannot make.
 
-If a monitor is ever added here anyway, it is not a copy of the `hermes` monitor: this Access app authenticates every request with Service Auth, so the monitor must send the service-token headers and set `maxredirects: 0`.
+If a monitor is ever added here anyway, it is not a copy of the `hermes API` monitor: this Access app authenticates every request with Service Auth, so the monitor must send the service-token headers and set `maxredirects: 0`.
 Residuals are in [monitoring.md](monitoring.md#what-this-does-not-catch); the check's own triage is in [hermes-vm.md](hermes-vm.md#reading-a-down-hermes-app-alive).
 
 **The triage here inverted on August 25, 2026.**
@@ -232,7 +256,7 @@ It is also why the bypass is load-bearing rather than a convenience: without it 
 The one exception to "from inside a cluster", `hermes-app-alive`, is described below the table — and it needs the same bypass, from further away.
 
 **Some monitors deliberately receive nothing on some runs, so silence is not always a fault.**
-`health-ingest` pushes only when both its buckets are fresh, and `homelab-update-watch` pushes nothing when it could not read GitHub.
+`health-garmin-and-apple-ingest` pushes only when both its buckets are fresh, and `homelab-update-watch` pushes nothing when it could not read GitHub.
 Both stand in for healthchecks.io's `/log` ping, which recorded an event and changed no state; kuma has two states and no third kind, so "record nothing" becomes "send nothing".
 So a monitor that has not moved in a while may be working exactly as designed, and its **silence bound is the interval plus retry** in the table below — not any per-run signal.
 Read the last message it did receive, and the pod log, before treating a gap as an incident.
@@ -260,8 +284,8 @@ Read it per row rather than assuming up-on-success everywhere.
 | `vps-keel-fresh` | `op://VPS/keel-fresh/kuma-push-token` | 86400s, 1 retry at 21600s | `keel-fresh` CronJob in the VPS `ops` namespace, from an EXIT trap: `up` on exit 0, `down` on any failure. The same contract as the row above, from the cluster this uptime-kuma runs on |
 | `health-influx-backup` | `op://Homelab/health-healthchecks/backup-kuma-push-token` | 86400s, 1 retry at 21600s | `influx-backup` CronJob in `health`, from an EXIT trap: `up` on exit 0, `down` otherwise. `msg` carries `verdict=`, `buckets=n/m` and `grafana_kib=`, plus `failed_step=` and `error=` on a failure |
 | `homelab-cloudflare-analytics` | `op://Homelab/health-healthchecks/cloudflare-kuma-push-token` | 3600s, 1 retry at 7200s | `cloudflare-analytics` CronJob in `health`, Python: `up` on rc 0, `down` otherwise, the unrecoverable-gap path included. `msg` carries `verdict=` from `ok\|incomplete\|gap\|failed`, `chunks=n/m`, `rows=` and `series=` |
-| `withings-ingest` | `op://Homelab/health-healthchecks/withings-kuma-push-token` | 1800s, 1 retry at 900s | `withings-ingest` CronJob in `health`, Python: `up` on rc 0, `down` otherwise. `msg` carries `verdict=` from `ok\|failed`, `groups=` and `points=`, plus `failure=` from a five-member enum, plus `exception=` after it on an unhandled error |
-| `health-ingest` | `op://Homelab/health-healthchecks/ingest-kuma-push-token` | 86400s, 1 retry at 43200s | `ingest-freshness` CronJob in `health`, **success only**: `up` when BOTH buckets are under 24h, and **nothing at all** when either is stale or the query failed. One monitor for two buckets because one process checks both. `msg` carries `apple_age_h=` and `garmin_age_h=` on every push — the last message before the silence is what names which path was ageing |
+| `Withings-ingest` | `op://Homelab/health-healthchecks/withings-kuma-push-token` | 1800s, 1 retry at 900s | `withings-ingest` CronJob in `health`, Python: `up` on rc 0, `down` otherwise. `msg` carries `verdict=` from `ok\|failed`, `groups=` and `points=`, plus `failure=` from a five-member enum, plus `exception=` after it on an unhandled error |
+| `health-garmin-and-apple-ingest` | `op://Homelab/health-healthchecks/ingest-kuma-push-token` | 86400s, 1 retry at 43200s | `ingest-freshness` CronJob in `health`, **success only**: `up` when BOTH buckets are under 24h, and **nothing at all** when either is stale or the query failed. One monitor for two buckets because one process checks both. `msg` carries `apple_age_h=` and `garmin_age_h=` on every push — the last message before the silence is what names which path was ageing |
 | `homelab-hermes-pull` | `op://Homelab/hermes-backup/kuma-push-token` | 86400s, 1 retry at 7200s | `hermes-pull` CronJob in `backup`, from an EXIT trap: `up` on exit 0, `down` otherwise. `msg` carries `verdict=`, `zip_kib=` and `sha256_match=yes\|no` |
 | `hindsight-pg-dump` | `op://Homelab/hindsight/kuma-push-token` | 86400s, 1 retry at 7200s | `hindsight-pg-dump` CronJob in `hindsight`, from an EXIT trap: `up` on exit 0, `down` otherwise. `msg` carries `verdict=`, `dump_kib=`, `tables=` and `kept=` |
 | `hindsight-canary` | `op://Homelab/hindsight/canary-kuma-push-token` | 3600s, 1 retry at 1800s | `hindsight-canary` CronJob in `hindsight`, from an EXIT trap: `up` when retain and recall both pass, `down` when either fails. `msg` carries `verdict=` from that script's enum plus both HTTP statuses |
@@ -270,7 +294,7 @@ Read it per row rather than assuming up-on-success everywhere.
 | `hermes-app-alive` | `op://hermes/hermes-app-alive/kuma-push-token` | 86400s, 1 retry at 21600s | A `no_agent` cron job inside `hermes-gateway` on the hermes VM at 05:45 UTC, `up` on exit 0 and `down` on failure, from an EXIT trap |
 
 Each migrated row's interval and retry mirror the period and grace of the healthchecks.io check it replaced, so nothing got quieter or noisier in the move (August 26, 2026).
-`withings-ingest` replaced nothing: it was created on September 2, 2026 for new scheduled work.
+`Withings-ingest` replaced nothing: it was created on September 2, 2026 for new scheduled work.
 Its interval tracks its CronJob's period, so both moved when the schedule went from six-hourly to every 15 minutes on September 3, 2026: 1800s with 1 retry at 900s, which tolerates one missed run before it alerts.
 Nothing in this repo sets those two numbers — change them by hand in the uptime-kuma UI on the monitor's edit page, because a CronJob schedule change does not reach the monitor.
 
@@ -335,9 +359,9 @@ Add one monitor that GETs a healthchecks.io ping URL.
 | Monitor type | **HTTP(s)** |
 | Name | `vps-uptime-kuma-alive` |
 | URL | `https://hc-ping.com/<op://VPS/uptime-kuma/healthcheck-uuid>` |
-| Interval | 300s |
+| Interval | 60s |
 | Accepted status codes | `["200-299"]` |
-| Max redirects | 0 |
+| Max redirects | default — `hc-ping.com` has no Access app in front of it |
 
 **Do not use a Push monitor.**
 A Push monitor waits to *receive* a ping, which is the opposite of what this needs.
