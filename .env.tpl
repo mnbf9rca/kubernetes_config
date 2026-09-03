@@ -120,10 +120,11 @@ HEALTH_GRAFANA_ADMIN_PASSWORD=op://Homelab/health-grafana/admin-password
 # the database DSN in homelab/secrets/hindsight.yaml, and a character needing
 # percent-encoding there is a debugging session nobody needs.
 #
-# The extraction-LLM key's 1Password field is named for the provider it currently
-# holds (`openai-api-key`), while the k8s Secret key it lands in stays the
-# provider-neutral `llm-api-key`. Switching provider is two env lines in
-# hindsight.yaml plus a new field here.
+# The extraction LLM moved from OpenAI to DeepInfra on 2026-09-03, so the value
+# that lands in the provider-neutral k8s Secret key `llm-api-key` now comes from
+# HINDSIGHT_DEEPINFRA_API_KEY. HINDSIGHT_LLM_API_KEY is kept, still pointing at
+# the OpenAI field, as the rollback: reverting the switch is one line in
+# homelab/secrets/hindsight.yaml and two in homelab/hindsight/hindsight.yaml.
 #
 # tenant-api-key is shared by the API, the control plane and the canary. The Hermes
 # gateways on VM 103 send the same value but do NOT read it from here: they resolve
@@ -133,6 +134,7 @@ HEALTH_GRAFANA_ADMIN_PASSWORD=op://Homelab/health-grafana/admin-password
 # — see docs/operations/hindsight.md.
 HINDSIGHT_PG_PASSWORD=op://Homelab/hindsight/pg-password
 HINDSIGHT_LLM_API_KEY=op://Homelab/hindsight/openai-api-key
+HINDSIGHT_DEEPINFRA_API_KEY=op://Homelab/deepinfra/api_key
 HINDSIGHT_TENANT_API_KEY=op://Homelab/hindsight/tenant-api-key
 HINDSIGHT_CP_ACCESS_KEY=op://Homelab/hindsight/cp-access-key
 # uptime-kuma push tokens: the nightly pg_dump and the hourly canary
