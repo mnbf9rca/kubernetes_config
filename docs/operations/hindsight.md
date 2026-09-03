@@ -93,6 +93,9 @@ Rolling back without topping that account up rolls back to a broken write path.
 Its sentinel sentence carries no fact worth remembering, so a model may legitimately extract nothing from it: GLM-5.3-Flash returns `{"facts": []}` where `gpt-4o-mini` returned a memory, and the canary still passes green — on the *previous* run's memory, because recall only has to find one result.
 To judge a new extraction model, retain a paragraph containing real facts into a scratch bank, count the memory units it produced, and delete the bank afterwards.
 
+**Nothing deduplicates the sentinel.**
+Every run adds one memory, so the canary bank grows without bound at 24 a day — it held 253 memory units on September 3, 2026 — and that costs nothing worth acting on because consolidation is windowed at about 7,000 input tokens per run whatever the bank holds, measured the same day.
+
 ## Upgrading
 
 ```sh
@@ -156,7 +159,9 @@ Then, by hand.
 The VM's `hindsight-client` is never pinned by this estate — see [The client on the hermes VM](#the-client-on-the-hermes-vm) — so a server bump moves the server alone, and the client moves only when hermes-agent's own pin moves.
 
 Keep the API and control-plane images on the **same** version tag: Renovate groups them, and a skewed pair is a combination nobody has tested.
-Keep the API pin at or above **0.9.1** forever — the liveness probe uses `/health/live`, which does not exist below it, and 0.5.0+ is what makes the canary's fixed sentinel deduplicate instead of growing the bank.
+Keep the API pin at or above **0.9.1** forever — the liveness probe uses `/health/live`, which does not exist below it.
+That probe is the whole of the reason.
+This line also claimed 0.5.0+ made the canary's sentinel deduplicate; that was wrong, nothing deduplicates it, and the floor never rested on it.
 
 **PostgreSQL major versions are not a tag edit.**
 Renovate refuses them for this tree, because a grouped pull request quietly carrying one would be a data-loss trap that `make hindsight-upgrade` could not catch: the dump would succeed, and the new major would refuse the old data directory.

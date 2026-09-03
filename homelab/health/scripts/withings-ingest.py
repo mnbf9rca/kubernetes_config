@@ -2,8 +2,8 @@
 """Pull one Withings account's body measurements into InfluxDB.
 
 The scale produces body-composition detail that Apple Health never receives.
-This job copies the account's measure groups into the `withings` bucket every
-six hours. Weight arrives here AND in apple_metrics; that is deliberate and is
+This job copies the account's measure groups into the `withings` bucket every 15
+minutes. Weight arrives here AND in apple_metrics; that is deliberate and is
 not deduplicated.
 
 THE THREE RULES THIS SCRIPT EXISTS TO ENFORCE. Read them before changing
