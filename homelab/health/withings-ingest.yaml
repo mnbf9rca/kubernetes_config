@@ -29,11 +29,12 @@
 # refreshes, so a restore yields a usable token only for a loss falling between
 # the 03:00 snapshot and the next successful run.
 #
-# NO KEEL in this namespace: the image is pinned and Renovate proposes bumps
-# under the "health stack" group.
+# NO KEEL in this namespace (see docs/operations/homelab-health.md): the image
+# is pinned and Renovate proposes bumps under the "health stack" group.
 #
 # NO PROBES. Scheduled work: the instrument is the uptime-kuma push monitor's
-# dead-man's-switch plus activeDeadlineSeconds.
+# dead-man's-switch plus activeDeadlineSeconds. See
+# docs/operations/monitoring.md.
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata: { name: withings-tokens, namespace: health }

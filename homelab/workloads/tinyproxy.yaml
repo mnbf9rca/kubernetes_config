@@ -3,7 +3,8 @@
 # sites block Hetzner's address ranges, so those fetches leave from the home
 # connection instead: the VPS dials its `homelab-proxy` Service (a
 # `cloudflared access tcp` client), which reaches proxy.cynexia.com on the
-# cynexia-health tunnel, which lands here. The `proxy` namespace is declared
+# homelab cloudflared tunnel (`cynexia-health`, run from the `health`
+# namespace), which lands here. The `proxy` namespace is declared
 # in homelab/bootstrap/namespaces.yaml and must exist before this file is
 # applied.
 apiVersion: v1
@@ -13,7 +14,10 @@ metadata:
   namespace: proxy
   # This ConfigMap is hand-written, not generated, so it carries no content
   # hash and editing it does not roll the Deployment: after any change here,
-  # run `kubectl -n proxy rollout restart deploy/tinyproxy`.
+  # run `kubectl -n proxy rollout restart deploy/tinyproxy`. The restart is the
+  # only way in, not merely the tidy one: the file is mounted with `subPath`,
+  # and the kubelet never refreshes a subPath mount, so a running pod keeps the
+  # config it started with however long it runs.
 data:
   # Four directives, all of them doing work. Everything else tinyproxy needs
   # it already defaults to, and `tinyproxy -d` (the image's CMD) logs to
@@ -21,8 +25,9 @@ data:
   tinyproxy.conf: |
     Port 8888
     Listen 0.0.0.0
-    # The only intended client is the cloudflared pod serving the
-    # cynexia-health tunnel, which dials from the homelab pod CIDR.
+    # The only intended client is the cloudflared pod serving the homelab
+    # cloudflared tunnel from the `health` namespace, which dials from the
+    # homelab pod CIDR.
     # NetworkPolicy is inert on this cluster (flannel enforces nothing), so
     # this line is the only in-cluster restriction, and it is coarse: any pod
     # on the cluster can use the proxy. That grants nothing new, because every
