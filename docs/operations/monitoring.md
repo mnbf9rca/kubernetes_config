@@ -102,7 +102,7 @@ Defaults, unless a service's entry below says otherwise:
 | jottacloud-backup | none | Its old liveness probe could not fail. `activeDeadlineSeconds: 21600` bounds the run |
 | garmin-grafana | none | It serves nothing. The `health-ingest` push monitor is the correct instrument |
 | cloudflare-analytics | none | Scheduled work. `homelab-cloudflare-analytics` plus `activeDeadlineSeconds: 1200` is the instrument |
-| withings-ingest | none | Scheduled work. `withings-ingest` plus `activeDeadlineSeconds: 900` is the instrument |
+| withings-ingest | none | Scheduled work. `withings-ingest` plus `activeDeadlineSeconds: 600` is the instrument |
 | update-watch | none | Scheduled work. `homelab-update-watch` plus `activeDeadlineSeconds: 300` is the instrument |
 | keel-fresh | none | Scheduled work. The `homelab-keel-fresh` kuma push monitor plus `activeDeadlineSeconds: 300` is the instrument |
 | hindsight api | liveness `/health/live`, readiness and startup `/health` (:8888) | Split on purpose, the same way n8n's is. `/health` is database-gated, so a broken postgres drains traffic; `/health/live` is in-process and never touches the database, so a slow or recovering postgres cannot crashloop the single replica. `/health/live` needs image ≥ 0.9.1 — keep the pin at or above it |
@@ -148,14 +148,16 @@ Generated scripts also pass through envsubst, so run `make check-script-substitu
 | Field | Value | Why |
 |---|---|---|
 | `timeZone: "UTC"` | every job | Otherwise the schedule follows kube-controller-manager's local zone |
-| `startingDeadlineSeconds` | 3600 (update-watch and both clusters' keel-fresh included), except 1800 for cloudflare-analytics and withings-ingest, 600 for hindsight-canary, 300 for jottacloud, and unset for `ingest-freshness` | A missed window retries for that long, then drops. `update-watch` takes the 3600 default deliberately: a silently skipped run is the failure it exists to prevent |
-| `activeDeadlineSeconds` | restic 14400, influx-backup 3600, hindsight-pg-dump 3600, hermes-pull 1800, cloudflare-analytics 1200, withings-ingest 900, ingest-freshness 300, update-watch 300, keel-fresh 300 on both clusters, hindsight-canary 300, jottacloud 21600 | With `concurrencyPolicy: Forbid`, one hung run silently blocks every later run |
+| `startingDeadlineSeconds` | 3600 (update-watch and both clusters' keel-fresh included), except 1800 for cloudflare-analytics, 600 for withings-ingest and hindsight-canary, 300 for jottacloud, and unset for `ingest-freshness` | A missed window retries for that long, then drops. `update-watch` takes the 3600 default deliberately: a silently skipped run is the failure it exists to prevent |
+| `activeDeadlineSeconds` | restic 14400, influx-backup 3600, hindsight-pg-dump 3600, hermes-pull 1800, cloudflare-analytics 1200, withings-ingest 600, ingest-freshness 300, update-watch 300, keel-fresh 300 on both clusters, hindsight-canary 300, jottacloud 21600 | With `concurrencyPolicy: Forbid`, one hung run silently blocks every later run |
 | `ttlSecondsAfterFinished` | 259200 on both restic jobs, hermes-pull, cloudflare-analytics, withings-ingest, update-watch and both clusters' keel-fresh; 172800 on influx-backup and hindsight-pg-dump; 3600 on hindsight-canary, which runs hourly; 86400 on the rest | A Friday failure on the restic jobs survives until Monday |
 | `terminationGracePeriodSeconds` | not set on any job | busybox `ash` runs as PID 1 and never forwards SIGTERM to restic, so a grace period only slows teardown. `restic unlock` at the head of the next run recovers the lock |
 
 Two of those are the hindsight jobs.
 `hindsight-pg-dump` runs at 02:15Z — after `hermes-pull` at 02:00, before `influx-backup` at 02:30 and the 03:00 sweep — on `influx-backup`'s figures exactly.
 `hindsight-canary` runs hourly, and its `activeDeadlineSeconds: 300` is deliberately far shorter than its own schedule, so a hung run can never block the next one under `concurrencyPolicy: Forbid`; its `ttlSecondsAfterFinished: 3600` reaps a completed run before the next one lands.
+`withings-ingest` is the same shape at a tighter cadence: it runs every 15 minutes, so both its deadlines sit at 600 seconds, below the 900-second interval.
+Its `ttlSecondsAfterFinished` stays at 259200, because at 96 runs a day the history limits (3 successful, 2 failed) reap a finished Job long before the TTL does.
 
 **Neither hindsight CronJob carries a probe of any kind**, like every other scheduled job here.
 

@@ -48,20 +48,30 @@ metadata:
   name: withings-ingest
   namespace: health
 spec:
-  # Every six hours, at :22 past an odd hour. Minute 22 is used by nothing else
-  # in either cluster, and hours 1/7/13/19 keep this clear of the 02:00-03:00
-  # backup chain (hermes-pull 02:00, hindsight-pg-dump 02:15, influx-backup
-  # 02:30, restic 03:00) and of ingest-freshness at :15 on 0/6/12/18.
-  # Six-hourly rather than hourly because a scale is used at most a few times a
-  # day and a missed window is picked up whole by the next run.
-  schedule: "22 1,7,13,19 * * *"
+  # Every 15 minutes, at :07, :22, :37 and :52. None of those four minutes is
+  # used by anything else in either cluster, so this never lands on the same
+  # minute as the 02:00-03:00 backup chain (hermes-pull 02:00,
+  # hindsight-pg-dump 02:15, influx-backup 02:30, restic 03:00) or as
+  # ingest-freshness at :15.
+  # Every 15 minutes rather than six-hourly so a weigh-in reaches Grafana
+  # within a quarter of an hour, and it is safe on both budgets a faster
+  # cadence could blow. A steady-state run makes four HTTP requests, two of
+  # them to Withings (refresh, then getmeas), against an account limit of 120
+  # requests a minute. And the refresh token rotates on EVERY refresh whatever
+  # the interval, so 96 rotations a day exercise the persist-before-use rule
+  # above rather than threaten it: that rule is what makes rotation routine.
+  schedule: "7,22,37,52 * * * *"
   timeZone: "UTC"                 # without this the schedule is read in kube-controller-manager's local zone
   concurrencyPolicy: Forbid
-  # A missed window is retried for 30 minutes, then dropped. The resume point
-  # is max(_time) over the bucket, so the next run covers the gap by itself.
-  startingDeadlineSeconds: 1800
+  # 600, shorter than the 900-second interval, so a retry cannot still be
+  # pending when the next tick arrives. A missed window is retried for 10
+  # minutes, then dropped; the resume point is max(_time) over the bucket, so
+  # the next run covers the gap by itself.
+  startingDeadlineSeconds: 600
+  # 96 runs a day, so these bound the retained Jobs, not ttlSecondsAfterFinished
+  # below: at 3 and 2 the namespace holds at most five finished withings Jobs.
   successfulJobsHistoryLimit: 3
-  failedJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 2
   jobTemplate:
     spec:
       # 1, not 0. A retry is safe by construction: if the refresh succeeded and
@@ -77,10 +87,13 @@ spec:
       # article 360018514178, "API - Improving the refresh token expiration",
       # is where that grace was introduced.
       backoffLimit: 1
-      # Steady state is three HTTP calls and finishes in seconds. 15 minutes is
-      # sized for the FIRST run, which pages through the whole account history,
-      # and still bounds a wedged socket well inside the 6-hour schedule.
-      activeDeadlineSeconds: 900
+      # 600, below the 900-second interval: with concurrencyPolicy: Forbid, a
+      # deadline equal to the interval would let one hung run block the next
+      # tick. Steady state is four HTTP requests and finishes in seconds. The
+      # first run, which pages through the whole account history, ran on
+      # September 2, 2026 under the old 900; re-authorizing does not repeat it,
+      # because the resume point is the bucket rather than the token file.
+      activeDeadlineSeconds: 600
       # 3 days, so a Friday failure is still readable on Monday.
       ttlSecondsAfterFinished: 259200
       template:

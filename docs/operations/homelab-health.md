@@ -495,7 +495,7 @@ It cannot fail silently.
 ## Withings ingest
 
 `homelab/health/withings-ingest.yaml`.
-Six-hourly CronJob at `22 1,7,13,19 * * *` that pulls one Withings account's measure groups into the `withings` bucket.
+CronJob at `7,22,37,52 * * * *` — every 15 minutes — that pulls one Withings account's measure groups into the `withings` bucket.
 
 The scale produces body-composition detail that Apple Health never receives.
 Weight arrives here and in `apple_metrics`, deliberately, and the two are not deduplicated: the buckets stay separate and a Grafana panel picks the one it wants.
@@ -508,10 +508,18 @@ Weight arrives here and in `apple_metrics`, deliberately, and the two are not de
 | Bucket | `withings`, **infinite** retention |
 | Measurement | `withings_measure`; tags `person`, `type`, `deviceid`; fields `grpid` (string) and `value` (float) |
 | Image | `python:3.14-alpine3.22`, digest-pinned to the same reference `cloudflare-analytics` carries. No keel; Renovate proposes bumps under the "health stack" group |
-| Deadlines | `startingDeadlineSeconds: 1800`, `activeDeadlineSeconds: 900`, `ttlSecondsAfterFinished: 259200` |
+| Deadlines | `startingDeadlineSeconds: 600`, `activeDeadlineSeconds: 600`, `ttlSecondsAfterFinished: 259200` |
 | Monitoring | The `withings-ingest` uptime-kuma push monitor: `up` on exit 0, `down` otherwise |
 
-Six-hourly rather than hourly because a scale is used at most a few times a day, and a missed window is picked up whole by the next run.
+Every 15 minutes rather than six-hourly, so a weigh-in reaches Grafana within a quarter of an hour instead of within six.
+The cadence is safe on both budgets a faster schedule could blow.
+A steady-state run makes four HTTP requests, two of which reach Withings — the token refresh and one `getmeas` — against an account limit of 120 requests a minute.
+And the refresh token rotates on every refresh whatever the interval, so 96 rotations a day exercise the persist-before-use rule rather than threaten it: that rule is what makes rotation routine.
+A missed window is still picked up whole by the next run, because the resume point is `max(_time)` over the bucket.
+
+Both deadlines sit at 600 seconds, below the 900-second interval.
+`activeDeadlineSeconds` must stay below it: under `concurrencyPolicy: Forbid`, a deadline equal to the interval lets one hung run block the next tick.
+`successfulJobsHistoryLimit: 3` and `failedJobsHistoryLimit: 2` bound the retained Jobs at 96 runs a day; `ttlSecondsAfterFinished` no longer does.
 
 ### Why the script is Python
 
@@ -605,7 +613,7 @@ None of them are created by `make apply-homelab`.
 
 1. **DNS for the callback host.** `withings.cynexia.net`, an A record to `10.100.0.100`. It exists only so the browser lands on something during authorization; Traefik answers 404 with the wildcard certificate and the code is read from the address bar.
 2. **Withings client credentials** in 1Password as `op://Homelab/health-withings/` with `client-id` `[text]`, `client-secret` concealed, and `redirect-url` `[text]` holding `https://withings.cynexia.net/oauth-callback`. The application is registered as a Public API integration in the Development environment with that redirect URI.
-3. **uptime-kuma push monitor** `withings-ingest`, Push type, 21600s interval with one retry at 7200s. Token into `op://Homelab/health-healthchecks/withings-kuma-push-token`, typed `[text]`.
+3. **uptime-kuma push monitor** `withings-ingest`, Push type, 1800s interval with one retry at 900s. Token into `op://Homelab/health-healthchecks/withings-kuma-push-token`, typed `[text]`.
 4. **InfluxDB bucket and tokens**: `make health-influx-withings-bootstrap`, in a plain terminal. It prints two live tokens, so run it outside an agent session.
 
 The tree already carries the `withings-token` key on the `health-influxdb` Secret, its `.env.tpl` line and both Makefile variable list entries.
@@ -621,6 +629,7 @@ The symptom is a `verdict=failed failure=refresh` heartbeat that repeats on ever
 There is no `make` target for this: it needs a browser, a 30-second code window and a paste, so it is a sequence you run by hand.
 
 1. **Suspend the CronJob**, so a scheduled run cannot land in the middle of the exchange.
+   At a 15-minute cadence this is not a formality: a tick fires at :07, :22, :37 or :52, so an unsuspended re-authorization is odds-on to collide with one.
 
    ```bash
    kubectl -n health patch cronjob withings-ingest -p '{"spec":{"suspend":true}}'
@@ -761,7 +770,7 @@ Roster and per-monitor settings: [uptime-kuma.md](uptime-kuma.md#push-monitors).
 | `health-ingest` | 1d / 12h | silence |
 | `health-influx-backup` | 1d / 6h | **a `down` push from an EXIT trap** |
 | `homelab-cloudflare-analytics` | 1h / 2h | **a `down` push from the exit path** |
-| `withings-ingest` | 6h / 2h | **a `down` push from the exit path** |
+| `withings-ingest` | 30m / 15m | **a `down` push from the exit path** |
 
 **`health-ingest` signals failure by silence; the other three do not.**
 
@@ -777,13 +786,13 @@ Roster and per-monitor settings: [uptime-kuma.md](uptime-kuma.md#push-monitors).
   The pod log carries the full per-bucket verdict and keeps "stale" apart from "query failed", which the monitor's one bit cannot.
 - `cloudflare-analytics` (hourly) is Python and pushes `up` on rc 0 and `down` otherwise, the unrecoverable-gap path included, so a failure is distinguishable from a never-scheduled run without waiting for the silence bound.
   Pushes are best-effort and can never fail the job.
-- `withings-ingest` (every six hours) is Python on the same contract: `up` on rc 0, `down` otherwise, one push per run, never silent. `msg` carries `verdict=` from `ok|failed`, `groups=`, `points=` and, on a failure, `failure=` from a five-member enum naming the stage that died — `resume` and `write` are InfluxDB, `refresh` and `fetch` are Withings, `token_persist` is the volume — plus `exception=` after it on an unhandled error.
+- `withings-ingest` (every 15 minutes) is Python on the same contract: `up` on rc 0, `down` otherwise, one push per run, never silent. `msg` carries `verdict=` from `ok|failed`, `groups=`, `points=` and, on a failure, `failure=` from a five-member enum naming the stage that died — `resume` and `write` are InfluxDB, `refresh` and `fetch` are Withings, `token_persist` is the volume — plus `exception=` after it on an unhandled error.
 
 **There is no `/start` equivalent on the push API, and none of these four has one.**
 A push is a heartbeat carrying a status, so `activeDeadlineSeconds` is the whole of the hang bound and the monitor's interval plus retry is the silence bound.
 
-All four are bounded by `timeZone: "UTC"` and `activeDeadlineSeconds` (3600 for `influx-backup`, 300 for `ingest-freshness`, 1200 for `cloudflare-analytics`, 900 for `withings-ingest`) — with `concurrencyPolicy: Forbid` and no deadline, one hung run blocks every subsequent run with nothing alerting.
-`influx-backup` sets `startingDeadlineSeconds: 3600`, `cloudflare-analytics` 1800 and `withings-ingest` 1800; `ingest-freshness` deliberately does not, since it runs again in six hours.
+All four are bounded by `timeZone: "UTC"` and `activeDeadlineSeconds` (3600 for `influx-backup`, 300 for `ingest-freshness`, 1200 for `cloudflare-analytics`, 600 for `withings-ingest`) — with `concurrencyPolicy: Forbid` and no deadline, one hung run blocks every subsequent run with nothing alerting.
+`influx-backup` sets `startingDeadlineSeconds: 3600`, `cloudflare-analytics` 1800 and `withings-ingest` 600; `ingest-freshness` deliberately does not, since it runs again in six hours.
 
 This namespace's monitors watch **data freshness**, not the edge — which is why the 2026-08-18 Pomerium wedge went unnoticed (that proxy has since been removed).
 External availability of `mcp.cynexia.com` and the other tunnel hostnames is layer 3, in [uptime-kuma.md](uptime-kuma.md#monitor-list).
