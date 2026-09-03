@@ -360,6 +360,15 @@ class Points(unittest.TestCase):
         self.assertIn(",position=10,", line)
         self.assertIn(",position_name=left_leg ", line)
 
+    def test_position_7_is_whole_body(self):
+        # The spec omits 7; the water types arrive at it and must not read as
+        # `unknown` on every panel that shows them.
+        line = wi.points([{"grpid": 1, "date": 100, "deviceid": "d",
+                           "measures": [{"type": 168, "value": 1234,
+                                         "unit": -3, "position": 7}]}])[0]
+        self.assertIn(",position=7,", line)
+        self.assertIn(",position_name=whole_body ", line)
+
     def test_a_position_outside_the_table_is_named_unknown(self):
         # Newer hardware invents positions, exactly as it invents type codes.
         line = wi.points([{"grpid": 1, "date": 100, "deviceid": "d",

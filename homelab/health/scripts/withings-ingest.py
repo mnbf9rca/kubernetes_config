@@ -150,7 +150,8 @@ TYPES = {
 
 # The device position a measure was taken at, verbatim from the Withings spec at
 # components.schemas.measure_object.properties.position. Codes 0-28; the spec
-# lists no 7. Segmental types (173, 174, 175) repeat one type per position, so
+# lists no 7, which is supplied from elsewhere and marked at its entry below.
+# Segmental types (173, 174, 175) repeat one type per position, so
 # without a name a panel legend reads as bare integers.
 # A position missing from this table is tagged position_name=unknown and the
 # numeric `position` tag still carries the code, exactly as an unknown type is.
@@ -162,6 +163,12 @@ POSITIONS = {
     4:  "right_foot",
     5:  "left_foot",
     6:  "between_legs",
+    # Not in the current openapi.yaml. Named WHOLE_BODY in aiowithings'
+    # MeasurementPosition enum (github.com/joostlek/python-withings,
+    # models.py), and corroborated here by observation: extracellular plus
+    # intracellular water (types 168 and 169) arrive at position 7 and sum to
+    # hydration (type 77).
+    7:  "whole_body",
     8:  "left_part_of_body",
     9:  "right_part_of_body",
     10: "left_leg",

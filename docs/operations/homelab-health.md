@@ -603,6 +603,7 @@ Six further tags ride alongside the numeric code, so an MCP caller or a Grafana 
 - `position` — the measure's `position` field as a string, present only when the measure carries one.
   Types 173, 174 and 175 are segmental: they repeat a type per body position, enumerated 0 to 28.
 - `position_name` — that position's name, or `unknown` for a code the table does not hold, written beside `position` and absent with it; the enumeration is transcribed into the `POSITIONS` constant from the spec's `components.schemas.measure_object.properties.position`, which lists no code 7.
+  Code 7 is `whole_body`, and it is the one entry the spec does not supply: it is named `WHOLE_BODY` in the `MeasurementPosition` enum of the `aiowithings` library (`github.com/joostlek/python-withings`, `models.py`), and the account's own data corroborates it — extracellular and intracellular water (types 168 and 169) arrive at position 7 and sum to hydration (type 77).
 - `modelid` — the measure group's device model code as a string, read from the group's `modelid` (the spec spells the same field `model_id` on `measuregrp_object` and `modelid` on `activity_object`, so the script reads both names) and absent where the group carries neither.
 - `model` — the device model's name, taken verbatim from the group's own `model` string, which `components.schemas.measuregrp_object.properties.model` enumerates as names rather than codes, so no table is transcribed; it is absent where the group sends no string.
 
