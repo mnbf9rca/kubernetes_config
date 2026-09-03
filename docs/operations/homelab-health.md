@@ -509,7 +509,7 @@ Weight arrives here and in `apple_metrics`, deliberately, and the two are not de
 | Measurement | `withings_measure`; tags `person`, `type`, `deviceid`; fields `grpid` (string) and `value` (float) |
 | Image | `python:3.14-alpine3.22`, digest-pinned to the same reference `cloudflare-analytics` carries. No keel; Renovate proposes bumps under the "health stack" group |
 | Deadlines | `startingDeadlineSeconds: 600`, `activeDeadlineSeconds: 600`, `ttlSecondsAfterFinished: 259200` |
-| Monitoring | The `withings-ingest` uptime-kuma push monitor: `up` on exit 0, `down` otherwise |
+| Monitoring | The `Withings-ingest` uptime-kuma push monitor: `up` on exit 0, `down` otherwise |
 
 Every 15 minutes rather than six-hourly, so a weigh-in reaches Grafana within a quarter of an hour instead of within six.
 The cadence is safe on both budgets a faster schedule could blow.
@@ -613,7 +613,7 @@ None of them are created by `make apply-homelab`.
 
 1. **DNS for the callback host.** `withings.cynexia.net`, an A record to `10.100.0.100`. It exists only so the browser lands on something during authorization; Traefik answers 404 with the wildcard certificate and the code is read from the address bar.
 2. **Withings client credentials** in 1Password as `op://Homelab/health-withings/` with `client-id` `[text]`, `client-secret` concealed, and `redirect-url` `[text]` holding `https://withings.cynexia.net/oauth-callback`. The application is registered as a Public API integration in the Development environment with that redirect URI.
-3. **uptime-kuma push monitor** `withings-ingest`, Push type, 1800s interval with one retry at 900s. Token into `op://Homelab/health-healthchecks/withings-kuma-push-token`, typed `[text]`.
+3. **uptime-kuma push monitor** `Withings-ingest`, Push type, 1800s interval with one retry at 900s. Token into `op://Homelab/health-healthchecks/withings-kuma-push-token`, typed `[text]`.
 4. **InfluxDB bucket and tokens**: `make health-influx-withings-bootstrap`, in a plain terminal. It prints two live tokens, so run it outside an agent session.
 
 The tree already carries the `withings-token` key on the `health-influxdb` Secret, its `.env.tpl` line and both Makefile variable list entries.
@@ -767,12 +767,12 @@ Roster and per-monitor settings: [uptime-kuma.md](uptime-kuma.md#push-monitors).
 
 | Monitor | Interval / retry | Signals failure by |
 |---|---|---|
-| `health-ingest` | 1d / 12h | silence |
+| `health-garmin-and-apple-ingest` | 1d / 12h | silence |
 | `health-influx-backup` | 1d / 6h | **a `down` push from an EXIT trap** |
 | `homelab-cloudflare-analytics` | 1h / 2h | **a `down` push from the exit path** |
-| `withings-ingest` | 30m / 15m | **a `down` push from the exit path** |
+| `Withings-ingest` | 30m / 15m | **a `down` push from the exit path** |
 
-**`health-ingest` signals failure by silence; the other three do not.**
+**`health-garmin-and-apple-ingest` signals failure by silence; the other three do not.**
 
 - `influx-backup` pushes `up` or `down` from an EXIT trap, so a failure is DOWN within a minute and is distinguishable from a never-scheduled run.
   It did not always: the report used to be the script's last statement under `set -eu`, so a failing prune, a missing ConfigMap key or a dead influxdb pod produced *exactly nothing* until the silence bound expired some 30 hours later.

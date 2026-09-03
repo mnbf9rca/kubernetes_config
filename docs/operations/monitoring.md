@@ -10,7 +10,7 @@ Read [What this does not catch](#what-this-does-not-catch) before you trust a gr
 |---|---|
 | A restic check is red | `failed_step=` in the ping body names the phase, and `prune=` says whether retention ran — [Reading a restic failure body](#reading-a-restic-failure-body) |
 | `mount_ok=no` on homelab restic | The SSD did not mount, so the backup captured nothing — [the gates](#the-backup-verification-gates) |
-| `health-ingest` is DOWN | Check whether the operator synced a watch before suspecting the pipeline. The last heartbeat's `apple_age_h=`/`garmin_age_h=` names which path was ageing — [the push monitors](uptime-kuma.md#push-monitors) |
+| `health-garmin-and-apple-ingest` is DOWN | Check whether the operator synced a watch before suspecting the pipeline. The last heartbeat's `apple_age_h=`/`garmin_age_h=` names which path was ageing — [the push monitors](uptime-kuma.md#push-monitors) |
 | `homelab-update-watch` is DOWN | In a fresh heartbeat, `verdict=` names the cause and `next=` names the command to run; a stale `run_epoch=` means the watcher itself went quiet — [The update watcher](#the-update-watcher) |
 | A sidecar shows `RESTARTS: 0` but its snapshot is missing | Expected; they log rather than exit. Read the sidecar's stderr — [Why the sidecars have no probes](#why-the-sidecars-have-no-probes) |
 | `hindsight-canary` is DOWN | Read `verdict=`: `retain-failed` is the API, the database or the tenant key; `recall-miss` is the retrieval side. An agent is losing memories right now — [hindsight.md](hindsight.md) |
@@ -100,7 +100,7 @@ Defaults, unless a service's entry below says otherwise:
 | traefik | exec `traefik healthcheck --ping` | `hostNetwork` makes the pod IP the storage NIC, where the ping endpoint is not bound. The CLI queries loopback |
 | keel (both clusters) | `/healthz` | Liveness 15s × 6 is laxer than readiness 10s × 3 |
 | jottacloud-backup | none | Its old liveness probe could not fail. `activeDeadlineSeconds: 21600` bounds the run |
-| garmin-grafana | none | It serves nothing. The `health-ingest` push monitor is the correct instrument |
+| garmin-grafana | none | It serves nothing. The `health-garmin-and-apple-ingest` push monitor is the correct instrument |
 | cloudflare-analytics | none | Scheduled work. `homelab-cloudflare-analytics` plus `activeDeadlineSeconds: 1200` is the instrument |
 | withings-ingest | none | Scheduled work. `withings-ingest` plus `activeDeadlineSeconds: 600` is the instrument |
 | update-watch | none | Scheduled work. `homelab-update-watch` plus `activeDeadlineSeconds: 300` is the instrument |
@@ -320,7 +320,7 @@ An uptime-kuma **HTTP** monitor could not have done this: kuma runs on the VPS, 
 A **push** monitor reverses the direction — the canary pod calls out to `uptime.cynexia.com` — which is why the reporting side moved to kuma on August 26, 2026 while the probing side could not.
 **Rotating the tenant key is not finished until the VM-side smoke test in [hindsight.md](hindsight.md) has been re-run** — the canary proves the server accepts writes, not that Hermes still sends them.
 
-**The two ingest signals are now one monitor, `health-ingest`, and it stays success-only.**
+**The two ingest signals are now one monitor, `health-garmin-and-apple-ingest`, and it stays success-only.**
 One `ingest-freshness` CronJob checks both buckets in one process, so two monitors would be one signal counted twice.
 It pushes `up` only when both buckets are fresh and pushes **nothing** on every other path — a stale bucket, a failed query, a dead InfluxDB.
 A `down` push on a stale bucket would flip the monitor at the first 6-hourly run that found nothing, trading a 36-hour tolerance for a 6-hour one, on a signal that depends on the operator syncing a watch.
@@ -663,15 +663,15 @@ One consequence bites from this side: a monitor that follows redirects reports U
 
 Layer 3 is no longer only outbound HTTP checks.
 It also holds **push monitors**, driven by jobs that send a heartbeat rather than answering a request — the dead-man's-switch shape that used to mean a healthchecks.io check.
-Ten were created on August 26, 2026: `homelab-keel-fresh` and `vps-keel-fresh`, and the eight that took over the routine heartbeats — `health-influx-backup`, `health-ingest`, `homelab-cloudflare-analytics`, `homelab-hermes-pull`, `hindsight-pg-dump`, `hindsight-canary`, `homelab-update-watch` and `jottacloud-backup`.
+Ten were created on August 26, 2026: `homelab-keel-fresh` and `vps-keel-fresh`, and the eight that took over the routine heartbeats — `health-influx-backup`, `health-garmin-and-apple-ingest`, `homelab-cloudflare-analytics`, `homelab-hermes-pull`, `hindsight-pg-dump`, `hindsight-canary`, `homelab-update-watch` and `jottacloud-backup`.
 An eleventh, **`hermes-app-alive`**, is the one driven from **outside** both clusters: a `no_agent` cron job inside the hermes agent on the off-cluster VM at 05:45 UTC, `up` on exit 0 and `down` otherwise ([hermes-vm.md](hermes-vm.md#reading-a-down-hermes-app-alive)).
 That widens the `/api/push/*` Access bypass's blast radius past "the clusters".
-A twelfth, **`withings-ingest`**, was added on September 2, 2026 for the `withings-ingest` CronJob in `health`.
+A twelfth, **`Withings-ingest`**, was added on September 2, 2026 for the `withings-ingest` CronJob in `health`.
 Because the healthchecks.io account is capped at 20 checks, new scheduled work takes a push monitor instead.
 Both the roster and the Cloudflare Access bypass that lets a job reach the push endpoint are in **[uptime-kuma.md](uptime-kuma.md#push-monitors)**.
 
 **The monitors deliberately kept the retired checks' names**, so the estate reads as one inventory across the change: `health-influx-backup` names the same job it always did, in a different place.
-The one exception is the merge — `health-apple-ingest` and `health-garmin-ingest` became the single `health-ingest`, because one CronJob checked both in one process.
+The one exception is the merge — `health-apple-ingest` and `health-garmin-ingest` became the single `health-garmin-and-apple-ingest`, because one CronJob checked both in one process.
 
 What that costs: a push carries one short `msg` line rather than a multi-line body, and there is no `/start`.
 The verdict and one or two counters travel with the alert; the full diagnostic stays in the pod log until `ttlSecondsAfterFinished` reaps it, so read the pod log first and the kuma heartbeat history second.
@@ -794,7 +794,7 @@ Correct anywhere the estate's own text says otherwise.
 
 ### Named accepted residual: the ingest signal leaks a presence timeline
 
-`apple_age_h=` and `garmin_age_h=` are written on every successful `health-ingest` heartbeat, up to four times a day, and over the retained window they constitute a sync-and-absence timeline for an identified individual: when the operator last wore and synced a watch, and by inference when they were away, asleep or not wearing a device.
+`apple_age_h=` and `garmin_age_h=` are written on every successful `health-garmin-and-apple-ingest` heartbeat, up to four times a day, and over the retained window they constitute a sync-and-absence timeline for an identified individual: when the operator last wore and synced a watch, and by inference when they were away, asleep or not wearing a device.
 They are written anyway — the ages *are* the finding this signal exists to deliver, and after the merge they are also the only thing that says which of the two paths went stale.
 
 **The move to a push monitor changed the premise of this residual, and it is worth restating rather than renaming.**
@@ -821,7 +821,7 @@ These are settled.
 Do not relitigate them without new evidence.
 
 - **Any probe on `garmin-grafana`.**
-  The `health-ingest` freshness monitor covers it.
+  The `health-garmin-and-apple-ingest` freshness monitor covers it.
 - **Token-mtime freshness probe for garmin.**
   The token file is written only on the interactive login path, so its mtime changes about once a year: the probe detects nothing and false-positives on any sane threshold.
 - **Staleness-based liveness for garmin.**

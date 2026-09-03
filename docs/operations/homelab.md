@@ -526,7 +526,7 @@ systemctl --user enable --now hermes-webui
 **`loginctl enable-linger hermes` is not optional and is easy to miss.**
 Without it the `hermes` user manager stops when the last session ends, so all six user units die at the next reboot, which is now automatic and can happen any night at 04:45 UTC.
 Part of the failure hides itself: the daily liveness check runs as a cron job inside `hermes-gateway`, so the thing that would push a `down` dies with everything else. uptime-kuma sees silence and that monitor stays green until its heartbeat lapses about 30 hours later.
-The existing `hermes` HTTP monitor does catch it sooner, because the dashboard it probes is one of the units that died.
+The existing `hermes API` HTTP monitor does catch it sooner, because the dashboard it probes is one of the units that died.
 Confirm lingering with `loginctl show-user hermes -p Linger`, which must print `Linger=yes`.
 
 `webui.env` comes back with the restored `~/.hermes`, so no password step is needed on a restore — only on a first install.
