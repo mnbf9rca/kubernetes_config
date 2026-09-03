@@ -288,6 +288,13 @@ class Fetch(unittest.TestCase):
 
 
 class Points(unittest.TestCase):
+    def setUp(self):
+        self.real_log = wi.log
+        wi.log = lambda msg: None
+
+    def tearDown(self):
+        wi.log = self.real_log
+
     def test_line_protocol_shape_and_ordering(self):
         groups = [
             {"grpid": 7, "date": 200, "deviceid": "dev1",
@@ -297,11 +304,64 @@ class Points(unittest.TestCase):
         ]
         lines = wi.points(groups)
         self.assertEqual(lines, [
-            'withings_measure,person=rob,type=170,deviceid=unknown '
-            'grpid="6",value=12.34 100',
-            'withings_measure,person=rob,type=1,deviceid=dev1 '
-            'grpid="7",value=74.850 200',
+            'withings_measure,person=rob,type=170,type_name=visceral_fat,'
+            'deviceid=unknown grpid="6",value=12.34 100',
+            'withings_measure,person=rob,type=1,type_name=weight,unit=kg,'
+            'deviceid=dev1 grpid="7",value=74.850 200',
         ])
+
+    def test_a_known_type_carries_its_name_and_unit(self):
+        # A caller reading this bucket should not need the code table.
+        line = wi.points([{"grpid": 1, "date": 100, "deviceid": "d",
+                           "measures": [{"type": 11, "value": 62,
+                                         "unit": 0}]}])[0]
+        self.assertIn(",type_name=heart_pulse,", line)
+        self.assertIn(",unit=bpm,", line)
+
+    def test_a_type_the_spec_gives_no_unit_for_carries_no_unit_tag(self):
+        # The spec states no unit for 18 codes; an absent tag beats a guess.
+        line = wi.points([{"grpid": 1, "date": 100, "deviceid": "d",
+                           "measures": [{"type": 130, "value": 0,
+                                         "unit": 0}]}])[0]
+        self.assertIn(",type_name=atrial_fibrillation_result,", line)
+        self.assertNotIn("unit=", line)
+
+    def test_an_unknown_code_is_named_unknown_and_is_still_written(self):
+        # Newer firmware invents codes. Dropping one would lose the reading.
+        line = wi.points([{"grpid": 1, "date": 100, "deviceid": "d",
+                           "measures": [{"type": 9999, "value": 5,
+                                         "unit": 0}]}])[0]
+        self.assertIn(",type=9999,", line)
+        self.assertIn(",type_name=unknown,", line)
+        self.assertNotIn("unit=", line)
+        self.assertTrue(line.endswith('grpid="1",value=5 100'))
+
+    def test_a_segmental_measure_carries_its_position(self):
+        # Types 173, 174 and 175 repeat a type per body position, 0-28.
+        line = wi.points([{"grpid": 1, "date": 100, "deviceid": "d",
+                           "measures": [{"type": 174, "value": 1234,
+                                         "unit": -3, "position": 5}]}])[0]
+        self.assertIn(",position=5 ", line)
+
+    def test_a_measure_without_a_position_carries_no_position_tag(self):
+        line = wi.points([{"grpid": 1, "date": 100, "deviceid": "d",
+                           "measures": [{"type": 1, "value": 74850,
+                                         "unit": -3, "position": None}]}])[0]
+        self.assertNotIn("position=", line)
+
+    def test_a_tag_value_holding_a_space_is_escaped(self):
+        # A raw space would end the tag set and the rest would parse as fields.
+        real = dict(wi.TYPES)
+        wi.TYPES[9998] = ("space name", "a b")
+        try:
+            line = wi.points([{"grpid": 1, "date": 100, "deviceid": "d",
+                               "measures": [{"type": 9998, "value": 1,
+                                             "unit": 0}]}])[0]
+        finally:
+            wi.TYPES.clear()
+            wi.TYPES.update(real)
+        self.assertIn(",type_name=space\\ name,", line)
+        self.assertIn(",unit=a\\ b,", line)
 
     def test_a_measure_missing_a_field_raises_rather_than_writing_junk(self):
         with self.assertRaises(wi.IngestFailed):

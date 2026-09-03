@@ -506,7 +506,7 @@ Weight arrives here and in `apple_metrics`, deliberately, and the two are not de
 |---|---|
 | Endpoint | `POST https://wbsapi.withings.net/measure`, `action=getmeas`, `category=1` |
 | Bucket | `withings`, **infinite** retention |
-| Measurement | `withings_measure`; tags `person`, `type`, `deviceid`; fields `grpid` (string) and `value` (float) |
+| Measurement | `withings_measure`; tags `person`, `type`, `type_name`, `deviceid`, plus `unit` and `position` where they apply; fields `grpid` (string) and `value` (float) |
 | Image | `python:3.14-alpine3.22`, digest-pinned to the same reference `cloudflare-analytics` carries. No keel; Renovate proposes bumps under the "health stack" group |
 | Deadlines | `startingDeadlineSeconds: 600`, `activeDeadlineSeconds: 600`, `ttlSecondsAfterFinished: 259200` |
 | Monitoring | The `Withings-ingest` uptime-kuma push monitor: `up` on exit 0, `down` otherwise |
@@ -593,8 +593,26 @@ With one measurement an unknown code is one more tag value in a series that alre
 `grpid` is a field and `deviceid` is a tag.
 `deviceid` has a handful of values for the life of the account; `grpid` has one per weigh-in forever, so as a tag it would multiply series cardinality by the number of weigh-ins.
 
-**There is no `type_name` tag. The numeric code is the data; the name is presentation.**
-Type names live in Grafana as a value mapping on the `type` tag, where a correction costs no redeploy, forks no series, and an unmapped code renders as its number rather than disappearing.
+Three further tags ride alongside the numeric code, so an MCP caller or a Grafana query needs no copy of the code table.
+
+- `type_name` — the measure's name, or `unknown` for a code the table does not hold.
+  An unknown code is still written: dropping one would lose the reading, and newer firmware invents codes.
+- `unit` — the unit the spec itself states, and **absent where the spec states none** rather than guessed.
+  Seventeen of the 43 codes are unitless there, so a query must handle the tag being missing.
+- `position` — the measure's `position` field as a string, present only when the measure carries one.
+  Types 173, 174 and 175 are segmental: they repeat a type per body position, enumerated 0 to 28.
+
+The source is Withings' own `openapi.yaml` at `developer.withings.com`, `info.version` 2.0, the `meastype` parameter description.
+The table lives as the `TYPES` constant in `homelab/health/scripts/withings-ingest.py`, and each run logs the count of unknown codes it saw to the pod log — a count only, and not to the heartbeat, whose value allowlist admits neither the count nor the codes.
+
+The numeric `type` tag is unchanged and is still the data every panel filters on.
+Type 130's value is a classification integer 0 to 13, not a measurement; it is still written as the float `value`, so a panel maps the number rather than reading a unit.
+
+This reverses the earlier decision that names were presentation and belonged in a Grafana value mapping.
+The mapping served Grafana and nothing else, and the MCP connector and any ad-hoc Flux query were left holding a code table they had no copy of.
+
+**The whole measurement was deleted and re-backfilled on September 3, 2026**, so no untagged point sits beside a tagged one.
+The wipe was a `POST /api/v2/delete` over `_measurement="withings_measure"` with the bucket's own read-write token, then one manual run of the CronJob, which re-paged the account from 2009 because the resume query then found an empty bucket.
 
 Accepted residual: two groups sharing a measurement date, a type and a device collapse to one series and one timestamp, so the later write wins.
 That needs two weigh-ins recorded at the same second on the same device.
@@ -603,7 +621,7 @@ That needs two weigh-ins recorded at the same second on the same device.
 
 Grafana holds a hand-built dashboard at uid `withings`, titled **Withings** and tagged `health`, added September 2, 2026.
 It is **not provisioned from this repo**, by design: it lives in `grafana.db` like every other dashboard here, so the nightly SQLite dump described under [The Grafana dump](#the-grafana-dump) is what captures it.
-Eight stat tiles carry the latest reading for weight, fat ratio, fat mass, muscle mass, hydration, bone mass, heart rate and blood pressure — each over `range(start: 0)`, so a tile is never blank merely because the cuff has not been used inside the dashboard's 90-day window — then time series for the same measures, a collapsed **Other** row holding height, and a table of any type code present in the bucket that no panel covers.
+Eight stat tiles carry the latest reading for weight, fat ratio, fat mass, muscle mass, hydration, bone mass, heart rate and blood pressure — each over `range(start: 0)`, so a tile is never blank merely because the cuff has not been used inside the dashboard's 90-day window — then time series for the same measures, a collapsed **Other** row holding height, and a table of any type code present in the bucket that no panel covers, showing each code's `type_name` beside it.
 That last table is the only thing that would notice a code newer firmware invents, and empty is its expected state.
 
 ### First-run setup

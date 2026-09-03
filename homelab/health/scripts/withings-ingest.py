@@ -86,6 +86,65 @@ FIRST_RUN_START = "2009-01-01"
 # second browser round trip. No endpoint here calls either.
 SCOPE = "user.metrics,user.activity"
 
+# Withings measure type codes, transcribed from developer.withings.com's
+# openapi.yaml (info.version 2.0), the `meastype` parameter description. The
+# numeric code stays the data - it is the tag every panel filters on - and this
+# table only adds the name and the unit the spec itself states, so an MCP caller
+# or a Grafana query needs no copy of the code table.
+#
+# AN EMPTY UNIT MEANS THE SPEC STATES NONE, AND IS NOT A GUESS TO BE FILLED IN.
+# Seventeen of these 43 codes are unitless there - counted from the table below,
+# not from memory - and the `unit` tag is simply absent on each of them.
+# A code missing from this table is written unchanged with type_name=unknown -
+# newer firmware invents codes, and dropping one would lose the reading.
+TYPES = {
+    1:   ("weight", "kg"),
+    4:   ("height", "m"),
+    5:   ("fat_free_mass", "kg"),
+    6:   ("fat_ratio", "%"),
+    8:   ("fat_mass_weight", "kg"),
+    9:   ("diastolic_blood_pressure", "mmHg"),
+    10:  ("systolic_blood_pressure", "mmHg"),
+    11:  ("heart_pulse", "bpm"),
+    12:  ("temperature", "°C"),
+    54:  ("spo2", "%"),
+    71:  ("body_temperature", "°C"),
+    73:  ("skin_temperature", "°C"),
+    76:  ("muscle_mass", "kg"),
+    77:  ("hydration", "kg"),
+    88:  ("bone_mass", "kg"),
+    91:  ("pulse_wave_velocity", "m/s"),
+    123: ("vo2_max", "ml/min/kg"),
+    # A classification integer 0-13, not a measurement; still written as the
+    # float value, so a panel maps the number rather than reading a unit.
+    130: ("atrial_fibrillation_result", ""),
+    135: ("qrs_interval", ""),
+    136: ("pr_interval", ""),
+    137: ("qt_interval", ""),
+    138: ("corrected_qt_interval", ""),
+    139: ("atrial_fibrillation_result_ppg", ""),
+    147: ("urinary_ph", ""),
+    148: ("urine_specific_gravity", ""),
+    151: ("urinary_nitrites", "µmol/L"),
+    155: ("vascular_age", ""),
+    167: ("nerve_health_score_conductance_feet", ""),
+    168: ("extracellular_water", "kg"),
+    169: ("intracellular_water", "kg"),
+    170: ("visceral_fat", ""),                  # spec: without unit
+    173: ("fat_free_mass_segments", ""),        # per position
+    174: ("fat_mass_segments", "kg"),           # per position
+    175: ("muscle_mass_segments", ""),          # per position
+    196: ("nerve_response_score", ""),
+    204: ("urinary_ketones", "mmol/L"),
+    205: ("urinary_vitamin_c", "mmol/L"),
+    226: ("basal_metabolic_rate", ""),
+    227: ("metabolic_age", ""),
+    229: ("electrochemical_skin_conductance", ""),
+    248: ("urinary_calcium", "mmol/L"),
+    249: ("urinary_creatinine", "mmol/L"),
+    251: ("urinary_calcium_creatinine_ratio", "mmol/mmol"),
+}
+
 
 class IngestFailed(Exception):
     """The run did not produce a trustworthy answer.
@@ -525,8 +584,14 @@ def points(groups):
     `type`. `grpid` is a FIELD and `deviceid` is a TAG: deviceid has a handful of
     values for the life of the account, grpid has one per weigh-in forever and as
     a tag would multiply series cardinality by the number of weigh-ins.
+
+    `type_name`, `unit` and `position` ride alongside the numeric `type` so a
+    reader needs no copy of TYPES. `unit` is omitted where the spec states none
+    and `position` where the measure carries none, because an absent tag is
+    honest and a placeholder forks a series for nothing.
     """
     lines = []
+    unknown = set()
     for group in sorted(groups, key=group_date):
         ts = group_date(group)
         grpid = group.get("grpid", "")
@@ -539,11 +604,23 @@ def points(groups):
             except (KeyError, TypeError):
                 raise IngestFailed(
                     "measure group is missing value, unit or type")
-            lines.append(
-                'withings_measure,person=%s,type=%s,deviceid=%s '
-                'grpid="%s",value=%s %d'
-                % (esc_tag(PERSON), esc_tag(mtype), esc_tag(deviceid),
-                   esc_field(grpid), scaled(value, unit), ts))
+            if mtype not in TYPES:
+                unknown.add(mtype)
+            type_name, unit_name = TYPES.get(mtype, ("unknown", ""))
+            tags = ("person=%s,type=%s,type_name=%s"
+                    % (esc_tag(PERSON), esc_tag(mtype), esc_tag(type_name)))
+            if unit_name:
+                tags += ",unit=%s" % esc_tag(unit_name)
+            tags += ",deviceid=%s" % esc_tag(deviceid)
+            position = measure.get("position")
+            if position is not None:
+                tags += ",position=%s" % esc_tag(position)
+            lines.append('withings_measure,%s grpid="%s",value=%s %d'
+                         % (tags, esc_field(grpid), scaled(value, unit), ts))
+    # A COUNT, NOT THE CODES, AND THE POD LOG RATHER THAN THE HEARTBEAT: the
+    # heartbeat's allowlist admits neither, and a code nobody has mapped is a
+    # thing to go and look at, not a thing to alert on.
+    log("unknown type codes seen: %d" % len(unknown))
     return lines
 
 
