@@ -65,7 +65,7 @@ Ingress hostnames are `*.cynexia.net` (Route53), Traefik-fronted, LAN/Tailscale 
 
 Retired in the rebuild: immich, ollama, open-webui, komga, jellyfin, mylar3, lazylibrarian, caddy, postgresql.
 tinyproxy was on that list until September 2, 2026, when it returned in its own `proxy` namespace to serve changedetection on the VPS — see [vps.md](vps.md#residential-egress-through-the-homelab).
-cloudflared was retired from the downloads-era stack but is not retired homelab-wide — the `health` namespace runs its own dedicated `cynexia-health` tunnel, separate from the VPS cluster's `cynexia-vps` tunnel.
+cloudflared was retired from the downloads-era stack but is not retired homelab-wide — the `health` namespace runs the `cynexia-health` tunnel, separate from the VPS cluster's `cynexia-vps` tunnel. It is the whole cluster's tunnel rather than the namespace's own: `proxy.cynexia.com` fronts an origin in the `proxy` namespace.
 
 ### The `ops` namespace
 

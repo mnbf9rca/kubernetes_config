@@ -11,6 +11,7 @@ Read [What this does not catch](#what-this-does-not-catch) before you trust a gr
 | A restic check is red | `failed_step=` in the ping body names the phase, and `prune=` says whether retention ran — [Reading a restic failure body](#reading-a-restic-failure-body) |
 | `mount_ok=no` on homelab restic | The SSD did not mount, so the backup captured nothing — [the gates](#the-backup-verification-gates) |
 | `health-garmin-and-apple-ingest` is DOWN | Check whether the operator synced a watch before suspecting the pipeline. The last heartbeat's `apple_age_h=`/`garmin_age_h=` names which path was ageing — [the push monitors](uptime-kuma.md#push-monitors) |
+| `Withings-ingest` is DOWN | `failure=` names the stage it reached. `failure=token_persist` is the one with a clock on it: the refresh succeeded, the rotated token was lost, and the old one is running down an eight-hour grace, so fix the volume and force a run inside that window or the repair is a browser re-authorization. Every other stage is safe until the next run — [homelab-health.md](homelab-health.md#the-token-rule) |
 | `homelab-update-watch` is DOWN | In a fresh heartbeat, `verdict=` names the cause and `next=` names the command to run; a stale `run_epoch=` means the watcher itself went quiet — [The update watcher](#the-update-watcher) |
 | A sidecar shows `RESTARTS: 0` but its snapshot is missing | Expected; they log rather than exit. Read the sidecar's stderr — [Why the sidecars have no probes](#why-the-sidecars-have-no-probes) |
 | `hindsight-canary` is DOWN | Read `verdict=`: `retain-failed` is the API, the database or the tenant key; `recall-miss` is the retrieval side. An agent is losing memories right now — [hindsight.md](hindsight.md) |
@@ -92,7 +93,7 @@ Defaults, unless a service's entry below says otherwise:
 | Container | Target | Note |
 |---|---|---|
 | influxdb-mcp | liveness and readiness `tcpSocket` | The MCP server exposes no health endpoint. TCP detects process death, not a wedged handler |
-| cloudflared tunnel connectors (both clusters) | liveness and readiness `/ready` (:2000) | Neither Deployment has a Service, so readiness gates the rolling update and shows connector state. It routes nothing |
+| cloudflared tunnel connectors (both clusters) | liveness and readiness `/ready` (:2000) | Neither of those two Deployments has a Service — unlike the VPS `homelab-proxy` cloudflared above, which does — so readiness gates the rolling update and shows connector state. It routes nothing |
 | influxdb | `/health` | — |
 | grafana | `/api/health` | — |
 | apple-health-ingester | `tcpSocket` | No HTTP health endpoint upstream |

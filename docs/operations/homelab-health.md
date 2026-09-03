@@ -46,8 +46,8 @@ Public `*.cynexia.com` hostnames on this tunnel:
 | `proxy.cynexia.com` | Residential egress proxy for changedetection on the VPS — see [vps.md](vps.md#residential-egress-through-the-homelab) |
 | `grafana.cynexia.com` | Grafana, via Cloudflare Access (Access app `grafana`: `service-auth-monitoring` + `allow_cynexia_com`) — the same instance Traefik serves privately at `grafana-health.cynexia.net`, with Grafana's own admin login as the second gate |
 
-`proxy.cynexia.com` is the only **TCP** origin in the ingress block — `tcp://tinyproxy.proxy.svc.cluster.local:8888`, not an HTTP service — and, like `mcp.cynexia.com`, it has an origin that authenticates nobody; unlike `mcp`, a naked origin here is an open forward proxy.
-Its Access application, `homelab-proxy`, carries one app-scoped Service Auth policy and nothing else, so a deleted or disabled application publishes an open HTTP proxy on the operator's home connection rather than closing the path.
+`proxy.cynexia.com` is the only **TCP** origin in the ingress block — `tcp://tinyproxy.proxy.svc.cluster.local:8888`, not an HTTP service — and, like `mcp.cynexia.com`, it has an origin that authenticates nobody.
+The whole gate is its Access application, `homelab-proxy`, which carries one app-scoped Service Auth policy and nothing else: deleting or disabling that application publishes an open forward proxy on the operator's home connection rather than closing the path.
 
 `hermes.cynexia.com` and `hermes-app.cynexia.com` are the two off-cluster origins on this tunnel: cloudflared proxies both to the hermes VM on the LAN, not to a cluster Service.
 The Access app (`hermes`) attaches two reusable policies: `service-auth-monitoring`, the `non_identity` policy holding the `Uptime` service token that lets the uptime-kuma monitor through, and `allow_cynexia_com`, which requires `email_domain: cynexia.com`.
@@ -166,7 +166,7 @@ It creates `cloudflare` with `-r 0` (infinite retention — expiring the copy wo
 | Token | Paste into | Scope |
 |---|---|---|
 | Cloudflare ingest | `op://Homelab/health-influxdb/cloudflare-token` | read **and** write on `cloudflare` |
-| Replacement read-only | `op://Homelab/health-influxdb/read-token` | read on all four buckets that existed when it was written |
+| Replacement read-only | `op://Homelab/health-influxdb/read-token` | read on `apple_metrics`, `apple_workouts`, `garmin` and `cloudflare` — the four buckets that existed when it was written |
 
 The ingest token needs read as well as write because the job's resume point is `max(_time)` read back out of the bucket.
 
