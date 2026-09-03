@@ -278,13 +278,37 @@ class Fetch(unittest.TestCase):
         self.assertEqual(len(wi.fetch_measures("access", 1000)), 1)
         self.assertEqual(len(self.calls), 1)
 
+    def test_the_request_asks_for_every_type_of_real_measurement(self):
+        # The four things the query must say, and the one it must not: no
+        # `meastypes`, or a type code newer firmware invents never arrives.
+        self.stub_pages([{"status": 0, "body": {"measuregrps": []}}])
+        wi.fetch_measures("access", 1234)
+        self.assertEqual(self.calls[0]["action"], "getmeas")
+        self.assertEqual(self.calls[0]["category"], "1")
+        self.assertEqual(self.calls[0]["lastupdate"], "1234")
+        self.assertNotIn("meastypes", self.calls[0])
+
     def test_a_more_that_never_clears_raises_at_the_page_cap(self):
         wi.MAX_PAGES = 3
-        page = {"status": 0, "body": {"measuregrps": [], "more": 1, "offset": 5}}
-        wi.http_post = lambda url, body, headers, timeout=None: (
-            200, json.dumps(page))
+        # The offset advances on every page, so what stops this run is the cap
+        # rather than the non-advancing-offset guard the next test covers.
+        self.stub_pages([
+            {"status": 0, "body": {"measuregrps": [], "more": 1, "offset": n}}
+            for n in (1, 2, 3)])
         with self.assertRaises(wi.IngestFailed):
             wi.fetch_measures("access", 1000)
+        self.assertEqual(len(self.calls), 3)
+
+    def test_a_more_whose_offset_does_not_advance_raises_at_once(self):
+        self.stub_pages([
+            {"status": 0, "body": {"measuregrps": [{"grpid": 1}], "more": 1,
+                                   "offset": 1}},
+            {"status": 0, "body": {"measuregrps": [{"grpid": 1}], "more": 1,
+                                   "offset": 1}},
+        ])
+        with self.assertRaises(wi.IngestFailed):
+            wi.fetch_measures("access", 1000)
+        self.assertEqual(len(self.calls), 2)
 
 
 class Points(unittest.TestCase):

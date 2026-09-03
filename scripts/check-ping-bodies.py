@@ -184,8 +184,8 @@ PY_VALUE_ALLOWLIST = frozenset({
     # "verdict from a fixed enum" shape this rule already permits. If that map
     # ever gains a formatted string, this entry must come back off the list.
     "next_action",
-    # homelab/health/scripts/withings-ingest.py. Two counters bound to int()
-    # of a value the script counted, and STAGE, a one-element list holding a
+    # homelab/health/scripts/withings-ingest.py. Two counters bound to len()
+    # of a list the script built, and STAGE, a one-element list holding a
     # member of that script's STAGES enum -- the same "verdict from a fixed
     # enum" shape as `verdict` and `next_action` above. Nothing Withings or
     # InfluxDB sent can reach any of them: a response body goes to `log`, which

@@ -134,7 +134,7 @@ fatal() {
 # because that list lives in the OTHER pod's script and cannot be read from this
 # one. Nothing depends on the two agreeing - influx-export-lp.sh already fails by
 # name on a bucket it cannot find, so on the success path n is always m - but a
-# `buckets=5/4` in the heartbeat is the visible tell that a bucket was added
+# `buckets=6/5` in the heartbeat is the visible tell that a bucket was added
 # there and not here. Adding a bucket is three edits now: create it, list it in
 # influx-export-lp.sh, and raise this.
 LP_EXPECTED=5

@@ -89,24 +89,22 @@ IMAGES_METRIC=poll_trigger_tracked_images
 START_METRIC=process_start_time_seconds
 
 # The literal floor for tracked images. It must be derived from the count that
-# will be true AFTER this plan's de-keeling, not from the count observed today,
-# and it must keep a container of headroom: the point of a floor is that losing
-# one workload's annotations does not alarm while losing the WATCH does.
+# is true after every de-keeling already applied here, and it must keep a
+# container of headroom: the point of a floor is that losing one workload's
+# annotations does not alarm while losing the WATCH does.
 #
-# The arithmetic, measured 2026-08-26 from poll_trigger_tracked_images and the
-# six registries_scanned_total series behind it: keel tracks 6 images on homelab
-# (traefik, emby, nzbhydra2, radarr, sabnzbd, sonarr). That is already after
-# Task 1 removed keel's own annotations - the plan's "7" was the pre-Task-1
-# count, and keel no longer appears in its own tracked set. Task 4 de-keels
-# traefik -> 5. So the steady-state count is 5 and the floor is 4. Setting it to
-# 5 would leave ZERO margin, which is the failure this constant exists to avoid.
+# The arithmetic, from poll_trigger_tracked_images: keel tracks 6 images on
+# homelab - emby, nzbhydra2, radarr, sabnzbd, sonarr and tinyproxy, one image
+# each. keel's own annotations were removed, so it no longer appears in its own
+# tracked set, and traefik was de-keeled. So the steady-state count is 6 and the
+# floor is 5, one below. Setting it to 6 would leave ZERO margin, which is the
+# failure this constant exists to avoid.
 #
 # jottacloud-backup is NOT in that set: it carries no keel annotations at all
 # and keel's own metrics do not name it. Do not count it.
 #
 # Raise it deliberately when the estate grows; a floor that drifts below reality
 # is a check that has stopped checking.
-# 2026-09-02: tinyproxy adds one keel image, so steady state 6 and floor 5.
 IMAGE_FLOOR=5
 
 STATE_DIR=/state

@@ -575,7 +575,15 @@ def fetch_measures(access_token, lastupdate):
         groups.extend(page_groups)
         if not body.get("more"):
             return groups
-        offset = body.get("offset") or 0
+        # The offset must advance. A `more` flag with a repeated or missing
+        # offset re-sends page 1 until the cap, so the same groups arrive up to
+        # MAX_PAGES times; raising here says what went wrong instead.
+        next_offset = body.get("offset") or 0
+        if next_offset <= offset:
+            raise IngestFailed(
+                "getmeas page %d set more without advancing the offset "
+                "(%s -> %s)" % (page, offset, next_offset))
+        offset = next_offset
     raise IngestFailed("more flag still set after %d pages" % MAX_PAGES)
 
 
