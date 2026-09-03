@@ -389,6 +389,24 @@ class Points(unittest.TestCase):
         self.assertIn(",type_name=space\\ name,", line)
         self.assertIn(",unit=a\\ b,", line)
 
+    def test_a_group_carrying_a_device_model_tags_both_code_and_name(self):
+        # The account has more than one scale; a panel needs to tell them apart
+        # without anyone memorising which opaque deviceid is which.
+        line = wi.points([{"grpid": 1, "date": 100, "deviceid": "d",
+                           "modelid": 6, "model": "Body Cardio",
+                           "measures": [{"type": 1, "value": 74850,
+                                         "unit": -3}]}])[0]
+        self.assertIn(",modelid=6,", line)
+        self.assertIn(",model=Body\\ Cardio ", line)
+
+    def test_a_group_without_a_device_model_carries_neither_tag(self):
+        # Older groups predate the field; an absent tag beats a placeholder.
+        line = wi.points([{"grpid": 1, "date": 100, "deviceid": "d",
+                           "measures": [{"type": 1, "value": 74850,
+                                         "unit": -3}]}])[0]
+        self.assertNotIn("modelid=", line)
+        self.assertNotIn("model=", line)
+
     def test_a_measure_missing_a_field_raises_rather_than_writing_junk(self):
         with self.assertRaises(wi.IngestFailed):
             wi.points([{"grpid": 1, "date": 1, "measures": [{"type": 1}]}])

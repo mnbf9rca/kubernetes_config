@@ -630,6 +630,10 @@ def points(groups):
     omitted where the spec states none and both position tags where the measure
     carries none, because an absent tag is honest and a placeholder forks a
     series for nothing.
+
+    `modelid` and `model` name the device that took the group, so a panel can
+    separate two scales without anyone holding a table of opaque deviceids.
+    Both are absent where the group carries neither, on the same reasoning.
     """
     lines = []
     unknown = set()
@@ -637,6 +641,16 @@ def points(groups):
         ts = group_date(group)
         grpid = group.get("grpid", "")
         deviceid = group.get("deviceid") or "unknown"
+        device = ",deviceid=%s" % esc_tag(deviceid)
+        # The spec spells this field `model_id` on the measure group and
+        # `modelid` on the activity object, so read both names rather than bet
+        # on which one the live account sends.
+        modelid = group.get("modelid", group.get("model_id"))
+        if modelid is not None:
+            device += ",modelid=%s" % esc_tag(modelid)
+        model = group.get("model")
+        if isinstance(model, str) and model:
+            device += ",model=%s" % esc_tag(model)
         for measure in group.get("measures") or []:
             try:
                 value = measure["value"]
@@ -652,7 +666,7 @@ def points(groups):
                     % (esc_tag(PERSON), esc_tag(mtype), esc_tag(type_name)))
             if unit_name:
                 tags += ",unit=%s" % esc_tag(unit_name)
-            tags += ",deviceid=%s" % esc_tag(deviceid)
+            tags += device
             position = measure.get("position")
             if position is not None:
                 tags += ",position=%s,position_name=%s" % (
