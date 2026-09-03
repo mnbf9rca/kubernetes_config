@@ -628,6 +628,9 @@ Grafana holds a hand-built dashboard at uid `withings`, titled **Withings** and 
 It is **not provisioned from this repo**, by design: it lives in `grafana.db` like every other dashboard here, so the nightly SQLite dump described under [The Grafana dump](#the-grafana-dump) is what captures it.
 Eight stat tiles carry the latest reading for weight, fat ratio, fat mass, muscle mass, hydration, bone mass, heart rate and blood pressure — each over `range(start: 0)`, so a tile is never blank merely because the cuff has not been used inside the dashboard's 90-day window — then time series for the same measures, a collapsed **Other** row holding height, and a table of any type code present in the bucket that no panel covers, showing each code's `type_name` beside it.
 That last table is the only thing that would notice a code newer firmware invents, and empty is its expected state.
+A second hand-built dashboard, uid `withings-body`, titled **Withings body composition**, was built 2026-09-03.
+It holds the current-state row, the weight decomposition stack, weight and total body water history, the water split with the extracellular share, the stacked fat-and-muscle-by-segment bars, and the body-shaped segment tiles.
+Like the first dashboard, it lives in `grafana.db` and is covered by the same nightly SQLite dump; its design notes are local-only under the session scratchpad and are not in this repo.
 
 ### First-run setup
 
