@@ -48,11 +48,12 @@ metadata:
   name: withings-ingest
   namespace: health
 spec:
-  # Every 15 minutes, at :07, :22, :37 and :52. None of those four minutes is
-  # used by anything else in either cluster, so this never lands on the same
-  # minute as the 02:00-03:00 backup chain (hermes-pull 02:00,
-  # hindsight-pg-dump 02:15, influx-backup 02:30, restic 03:00) or as
-  # ingest-freshness at :15.
+  # Every 15 minutes, at :07, :22, :37 and :52. None of those four minutes is a
+  # start time in the 02:00-03:00 backup chain (hermes-pull 02:00,
+  # hindsight-pg-dump 02:15, influx-backup 02:30, restic 03:00), and none is
+  # ingest-freshness at :15. It DOES share :37 with cloudflare-analytics, which
+  # is harmless: the two share no lock, no volume and no InfluxDB bucket, and
+  # both finish in seconds.
   # Every 15 minutes rather than six-hourly so a weigh-in reaches Grafana
   # within a quarter of an hour, and it is safe on both budgets a faster
   # cadence could blow. A steady-state run makes four HTTP requests, two of
