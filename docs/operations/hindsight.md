@@ -41,6 +41,58 @@ If that ever stops being true, the escalation is a custom tenant extension keyed
 Images are pinned and the namespace carries no keel annotations; Renovate opens a grouped "hindsight stack" pull request instead.
 An unattended migration at 3 a.m. against the store holding an agent's memory is the failure this design exists to make impossible, and Hindsight's migrations are **forward-only** — so the pre-upgrade dump is the rollback, and there is no other one.
 
+## The extraction LLM
+
+Retain, reflect and consolidation are the only paths that leave the cluster.
+They call one OpenAI-compatible chat endpoint; embeddings and reranking run locally inside the full image and nothing in this section touches them.
+
+| | Value |
+|---|---|
+| Provider | `openai` — hindsight's name for the OpenAI *wire format*, not for the company |
+| Base URL | `https://api.deepinfra.com/v1/openai`, as `HINDSIGHT_API_LLM_BASE_URL` |
+| Model | `zai-org/GLM-5.3-Flash`, as `HINDSIGHT_API_LLM_MODEL` |
+| Key | `op://Homelab/deepinfra/api_key`, reaching the Secret's provider-neutral `llm-api-key` through `HINDSIGHT_DEEPINFRA_API_KEY` |
+| Price | $0.075 in / $0.25 out per million tokens on September 3, 2026, under a standing 50% promotion nobody here controls; budget against the standard $0.15 / $0.50 |
+
+**Privacy is why it moved from OpenAI's `gpt-4o-mini`, on September 3, 2026.**
+Every retain hands the model the agent's raw conversation text, so whoever serves it sees everything the profiles are told.
+DeepInfra states it does not store or train on inference inputs and outputs without explicit consent.
+That is the reason that decided it; the lower price is a bonus.
+
+**`provider: openai` is correct and must stay.**
+Hindsight has no separate `openai-compatible` provider value — `openai` plus a custom base URL is the documented way to drive any OpenAI-compatible endpoint, and the provider switches from `max_completion_tokens` to the widely supported `max_tokens` as soon as a non-Azure base URL is set.
+Give the base URL its full path: nothing appends `/v1` for this provider.
+
+**Consolidation and reflect follow the primary LLM and have no configuration of their own.**
+The `HINDSIGHT_API_CONSOLIDATION_LLM_*`, `_RETAIN_LLM_*` and `_REFLECT_LLM_*` families all exist, and all of them resolve with `or None` and fall back to the primary settings.
+Leaving them unset is what keeps a provider switch at two env lines instead of eight, and it was confirmed live: consolidation calls appear under the new model within minutes of the rollout, with nothing set for them.
+
+**Structured output takes the soft path, which is why no stricter model was needed.**
+`HINDSIGHT_API_LLM_STRICT_SCHEMA` defaults to false, so hindsight appends the JSON schema to the prompt and sends `response_format: {"type": "json_object"}`, then strips code fences and reasoning tags before parsing and retries the whole call on a parse failure.
+Probed against DeepInfra before the switch: valid JSON, `finish_reason: stop`, and a `reasoning_content` field that came back empty or near-empty.
+GLM-5.3-Flash therefore needs no `HINDSIGHT_API_LLM_REASONING_EFFORT=none`.
+If a future model does emit a thinking block, that variable is the first knob and `HINDSIGHT_API_LLM_EXTRA_BODY` is the second.
+
+**The thinking-token multiplier this switch was checked for did not appear.**
+Measured from the `llm_requests` table across the rollout on September 3, 2026: extraction input tokens were unchanged at about 3,200 per call — 3,350 on `gpt-4o-mini`, 3,226 on GLM-5.3-Flash — and output tokens went *down*, from 902 to 125.
+**Treat the output figure as a direction, not a rate.** The Hermes profiles went quiet right after the rollout, so the new model's side of that comparison is three calls, one of them the canary's deliberately empty extraction.
+`llm_requests` is where to re-measure once real traffic has accumulated: it records provider, model, scope, status and token counts per call, and a retention sweep prunes it, so take the reading soon after a change rather than weeks later.
+
+    kubectl --context cynexia-homelab -n hindsight exec deploy/hindsight-postgres -c postgres -- \
+      psql -U hindsight -d hindsight -tAc "SELECT model, scope, status, count(*), \
+      round(avg(input_tokens),1), round(avg(output_tokens),1) FROM llm_requests \
+      WHERE started_at > now() - interval '24 hours' GROUP BY 1,2,3 ORDER BY 4 DESC;"
+
+**Rollback is one commit.**
+`git revert` the switch commit and `make apply-homelab`, then `kubectl -n hindsight rollout restart deploy/hindsight` if the Secret was the only thing that moved.
+`HINDSIGHT_LLM_API_KEY` still resolves `op://Homelab/hindsight/openai-api-key` in `.env.tpl` and is still on both Makefile lists, precisely so that nothing has to be recreated to go back.
+One thing to know before doing it: on the day of the switch the OpenAI account had already run out of credits, and 403 of the previous 24 hours' extractions had failed with `429 … You have no credits remaining`.
+Rolling back without topping that account up rolls back to a broken write path.
+
+**The canary cannot judge a provider change, and reading it as if it could is the trap here.**
+Its sentinel sentence carries no fact worth remembering, so a model may legitimately extract nothing from it: GLM-5.3-Flash returns `{"facts": []}` where `gpt-4o-mini` returned a memory, and the canary still passes green — on the *previous* run's memory, because recall only has to find one result.
+To judge a new extraction model, retain a paragraph containing real facts into a scratch bank, count the memory units it produced, and delete the bank afterwards.
+
 ## Upgrading
 
 ```sh
