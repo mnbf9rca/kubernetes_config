@@ -687,6 +687,10 @@ Four tags, **all group-level**, so editing `TYPES` moves a field key and never a
 - `deviceid` — the device, or the literal `unknown` for a manual entry.
 - `model` — the model name exactly as the API sent it, and absent where the group sends none. Groups from before 2022 carry none, and no backfill step invents one.
 
+**One weigh-in can span several groups**, so `grpid` is the group's identity and not the reading's: on 2026-09-04 the BodyFit split one weigh-in into three groups at the same timestamp, one holding the body composition, one `heart_pulse` alone and one `pulse_wave_velocity` with `vascular_age`.
+A query that wants one row per weigh-in therefore keys on `_time` and `deviceid`, and keying on `grpid` yields one row per group with the extras empty in every column the first one filled.
+Measured across all history: one such moment on the BodyFit, none on the Body+.
+
 `modelid` is **not** written: it is the same fact under a second name, on a point `deviceid` already keys.
 **Row keys in queries and dashboards use `deviceid`, never `model`**, because a `grpid` written once with `model` and once without would leave two series and split the device whose older groups carry none.
 The guide's dedupe query detects exactly that, and a wipe-and-backfill fixes it.
@@ -758,26 +762,19 @@ Height reads `range(start: 0)` for the stat tiles' reason: it is typed by hand a
 The symmetry tiles no longer substitute `now()` for a time axis, because one weigh-in is now one row.
 
 `Mass by limb` is one Bar chart panel, horizontal and stacked, replacing the three separate bar gauges it started as.
-Its query takes the latest value of all fifteen segmental fields and pivots them into one row per limb with columns `limb`, `fat_mass`, `muscle_mass` and `other_lean`, in anatomical order, so each bar is one limb and the three components stack along it.
-`other_lean` is fat-free mass minus muscle mass, which at whole-body level is exactly `bone_mass` — 67.09 less 63.75 is 3.34 — so the decomposition is the vendor's own.
+Its query takes the latest segmental fat mass and muscle mass and pivots them into one row per limb with columns `limb`, `fat_mass` and `muscle_mass`, in anatomical order, so each bar is one limb and the two components stack along it.
+Per-segment value labels are off; the tooltip still carries every number.
 
-**Per limb, though, `other_lean` goes negative, and that is Withings' data rather than a bug here.**
-Both families sum correctly to their whole-body totals, but Withings distributes muscle and fat-free mass differently across the segments — more muscle to the limbs, more fat-free to the torso — so segmental muscle mass exceeds segmental fat-free mass everywhere except the torso.
-Measured on 2026-09-04: `other_lean` is −0.22 for each arm, −0.64 and −0.62 for the legs, and +5.05 for the torso, and those five sum to 3.35, which is the whole-body bone mass again.
-So a limb's bar does not read as "total mass" the way the whole-body figures would suggest; the torso's does.
+**Two series, both measured, nothing derived — and the reason is a real property of the data.**
+The panel briefly carried a third series, fat-free mass minus muscle mass, on the theory that muscle is part of lean mass.
+At whole-body level that identity holds exactly and is Withings' own: `fat_free_mass` 67.09 less `muscle_mass` 63.75 is 3.34, which is `bone_mass` to the last digit.
+**Per limb it does not.**
+Both families sum correctly to their whole-body totals, but Withings distributes them differently across the segments — more muscle to the limbs, more fat-free mass to the torso — so segmental muscle mass is *larger* than segmental fat-free mass on both arms and both legs.
+The remainder came out at −220 g per arm and −640 g and −620 g for the legs, positive only on the torso.
+**The two families are not on one basis per segment, so they must not be subtracted there**, and `fat_free_mass_*` is not read by this panel at all.
 
-**No panel buckets or averages.**
-Both scales can weigh on the same day and both readings must stay visible, so no panel carries `aggregateWindow`: on a wide dashboard window `v.windowPeriod` grows past a day and `fn: mean` would silently merge two weigh-ins into one point.
-464 groups is the whole history, so there is nothing to downsample for.
-
-**The older scale's early weigh-ins carry no `model` tag**, so a per-scale series key must never be `model` alone.
-`Body+` has 203 tagged and 252 untagged weight points on one deviceid, all the untagged ones before 2022-01-19, so `group(columns: ["model"])` splits a single physical scale into two lines and manufactures a calibration offset that is not there.
-Key on the model where it exists and fall back to the `deviceid`, which is complete: that stays correct for a scale added later, because a new device always sends a model.
-
-**A query that executes and returns rows is not a working panel.**
-Verify every panel through `/api/ds/query` and check the frame shape the panel type expects — one frame per series for bar gauges and stacked charts, no helper columns left in the output, and a display name on every series — because a bar gauge fed one frame with two numeric fields returns rows perfectly happily and draws the wrong picture.
-Executing all nineteen panel queries on 2026-09-04 returned rows from every one and still missed four defects: the three by-limb bar gauges drew `_value` and the `anatomical_order` sort key instead of five limbs, both symmetry panels and the water-share panel legended `Value` because a `map` building a bare `{_time, _value}` record carries no label, and the height panel rendered blank on every load.
-The shape a panel needs is a property of the panel type, so it is worth naming in the query's own comment: `Mass by limb` hands `barchart` exactly one string column for `xField` and three numeric ones, and a helper column left in that output would become a fourth stacked series.
+The `Weigh-ins` table pivots on `_time`, `deviceid` and `model`, never on `grpid`, because one weigh-in can arrive as several groups — see [Schema](#schema).
+Keying on `grpid` put three rows in the table for the 2026-09-04 BodyFit reading, two of them empty in every displayed column.
 
 **No dedupe panel and no readings-per-scale panel.**
 Neither query carries an alert, and a panel with no alert is not a detector.

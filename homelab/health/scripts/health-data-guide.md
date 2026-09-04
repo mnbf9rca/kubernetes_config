@@ -27,7 +27,7 @@ Tags, all group-level:
 | Tag | Meaning |
 |---|---|
 | `person` | Always `rob` |
-| `grpid` | The Withings group id: the per-reading entity, one value per weigh-in |
+| `grpid` | The Withings group id. One weigh-in can span SEVERAL of these — see below |
 | `deviceid` | The device that took the group, or `unknown` for a manual entry |
 | `model` | The device model name, when the API sent one. Absent on groups from before 2022 |
 
@@ -96,6 +96,15 @@ Neither the unit nor the name's meaning is in the data. Both are here.
 
 **Whole-body fat mass is `fat_mass_weight`, while its segments are `fat_mass_*`.** That asymmetry is deliberate: `fat_mass_weight` is Withings' own name for the whole-body code.
 
+### One weigh-in can be several groups
+
+**A weigh-in is a timestamp and a device, not a `grpid`.**
+Withings can split one reading across several measure groups sharing the same `_time`: on 2026-09-04 the BodyFit sent three, one carrying the body composition, one carrying `heart_pulse` alone, and one carrying `pulse_wave_velocity` and `vascular_age`.
+So group or pivot on `_time` and `deviceid` when you want one row per weigh-in.
+Keying on `grpid` returns one row per group instead, and the extra rows are empty in every column the first one filled.
+
+`grpid` is still exactly right for asking about group structure, which is what pattern 9 does.
+
 ### Residue
 
 A field named `type_<code>`, or a suffix `_position_<n>`, means a code or a position that `TYPES` and `POSITIONS` do not name — newer firmware, most likely. **Report it. Do not guess what it holds.**
@@ -110,14 +119,15 @@ Every block below carries its measurement filter, so each one is complete on its
 from(bucket: "withings")
   |> range(start: -90d)
   |> filter(fn: (r) => r._measurement == "withings_measure_group")
-  |> keep(columns: ["_time", "grpid", "deviceid", "_field", "_value"])
+  |> keep(columns: ["_time", "deviceid", "model", "_field", "_value"])
   |> group()
-  |> pivot(rowKey: ["_time", "grpid", "deviceid"], columnKey: ["_field"], valueColumn: "_value")
+  |> pivot(rowKey: ["_time", "deviceid", "model"], columnKey: ["_field"], valueColumn: "_value")
   |> sort(columns: ["_time"], desc: true)
   |> limit(n: 1)
 ```
 
-One row, sparse columns. It anchors on no field, so a weightless group is visible rather than skipped.
+One row, sparse columns.
+It anchors on no field, so a weightless group is visible rather than skipped, and it keys on the moment rather than on `grpid`, so a weigh-in split across several groups comes back whole.
 
 ### 2. Weight over time, per device
 
@@ -177,13 +187,15 @@ A reading missing one side yields null. That is true of this shape and of every 
 from(bucket: "withings")
   |> range(start: 0)
   |> filter(fn: (r) => r._measurement == "withings_measure_group")
-  |> group(columns: ["deviceid", "grpid"])
+  |> group(columns: ["deviceid", "_time"])
   |> first()
   |> group(columns: ["deviceid"])
   |> count()
 ```
 
-No field filter is needed. The row key is `deviceid` alone: grouping on `model` as well would split the device whose older groups carry none.
+No field filter is needed.
+The inner key is `deviceid` and `_time`, not `deviceid` and `grpid`, or a weigh-in that arrived as three groups counts as three readings.
+The outer key is `deviceid` alone: grouping on `model` as well would split the device whose older groups carry none.
 
 ### 7. One day's body composition
 
@@ -191,9 +203,9 @@ No field filter is needed. The row key is `deviceid` alone: grouping on `model` 
 from(bucket: "withings")
   |> range(start: 2026-09-03T00:00:00Z, stop: 2026-09-04T00:00:00Z)
   |> filter(fn: (r) => r._measurement == "withings_measure_group")
-  |> keep(columns: ["_time", "grpid", "deviceid", "_field", "_value"])
+  |> keep(columns: ["_time", "deviceid", "model", "_field", "_value"])
   |> group()
-  |> pivot(rowKey: ["_time", "grpid", "deviceid"], columnKey: ["_field"], valueColumn: "_value")
+  |> pivot(rowKey: ["_time", "deviceid", "model"], columnKey: ["_field"], valueColumn: "_value")
   |> sort(columns: ["_time"], desc: true)
 ```
 
@@ -273,6 +285,7 @@ Without it, a British Summer Time day is bucketed an hour off and the first and 
 - **Do not pivot on a type name and read a segment as the whole body.** That was the old schema's failure and it was silent. Under this schema the segments have their own field names.
 - **Do not filter on `_field == "value"`.** No such field exists here any more; the filter returns an empty result rather than an error.
 - **Do not anchor a latest-reading query on `weight`.** Sparse rows are normal.
+- **Do not key a per-weigh-in query on `grpid`.** One weigh-in can be several groups at one timestamp.
 - **Do not combine the two scales.**
 - **Do not guess what a `type_<n>` field holds.** Report it.
 - **Do not quote a record count from this file.** Measure it with `count()`, `first()` and `last()`.
