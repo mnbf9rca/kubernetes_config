@@ -84,8 +84,29 @@ jobs:
             echo "mcp=false" >> "$GITHUB_OUTPUT"
           fi
 
+  # Nothing else lints the inline shell in this file, which is how a `for` loop
+  # over a multi-line output reached master and broke the first push. actionlint
+  # parses the workflow and runs shellcheck over every `run:` body, so it is
+  # unconditional and ungated: it takes seconds and it is what catches that
+  # class. `build` needs it, so a lint failure stops the build - but note that a
+  # job skipped because a dependency failed still satisfies a required check, so
+  # make `lint` a required check on master too rather than relying on `build`.
+  # `make check-workflows` runs the same thing by hand.
+  lint:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+
+      # The official image, pinned; it ships shellcheck. With no file arguments
+      # actionlint lints every workflow in .github/workflows.
+      - uses: docker://rhysd/actionlint:1.7.12
+        with:
+          args: -color -shellcheck=shellcheck
+
   build:
-    needs: changes
+    needs: [changes, lint]
     if: needs.changes.outputs.mcp == 'true'
     runs-on: ubuntu-latest
     steps:
@@ -162,11 +183,20 @@ jobs:
       #     --certificate-oidc-issuer https://token.actions.githubusercontent.com
       - name: Push and sign
         if: github.event_name == 'push'
+        # The tags output is one tag per LINE, so it reaches the script through
+        # the environment and is read a line at a time. Interpolated into the
+        # script body it was a syntax error: bash read the newline after the
+        # first tag as the end of the `for` word list. A here-string keeps the
+        # loop in the step's own shell, so `set -e` aborts at a failed push and
+        # cosign never runs on a half-pushed image.
+        env:
+          TAGS: ${{ steps.meta.outputs.tags }}
         run: |
           set -euo pipefail
-          for tag in ${{ steps.meta.outputs.tags }}; do
+          while IFS= read -r tag; do
+            [ -n "$tag" ] || continue
             docker tag influxdb-mcp-server:ci "$tag"
             docker push "$tag"
-          done
+          done <<< "$TAGS"
           cosign sign --yes \
             "$(docker inspect --format '{{index .RepoDigests 0}}' influxdb-mcp-server:ci)"

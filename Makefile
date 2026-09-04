@@ -125,6 +125,7 @@ help:
 	@echo "                    (no per-cluster half: it compares the two trees against each other)"
 	@echo "                    (check-job-ttl through check-keel-fresh-parity — those six — also run in"
 	@echo "                     the diff-*/apply-* preflight; the first five per cluster, this one whole)"
+	@echo "  check-workflows - actionlint (with shellcheck) over .github/workflows/ — not in the preflight"
 	@echo ""
 	@echo "Hermes VM targets (not cluster-applied):"
 	@echo "  check-vm-scripts - shellcheck + ping-body scan the hermes VM's alive-check script"
@@ -151,7 +152,7 @@ help:
 .PHONY: check-tools
 check-tools:
 	@ok=1; \
-	for tool in kubectl kustomize envsubst op direnv talosctl omnictl jq shellcheck; do \
+	for tool in kubectl kustomize envsubst op direnv talosctl omnictl jq shellcheck actionlint; do \
 	  if ! command -v $$tool >/dev/null 2>&1; then \
 	    echo "MISSING: $$tool"; ok=0; \
 	  else \
@@ -416,14 +417,31 @@ check-renovate-scope-vps:
 #
 # Not wired into diff-*/apply-*: nothing here is applied to a cluster, so
 # gating a cluster apply on it would be noise. That is a real cost — nothing
-# runs it on a schedule and this repo has no CI (there is no .github/workflows
-# directory), so it can rot unnoticed. What keeps it honest is that it is run
+# runs it on a schedule and the one CI workflow here builds and lints only
+# itself, so it can rot unnoticed. What keeps it honest is that it is run
 # by hand before anything under hermes-vm/ is copied to the VM.
 .PHONY: check-vm-scripts
 check-vm-scripts:
 	@shellcheck -s sh hermes-vm/scripts/*.sh
 	@scripts/check-ping-bodies.py hermes-vm
 	@echo "OK: hermes-vm scripts lint clean and ping-body safe"
+
+# ---- check-workflows -------------------------------------------------------
+# The shell inside a workflow's `run:` blocks is rendered by nothing here, so
+# check-script-lint — which extracts shell from the kustomize RENDER — cannot
+# see it. actionlint parses the workflow and hands each `run:` body to
+# shellcheck, which is what catches a `for` loop over an interpolated
+# multi-line output: that shipped to master on 2026-09-04 and broke the first
+# image push with a syntax error.
+#
+# NOT in the diff-*/apply-* preflight: a workflow renders nothing and reaches
+# no cluster, so gating an apply on it would be noise. It runs in the `lint`
+# job of .github/workflows/influxdb-mcp-image.yml on every push and pull
+# request, and by hand here.
+.PHONY: check-workflows
+check-workflows:
+	@actionlint -shellcheck=shellcheck .github/workflows/*.yml
+	@echo "OK: workflows lint clean"
 
 .PHONY: require-vars
 require-vars:
