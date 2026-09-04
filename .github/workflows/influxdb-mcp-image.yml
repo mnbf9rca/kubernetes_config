@@ -1,123 +1,99 @@
 # The only workflow in this repository. It builds ghcr.io/mnbf9rca/influxdb-mcp-server
 # from homelab/health/mcp/.
 #
-# BUILD ON THE PULL REQUEST, PROMOTE ON MERGE. The image is named by its
-# CONTENT - `tree-<hash>` - so the pull request builds, pushes and signs the
-# exact artifact that master will later run, and merging only moves a tag.
+# BUILD ON THE PULL REQUEST, PROMOTE ON MERGE, AND THE PULL REQUEST EVENT IS
+# WHAT CARRIES THE IMAGE BETWEEN THEM. The image is tagged `sha-<head sha>`, and
+# the merge run reads that same head sha out of its own event payload, so it
+# needs no content hash and no lookup heuristic to know which image the pull
+# request built.
 #
-#   On a pull request: `changes`, `lint`, `build`. The image is built, its
-#   guidance hook asserted, then pushed and signed. `build` runs ONLY here.
+#   A pull request run (opened, synchronize, reopened): `changes`, `lint`,
+#   `build`. The image is built, its guidance hook asserted, then pushed and
+#   signed as `sha-<head sha>`.
 #
-#   On a push to master: `changes`, `lint`, `promote`. `build` is skipped by its
-#   own `if:`, so a merge cannot rebuild: it verifies the signature on the image
-#   the pull request pushed and points `stable` at that same digest. What master
-#   delivers is bit-for-bit what was reviewed, by the same signature.
+#   THE MERGE RUN (closed, merged == true): `changes`, `promote`. It verifies
+#   the signature on `sha-<head sha>` and points `stable` at that digest with
+#   `crane tag`. It builds nothing, pushes nothing and signs nothing, so what
+#   master delivers is bit-for-bit what was reviewed, under the same signature.
 #
-# NOTHING BUILDS ON MASTER. The master-only surface is exactly the `promote`
-# job's login, inspect, verify and retag - four steps, none of which builds,
-# pushes or signs anything. There is no fallback build: if the image is not in
-# the registry, `promote` FAILS and says to open a pull request that touches
-# homelab/health/mcp/. A direct push to master is not this repository's
-# practice, and a fallback would be master-only code no pull request ever runs -
-# the exact thing this design exists to remove.
+# NOTHING BUILDS OUTSIDE A PULL REQUEST. The whole master-only surface is
+# `promote`'s login, verify and retag. There is no fallback build: a missing or
+# unsigned tag fails the job loudly rather than letting master produce an image
+# nobody reviewed.
 #
-# `promote` runs on EVERY master push, including one where `changes` said the
-# inputs did not move: the retag is cheap and idempotent, and skipping it would
-# leave `stable` behind after a squash that did change the tree.
-#
-# WHY THE HASH COVERS THIS FILE. The build inputs are the mcp directory's tree
-# object AND this workflow's own blob, because a change to the build steps must
-# produce a different image even when homelab/health/mcp/ is byte-identical -
-# otherwise `promote` would retag `stable` onto an image the old steps built and
-# the change would silently never ship.
-#
-# WHY THE HASH MATCHES ACROSS THE MERGE. On a pull request GitHub runs the
-# workflow against the merge commit, whose tree is what a squash merge writes to
-# master, so the master run computes the same hash and finds the image.
-#
-# SO A PULL REQUEST WHOSE BASE HAS MOVED MUST RE-RUN BEFORE IT MERGES. Once
-# master advances, the squash tree can differ from the merge commit the last run
-# saw, the hash changes, and `promote` fails on a missing tag. GitHub's "Update
-# branch" button re-triggers this workflow, which is both the fix and the
-# prevention.
+# THERE IS NO push: TRIGGER, so A DIRECT PUSH TO MASTER PROMOTES NOTHING - it
+# leaves `stable` where it is, silently, because no run happens at all. Changes
+# to the image reach the cluster through a pull request or they do not reach it.
 #
 # A FORK'S PULL REQUEST gets a read-only GITHUB_TOKEN, so `build` builds and
-# asserts but pushes nothing, and its merge would fail in `promote`. Land such a
-# contribution by branching it inside this repository and opening a pull request
-# from there.
+# asserts but pushes nothing. Its merge therefore fails at `cosign verify` with
+# nothing to verify, which is the designed refusal: land a fork's change by
+# opening a pull request from a branch inside this repository.
 #
-# REQUIRED STATUS CHECKS ON MASTER: `lint` and `build`. Both, not just `build`:
-# a job skipped because a dependency failed still satisfies a required check, so
-# `build`'s `needs: lint` does not make a lint failure block a merge.
+# THE IMAGE IS BUILT FROM THE MERGE COMMIT AND TAGGED WITH THE HEAD SHA. That is
+# the standard pull-request checkout, and it means a base branch that moves
+# after the last run leaves the tag naming a build made against the older base.
+# `synchronize` fires on a new head commit, not on a moved base, so the fix is
+# the same as the review's: update the branch, which pushes a new head sha and
+# rebuilds. The exposure is bounded by how stale the base is allowed to get.
+#
+# REQUIRED STATUS CHECKS ON MASTER: `lint` and `build`, both of which report on
+# a pull request run. Both, not just `build`: a job skipped because a dependency
+# failed still satisfies a required check, so `build`'s `needs: lint` does not
+# by itself make a lint failure block a merge.
 #
 # NO workflow_dispatch. Every input is pinned and the lockfile is committed, so
-# a manual run would rebuild what the last run already pushed; retrying a failed
-# push is GitHub's own re-run button on the run that failed.
+# a manual run would rebuild what the pull request already pushed; retrying a
+# failed push is GitHub's own re-run button on the run that failed.
 #
 # A ROLLBACK IS NOT A TAG EDIT. check-renovate-scope reads a pinned reference
 # under a complete keel annotation set as the frozen state and hard-fails
-# apply-homelab, so pointing the Deployment at tree-<hash> means stripping the
-# keel annotations in the same emergency edit. The rollback is what every other
-# update here does: revert the build input, let the merge promote the image, and
-# keel delivers it.
+# apply-homelab, so pointing the Deployment at sha-<n> means stripping the keel
+# annotations in the same emergency edit. The rollback is what every other
+# update here does: revert the build input in a pull request, let the merge
+# promote the image, and keel delivers it.
 #
-# THE TRIGGERS CARRY NO paths: FILTER AND THE PATH CONDITION LIVES IN THE
+# THE TRIGGER CARRIES NO paths: FILTER AND THE PATH CONDITION LIVES IN THE
 # `changes` JOB, so that `build` can be a required status check on master.
 # GitHub treats a job skipped by its own `if:` as satisfying a required check,
 # but a workflow that a paths filter never triggered reports nothing at all -
 # and a required check that never reports blocks the pull request forever.
 name: influxdb-mcp image
 
+# Pull request events only, `closed` included: the merge is an event on the
+# pull request, so promotion needs no push trigger and gets the head sha for
+# free.
 on:
-  push:
-    branches: [master]
   pull_request:
+    types: [opened, synchronize, reopened, closed]
 
-# Read-only by default; the two jobs that touch the registry widen it
-# themselves. Login uses the job's own GITHUB_TOKEN; no secret is added to the
-# repository - the signing key is an ephemeral OIDC identity, not stored.
+# Read-only by default; the jobs that touch the registry widen it themselves.
+# Login uses the job's own GITHUB_TOKEN; no secret is added to the repository -
+# the signing key is an ephemeral OIDC identity, not stored.
 permissions:
   contents: read
 
 jobs:
-  # The paths filter the triggers no longer carry, and the content hash that
-  # names the image. Plain git: the comparison is a two-dot diff on a push and a
-  # three-dot diff against the merge base on a pull request, and a push with no
-  # usable `before` - a new branch, or a force push that orphaned the old tip -
-  # counts as changed.
+  # The paths filter the trigger does not carry. GitHub's own list of the pull
+  # request's files IS the merge-base diff, and it needs no checkout - which
+  # also sidesteps the merge ref a closed pull request may no longer have.
   changes:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      pull-requests: read
     outputs:
       mcp: ${{ steps.filter.outputs.mcp }}
-      hash: ${{ steps.hash.outputs.hash }}
     steps:
-      - uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
-
       - name: Decide whether the image inputs changed
         id: filter
-        # Through the environment, not through ${{ }} interpolation into the
-        # script body.
         env:
-          EVENT: ${{ github.event_name }}
-          BASE_REF: ${{ github.base_ref }}
-          BEFORE: ${{ github.event.before }}
-          SHA: ${{ github.sha }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
         run: |
           set -euo pipefail
-          if [ "$EVENT" = "pull_request" ]; then
-            files=$(git diff --name-only "origin/$BASE_REF...HEAD")
-          elif [ -n "$BEFORE" ] && [ "$BEFORE" != "null" ] \
-               && git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
-            files=$(git diff --name-only "$BEFORE..$SHA")
-          else
-            echo "no usable before-sha ('$BEFORE'): treating as changed"
-            echo "mcp=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
+          files=$(gh api "repos/$REPO/pulls/$PR/files" --paginate --jq '.[].filename')
           echo "changed files:"
           printf '%s\n' "$files"
           # grep, not grep -q: -q closes the pipe on the first match, and under
@@ -130,28 +106,16 @@ jobs:
             echo "mcp=false" >> "$GITHUB_OUTPUT"
           fi
 
-      # Both inputs are printed, because when `promote` misses its tag the first
-      # question is which of the two moved between the pull request and master.
-      - name: Name the image by its content
-        id: hash
-        run: |
-          set -euo pipefail
-          mcp=$(git rev-parse "HEAD:homelab/health/mcp")
-          workflow=$(git rev-parse "HEAD:.github/workflows/influxdb-mcp-image.yml")
-          hash=$(printf '%s%s' "$mcp" "$workflow" | sha256sum | cut -c1-12)
-          echo "mcp tree:      $mcp"
-          echo "workflow blob: $workflow"
-          echo "image hash:    $hash"
-          echo "hash=$hash" >> "$GITHUB_OUTPUT"
-
   # Nothing else lints the inline shell in this file, which is how a `for` loop
   # over a multi-line output reached master and broke the first push. actionlint
   # parses the workflow and runs shellcheck over every `run:` body, so it is
   # unconditional and ungated: it takes seconds and it is what catches that
   # class. Values still reach a script through `env:`, never by interpolating a
   # multi-line output into the script body. `make check-workflows` runs the same
-  # thing by hand.
+  # thing by hand. Every piece of shell in the delivery path is a `run:` block in
+  # this file, which is what keeps that coverage complete.
   lint:
+    if: github.event.action != 'closed'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -164,21 +128,25 @@ jobs:
         with:
           args: -color -shellcheck=shellcheck
 
-  # PULL REQUESTS ONLY. On a master push this is skipped and `promote`'s
-  # fallback is the sole builder, so a merge can never overwrite an existing
-  # tree tag with a fresh, non-reproducible rebuild of the same inputs.
   build:
     needs: [changes, lint]
-    if: github.event_name == 'pull_request' && needs.changes.outputs.mcp == 'true'
+    if: github.event.action != 'closed' && needs.changes.outputs.mcp == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
       id-token: write
-    env:
-      IMAGE: ghcr.io/mnbf9rca/influxdb-mcp-server:tree-${{ needs.changes.outputs.hash }}
     steps:
       - uses: actions/checkout@v7
+
+      # GitHub expressions cannot take a substring, so the tag is assembled here
+      # and handed to every later step through the environment file.
+      - name: Name the image after the head commit
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          echo "IMAGE=ghcr.io/mnbf9rca/influxdb-mcp-server:sha-${HEAD_SHA:0:12}" >> "$GITHUB_ENV"
 
       - uses: docker/setup-buildx-action@v4
 
@@ -213,9 +181,9 @@ jobs:
           cat tools.json
           grep -q 'how-to-use-health-data' tools.json
 
-      # A pull request from a fork gets a read-only GITHUB_TOKEN, so it builds
-      # and asserts but cannot push or sign. Landing such a contribution means
-      # branching it inside this repository: `promote` has no fallback build.
+      # A fork's pull request has a read-only GITHUB_TOKEN, so it builds and
+      # asserts but cannot push or sign - and its merge then fails in `promote`,
+      # deliberately.
       - name: Log in to GHCR
         if: github.event.pull_request.head.repo.full_name == github.repository
         uses: docker/login-action@v4
@@ -252,30 +220,28 @@ jobs:
           docker push "$IMAGE"
           cosign sign --yes "$(docker inspect --format '{{index .RepoDigests 0}}' "$IMAGE")"
 
-  # id-token: write is for the FALLBACK, which signs the image it had to build.
-  # The retag path needs only packages: write.
-  #
-  # `needs: lint` as well as `changes`: without it a red lint on master still
-  # moves `stable`, because promote does not depend on `build` and a failing
-  # sibling job does not stop an independent one.
+  # The merge run. No checkout: nothing here reads the repository.
   promote:
-    needs: [changes, lint]
-    if: github.event_name == 'push'
+    needs: [changes]
+    if: github.event.action == 'closed' && github.event.pull_request.merged == true && needs.changes.outputs.mcp == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
-      id-token: write
     # One promotion at a time, and never cancelled: two merges landing together
     # would otherwise race to write `stable`, and the loser could be the newer
-    # one. cancel-in-progress: false because a cancelled promote can leave the
-    # image pushed and `stable` unmoved.
+    # one.
     concurrency:
       group: promote-stable
       cancel-in-progress: false
-    env:
-      IMAGE: ghcr.io/mnbf9rca/influxdb-mcp-server:tree-${{ needs.changes.outputs.hash }}
     steps:
+      - name: Name the image after the merged head commit
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          echo "IMAGE=ghcr.io/mnbf9rca/influxdb-mcp-server:sha-${HEAD_SHA:0:12}" >> "$GITHUB_ENV"
+
       - uses: docker/login-action@v4
         with:
           registry: ghcr.io
@@ -286,37 +252,26 @@ jobs:
 
       - uses: imjasonh/setup-crane@v0.7
 
-      # NO FALLBACK BUILD. A missing tag means the pull request never pushed
-      # this content - a direct push to master, a fork's pull request, or a base
-      # that moved so the squash tree differs from what the last run saw. Each
-      # is fixed by opening (or re-running) a pull request, not by master
-      # building an image nothing reviewed. A transient registry failure lands
-      # here too, and its fix is the re-run button.
-      - name: Require the image the pull request built
-        run: |
-          set -euo pipefail
-          if ! docker buildx imagetools inspect "$IMAGE"; then
-            echo "no image at $IMAGE"
-            echo "master does not build. Open a pull request touching homelab/health/mcp/ (or re-run one whose base has moved) so its build pushes and signs this image, then merge it."
-            exit 1
-          fi
-
-      # BEFORE the retag, never after. Verifying `stable` afterwards reports a
-      # bad promotion that has already happened; verifying the tree tag first
-      # means an unsigned or foreign image never becomes `stable` at all,
-      # because a failure here exits the job with the tag untouched.
+      # BEFORE the retag, never after, and it is also the existence check: a tag
+      # that was never pushed cannot verify. A same-repo pull request signed
+      # this digest; a fork's did not push at all, so this is where that merge
+      # stops - loudly, with `stable` untouched.
       #
-      # cosign v3 signs and verifies the new bundle format by default. If GHCR
-      # rejects the OCI 1.1 referrer, `--new-bundle-format=false` here and on
-      # the `cosign sign` in `build` - both, or verification looks for a bundle
-      # the signature did not write.
+      # If GHCR ever rejects the OCI 1.1 referrer that cosign v3 writes by
+      # default, `--new-bundle-format=false` here AND on the `cosign sign` in
+      # `build` - both, or verification looks for a bundle the signature did not
+      # write.
       - name: Verify the signature before promoting it
         run: |
           set -euo pipefail
-          cosign verify \
+          if ! cosign verify \
             --certificate-identity-regexp '^https://github\.com/mnbf9rca/kubernetes_config/\.github/workflows/influxdb-mcp-image\.yml@' \
             --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-            "$IMAGE"
+            "$IMAGE"; then
+            echo "no verifiable signature on $IMAGE"
+            echo "This workflow never builds outside a pull request. A fork's pull request cannot push or sign, so its changes must be re-opened as a pull request from a branch inside this repository; otherwise re-run the pull request's build and merge again."
+            exit 1
+          fi
 
       # crane tag, not docker tag + docker push: it writes a new tag against the
       # digest that is already in the registry. Nothing is rebuilt, no new
