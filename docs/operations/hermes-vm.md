@@ -73,7 +73,7 @@ The four apt files and `/etc/hermes/config.yaml` sit outside the zip, and they a
 make check-vm-scripts
 ```
 
-This is the **only** thing that ever lints these files: it runs in no preflight, this repository has no CI, and nothing runs it on a schedule.
+This is the **only** thing that ever lints these files: it runs in no preflight, the repository's one workflow builds the InfluxDB MCP image from `homelab/health/mcp/` and covers nothing under `hermes-vm/`, and nothing runs it on a schedule.
 This procedure is its only caller; the update runbook never invokes it.
 It covers all three scripts under `hermes-vm/scripts/` — `hermes-app-alive.sh` from step 2, `hermes-sandbox-refresh.sh` from step 6, and `hermes-profile-docker-setup.sh` from [step 7](#7-pin-the-docker-terminal-backend).
 

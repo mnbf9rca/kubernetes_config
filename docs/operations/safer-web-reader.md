@@ -223,7 +223,7 @@ That last rule protects the human at the other end rather than the machine in th
 Nothing else is validated here, because everything else is a consumer's job and a half-measure would imply a guarantee that does not exist.
 
 **Run `test_validate.py` by hand before any install.**
-Nothing runs it automatically — this repository has no CI, and `make check-vm-scripts` is `shellcheck` over the shell scripts plus the ping-body scan, so it parses the Python for ping sinks and never executes it:
+Nothing runs it automatically — the repository's one workflow builds the InfluxDB MCP image from `homelab/health/mcp/` and covers neither this guard nor anything else under `hermes-vm/`, and `make check-vm-scripts` is `shellcheck` over the shell scripts plus the ping-body scan, so it parses the Python for ping sinks and never executes it:
 
 ```sh
 python3 -m unittest discover -s hermes-vm/plugins/safer-reader-broker -p 'test_*.py'
