@@ -225,6 +225,9 @@ The rules that must not be broken:
 
 - Keep the one-file-per-service pattern; keep all of a service's resources in that file.
 - Every new Deployment must include the full keel annotation set above — **except** in the `health`, `ops`, `hindsight` and `backup` namespaces, which explicitly forbid keel, and **except keel itself**, which is digest-pinned on both clusters so the update engine cannot update itself (`homelab/bootstrap/keel/keel.yaml`, `vps/bootstrap/keel/keel.yaml`).
+  **What that prohibition is for**: those four namespaces hold stateful or third-party images that must not roll unreviewed, because a roll can migrate data or change behaviour nobody read — a forward-only migration on startup, a scheduled job whose output nothing re-verifies, a backup runner.
+  The reason is the image's provenance and its effect on data, not the namespace's name, so an image that is **stateless and built by this repository from reviewed inputs** is on the other side of the line: the reviewed decision is the build input and the roll only delivers it.
+  `influxdb-mcp` in `health` is the one such exemption today, written down in `scripts/check-renovate-scope.py`'s `FLOATING_EXEMPT` list and named in the namespace comment; adding a second means meeting both halves of that test and writing it in the same two places.
   The rule that decides which mode a workload is in: **floating tag means keel; pinned tag means Renovate; never both.**
   `match-tag: "true"` on a pinned tag only refreshes the digest, so a semver pin carrying keel annotations is frozen while looking covered.
 - **Every pinned image in both clusters is inside Renovate's scope, and keeping it that way is a standing obligation.**

@@ -122,7 +122,7 @@ class TestNoRuleSwallowsCode(unittest.TestCase):
         # The rule is symmetric; a hole on one side is a hole on the other.
         label, homelab, _, rules = kfp.PAIRS[0]
         mutated = self._insert_above(
-            kfp.read(homelab), "IMAGE_FLOOR=5", "rm -rf /state")
+            kfp.read(homelab), "IMAGE_FLOOR=6", "rm -rf /state")
         with self.assertRaises(kfp.CheckUnrunnable):
             kfp.mask(mutated, rules, "homelab", label)
 

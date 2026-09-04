@@ -43,7 +43,14 @@ kind: Namespace
 metadata:
   name: health
   # PSA baseline (cluster default). Nothing in health uses hostPath/hostNetwork.
-  # NO keel in this namespace: images are digest/version-pinned (health data pipeline).
+  # NO keel in this namespace, with ONE named exception. Images here are
+  # digest/version-pinned because they are stateful or third-party and must not
+  # roll unreviewed: a roll can migrate data or change behaviour nobody read.
+  # The exception is influxdb-mcp, which runs the floating tag `stable` on an
+  # image this repository builds from its own homelab/health/mcp/ inputs. It is
+  # stateless, and the reviewed decision is the build input rather than the
+  # roll, which is the other side of that same line. The exemption is written
+  # down in scripts/check-renovate-scope.py's FLOATING_EXEMPT list.
 ---
 apiVersion: v1
 kind: Namespace

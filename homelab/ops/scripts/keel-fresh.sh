@@ -93,19 +93,22 @@ START_METRIC=process_start_time_seconds
 # container of headroom: the point of a floor is that losing one workload's
 # annotations does not alarm while losing the WATCH does.
 #
-# The arithmetic, from poll_trigger_tracked_images: keel tracks 6 images on
+# The arithmetic, from poll_trigger_tracked_images: keel tracks 7 images on
 # homelab - emby, nzbhydra2, radarr, sabnzbd, sonarr and tinyproxy, one image
-# each. keel's own annotations were removed, so it no longer appears in its own
-# tracked set, and traefik was de-keeled. So the steady-state count is 6 and the
-# floor is 5, one below. Setting it to 6 would leave ZERO margin, which is the
-# failure this constant exists to avoid.
+# each, plus influxdb-mcp in the health namespace, which is that namespace's one
+# written keel exception. keel's own annotations were removed, so it no longer
+# appears in its own tracked set, and traefik was de-keeled. So the steady-state
+# count is 7 and the floor is 6, one below. Setting it to 7 would leave ZERO
+# margin, which is the failure this constant exists to avoid: the healthy
+# heartbeat reads `images=7/6`, and `images=7/7` would be the state to fix by
+# lowering the floor rather than by celebrating it.
 #
 # jottacloud-backup is NOT in that set: it carries no keel annotations at all
 # and keel's own metrics do not name it. Do not count it.
 #
 # Raise it deliberately when the estate grows; a floor that drifts below reality
 # is a check that has stopped checking.
-IMAGE_FLOOR=5
+IMAGE_FLOOR=6
 
 STATE_DIR=/state
 STATE_FILE=$STATE_DIR/last

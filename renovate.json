@@ -45,6 +45,7 @@
     { "matchFileNames": [
         "homelab/workloads/**",
         "homelab/bootstrap/keel/**",
+        "homelab/health/influxdb-mcp.yaml",
         "vps/workloads/**",
         "vps/bootstrap/keel/**",
         "vps/bootstrap/cloudflared/**"
