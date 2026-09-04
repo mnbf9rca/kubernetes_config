@@ -11,18 +11,21 @@
 # annotations in the same emergency edit. The rollback is what every other
 # update here does: revert the build input, let the master build make the
 # image, and keel delivers it.
+#
+# THE TRIGGERS CARRY NO paths: FILTER AND THE PATH CONDITION LIVES IN THE
+# `changes` JOB, so that `build` can be a required status check on master.
+# GitHub treats a job skipped by its own `if:` as satisfying a required check,
+# but a workflow that a paths filter never triggered reports nothing at all -
+# and a required check that never reports blocks the pull request forever.
+# So the workflow runs on every push to master and every pull request, and
+# `changes` decides whether `build` does any work. The required check on
+# master is the `build` job of this workflow.
 name: influxdb-mcp image
 
 on:
   push:
     branches: [master]
-    paths:
-      - 'homelab/health/mcp/**'
-      - '.github/workflows/influxdb-mcp-image.yml'
   pull_request:
-    paths:
-      - 'homelab/health/mcp/**'
-      - '.github/workflows/influxdb-mcp-image.yml'
 
 # contents: read, packages: write, and id-token: write for keyless signing, and
 # nothing else. Login uses the job's own GITHUB_TOKEN; no secret is added to
@@ -33,7 +36,57 @@ permissions:
   id-token: write
 
 jobs:
+  # The paths filter the triggers no longer carry. Plain git and grep: the
+  # comparison is a two-dot diff on a push and a three-dot diff against the
+  # merge base on a pull request, and a push with no usable `before` - a new
+  # branch, or a force push that orphaned the old tip - counts as changed.
+  changes:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      mcp: ${{ steps.filter.outputs.mcp }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Decide whether the image inputs changed
+        id: filter
+        # Through the environment, not through ${{ }} interpolation into the
+        # script body.
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_REF: ${{ github.base_ref }}
+          BEFORE: ${{ github.event.before }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT" = "pull_request" ]; then
+            files=$(git diff --name-only "origin/$BASE_REF...HEAD")
+          elif [ -n "$BEFORE" ] && [ "$BEFORE" != "null" ] \
+               && git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
+            files=$(git diff --name-only "$BEFORE..$SHA")
+          else
+            echo "no usable before-sha ('$BEFORE'): treating as changed"
+            echo "mcp=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "changed files:"
+          printf '%s\n' "$files"
+          # grep, not grep -q: -q closes the pipe on the first match, and under
+          # pipefail printf's EPIPE would then read as "no match".
+          if printf '%s\n' "$files" \
+             | grep -E '^(homelab/health/mcp/|\.github/workflows/influxdb-mcp-image\.yml$)' \
+             > /dev/null; then
+            echo "mcp=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "mcp=false" >> "$GITHUB_OUTPUT"
+          fi
+
   build:
+    needs: changes
+    if: needs.changes.outputs.mcp == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
