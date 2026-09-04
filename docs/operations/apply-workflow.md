@@ -196,8 +196,8 @@ Use it only for secrets that genuinely can't be single-line; everything else flo
 | `route-vps-dns` | `cloudflared tunnel route dns cynexia-vps <host>` for every hostname in `vps/bootstrap/cloudflared/cloudflared.yaml` |
 | `create-cloudflared-secret` | Imperative Secret creation for the VPS tunnel creds from `op://VPS/cloudflared/credentials-json` |
 
-Targets that read a single field imperatively — `create-jotta-secret`, `create-hermes-ssh-secret`, both `create-*-cloudflared-secret` targets and `health-influx-bootstrap` — call `op read` / `op document get` directly rather than going through `op run`; they authenticate with the same service-account token from `.envrc`.
-`health-influx-cloudflare-bootstrap` touches 1Password not at all, by design: it runs entirely through the in-pod `influx` CLI and `jq`, so the admin token stays inside the cluster instead of landing in this shell's argv where `ps` can read it.
+Targets that read a single field imperatively — `create-jotta-secret`, `create-hermes-ssh-secret` and both `create-*-cloudflared-secret` targets — call `op read` / `op document get` directly rather than going through `op run`; they authenticate with the same service-account token from `.envrc`.
+**No influx target touches 1Password at all**, and that is worth stating because one used to: `health-influx-bucket-bootstrap` runs entirely through the in-pod `influx` CLI and `jq`, so the admin token stays inside the cluster instead of landing in this shell's argv where `ps` can read it. The Garmin v1 password the deleted `health-influx-bootstrap` read with `op read` now lives in the already-done paragraph in [homelab-health.md](homelab-health.md).
 
 The VPS block is a deliberate copy-paste of the homelab block rather than a parameterised macro — reading `apply-vps` top to bottom is clearer than chasing a generated target, and two clusters is not enough to justify the abstraction.
 
@@ -207,8 +207,7 @@ The VPS block is a deliberate copy-paste of the homelab block rather than a para
 |---|---|
 | `create-health-cloudflared-secret` | Recreates the homelab cloudflared tunnel's creds Secret (Cloudflare name `cynexia-health`) via `op document get health-cloudflared` |
 | `route-health-dns` | CNAMEs for every hostname in `homelab/health/cloudflared.yaml` onto the `cynexia-health` tunnel |
-| `health-influx-bootstrap` | InfluxDB buckets, v1 DBRP mapping, v1-compat auth user, and the two scoped tokens — see [homelab-health.md](homelab-health.md) |
-| `health-influx-cloudflare-bootstrap` | Creates the `cloudflare` bucket and mints its ingest token plus a replacement read token covering all four buckets. Prints both for pasting into 1Password; applies nothing |
+| `health-influx-bucket-bootstrap` | `BUCKET=<name>`. Creates one bucket with infinite retention and mints one read-and-write ingest token on it. Prints that token for pasting into 1Password; touches the shared read token not at all, and applies nothing |
 | `health-upgrade` | Creates a one-off Job from `cronjob/influx-backup`, waits for it, tails the log and **stops** — the pre-upgrade dump of InfluxDB *and* Grafana, and nothing else. The script's sizes and counts arrive on the log's `detail:` line, which the target tails; the one-line heartbeat sent to the `health-influx-backup` monitor carries only the verdict, `buckets=` and `grafana_kib=`. Applies nothing, merges nothing, edits no pin. See [homelab-health.md](homelab-health.md) |
 
 ### Hindsight namespace

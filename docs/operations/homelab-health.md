@@ -154,34 +154,72 @@ Server-side improvements (an org default, a list-buckets tool, MCP instructions)
 
 ## InfluxDB bootstrap
 
-`make health-influx-bootstrap` creates the buckets, the v1 DBRP mapping and the v1-compat auth user (garmin-grafana needs InfluxDB 1.x-style auth), then prints two scoped tokens — ingester write-only, MCP+Grafana read-only — for one-time manual paste into 1Password.
-InfluxDB 2.9 hash-stores tokens server-side, so **the printed value is the only copy, ever**.
+One target creates a bucket and mints its ingest token:
 
-Token extraction uses `--json | jq -r .token`, not `--hide-headers` + awk column parsing: the multi-word `-d` description strings shift awk's column and it silently captures a description fragment instead of the token.
-`jq` is therefore a hard dependency and is asserted by `make check-tools`.
+```bash
+make health-influx-bucket-bootstrap BUCKET=sleep
+```
 
-`make health-influx-cloudflare-bootstrap` does the same job for the Cloudflare analytics bucket.
-It creates `cloudflare` with `-r 0` (infinite retention — expiring the copy would defeat the entire point) and prints **two** tokens:
+Run it in a plain terminal. InfluxDB 2.9 hash-stores tokens server-side, so **the printed value is the only copy, ever**, and a token printed in an agent session lands in that transcript and must then be rotated under the `secrets-to-rotate.md` rule.
 
-| Token | Paste into | Scope |
+Token extraction uses `--json | jq -r .token`, not `--hide-headers` plus awk column parsing: the multi-word `-d` description strings shift awk's column and it silently captures a description fragment instead of the token. `jq` is therefore a hard dependency and is asserted by `make check-tools`.
+
+Three choices the target makes, which its comment no longer has room for:
+
+- **Retention is `-r 0`, infinite.** These buckets exist to outlive the source they copy from — Cloudflare's 8-day analytics window is the sharpest case — so expiring the copy would defeat the pipeline.
+- **The ingest token reads as well as writes.** Each job's resume point is `max(_time)` read back out of its own bucket, not a stored cursor, so it reads before it writes. Three of the four ingest tokens need that; the apple ingester is the exception and no flow re-mints it.
+- **The shared read token is not touched.** It reads every bucket in the organization, present and future, so a new bucket is visible to Grafana and the MCP connector with no re-mint.
+
+**A new bucket is three edits, not one.** Create it with the target, add its name to the explicit `for B in ...` list in `homelab/health/scripts/influx-export-lp.sh`, and raise `LP_EXPECTED` in `homelab/health/scripts/influx-backup.sh`. A bucket missing from the export list is silently never exported; a bucket in that list that does not exist fails the nightly job by name, so create it **before** the apply that adds it; and a stale `LP_EXPECTED` shows up as a visibly wrong `buckets=n/m` in the `health-influx-backup` heartbeat and nothing worse. Nothing mechanical enforces this rule — the target's last line prints it at the moment it applies.
+
+### The shared read token
+
+Minted once, on September 4, 2026, org-wide:
+
+```bash
+influx auth create -o cynexia --read-buckets --read-orgs -d "mcp+grafana read-only (org-wide)"
+```
+
+`--read-buckets` takes no id and grants read on **all** organization buckets, present and future; `--read-orgs` grants organization-metadata read, which is what makes the MCP server's `influxdb://orgs` resource answer instead of returning `{"orgs":[]}`.
+
+**After that mint, no bucket addition ever touches this token again.** The three per-bucket bootstrap targets that preceded it existed almost entirely to re-mint it with one more `--read-bucket` id, and they are deleted.
+
+It has **three** consumers, two of which need a restart when the value changes: `grafana` and `influxdb-mcp` are Deployments and are restarted; `homelab/health/ingest-freshness.yaml` is a CronJob and picks the new value up on its next scheduled run.
+
+If it is ever replaced, the ordering is not a preference: paste over the existing `op://Homelab/health-influxdb/read-token` field's value (never into a second field — a duplicate label makes `op run` ambiguous and breaks every build, diff and apply target), `make apply-homelab`, restart the two Deployments, verify a Grafana panel and one MCP `query-data` call, and **only then** `influx auth delete` the superseded auth. Deleting first locks Grafana, the connector and `ingest-freshness` out until the new Secret has rolled. Replacing the value puts both the `health-influxdb` and `grafana-datasources` Secrets in the next diff, because both render that placeholder; those two are expected and are not reverts.
+
+| Token | 1Password field | Scope |
 |---|---|---|
+| Shared read-only | `op://Homelab/health-influxdb/read-token` | read on **all** org buckets, present and future, plus org read |
+| Apple ingester | `op://Homelab/health-influxdb/ingester-token` | write-only on `apple_metrics` and `apple_workouts` |
 | Cloudflare ingest | `op://Homelab/health-influxdb/cloudflare-token` | read **and** write on `cloudflare` |
-| Replacement read-only | `op://Homelab/health-influxdb/read-token` | read on `apple_metrics`, `apple_workouts`, `garmin` and `cloudflare` — the four buckets that existed when it was written |
+| Withings ingest | `op://Homelab/health-influxdb/withings-token` | read **and** write on `withings` |
 
-The ingest token needs read as well as write because the job's resume point is `max(_time)` read back out of the bucket.
+**`--read-buckets` covers `_monitoring` and `_tasks` as well.** Those hold InfluxDB's own task and check logs and no user data, and nothing in this estate writes tasks or checks. No action; it is recorded so nobody rediscovers it as a surprise.
 
-The read token has to be **replaced**, not amended: InfluxDB offers no way to add a bucket to an existing auth, so Grafana and the MCP connector cannot see `cloudflare` until a new token exists.
-Order matters — paste, `make apply-homelab`, restart `grafana` and `influxdb-mcp`, and only **then** `influx auth delete` the superseded auth.
-Delete it first and you lock Grafana and the connector out until the new Secret has rolled.
+### Already done — this is what ran, on the dates it ran
 
-`make health-influx-withings-bootstrap` does the same job for the `withings` bucket, on the same terms: `-r 0`, an ingest token that reads and writes on that one bucket, and a replacement read token covering all five.
-Run it before the apply that adds `withings` to `influx-export-lp.sh`'s bucket list — that script fails by name on a bucket that does not exist, so the wrong order fails the nightly backup until the bucket appears.
-It prints the ingest token for you to paste into `op://Homelab/health-influxdb/withings-token`.
-The tree already carries that Secret key, its `.env.tpl` line and both Makefile variable list entries, so the only thing you create by hand is the vault field itself — and `op run` refuses every build, diff and apply target until it exists.
-Replacing the `read-token` value puts both the `health-influxdb` and `grafana-datasources` Secrets in the next diff, because both render that placeholder; those two are expected and are not reverts.
+Kept verbatim so it can be replayed if a rebuild ever starts from an **empty** InfluxDB rather than from a restore. The ordinary recovery path is `influx restore` of the nightly native backup, which brings buckets, DBRP mappings and authorization records back together, so none of this is needed after a restore.
 
-**Always mint the replacement read token from the newest bucket's target.**
-Each of these targets hard-codes the bucket list its read token covers: `health-influx-bootstrap` mints over three buckets and `health-influx-cloudflare-bootstrap` over four, so re-running either one after the withings bootstrap silently drops `withings` from the read token and Grafana and the MCP connector stop seeing it.
+```bash
+# The shared read token (September 4, 2026). No target and no other committed
+# file holds this command; three consumers depend on it.
+influx auth create -o cynexia --read-buckets --read-orgs -d "mcp+grafana read-only (org-wide)"
+
+# The Garmin v1-compat mapping and user, at namespace bootstrap. garmin-grafana
+# speaks InfluxDB 1.x auth and nothing else.
+influx v1 dbrp create --db GarminStats --rp autogen --bucket-id <garmin bucket id> --default
+influx v1 auth create --username garmin --password '<op://Homelab/health-influxdb/garmin-v1-password>' \
+  --read-bucket <garmin bucket id> --write-bucket <garmin bucket id> -d "garmin-grafana v1-compat"
+
+# The apple ingester token, at namespace bootstrap. WRITE-ONLY over two
+# buckets: the single exception to the read-and-write rule, and the one token
+# health-influx-bucket-bootstrap cannot mint.
+influx auth create -o cynexia --write-bucket <apple_metrics id> --write-bucket <apple_workouts id> \
+  -d "apple ingester write-only"
+```
+
+Buckets themselves need no record here: `make health-influx-bucket-bootstrap BUCKET=<name>` makes any of the five.
 
 ## Backups and restore
 
@@ -228,7 +266,7 @@ Each run reports the current size as `grafana_kib=` in the `health-influx-backup
 
 **Adding a bucket means adding it to that list**, or it is silently never exported — the same class of bug as the VPS backup gate's expected-set assertion ([monitoring.md](monitoring.md)), and the reason the list is explicit rather than a wildcard over `influx bucket list`.
 A named bucket that does not exist is now a **named fatal error**: the pipeline `influx bucket list | awk` exits with awk's status, so a failed lookup used to leave the bucket ID empty and sail straight past `set -eu` into an opaque `export-lp` error.
-Consequence for ordering: run `make health-influx-cloudflare-bootstrap` **before** the apply that adds `cloudflare` here, or the next night's export fails.
+Consequence for ordering: run `make health-influx-bucket-bootstrap BUCKET=cloudflare` **before** the apply that adds `cloudflare` here, or the next night's export fails.
 
 **A new bucket is three edits, not two.**
 Create it, add it to the `for B in ...` list in `influx-export-lp.sh`, **and** raise `LP_EXPECTED` in `homelab/health/scripts/influx-backup.sh`.
@@ -475,7 +513,7 @@ None of them are created by `make apply-homelab`.
    Mark it `[text]`, not concealed — it is an identifier, and a concealed value makes the vault harder to debug.
 3. **uptime-kuma push monitor** `homelab-cloudflare-analytics`, 3600s interval with one retry at 7200s.
    Token into `op://Homelab/health-healthchecks/cloudflare-kuma-push-token`.
-4. **InfluxDB bucket and token**: `make health-influx-cloudflare-bootstrap`.
+4. **InfluxDB bucket and token**: `make health-influx-bucket-bootstrap BUCKET=cloudflare`, in a plain terminal.
    See below.
 
 Then `make apply-homelab`, and force the first run rather than waiting an hour:
@@ -640,7 +678,7 @@ None of them are created by `make apply-homelab`.
 1. **DNS for the callback host.** `withings.cynexia.net`, an A record to `10.100.0.100`. It exists only so the browser lands on something during authorization; Traefik answers 404 with the wildcard certificate and the code is read from the address bar.
 2. **Withings client credentials** in 1Password as `op://Homelab/health-withings/` with `client-id` `[text]`, `client-secret` concealed, and `redirect-url` `[text]` holding `https://withings.cynexia.net/oauth-callback`. The application is registered as a Public API integration in the Development environment with that redirect URI.
 3. **uptime-kuma push monitor** `Withings-ingest`, Push type, 1800s interval with one retry at 900s. Token into `op://Homelab/health-healthchecks/withings-kuma-push-token`, typed `[text]`.
-4. **InfluxDB bucket and tokens**: `make health-influx-withings-bootstrap`, in a plain terminal. It prints two live tokens, so run it outside an agent session.
+4. **InfluxDB bucket and token**: `make health-influx-bucket-bootstrap BUCKET=withings`, in a plain terminal. It prints one live token, so run it outside an agent session.
 
 The tree already carries the `withings-token` key on the `health-influxdb` Secret, its `.env.tpl` line and both Makefile variable list entries.
 What has to exist is the vault field the `.env.tpl` line points at, and `op run` refuses every build, diff and apply target until it does.
@@ -829,7 +867,7 @@ Per `health-*` 1Password item: edit the item → `make apply-homelab` → restar
 **No `direnv reload` step**: secrets are resolved per command by `op run` at apply time, so nothing is cached in your shell to refresh (reload only matters if `OP_SERVICE_ACCOUNT_TOKEN` itself changed).
 See [apply-workflow.md](apply-workflow.md#rotating-a-secret).
 
-InfluxDB tokens specifically: mint the replacement with the `health-influx-bootstrap` pattern, update 1Password, apply, then delete the old auth server-side.
+InfluxDB tokens specifically: mint the replacement with `make health-influx-bucket-bootstrap BUCKET=<name>` for a bucket ingest token, or with the recorded `influx auth create` line above for the shared read token, then update 1Password, apply, and delete the old auth server-side.
 
 If a real secret value is ever disclosed, log it in `secrets-to-rotate.md` at the repo root — see the honesty-box rule in `AGENTS.md`.
 

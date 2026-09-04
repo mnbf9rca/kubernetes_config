@@ -18,10 +18,9 @@
 #
 # The bucket list is EXPLICIT, and a missing bucket is fatal. A new bucket must
 # be added here or it is silently never exported — the same class of bug as the
-# VPS gate's expected-set assertion. `cloudflare` therefore requires
-# `make health-influx-cloudflare-bootstrap` to have been run BEFORE the apply
-# that adds it here, and `withings` the same for
-# `make health-influx-withings-bootstrap`.
+# VPS gate's expected-set assertion. A bucket therefore requires
+# `make health-influx-bucket-bootstrap BUCKET=<name>` to have been run BEFORE
+# the apply that adds it here.
 set -eu
 
 DATE=$1

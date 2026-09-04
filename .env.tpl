@@ -79,8 +79,10 @@ HEALTH_HC_GARMIN_UUID=op://Homelab/health-healthchecks/garmin-uuid
 HEALTH_HC_BACKUP_UUID=op://Homelab/health-healthchecks/backup-uuid
 HEALTH_HC_CLOUDFLARE_UUID=op://Homelab/health-healthchecks/cloudflare-uuid
 
-# health namespace — InfluxDB (admin creds + generated tokens; ingester/read
-# tokens are minted via `make health-influx-bootstrap` and pasted into 1Password)
+# health namespace — InfluxDB (admin creds + generated tokens; a bucket's ingest
+# token is minted via `make health-influx-bucket-bootstrap BUCKET=<name>` and
+# pasted into 1Password; the shared read token is minted by hand, once, and the
+# command is recorded in docs/operations/homelab-health.md)
 HEALTH_INFLUX_ADMIN_PASSWORD=op://Homelab/health-influxdb/admin-password
 HEALTH_INFLUX_ADMIN_TOKEN=op://Homelab/health-influxdb/admin-token
 HEALTH_INFLUX_GARMIN_V1_PASSWORD=op://Homelab/health-influxdb/garmin-v1-password
