@@ -434,10 +434,11 @@ check-vm-scripts:
 # multi-line output: that shipped to master on 2026-09-04 and broke the first
 # image push with a syntax error.
 #
-# The second line is the same gap one level down: actionlint lints WORKFLOWS,
-# and does not reach a composite action's `run:` bodies even when a workflow
-# references it (verified). So .github/actions/*/ keeps its shell in real script
-# files and shellcheck reads them directly.
+# Every piece of shell in the delivery path is a `run:` block in that workflow,
+# so this covers all of it. Keep it that way: actionlint lints WORKFLOWS and
+# does NOT reach a composite action's `run:` bodies even when a workflow
+# references it (verified), so shell moved under .github/actions/ would be shell
+# nothing checks.
 #
 # NOT in the diff-*/apply-* preflight: a workflow renders nothing and reaches
 # no cluster, so gating an apply on it would be noise. It runs in the `lint`
@@ -446,7 +447,6 @@ check-vm-scripts:
 .PHONY: check-workflows
 check-workflows:
 	@actionlint -shellcheck=shellcheck .github/workflows/*.yml
-	@shellcheck .github/actions/*/*.sh
 	@echo "OK: workflows lint clean"
 
 .PHONY: require-vars

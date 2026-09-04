@@ -13,14 +13,13 @@
 #   the pull request pushed and points `stable` at that same digest. What master
 #   delivers is bit-for-bit what was reviewed, by the same signature.
 #
-# WHAT IS MASTER-ONLY, HONESTLY: the whole `promote` job - login, cosign,
-# crane, the lookup, the fallback, the verify and the retag - seven steps a
-# pull request never runs. The claim is narrower than "only a retag": what a
-# pull request DOES exercise in full is every step that builds, pushes and
-# signs, because the fallback is the same composite action
-# (.github/actions/build-push-sign/) that `build` calls. So the untested-on-a-
-# pull-request surface is the lookup, the verify, the retag and the wiring
-# around them.
+# NOTHING BUILDS ON MASTER. The master-only surface is exactly the `promote`
+# job's login, inspect, verify and retag - four steps, none of which builds,
+# pushes or signs anything. There is no fallback build: if the image is not in
+# the registry, `promote` FAILS and says to open a pull request that touches
+# homelab/health/mcp/. A direct push to master is not this repository's
+# practice, and a fallback would be master-only code no pull request ever runs -
+# the exact thing this design exists to remove.
 #
 # `promote` runs on EVERY master push, including one where `changes` said the
 # inputs did not move: the retag is cheap and idempotent, and skipping it would
@@ -38,13 +37,14 @@
 #
 # SO A PULL REQUEST WHOSE BASE HAS MOVED MUST RE-RUN BEFORE IT MERGES. Once
 # master advances, the squash tree can differ from the merge commit the last run
-# saw, the hash changes, and `promote` misses. GitHub's "Update branch" button
-# re-triggers this workflow, which is the fix; the cost of forgetting is the
-# fallback, not a wrong image.
+# saw, the hash changes, and `promote` fails on a missing tag. GitHub's "Update
+# branch" button re-triggers this workflow, which is both the fix and the
+# prevention.
 #
 # A FORK'S PULL REQUEST gets a read-only GITHUB_TOKEN, so `build` builds and
-# asserts but pushes nothing. Its merge therefore always takes the fallback, and
-# that is the designed path, not a failure.
+# asserts but pushes nothing, and its merge would fail in `promote`. Land such a
+# contribution by branching it inside this repository and opening a pull request
+# from there.
 #
 # REQUIRED STATUS CHECKS ON MASTER: `lint` and `build`. Both, not just `build`:
 # a job skipped because a dependency failed still satisfies a required check, so
@@ -164,14 +164,6 @@ jobs:
         with:
           args: -color -shellcheck=shellcheck
 
-      # actionlint reaches workflows only: a composite action's shell is
-      # invisible to it, referenced or not (verified). So the composite action
-      # keeps its shell in real script files and they are checked here, with the
-      # runner's own shellcheck. Without this step the delivery path's shell is
-      # the one shell in the repository nothing lints.
-      - name: Lint the composite action's shell
-        run: shellcheck .github/actions/*/*.sh
-
   # PULL REQUESTS ONLY. On a master push this is skipped and `promote`'s
   # fallback is the sole builder, so a merge can never overwrite an existing
   # tree tag with a fresh, non-reproducible rebuild of the same inputs.
@@ -183,16 +175,82 @@ jobs:
       contents: read
       packages: write
       id-token: write
+    env:
+      IMAGE: ghcr.io/mnbf9rca/influxdb-mcp-server:tree-${{ needs.changes.outputs.hash }}
     steps:
       - uses: actions/checkout@v7
 
-      - uses: ./.github/actions/build-push-sign
+      - uses: docker/setup-buildx-action@v4
+
+      # Built once, loaded into the local daemon, and asserted BEFORE anything
+      # is pushed.
+      - name: Build
+        uses: docker/build-push-action@v7
         with:
-          image: ghcr.io/mnbf9rca/influxdb-mcp-server:tree-${{ needs.changes.outputs.hash }}
-          # A pull request from a fork gets a read-only GITHUB_TOKEN, so it can
-          # build and assert but not push or sign. Everything else can.
-          push: ${{ github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository }}
-          token: ${{ secrets.GITHUB_TOKEN }}
+          context: homelab/health/mcp
+          platforms: linux/amd64
+          load: true
+          push: false
+          tags: ${{ env.IMAGE }}
+
+      # The one failure mode the guidance hook has: the SDK moved and the patch
+      # no longer registers. Nothing in this repository can run a JavaScript
+      # test, so this build is the hook's only check. stdio, not --http, because
+      # that needs no session id and no SSE parsing. The InfluxDB environment is
+      # dummy: the assertion is the tool list, not a query.
+      - name: Assert the guidance tool is registered
+        run: |
+          set -euo pipefail
+          printf '%s\n' \
+            '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"ci","version":"0"}}}' \
+            '{"jsonrpc":"2.0","method":"notifications/initialized","params":{}}' \
+            '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}' \
+            | timeout 60 docker run -i --rm \
+                -e INFLUXDB_URL=http://127.0.0.1:8086 \
+                -e INFLUXDB_TOKEN=not-a-real-token \
+                -e INFLUXDB_ORG=ci \
+                "$IMAGE" > tools.json || true
+          cat tools.json
+          grep -q 'how-to-use-health-data' tools.json
+
+      # A pull request from a fork gets a read-only GITHUB_TOKEN, so it builds
+      # and asserts but cannot push or sign. Landing such a contribution means
+      # branching it inside this repository: `promote` has no fallback build.
+      - name: Log in to GHCR
+        if: github.event.pull_request.head.repo.full_name == github.repository
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install cosign
+        if: github.event.pull_request.head.repo.full_name == github.repository
+        uses: sigstore/cosign-installer@v4.1.2
+
+      # Keyless: the signature is made with the job's own OIDC identity and
+      # recorded in the public Rekor transparency log, so there is no key to
+      # store and none to rotate. It signs the DIGEST, so it survives `promote`
+      # retagging that digest as `stable` and keel rewriting the Deployment's.
+      #
+      # RepoDigests, not `docker buildx imagetools inspect`: `docker push`
+      # writes the registry digest back onto the local image, so it is already
+      # here and already a full `image@sha256:...` reference.
+      #
+      # One image, one tag, no loop: the loop over a multi-line tag list
+      # interpolated into the script body is what broke the first master push.
+      # IMAGE arrives through the environment, and nothing here is multi-line.
+      #
+      # cosign v3 writes the new bundle format by default, which GHCR stores as
+      # an OCI 1.1 referrer. If it ever rejects that, `--new-bundle-format=false`
+      # is the switch - here AND on the `cosign verify` in `promote`, or
+      # verification looks for a bundle this signature did not write.
+      - name: Push and sign
+        if: github.event.pull_request.head.repo.full_name == github.repository
+        run: |
+          set -euo pipefail
+          docker push "$IMAGE"
+          cosign sign --yes "$(docker inspect --format '{{index .RepoDigests 0}}' "$IMAGE")"
 
   # id-token: write is for the FALLBACK, which signs the image it had to build.
   # The retag path needs only packages: write.
@@ -215,9 +273,9 @@ jobs:
     concurrency:
       group: promote-stable
       cancel-in-progress: false
+    env:
+      IMAGE: ghcr.io/mnbf9rca/influxdb-mcp-server:tree-${{ needs.changes.outputs.hash }}
     steps:
-      - uses: actions/checkout@v7
-
       - uses: docker/login-action@v4
         with:
           registry: ghcr.io
@@ -228,30 +286,20 @@ jobs:
 
       - uses: imjasonh/setup-crane@v0.7
 
-      # A transient registry failure reads as "absent" here and costs a rebuild:
-      # the fallback pushes a new digest over the same tree tag and signs it, so
-      # the wrong branch is slow, never wrong. Retrying is the re-run button.
-      - name: Look for the image the pull request built
-        id: lookup
-        env:
-          IMAGE: ghcr.io/mnbf9rca/influxdb-mcp-server:tree-${{ needs.changes.outputs.hash }}
+      # NO FALLBACK BUILD. A missing tag means the pull request never pushed
+      # this content - a direct push to master, a fork's pull request, or a base
+      # that moved so the squash tree differs from what the last run saw. Each
+      # is fixed by opening (or re-running) a pull request, not by master
+      # building an image nothing reviewed. A transient registry failure lands
+      # here too, and its fix is the re-run button.
+      - name: Require the image the pull request built
         run: |
           set -euo pipefail
-          if docker buildx imagetools inspect "$IMAGE"; then
-            echo "found=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "no image at $IMAGE - building it here"
-            echo "found=false" >> "$GITHUB_OUTPUT"
+          if ! docker buildx imagetools inspect "$IMAGE"; then
+            echo "no image at $IMAGE"
+            echo "master does not build. Open a pull request touching homelab/health/mcp/ (or re-run one whose base has moved) so its build pushes and signs this image, then merge it."
+            exit 1
           fi
-
-      # A direct push to master, or a squash whose tree differs from every pull
-      # request head. Same steps the pull request would have run.
-      - uses: ./.github/actions/build-push-sign
-        if: steps.lookup.outputs.found == 'false'
-        with:
-          image: ghcr.io/mnbf9rca/influxdb-mcp-server:tree-${{ needs.changes.outputs.hash }}
-          push: 'true'
-          token: ${{ secrets.GITHUB_TOKEN }}
 
       # BEFORE the retag, never after. Verifying `stable` afterwards reports a
       # bad promotion that has already happened; verifying the tree tag first
@@ -260,11 +308,9 @@ jobs:
       #
       # cosign v3 signs and verifies the new bundle format by default. If GHCR
       # rejects the OCI 1.1 referrer, `--new-bundle-format=false` here and on
-      # the `cosign sign` in .github/actions/build-push-sign/push-and-sign.sh -
-      # both, or verification looks for a bundle the signature did not write.
+      # the `cosign sign` in `build` - both, or verification looks for a bundle
+      # the signature did not write.
       - name: Verify the signature before promoting it
-        env:
-          IMAGE: ghcr.io/mnbf9rca/influxdb-mcp-server:tree-${{ needs.changes.outputs.hash }}
         run: |
           set -euo pipefail
           cosign verify \
@@ -278,8 +324,6 @@ jobs:
       # still covers what `stable` now points at - which is why no second
       # verify follows: it would re-check the same digest under another name.
       - name: Point stable at that digest
-        env:
-          IMAGE: ghcr.io/mnbf9rca/influxdb-mcp-server:tree-${{ needs.changes.outputs.hash }}
         run: |
           set -euo pipefail
           crane tag "$IMAGE" stable
