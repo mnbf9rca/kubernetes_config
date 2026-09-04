@@ -750,11 +750,24 @@ Two hand-built dashboards, both deleted and rebuilt for the wide schema on the d
 Neither is provisioned from this repository, by design: both live in `grafana.db` like every other dashboard here, so the nightly SQLite dump described under [The Grafana dump](#the-grafana-dump) is what captures them.
 No dashboard JSON is committed.
 
-`withings` (uid `withings`) holds weight over time per device, latest-reading stat tiles for weight, fat ratio, fat mass, muscle mass, hydration, bone mass, heart rate and blood pressure — each over `range(start: 0)`, so a tile is never blank merely because the cuff has not been used inside the dashboard window — a collapsed **Other** row holding height, and an unknown-codes panel.
+`withings` (uid `withings`) holds weight over time per scale, latest-reading stat tiles for weight, fat ratio, fat mass, muscle mass, hydration, bone mass, heart rate and blood pressure — each over `range(start: 0)`, so a tile is never blank merely because the cuff has not been used inside the dashboard window — a collapsed **Other** row holding height, and an unknown-codes panel.
 That last panel is now `filter(fn: (r) => r._field =~ /^type_[0-9]+$/)`, which deleted the 43-entry `TYPES` literal the old one carried, and empty is its expected state.
+Height reads `range(start: 0)` for the stat tiles' reason: it is typed by hand a handful of times in a lifetime, so on the default ninety-day window the panel is blank on every load.
 
-`withings-body` (uid `withings-body`) holds the composition stack with display names as panel overrides, segmental mass by limb for each of the three families, left–right symmetry tiles over a real time axis, the latest weigh-in as a one-row table with sparse columns, and the extracellular share of total body water.
+`withings-body` (uid `withings-body`) holds the composition stack with display names as panel overrides, segmental mass by limb for each of the three families, left–right symmetry tiles over a real time axis, a `Weigh-ins` table of every group in the dashboard window with sparse columns, newest first, and the extracellular share of total body water.
 The symmetry tiles no longer substitute `now()` for a time axis, because one weigh-in is now one row.
+
+**No panel buckets or averages.**
+Both scales can weigh on the same day and both readings must stay visible, so no panel carries `aggregateWindow`: on a wide dashboard window `v.windowPeriod` grows past a day and `fn: mean` would silently merge two weigh-ins into one point.
+464 groups is the whole history, so there is nothing to downsample for.
+
+**The older scale's early weigh-ins carry no `model` tag**, so a per-scale series key must never be `model` alone.
+`Body+` has 203 tagged and 252 untagged weight points on one deviceid, all the untagged ones before 2022-01-19, so `group(columns: ["model"])` splits a single physical scale into two lines and manufactures a calibration offset that is not there.
+Key on the model where it exists and fall back to the `deviceid`, which is complete: that stays correct for a scale added later, because a new device always sends a model.
+
+**A query that executes and returns rows is not a working panel.**
+Verify every panel through `/api/ds/query` and check the frame shape the panel type expects — one frame per series for bar gauges and stacked charts, no helper columns left in the output, and a display name on every series — because a bar gauge fed one frame with two numeric fields returns rows perfectly happily and draws the wrong picture.
+Executing all nineteen panel queries on 2026-09-04 returned rows from every one and still missed four defects: the three by-limb bar gauges drew `_value` and the `anatomical_order` sort key instead of five limbs, both symmetry panels and the water-share panel legended `Value` because a `map` building a bare `{_time, _value}` record carries no label, and the height panel rendered blank on every load.
 
 **No dedupe panel and no readings-per-scale panel.**
 Neither query carries an alert, and a panel with no alert is not a detector.
