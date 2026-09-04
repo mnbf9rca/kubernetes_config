@@ -39,10 +39,14 @@
 # the same as the review's: update the branch, which pushes a new head sha and
 # rebuilds. The exposure is bounded by how stale the base is allowed to get.
 #
-# REQUIRED STATUS CHECKS ON MASTER: `lint` and `build`, both of which report on
-# a pull request run. Both, not just `build`: a job skipped because a dependency
-# failed still satisfies a required check, so `build`'s `needs: lint` does not
-# by itself make a lint failure block a merge.
+# REQUIRED STATUS CHECKS ON MASTER: `changes`, `lint` and `build`, all three of
+# which report on a pull request run. All three, not just `build`: a job skipped
+# because a dependency FAILED still satisfies a required check, so `build`'s
+# `needs: [changes, lint]` does not by itself make a failure in either one block
+# a merge. `changes` is on the list because `build` and `promote` both hang off
+# it, so without it a transient failure in the files lookup would skip `build`,
+# satisfy the check, and let a pull request merge with no image pushed - leaving
+# the merge run nothing to promote.
 #
 # NO workflow_dispatch. Every input is pinned and the lockfile is committed, so
 # a manual run would rebuild what the pull request already pushed; retrying a
