@@ -754,8 +754,17 @@ No dashboard JSON is committed.
 That last panel is now `filter(fn: (r) => r._field =~ /^type_[0-9]+$/)`, which deleted the 43-entry `TYPES` literal the old one carried, and empty is its expected state.
 Height reads `range(start: 0)` for the stat tiles' reason: it is typed by hand a handful of times in a lifetime, so on the default ninety-day window the panel is blank on every load.
 
-`withings-body` (uid `withings-body`) holds the composition stack with display names as panel overrides, segmental mass by limb for each of the three families, left–right symmetry tiles over a real time axis, a `Weigh-ins` table of every group in the dashboard window with sparse columns, newest first, and the extracellular share of total body water.
+`withings-body` (uid `withings-body`) holds the composition stack with display names as panel overrides, `Mass by limb`, left–right symmetry tiles over a real time axis, a `Weigh-ins` table of every group in the dashboard window with sparse columns, newest first, and the extracellular share of total body water.
 The symmetry tiles no longer substitute `now()` for a time axis, because one weigh-in is now one row.
+
+`Mass by limb` is one Bar chart panel, horizontal and stacked, replacing the three separate bar gauges it started as.
+Its query takes the latest value of all fifteen segmental fields and pivots them into one row per limb with columns `limb`, `fat_mass`, `muscle_mass` and `other_lean`, in anatomical order, so each bar is one limb and the three components stack along it.
+`other_lean` is fat-free mass minus muscle mass, which at whole-body level is exactly `bone_mass` — 67.09 less 63.75 is 3.34 — so the decomposition is the vendor's own.
+
+**Per limb, though, `other_lean` goes negative, and that is Withings' data rather than a bug here.**
+Both families sum correctly to their whole-body totals, but Withings distributes muscle and fat-free mass differently across the segments — more muscle to the limbs, more fat-free to the torso — so segmental muscle mass exceeds segmental fat-free mass everywhere except the torso.
+Measured on 2026-09-04: `other_lean` is −0.22 for each arm, −0.64 and −0.62 for the legs, and +5.05 for the torso, and those five sum to 3.35, which is the whole-body bone mass again.
+So a limb's bar does not read as "total mass" the way the whole-body figures would suggest; the torso's does.
 
 **No panel buckets or averages.**
 Both scales can weigh on the same day and both readings must stay visible, so no panel carries `aggregateWindow`: on a wide dashboard window `v.windowPeriod` grows past a day and `fn: mean` would silently merge two weigh-ins into one point.
@@ -768,6 +777,7 @@ Key on the model where it exists and fall back to the `deviceid`, which is compl
 **A query that executes and returns rows is not a working panel.**
 Verify every panel through `/api/ds/query` and check the frame shape the panel type expects — one frame per series for bar gauges and stacked charts, no helper columns left in the output, and a display name on every series — because a bar gauge fed one frame with two numeric fields returns rows perfectly happily and draws the wrong picture.
 Executing all nineteen panel queries on 2026-09-04 returned rows from every one and still missed four defects: the three by-limb bar gauges drew `_value` and the `anatomical_order` sort key instead of five limbs, both symmetry panels and the water-share panel legended `Value` because a `map` building a bare `{_time, _value}` record carries no label, and the height panel rendered blank on every load.
+The shape a panel needs is a property of the panel type, so it is worth naming in the query's own comment: `Mass by limb` hands `barchart` exactly one string column for `xField` and three numeric ones, and a helper column left in that output would become a fourth stacked series.
 
 **No dedupe panel and no readings-per-scale panel.**
 Neither query carries an alert, and a panel with no alert is not a detector.
