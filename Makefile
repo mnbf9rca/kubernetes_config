@@ -434,6 +434,11 @@ check-vm-scripts:
 # multi-line output: that shipped to master on 2026-09-04 and broke the first
 # image push with a syntax error.
 #
+# The second line is the same gap one level down: actionlint lints WORKFLOWS,
+# and does not reach a composite action's `run:` bodies even when a workflow
+# references it (verified). So .github/actions/*/ keeps its shell in real script
+# files and shellcheck reads them directly.
+#
 # NOT in the diff-*/apply-* preflight: a workflow renders nothing and reaches
 # no cluster, so gating an apply on it would be noise. It runs in the `lint`
 # job of .github/workflows/influxdb-mcp-image.yml on every push and pull
@@ -441,6 +446,7 @@ check-vm-scripts:
 .PHONY: check-workflows
 check-workflows:
 	@actionlint -shellcheck=shellcheck .github/workflows/*.yml
+	@shellcheck .github/actions/*/*.sh
 	@echo "OK: workflows lint clean"
 
 .PHONY: require-vars
