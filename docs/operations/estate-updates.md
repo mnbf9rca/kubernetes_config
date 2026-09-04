@@ -18,6 +18,16 @@ Which signal lives in healthchecks.io and which in uptime-kuma, and why, is in [
 The rule that keeps them apart: **a floating tag means keel; a pinned tag means Renovate; never both.**
 A `match-tag: "true"` annotation on a semver pin refreshes the digest only, so a pinned image carrying keel annotations is frozen while looking covered.
 
+**One image in this estate is built here, and its update has no apply step.**
+`ghcr.io/mnbf9rca/influxdb-mcp-server` is built from `homelab/health/mcp/` by this repository's one workflow, and the Deployment follows its floating `stable` tag under keel.
+So a Renovate pull request against those build inputs — the `node` base image, or the pinned `influxdb-mcp-server` package with the lockfile that moves with it, grouped as **influxdb-mcp build inputs** — **deploys nothing when it merges**.
+The pull request's build makes and signs the image, its merge promotes that digest to `stable`, and keel delivers it on its six-hour poll.
+Confirm both the pull request's build and the merge's `promote` run went green, and move on: there is no `make apply-homelab` for that change and `make diff-homelab` is empty for it.
+Everything else in `homelab/health/` is still pinned, and its bumps still need the ordinary apply.
+
+**That group automerges**, so in the ordinary case a session never sees the pull request at all: it merges itself once its three required checks and the three-day `minimumReleaseAge` wait have passed.
+What a failed automerge leaves behind is an **open Renovate pull request carrying a red check** — so treat one of those as the signal, and read the failing check rather than merging past it.
+
 ## When to run a session out of band
 
 An advisory in the FreshRSS `security` category that names a component this estate runs triggers a session **now**, not at the next calendar slot.
@@ -290,7 +300,7 @@ Why that check is separate from `estate-update`, and what to read when it goes r
   Compensated by keel cadence, session cadence and the advisory feeds above.
   A gap, documented rather than papered over.
 - **No automated applies.**
-  Nothing merges or applies unattended.
+  Nothing applies unattended, and the one thing that merges unattended is the `influxdb-mcp build inputs` group described above — which renders no manifest and so reaches no cluster through an apply.
   An auto-applier would need a permanent kubeconfig and a 1Password token on an always-on runner, and it could not judge whether a diff line reverts another branch's deployed work.
 - **Keel-managed SQLite applications get no pre-update dump.**
   The nightly restic sweep is the accepted floor.

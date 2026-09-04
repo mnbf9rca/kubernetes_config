@@ -13,10 +13,16 @@ Phase 2 (facade, records store, multi-person registry) is scoped there, not here
 
 ## Image policy
 
-**No keel in this namespace.**
+**No keel in this namespace, with one named exception.**
 This is a data pipeline; auto-upgrading it is not wanted.
 Every image is version- or digest-pinned and Renovate proposes bumps instead.
+
+The exception is `influxdb-mcp`, which runs the floating tag `stable` on an image built from this repository's own inputs and carries the full keel annotation set.
+It is a stateless HTTP server with no data to migrate, and the reviewed decision is the build input rather than the roll — Renovate proposes a change to `homelab/health/mcp/`, its pull request builds and signs the image, the merge promotes that same image, and keel delivers it within six hours.
+The exemption is written down in three places rather than left silent: `FLOATING_EXEMPT` in `scripts/check-renovate-scope.py`, the `health` namespace comment in `homelab/bootstrap/namespaces.yaml`, and the `pinDigests: false` path in `renovate.json`.
+
 Renovate is scoped to `homelab/**` and `vps/**`, with `pinDigests` on at the top level (see `renovate.json`); a `homelab/health/**` packageRule groups this namespace's bumps as `health stack` and keeps them off automerge.
+The one rule that does automerge is `influxdb-mcp build inputs`, over `homelab/health/mcp/**`, because that pull request's own build is the whole test and its merge is the whole deploy — see [Where the image comes from, and the guidance tool](#where-the-image-comes-from-and-the-guidance-tool).
 
 `namespaces.yaml` marks `health` as Pod Security Admission (PSA) `baseline` (nothing here needs hostPath/hostNetwork), but every workload already trips `restricted`-level PSA warnings — a hardening pass to `restricted` is a queued follow-up.
 
@@ -141,16 +147,53 @@ The old gate was committed here and failed closed (no Pomerium → 502).
 The new gate is Access dashboard/API state tracked nowhere in this repo: delete or disable the app and cloudflared serves the authless origin raw to the internet, silently — and a rebuild from this repo (`make apply-homelab` + `make route-health-dns`) republishes the hostname with no guarantee the app still exists.
 After any rollback, rebuild or account-side change, `curl -s -o /dev/null -D - https://mcp.cynexia.com/mcp` must return 401 before the hostname is trusted; the `Data MCP` uptime-kuma monitor is pinned to exactly `["401"]` so a naked origin alarms ([uptime-kuma.md](uptime-kuma.md)).
 
-In-cluster exposure is unchanged in kind from the 2026-08 sidecar era: flannel does not enforce NetworkPolicy, and upstream `ghcr.io/mnbf9rca/influxdb-mcp-server` (built multi-arch from source — there is no official image) binds `0.0.0.0` with no `--bind` flag, so pod-IP:3000 was reachable from any pod even as a sidecar; the restored Service only re-adds DNS discoverability.
+In-cluster exposure is unchanged in kind from the 2026-08 sidecar era: flannel does not enforce NetworkPolicy, and `ghcr.io/mnbf9rca/influxdb-mcp-server` (built here from source for **`linux/amd64` only** — there is no official image, and the workflow's single `platforms: linux/amd64` publishes a single-platform manifest, so an arm64 node would fail to pull it) binds `0.0.0.0` with no `--bind` flag, so pod-IP:3000 was reachable from any pod even as a sidecar; the restored Service only re-adds DNS discoverability.
 Any in-cluster pod can query InfluxDB read-only through it.
 Documented in `influxdb-mcp.yaml`.
 Queued: a bind-flag patch, and reinstating a NetworkPolicy if the CNI is ever swapped to Cilium.
 
-**The MCP tools do not reveal the InfluxDB org.**
-`query-data` requires an `org` parameter, but nothing tool-visible names it, and bucket discovery is exposed only as MCP resources, which agent frameworks generally do not surface.
-Agents therefore need the org name (`cynexia`) supplied out-of-band — a Hermes skill provides it.
+**The `how-to-use-health-data` tool is what reveals the InfluxDB org.**
+`query-data` requires an `org` parameter, and no upstream *tool* names it: bucket and org discovery are exposed only as MCP **resources**, which agent frameworks — Hermes included — generally never surface to the model.
+That is why the guidance is a tool and not a resource, and it is why re-minting the read token with `--read-orgs` makes `influxdb://orgs` answer correctly without closing the discovery gap.
+Nothing was blocked meanwhile either: `query-data` accepts the org **id** as well as the name, and the id is on every bucket in `influxdb://buckets`.
 With the org known, agents are self-sufficient through `query-data`: `buckets()` lists the readable buckets, and `import "influxdata/influxdb/schema"` with `schema.measurements(bucket: ...)`, `schema.measurementFieldKeys(...)` and `schema.measurementTagKeys(...)` discovers the schema.
+The out-of-band Hermes skill that used to supply the org is deleted: it reached one profile on one VM, and the tool reaches every client.
 Server-side improvements (an org default, a list-buckets tool, MCP instructions) are tracked in this repo's issue #47.
+
+### Where the image comes from, and the guidance tool
+
+The Deployment runs `ghcr.io/mnbf9rca/influxdb-mcp-server:stable`, built from `homelab/health/mcp/` by `.github/workflows/influxdb-mcp-image.yml` — the only workflow in this repository.
+
+There is **no fork**.
+Upstream `idoru/influxdb-mcp-server` 0.2.0 runs its source directly and exports nothing, so there is no module to import, subclass or wrap.
+A Node `--import` hook (`hook.mjs`) runs before the package does and patches `McpServer.prototype.connect` to register one extra zero-argument tool, `how-to-use-health-data`, then calls through.
+The upstream package is unmodified and installed by `npm ci` from a committed lockfile: the exact `0.2.0` pin fixes one package, and the lockfile is what fixes `@modelcontextprotocol/sdk`, which upstream declares by a caret range and which the hook patches.
+
+Nothing in this repository can run a JavaScript test, so the build is the hook's only check: the pull-request job builds the image, runs it over stdio and asserts the tool is in its `tools/list` before it pushes and signs it as `sha-<head sha>`.
+
+**The guide is not in the image.**
+`homelab/health/scripts/health-data-guide.md` reaches the pod through its own `configMapGenerator` entry, mounted read-only at `/guide`, with `GUIDE_PATH=/guide/health-data-guide.md` in the container's environment.
+The server reads that file **on every call**.
+Three consequences, all wanted: a guidance edit needs no image rebuild, the ConfigMap's content-hash suffix rolls the Deployment so the mounted copy is never stale, and a wrong path fails one tool call with a readable error instead of wedging the server at boot.
+
+**A tool, not a resource and not a prompt.**
+The claude.ai connector never shows resources to the model and its prompts are broken; ChatGPT reads tools.
+A tool is the only surface every client sees.
+That is the same argument that explains why re-minting the read token made `influxdb://orgs` correct without closing the discovery issue behind it: `influxdb://orgs` is a resource, and most agent frameworks never surface one.
+
+**Delivery is keel's.**
+Merging a Renovate pull request against `homelab/health/mcp/` deploys nothing by itself: it renders no manifest, the pull request's own build made and signed the image, the merge promotes that digest to `stable`, and keel rolls it within six hours.
+There is no apply step for that change, and looking for one is the mistake this paragraph exists to prevent.
+
+**Nothing builds outside a pull request.**
+The merge run resolves `sha-<head sha>` to a digest, verifies the signature on that digest and points `stable` at it with `crane tag` — it builds nothing and signs nothing, so what `stable` delivers is bit-for-bit what was reviewed.
+There is no `push:` trigger either, so a direct push to master promotes nothing at all and does so silently, because no run happens.
+
+**The `influxdb-mcp build inputs` group automerges**, so a routine bump normally has no human step: Renovate merges it once its three required checks — `changes`, `lint` and `build` — and the repository's three-day `minimumReleaseAge` wait have passed.
+A failed automerge is therefore what you see rather than a green one: **an open Renovate pull request carrying a red check**, waiting for a person.
+
+An upstream pull request adding a generic `GUIDE_PATH`-driven tool to the server itself is drafted and **not sent**; it needs the operator's approval before it is published anywhere.
+If it ever lands, the hook and this image both go and the Deployment returns to an upstream image with one environment variable.
 
 ## InfluxDB bootstrap
 
@@ -183,6 +226,8 @@ influx auth create -o cynexia --read-buckets --read-orgs -d "mcp+grafana read-on
 `--read-buckets` takes no id and grants read on **all** organization buckets, present and future; `--read-orgs` grants organization-metadata read, which is what makes the MCP server's `influxdb://orgs` resource answer instead of returning `{"orgs":[]}`.
 
 **After that mint, no bucket addition ever touches this token again.** The three per-bucket bootstrap targets that preceded it existed almost entirely to re-mint it with one more `--read-bucket` id, and they are deleted.
+
+The token it replaced — auth id `114494b86671e000`, the old per-bucket read token — was **deleted on September 4, 2026**, after the new value had been pasted, applied, rolled to the two Deployments and verified. That ordering is the one below, and it is the reason the old auth outlived the new one by a few minutes rather than the other way round.
 
 It has **three** consumers, two of which need a restart when the value changes: `grafana` and `influxdb-mcp` are Deployments and are restarted; `homelab/health/ingest-freshness.yaml` is a CronJob and picks the new value up on its next scheduled run.
 
@@ -402,7 +447,9 @@ It never reports a dump it did not watch finish.
 `kubectl create job --from=cronjob/influx-backup` sets that owner and a `cronjob.kubernetes.io/instantiate: manual` annotation, so a by-hand dump is as visible to the guard as a nightly one and you can name it anything.
 The one thing it cannot see is a Job someone hand-rolls with a copied pod spec and no owner reference, which no procedure here produces.
 
-**Other pinned images in this namespace have no independent rollback story** — the apple-health-ingester, garmin-fetch-data, influxdb-mcp and the cloudflared sidecar are all stateless, so their rollback *is* a tag revert and they need no dump.
+**Other images in this namespace have no independent rollback story** — the apple-health-ingester, garmin-fetch-data, influxdb-mcp and the cloudflared sidecar are all stateless, so they need no dump.
+For the three pinned ones the rollback *is* a tag revert.
+`influxdb-mcp` is the exception in mechanism, not in stakes: it follows the floating `stable` tag, so its rollback is to revert the build input in a pull request and let that pull request's merge promote the older image — pointing the Deployment at a `sha-` tag instead would be a pinned reference under a full keel annotation set, which `check-renovate-scope` reads as the frozen state and hard-fails.
 Only InfluxDB and Grafana hold state here.
 
 ## Cloudflare analytics ingest
@@ -544,7 +591,7 @@ Weight arrives here and in `apple_metrics`, deliberately, and the two are not de
 |---|---|
 | Endpoint | `POST https://wbsapi.withings.net/measure`, `action=getmeas`, `category=1` |
 | Bucket | `withings`, **infinite** retention |
-| Measurement | `withings_measure`; tags `person`, `type`, `type_name`, `deviceid`, plus `unit`, `position`, `position_name`, `modelid` and `model` where they apply; fields `grpid` (string) and `value` (float) |
+| Measurement | `withings_measure_group`, one point per measure group; tags `person`, `grpid`, `deviceid` and `model`; one float field per measure, named by the rule below. No string field |
 | Image | `python:3.14-alpine3.22`, digest-pinned to the same reference `cloudflare-analytics` carries. No keel; Renovate proposes bumps under the "health stack" group |
 | Deadlines | `startingDeadlineSeconds: 600`, `activeDeadlineSeconds: 600`, `ttlSecondsAfterFinished: 259200` |
 | Monitoring | The `Withings-ingest` uptime-kuma push monitor: `up` on exit 0, `down` otherwise |
@@ -601,15 +648,16 @@ Each run reads `max(_time)` over the `withings` bucket, so the token file holds 
 ```flux
 from(bucket:"withings")
   |> range(start: 1970-01-01T00:00:00Z)
-  |> filter(fn: (r) => r._field == "value")
+  |> filter(fn: (r) => r._measurement == "withings_measure_group")
   |> group()
   |> max(column: "_time")
   |> keep(columns: ["_time"])
 ```
 
-**The `filter` before the `group` is load-bearing and must not be tidied away.**
-This bucket carries a float field, `value`, and a string field, `grpid`, so a bare `group()` over every field merges tables whose `_value` types differ and InfluxDB answers `schema collision: cannot group float and string types together`.
-That error body parses as "no data" to a naive reader.
+**The measurement filter is load-bearing and the field filter is gone.**
+The old query filtered `_field == "value"` because the bucket then held a float field and a string field, and a bare `group()` over both answered `schema collision: cannot group float and string types together` — an error body that parses as "no data" to a naive reader, which is how `ingest-freshness` reported STALE for 25 straight days.
+The wide schema has no string field, so nothing needs filtering out, and a `_field == "value"` filter would now match nothing at all and read as an empty bucket on every run.
+The measurement filter replaces it for a different reason: it scopes the watermark to this measurement, which is what made the first run after the rename find an empty result and page the whole account into the new shape.
 
 **A failed query is not an empty one.**
 An empty result means the bucket has never been written and the run seeds from `FIRST_RUN_START` (2009-01-01).
@@ -624,51 +672,93 @@ Overlapping windows are harmless, because an InfluxDB write of an identical meas
 
 ### Schema
 
-One measurement with a `type` tag, not one measurement per type.
-The type space is open: newer hardware adds codes, and `meastypes` is deliberately not sent, so an unrecognized code still arrives and is still written.
-With one measurement an unknown code is one more tag value in a series that already exists, and every panel is a filter on `type`.
+**One measurement, `withings_measure_group`, one point per measure group** — one weigh-in, one typed height, or one cuff reading.
+The name is new so the old and new shapes can never share a measurement.
 
-`grpid` is a field and `deviceid` is a tag.
-`deviceid` has a handful of values for the life of the account; `grpid` has one per weigh-in forever, so as a tag it would multiply series cardinality by the number of weigh-ins.
+Three faults in the shape it replaced, in the order they mattered.
+A pivot on `type_name` returned one of five segmental positions as the whole-body value, silently, and an LLM writing one Flux string per question wrote exactly that query.
+`grpid` was a string field, so there was no per-reading entity to filter or group on and both dashboards fabricated row keys.
+And the string field poisoned every aggregate: an ungrouped `max(column: "_time")` failed with `schema collision`, which reads as "no data" to a naive caller.
 
-Six further tags ride alongside the numeric code, so an MCP caller or a Grafana query needs no copy of the code table.
+Four tags, **all group-level**, so editing `TYPES` moves a field key and never a point's identity:
 
-- `type_name` — the measure's name, or `unknown` for a code the table does not hold.
-  An unknown code is still written: dropping one would lose the reading, and newer firmware invents codes.
-- `unit` — the unit the spec itself states, and **absent where the spec states none** rather than guessed.
-  Twelve of the 43 codes are unitless there, so a query must handle the tag being missing.
-  Five more that the spec leaves blank — 170, 173, 175, 226 and 227 — carry a unit the operator read off the Withings app on 2026-09-03 rather than one the spec states, and an `app-observed 2026-09-03` comment on each `TYPES` line marks which they are.
-- `position` — the measure's `position` field as a string, present only when the measure carries one.
-  Types 173, 174 and 175 are segmental: they repeat a type per body position, enumerated 0 to 28.
-- `position_name` — that position's name, or `unknown` for a code the table does not hold, written beside `position` and absent with it; the enumeration is transcribed into the `POSITIONS` constant from the spec's `components.schemas.measure_object.properties.position`, which lists no code 7.
-  Code 7 is `whole_body`, and it is the one entry the spec does not supply: it is named `WHOLE_BODY` in the `MeasurementPosition` enum of the `aiowithings` library (`github.com/joostlek/python-withings`, `models.py`), and the account's own data corroborates it — extracellular and intracellular water (types 168 and 169) arrive at position 7 and sum to hydration (type 77).
-- `modelid` — the measure group's device model code as a string, read from the group's `modelid` (the spec spells the same field `model_id` on `measuregrp_object` and `modelid` on `activity_object`, so the script reads both names) and absent where the group carries neither.
-- `model` — the device model's name, taken verbatim from the group's own `model` string, which `components.schemas.measuregrp_object.properties.model` enumerates as names rather than codes, so no table is transcribed; it is absent where the group sends no string.
+- `person` — the `PERSON` constant.
+- `grpid` — the group's own id, the per-reading entity. A group without one raises rather than being written: as a tag, an absent value is a point that cannot be told apart from the next one.
+- `deviceid` — the device, or the literal `unknown` for a manual entry.
+- `model` — the model name exactly as the API sent it, and absent where the group sends none. Groups from before 2022 carry none, and no backfill step invents one.
 
-The source is Withings' own `openapi.yaml` at `developer.withings.com`, `info.version` 2.0, the `meastype` parameter description.
-The table lives as the `TYPES` constant in `homelab/health/scripts/withings-ingest.py`, and each run logs the count of unknown codes it saw to the pod log — a count only, and not to the heartbeat, whose value allowlist admits neither the count nor the codes.
+`modelid` is **not** written: it is the same fact under a second name, on a point `deviceid` already keys.
+**Row keys in queries and dashboards use `deviceid`, never `model`**, because a `grpid` written once with `model` and once without would leave two series and split the device whose older groups carry none.
+The guide's dedupe query detects exactly that, and a wipe-and-backfill fixes it.
 
-The numeric `type` tag is unchanged and is still the data every panel filters on.
-Type 130's value is a classification integer 0 to 13, not a measurement; it is still written as the float `value`, so a panel maps the number rather than reading a unit.
+**The naming rule.** One float field per measure, holding `scaled(value, unit)`:
 
-This reverses the earlier decision that names were presentation and belonged in a Grafana value mapping.
-The mapping served Grafana and nothing else, and the MCP connector and any ad-hoc Flux query were left holding a code table they had no copy of.
+```
+name(code)      = TYPES[code][0]                                if the code is known, else "type_<code>"
+suffix(pos)     = POSITIONS[pos]                                if the position is known
+                  "position_<pos>"                              if it is not
+                  "position_none"                               if the measure carries no position
+segmental(code) = name(code) ends in "_segments"
+repeated(code)  = this group holds more than one measure with this code
+field           = name(code)                                    if neither
+                = name(code) minus "_segments" + "_" + suffix(pos)  if either
+```
 
-**The whole measurement was deleted and re-backfilled on September 3, 2026**, so no untagged point sits beside a tagged one.
-The wipe was a `POST /api/v2/delete` over `_measurement="withings_measure"` with the bucket's own read-write token, then one manual run of the CronJob, which re-paged the account from 2009 because the resume query then found an empty bucket.
+**Repetition is read from the group, never from a hard-coded set of codes**, so a new segmental code needs no edit: five measures of an unknown code 176 become `type_176_right_arm` and its four neighbours.
+`position` is consulted only for a repeated or per-position code, which discards the electrode path that whole-body types carry — types 168 and 169 arrive at position 7, `whole_body`, and are still written under their bare names.
+A `TYPES` name ending `_segments` is per-position by construction and takes a suffix even when it arrives alone, because a partial reading would otherwise write a bare `fat_free_mass_segments`: a key in neither vocabulary, with its position discarded and no duplicate to stop the run.
+The `_segments` strip happens in `field_name`; `TYPES` and `POSITIONS` are not edited to support it.
 
-Accepted residual: two groups sharing a measurement date, a type and a device collapse to one series and one timestamp, so the later write wins.
-That needs two weigh-ins recorded at the same second on the same device.
+**The residue conventions.** An unknown code is written as `type_<code>`; an unknown position produces the suffix `_position_<n>`, so two unknown positions cannot collide; and a repeated code whose measures carry no position at all takes `_position_none`.
+No name in `TYPES` matches `^type_[0-9]+$`, so residue and named fields cannot collide.
+Naming a code later moves its field key, so historical points keep `type_<n>` and the column splits visibly — the wipe that a rename used to force is now optional.
+Each run logs the count of unknown codes to the pod log, a count only, never to the heartbeat, whose value allowlist admits neither the count nor the codes.
+
+**The duplicate stop, and its deliberate wedge.**
+A duplicate field key inside one group raises `IngestFailed`.
+Two cases reach it and only two: the same type code at the same position twice in one group, and a repeated code where more than one measure carries no position.
+A new segmental code cannot reach it, because repetition is read from the group's shape.
+The failure is loud and it wedges on purpose: `points()` raises, so no line is written for **any** group in that run; `STAGE` is still `fetch`, so the heartbeat reads `verdict=failed failure=fetch`, which is correct, because a group that cannot be shaped is a fault in what the fetch returned; the job exits 1 and the `Withings-ingest` push monitor goes `down`; and nothing having been written, the resume point does not advance, so every later run fails the same way, every 15 minutes, until a person looks.
+There is nothing to clean up afterwards — the write never happened — and the repair is a `TYPES` or `POSITIONS` edit, or a naming-rule fix, followed by a normal run.
+Accept it as a new way the job fails: it is two lines of code, and the alternative is a silently overwritten reading.
+
+**Where the tables live.** `TYPES` and `POSITIONS` in `homelab/health/scripts/withings-ingest.py` are the source of record, and there is **no** copy of them in this document by design — the units-correction day of September 3, 2026 corrected five in one commit, and a table here is the copy that day would have left stale.
+There is one other copy, `homelab/health/scripts/health-data-guide.md`, and it cannot be deleted: its readers are LLMs holding an MCP connection, with no checkout of this repository and no file system to read `TYPES` from.
+A test method in `homelab/health/scripts/test_withings_ingest.py` parses that guide's units table and asserts every field name, unit and position in it against `TYPES` and `POSITIONS`, and `make check-script-lint` runs it as a `diff-*` and `apply-*` preflight.
+
+**Provenance, in three tiers**, carried as comments on the `TYPES` lines: `spec` for all 43 codes, whose source is the documentation bundle Withings actually serves (`https://developer.withings.com/assets/js/main.8ae1c0ad.js` — `openapi.yaml` is no longer served as a file); `app-observed` for the five units the operator read off the Withings app because the spec states none; and `third-party` for `POSITIONS[7] = whole_body`, from the `aiowithings` enum and corroborated by the data.
+Checked September 4, 2026: 43 codes each side, exact parity.
+A spec **name** can change under a stable **code** — 196 was "Electrodermal activity feet" and is "Nerve Response Score (NRS)" today — and under the wide schema the numeric code leaves the data entirely, so `TYPES` is the estate's only code-to-name record.
+`https://developer.withings.com/llms.md` is **not** a spec: it puts vascular age at code 140 where the spec says 155.
+The four speculative nerve and electrodermal codes (158, 159, 197, 198) are deliberately not added — the account's two scales cannot emit them, and an unknown code is written as `type_<n>` and loses nothing.
+
+**Cardinality, and the condition that would withdraw this shape.**
+Series equal weigh-ins: about 460 today, about 730 a year at two readings a day.
+That is roughly 70 times below the `cloudflare` bucket's series count.
+**High-rate data — a sleep mat, continuous blood pressure — goes in its own measurement without a `grpid` tag.**
+That withdrawal condition stands.
+
+**Idempotent re-ingest.** Identity is `person,grpid,deviceid,model` plus `_time`, so an identical rerun overwrites the same point and `OVERLAP_SECONDS = 7200` is unchanged.
+Editing `TYPES` moves a field key, not an identity.
+
+**The old `withings_measure` measurement was deleted** once the backfill verified, in a `POST /api/v2/delete` over the bucket with its own read-write token.
+There was no dual-live window: the data is 460 points, the ingest is idempotent, and the real rollback is `git revert`, wipe, re-run.
 
 ### Dashboard
 
-Grafana holds a hand-built dashboard at uid `withings`, titled **Withings** and tagged `health`, added September 2, 2026.
-It is **not provisioned from this repo**, by design: it lives in `grafana.db` like every other dashboard here, so the nightly SQLite dump described under [The Grafana dump](#the-grafana-dump) is what captures it.
-Eight stat tiles carry the latest reading for weight, fat ratio, fat mass, muscle mass, hydration, bone mass, heart rate and blood pressure — each over `range(start: 0)`, so a tile is never blank merely because the cuff has not been used inside the dashboard's 90-day window — then time series for the same measures, a collapsed **Other** row holding height, and a table of any type code present in the bucket that no panel covers, showing each code's `type_name` beside it.
-That last table is the only thing that would notice a code newer firmware invents, and empty is its expected state.
-A second hand-built dashboard, uid `withings-body`, titled **Withings body composition**, was built 2026-09-03.
-It holds the current-state row, the weight decomposition stack, weight and total body water history, the water split with the extracellular share, the stacked fat-and-muscle-by-segment bars, and the body-shaped segment tiles.
-Like the first dashboard, it lives in `grafana.db` and is covered by the same nightly SQLite dump; its design notes are local-only under the session scratchpad and are not in this repo.
+Two hand-built dashboards, both deleted and rebuilt for the wide schema on the day it shipped.
+Neither is provisioned from this repository, by design: both live in `grafana.db` like every other dashboard here, so the nightly SQLite dump described under [The Grafana dump](#the-grafana-dump) is what captures them.
+No dashboard JSON is committed.
+
+`withings` (uid `withings`) holds weight over time per device, latest-reading stat tiles for weight, fat ratio, fat mass, muscle mass, hydration, bone mass, heart rate and blood pressure — each over `range(start: 0)`, so a tile is never blank merely because the cuff has not been used inside the dashboard window — a collapsed **Other** row holding height, and an unknown-codes panel.
+That last panel is now `filter(fn: (r) => r._field =~ /^type_[0-9]+$/)`, which deleted the 43-entry `TYPES` literal the old one carried, and empty is its expected state.
+
+`withings-body` (uid `withings-body`) holds the composition stack with display names as panel overrides, segmental mass by limb for each of the three families, left–right symmetry tiles over a real time axis, the latest weigh-in as a one-row table with sparse columns, and the extracellular share of total body water.
+The symmetry tiles no longer substitute `now()` for a time axis, because one weigh-in is now one row.
+
+**No dedupe panel and no readings-per-scale panel.**
+Neither query carries an alert, and a panel with no alert is not a detector.
+Both stay in `homelab/health/scripts/health-data-guide.md`, which is where the question actually gets asked.
 
 ### First-run setup
 
