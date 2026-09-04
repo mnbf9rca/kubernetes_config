@@ -1,0 +1,172 @@
+# The only workflow in this repository. It builds ghcr.io/mnbf9rca/influxdb-mcp-server
+# from homelab/health/mcp/ and gates its own inputs on a pull request.
+#
+# NO workflow_dispatch. Every input is pinned and the lockfile is committed, so
+# a manual run would rebuild what the last master build already pushed;
+# retrying a failed push is GitHub's own re-run button on the run that failed.
+#
+# A ROLLBACK IS NOT A TAG EDIT. check-renovate-scope reads a pinned reference
+# under a complete keel annotation set as the frozen state and hard-fails
+# apply-homelab, so pointing the Deployment at sha-<n> means stripping the keel
+# annotations in the same emergency edit. The rollback is what every other
+# update here does: revert the build input, let the master build make the
+# image, and keel delivers it.
+#
+# THE TRIGGERS CARRY NO paths: FILTER AND THE PATH CONDITION LIVES IN THE
+# `changes` JOB, so that `build` can be a required status check on master.
+# GitHub treats a job skipped by its own `if:` as satisfying a required check,
+# but a workflow that a paths filter never triggered reports nothing at all -
+# and a required check that never reports blocks the pull request forever.
+# So the workflow runs on every push to master and every pull request, and
+# `changes` decides whether `build` does any work. The required check on
+# master is the `build` job of this workflow.
+name: influxdb-mcp image
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+# contents: read, packages: write, and id-token: write for keyless signing, and
+# nothing else. Login uses the job's own GITHUB_TOKEN; no secret is added to
+# the repository - the signing key is an ephemeral OIDC identity, not stored.
+permissions:
+  contents: read
+  packages: write
+  id-token: write
+
+jobs:
+  # The paths filter the triggers no longer carry. Plain git and grep: the
+  # comparison is a two-dot diff on a push and a three-dot diff against the
+  # merge base on a pull request, and a push with no usable `before` - a new
+  # branch, or a force push that orphaned the old tip - counts as changed.
+  changes:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      mcp: ${{ steps.filter.outputs.mcp }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Decide whether the image inputs changed
+        id: filter
+        # Through the environment, not through ${{ }} interpolation into the
+        # script body.
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_REF: ${{ github.base_ref }}
+          BEFORE: ${{ github.event.before }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT" = "pull_request" ]; then
+            files=$(git diff --name-only "origin/$BASE_REF...HEAD")
+          elif [ -n "$BEFORE" ] && [ "$BEFORE" != "null" ] \
+               && git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
+            files=$(git diff --name-only "$BEFORE..$SHA")
+          else
+            echo "no usable before-sha ('$BEFORE'): treating as changed"
+            echo "mcp=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "changed files:"
+          printf '%s\n' "$files"
+          # grep, not grep -q: -q closes the pipe on the first match, and under
+          # pipefail printf's EPIPE would then read as "no match".
+          if printf '%s\n' "$files" \
+             | grep -E '^(homelab/health/mcp/|\.github/workflows/influxdb-mcp-image\.yml$)' \
+             > /dev/null; then
+            echo "mcp=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "mcp=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  build:
+    needs: changes
+    if: needs.changes.outputs.mcp == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: docker/setup-buildx-action@v4
+
+      - name: Compute the tags
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ghcr.io/mnbf9rca/influxdb-mcp-server
+          # `stable` is what the cluster runs and keel follows. `sha-<short>`
+          # says which commit's inputs an image came from, and comes from the
+          # workflow's own commit context with no parsing.
+          tags: |
+            type=raw,value=stable,enable={{is_default_branch}}
+            type=sha
+
+      # Built once, loaded into the local daemon, and asserted BEFORE anything
+      # is pushed - on master as well as on a pull request.
+      - name: Build
+        uses: docker/build-push-action@v7
+        with:
+          context: homelab/health/mcp
+          platforms: linux/amd64
+          load: true
+          push: false
+          tags: influxdb-mcp-server:ci
+
+      # The one failure mode the hook has: the SDK moved and the patch no
+      # longer registers. Nothing in this repository can run a JavaScript test,
+      # so this build is the hook's only check. stdio, not --http, because that
+      # needs no session id and no SSE parsing. The InfluxDB environment is
+      # dummy: the assertion is the tool list, not a query.
+      - name: Assert the guidance tool is registered
+        run: |
+          set -euo pipefail
+          printf '%s\n' \
+            '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"ci","version":"0"}}}' \
+            '{"jsonrpc":"2.0","method":"notifications/initialized","params":{}}' \
+            '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}' \
+            | timeout 60 docker run -i --rm \
+                -e INFLUXDB_URL=http://127.0.0.1:8086 \
+                -e INFLUXDB_TOKEN=not-a-real-token \
+                -e INFLUXDB_ORG=ci \
+                influxdb-mcp-server:ci > tools.json || true
+          cat tools.json
+          grep -q 'how-to-use-health-data' tools.json
+
+      - name: Log in to GHCR
+        if: github.event_name == 'push'
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install cosign
+        if: github.event_name == 'push'
+        uses: sigstore/cosign-installer@v4.1.2
+
+      # Keyless. The signature is made with the job's own OIDC identity and
+      # recorded in the public Rekor transparency log, so there is no key to
+      # store and none to rotate. It signs the DIGEST, so one signature covers
+      # both tags and survives keel rewriting the Deployment's digest.
+      #
+      # NOTHING VERIFIES IT AT ADMISSION - neither cluster runs a policy
+      # controller - so today it is provenance checked by hand:
+      #
+      #   cosign verify ghcr.io/mnbf9rca/influxdb-mcp-server:stable \
+      #     --certificate-identity-regexp \
+      #       '^https://github.com/mnbf9rca/kubernetes_config/' \
+      #     --certificate-oidc-issuer https://token.actions.githubusercontent.com
+      - name: Push and sign
+        if: github.event_name == 'push'
+        run: |
+          set -euo pipefail
+          for tag in ${{ steps.meta.outputs.tags }}; do
+            docker tag influxdb-mcp-server:ci "$tag"
+            docker push "$tag"
+          done
+          cosign sign --yes \
+            "$(docker inspect --format '{{index .RepoDigests 0}}' influxdb-mcp-server:ci)"

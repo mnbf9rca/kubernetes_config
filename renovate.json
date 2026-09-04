@@ -1,7 +1,7 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": ["config:recommended"],
-  "enabledManagers": ["kubernetes", "kustomize"],
+  "enabledManagers": ["kubernetes", "kustomize", "dockerfile", "npm", "github-actions"],
   "recreateWhen": "always",
   "pinDigests": true,
   "minimumReleaseAge": "3 days",
@@ -16,8 +16,23 @@
       "/(^|/)kustomization\\.ya?ml$/"
     ]
   },
+  "dockerfile": {
+    "managerFilePatterns": [
+      "/^homelab/health/mcp/Dockerfile$/"
+    ]
+  },
+  "npm": {
+    "managerFilePatterns": [
+      "/^homelab/health/mcp/package\\.json$/"
+    ]
+  },
+  "github-actions": {
+    "managerFilePatterns": [
+      "/^\\.github/workflows/influxdb-mcp-image\\.yml$/"
+    ]
+  },
   "description": [
-    "SETTING ignorePaths REPLACES THE config:recommended DEFAULTS. config:recommended pulls in :ignoreModulesAndTests, whose ignorePaths cover node_modules, bower_components, vendor, and assorted test/fixture directories. Declaring this key overrides that list wholesale rather than adding to it. No practical effect here - this repo manages no YAML under any of those paths - but a future manager (npm, gomod) added to enabledManagers would scan vendored trees this list no longer excludes. Re-add the defaults if that happens.",
+    "SETTING ignorePaths REPLACES THE config:recommended DEFAULTS. config:recommended pulls in :ignoreModulesAndTests, whose ignorePaths cover node_modules, bower_components, vendor, and assorted test/fixture directories. Declaring this key overrides that list wholesale rather than adding to it. THE DEFAULTS ARE NOT RE-ADDED, AND THAT IS THE DECISION RATHER THAN AN OVERSIGHT: the npm manager arrived on 2026-09-04 and is scoped by managerFilePatterns to homelab/health/mcp/package.json alone, so it scans no vendored tree, and node_modules/ is in .gitignore, which stops the one live case - a local npm install committed by accident - one step earlier than an ignorePaths entry would. Re-adding the defaults would only filter what git never tracks. Revisit if a manager is ever enabled unscoped.",
     "legacy-microk8s/** and no_longer_used/** currently match NOTHING. Both managerFilePatterns are anchored to ^homelab/ and ^vps/, so neither frozen tree is scanned in the first place. They are listed as defence in depth against a future pattern that is not anchored, not as active exclusions. **/secrets/** is the opposite and is the one genuinely active entry of the three: the homelab pattern does match homelab/secrets/*.yaml, and this excludes it. Harmless either way, since those files hold only ${VAR} placeholders and name no image, but the exclusion is real rather than defensive.",
     "DO NOT SET suppressNotifications: [\"dependencyLookupWarnings\"]. homelab/ops/scripts/update-watch.py reads the dependency-lookup warning block off the dependency dashboard issue, and that suppression deletes it from the body."
   ],
@@ -40,6 +55,9 @@
       "groupName": "health stack",
       "automerge": false,
       "prPriority": 5 },
+    { "matchFileNames": ["homelab/health/mcp/**", ".github/workflows/influxdb-mcp-image.yml"],
+      "groupName": "influxdb-mcp build inputs",
+      "description": "The build inputs for ghcr.io/mnbf9rca/influxdb-mcp-server: the node base image, the upstream package with the lockfile that moves with it, and the actions the workflow runs. MERGING ONE OF THESE DEPLOYS NOTHING BY ITSELF. It renders no manifest; the master build makes the image and keel delivers it on its six-hour poll, so do not go looking for an apply step. Placed after the homelab/health/** rule so this groupName wins for these files while that rule's automerge and prPriority still apply - note that the workflow path is outside homelab/, so it takes this groupName but neither of those two fields. THE github-actions MANAGER WAS ENABLED ON 2026-09-04, reversing the design's default of no: all five actions in this workflow had gone stale unwatched and the operator caught it in review. It is scoped to this one workflow file, which is the only one this repository has. Top-level pinDigests is left ON for it deliberately, so Renovate will also propose pinning each action to a commit sha - the wanted end state for a workflow that pushes and signs an image, and not the drift the keel rule above exists to prevent, since nothing rewrites a workflow file outside a pull request." },
     { "matchFileNames": ["homelab/ops/**"],
       "groupName": "ops tooling",
       "automerge": false,

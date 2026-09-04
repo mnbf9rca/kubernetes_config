@@ -48,6 +48,7 @@ kubernetes_config/
 ├── renovate.json             # scoped to homelab/** and vps/** (pinDigests, off on the keel-managed trees)
 ├── secrets-to-rotate.md      # honesty box for disclosed secret values (identifiers only)
 ├── docs/                     # operational documentation (docs/superpowers/ is gitignored)
+├── .github/workflows/        # the repo's one workflow: builds the InfluxDB MCP image
 ├── homelab/                  # Talos homelab cluster
 │   ├── kustomization.yaml    # top-level: bootstrap + secrets + workloads + backup + health + hindsight
 │   ├── talos/                # Omni ConfigPatches resources (applied via `make apply-talos`)
@@ -55,7 +56,8 @@ kubernetes_config/
 │   ├── workloads/            # application workloads (one file per service, --- separated, no ns override)
 │   ├── secrets/              # Secret manifests with ${VAR} envsubst placeholders
 │   ├── health/               # health-data pipeline (no keel; pinned images)
-│   │   └── scripts/          # job scripts as real files + their tests; mounted via configMapGenerator
+│   │   ├── scripts/          # job scripts as real files + their tests; mounted via configMapGenerator
+│   │   └── mcp/              # build inputs for the InfluxDB MCP image (Dockerfile, pinned package, lockfile, --import hook)
 │   ├── ops/                  # cluster-wide operational jobs (the daily Renovate update watcher)
 │   │   └── scripts/          # same pattern: real files + tests, via configMapGenerator
 │   ├── hindsight/            # Hindsight memory backend for the Hermes profiles (no keel; pinned images)
@@ -181,7 +183,8 @@ The rules that must not be broken:
       gh pr view <n> --repo mnbf9rca/kubernetes_config --json statusCheckRollup
 
   A `PENDING` or failing check means the pull request is not this session's work: leave it open and say so at the close.
-  This repository runs no CI, so a pull request with no checks at all is the normal case for human and agent work and has nothing to wait for; the rule bites on a check that exists and has not gone green.
+  This repository runs **one** workflow, `.github/workflows/influxdb-mcp-image.yml`: it builds the InfluxDB MCP image from `homelab/health/mcp/` and, on a pull request, builds it without pushing and asserts the added tool is registered — so a pull request touching those inputs does carry a check, and it is the whole of that change's review.
+  Every other pull request runs no check at all, which is the normal case for human and agent work and has nothing to wait for; the rule bites on a check that exists and has not gone green.
   Deploy-then-merge does not override this — a pull request can be applied and healthy and still be too young to merge.
 - **Concurrent deployed-but-unmerged branches are last-apply-wins on shared files.**
   An apply reconciles the whole rendered tree, so every file the applying branch does not carry is reset to that branch's version — another branch's already-deployed change included, silently, with every job still green.
@@ -295,7 +298,7 @@ The rules that must not be broken:
   The liveness check is read-only; the sandbox refresh pulls the pinned terminal image and removes idle stale containers, a mechanical judgement-free job, and neither is a precedent for scheduling `hermes update` itself.
   **Nothing mechanical guards runbook prose**, which is why its disclosure rules are written into the steps they govern rather than referenced.
   The files that remain under `hermes-vm/` are not rendered by kustomize, so `make check-script-lint` cannot see them — `make check-vm-scripts` is their guard, and it is `shellcheck -s sh` over every `*.sh` under `hermes-vm/scripts/` (the daily alive check; since 2026-08-29 the weekly docker-sandbox refresh; and since 2026-08-31 `hermes-profile-docker-setup.sh`, which is run by hand per new profile and is on no schedule) plus `scripts/check-ping-bodies.py hermes-vm`.
-  It runs in **no** preflight and there is no CI, so nothing runs it automatically: it is step 1 of the install procedure in `docs/operations/hermes-vm.md`, and the update runbook never calls it.
+  It runs in **no** preflight, and the one workflow this repository has covers `homelab/health/mcp/` alone, so nothing runs it automatically: it is step 1 of the install procedure in `docs/operations/hermes-vm.md`, and the update runbook never calls it.
   Run it by hand after touching anything under `hermes-vm/`, and before copying any of it to the VM.
 - **A new InfluxDB bucket in the `health` namespace means three edits, not one:** create it (a `make health-influx-*-bootstrap` target), add it to the explicit `for B in ...` list in `homelab/health/scripts/influx-export-lp.sh`, **and** raise `LP_EXPECTED` in `homelab/health/scripts/influx-backup.sh`, which is the denominator of the `buckets=n/m` the heartbeat carries.
   A bucket missing from the export list is silently never exported; a bucket in that list that does not exist fails the nightly job by name; and a stale `LP_EXPECTED` shows up as a visibly wrong `buckets=` and nothing worse.
