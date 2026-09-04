@@ -11,9 +11,11 @@
 #   `build`. The image is built, its guidance hook asserted, then pushed and
 #   signed as `sha-<head sha>`.
 #
-#   THE MERGE RUN (closed, merged == true): `changes`, `promote`. It verifies
-#   the signature on `sha-<head sha>` and points `stable` at that digest with
-#   `crane tag`. It builds nothing, pushes nothing and signs nothing, so what
+#   THE MERGE RUN (closed, merged == true): `changes`, `promote`. It resolves
+#   `sha-<head sha>` to a digest ONCE, verifies the signature on that digest,
+#   and points `stable` at that same digest with `crane tag` - so the thing
+#   verified and the thing promoted are one reference, not two names that could
+#   drift apart. It builds nothing, pushes nothing and signs nothing, so what
 #   master delivers is bit-for-bit what was reviewed, under the same signature.
 #
 # NOTHING BUILDS OUTSIDE A PULL REQUEST. The whole master-only surface is
@@ -261,24 +263,37 @@ jobs:
       # default, `--new-bundle-format=false` here AND on the `cosign sign` in
       # `build` - both, or verification looks for a bundle the signature did not
       # write.
+      # BY DIGEST, NOT BY TAG. The tag is resolved ONCE here and both the verify
+      # and the retag use that digest, so the thing verified and the thing
+      # promoted cannot differ - a tag re-pointed between the two steps would
+      # otherwise promote an image this job never checked.
+      #
+      # The identity regexp is anchored to `refs/pull/<n>/merge`, the only ref
+      # this workflow can sign from while `on:` carries pull_request alone. It
+      # is what makes restoring a push or workflow_dispatch trigger fail closed
+      # rather than quietly letting a branch-built signature promote.
       - name: Verify the signature before promoting it
         run: |
           set -euo pipefail
-          if ! cosign verify \
-            --certificate-identity-regexp '^https://github\.com/mnbf9rca/kubernetes_config/\.github/workflows/influxdb-mcp-image\.yml@' \
+          # An unpushed tag resolves to nothing, so this is the existence check
+          # and the signature check in one refusal.
+          D=$(crane digest "$IMAGE") || D=""
+          if [ -z "$D" ] || ! cosign verify \
+            --certificate-identity-regexp '^https://github\.com/mnbf9rca/kubernetes_config/\.github/workflows/influxdb-mcp-image\.yml@refs/pull/[0-9]+/merge$' \
             --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-            "$IMAGE"; then
-            echo "no verifiable signature on $IMAGE"
+            "${IMAGE%:*}@$D"; then
+            echo "no verifiable signature for $IMAGE"
             echo "This workflow never builds outside a pull request. A fork's pull request cannot push or sign, so its changes must be re-opened as a pull request from a branch inside this repository; otherwise re-run the pull request's build and merge again."
             exit 1
           fi
+          echo "DIGEST_REF=${IMAGE%:*}@$D" >> "$GITHUB_ENV"
 
       # crane tag, not docker tag + docker push: it writes a new tag against the
       # digest that is already in the registry. Nothing is rebuilt, no new
-      # manifest is created, and the signature just verified on that digest
-      # still covers what `stable` now points at - which is why no second
-      # verify follows: it would re-check the same digest under another name.
+      # manifest is created, and the signature just verified on THAT digest -
+      # the same reference, not the tag it came from - still covers what
+      # `stable` now points at, which is why no second verify follows.
       - name: Point stable at that digest
         run: |
           set -euo pipefail
-          crane tag "$IMAGE" stable
+          crane tag "$DIGEST_REF" stable
