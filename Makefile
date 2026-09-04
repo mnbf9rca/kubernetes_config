@@ -1392,8 +1392,10 @@ create-health-cloudflared-secret: check-context
 	printf '%s' "$$creds" | kubectl -n health create secret generic health-cloudflared-credentials \
 	  --from-file=credentials.json=/dev/stdin --dry-run=client -o yaml | kubectl -n health apply -f -
 
-# Shell helper shared by both health-influx-*-bootstrap targets: run an influx
-# CLI command inside the influxdb pod, authenticated as admin.
+# Shell helper for health-influx-bucket-bootstrap, the one target that needs it:
+# run an influx CLI command inside the influxdb pod, authenticated as admin. It
+# stays a variable rather than moving inline because it is spliced into a recipe
+# that already runs `pod` five times.
 #
 # The influx CLI reads INFLUX_TOKEN, not DOCKER_INFLUXDB_INIT_ADMIN_TOKEN, and
 # the CLI config the image writes at first init lives on an ephemeral path - so
@@ -1435,6 +1437,6 @@ health-influx-bucket-bootstrap: check-context
 	tok=$$(pod influx auth create -o cynexia --read-bucket $$id --write-bucket $$id \
 	  -d "$$BUCKET ingest read+write" --json | jq -r '.token // empty'); \
 	if [ -z "$$tok" ]; then echo "FATAL: influx auth create returned no token" >&2; exit 1; fi; \
-	echo "--- $$BUCKET INGEST TOKEN (paste into 1Password now — this is the only copy):"; \
+	echo "--- $$BUCKET INGEST TOKEN (paste into op://Homelab/health-influxdb/$$BUCKET-token now — this is the only copy):"; \
 	printf '%s\n' "$$tok"; \
 	echo "--- next: add '$$BUCKET' to influx-export-lp.sh's bucket list and raise LP_EXPECTED in influx-backup.sh"
