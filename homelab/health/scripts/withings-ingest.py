@@ -66,6 +66,14 @@ REDIRECT_URI = "https://withings.cynexia.net/oauth-callback"
 TOKEN_FILE = "/state/withings_tokens.json"
 PERSON = "rob"
 
+# The measurement. The name is NEW so the old narrow shape and the wide one can
+# never share a measurement: `withings_measure` held one point per measure with
+# `grpid` as a string field, and a bucket holding both would answer a pivot with
+# a mixture of the two. `resume_point` filters on this name, so the first run
+# after the rename finds an empty result and pages the account from
+# FIRST_RUN_START - which is the whole of the backfill.
+MEASUREMENT = "withings_measure_group"
+
 # EVERY REQUEST SETS AN EXPLICIT TIMEOUT. The tool this job replaces sets none,
 # which is how a wedged socket becomes a hung job.
 HTTP_TIMEOUT = 30
@@ -600,15 +608,57 @@ def scaled(value, unit):
     return format(Decimal(value).scaleb(unit), "f")
 
 
-def esc_field(value):
-    """Escape a quoted string field value: backslash, then double quote.
+def group_id(group):
+    """The `grpid` tag value, or raise.
 
-    `grpid` is a Withings integer today, so this is a guard rather than a
-    transformation - but an unescaped quote would end the field early and the
-    rest of the line would be parsed as something else.
+    `grpid` IS THE PER-READING ENTITY and is now a tag, so a group without one
+    has no identity: it could not be filtered, grouped or deduplicated, and two
+    such groups at the same second would overwrite each other. It was a string
+    field before, where an absent value was merely ugly; as a tag an absent
+    value is a point that cannot be told apart from the next one, so this
+    raises rather than defaulting.
     """
-    text = "".join(ch for ch in str(value) if ch.isprintable())
-    return text.replace("\\", "\\\\").replace('"', '\\"')
+    raw = group.get("grpid")
+    text = "" if raw is None else str(raw).strip()
+    if not text:
+        raise IngestFailed("measure group is missing a grpid")
+    return esc_tag(text)
+
+
+def field_name(code, position, repeated):
+    """The field key for one measure.
+
+    THE RULE READS REPETITION FROM THE GROUP, NEVER FROM A SET OF CODES. Five
+    measures of an unknown code 176 become `type_176_right_arm` and its four
+    neighbours with no edit here, because `repeated` is counted by the caller
+    from the group's own shape.
+
+    A TYPES name ending `_segments` is per-position by construction and takes a
+    suffix even when it arrives alone: a partial reading - one limb, a failed
+    contact - would otherwise write a bare `fat_free_mass_segments`, a key in
+    neither vocabulary, with its position discarded and no duplicate to stop
+    the run, so successive partial readings from different limbs would pile
+    into one column.
+
+    Consulting `position` only for a repeated or per-position code is what
+    discards the ELECTRODE PATH that whole-body types carry: types 168 and 169
+    arrive at position 7, which is a measurement path and not an anatomy.
+
+    TYPES and POSITIONS are NOT edited to support this; the `_segments` strip
+    happens here. No TYPES name matches `^type_[0-9]+$`, so residue and a named
+    field cannot collide, and both forms survive esc_tag unchanged.
+    """
+    name = TYPES[code][0] if code in TYPES else "type_%s" % code
+    segmental = name.endswith("_segments")
+    if segmental:
+        name = name[:-len("_segments")]
+    if not (segmental or repeated):
+        return esc_tag(name)
+    if position is None:
+        suffix = "position_none"
+    else:
+        suffix = POSITIONS.get(position, "position_%s" % position)
+    return esc_tag("%s_%s" % (name, suffix))
 
 
 def group_date(group):

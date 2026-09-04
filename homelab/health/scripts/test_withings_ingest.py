@@ -23,6 +23,7 @@ variable before it opens a socket.
 import importlib.util
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -309,6 +310,100 @@ class Fetch(unittest.TestCase):
         with self.assertRaises(wi.IngestFailed):
             wi.fetch_measures("access", 1000)
         self.assertEqual(len(self.calls), 2)
+
+
+class FieldName(unittest.TestCase):
+    """The field key is built from the group's own shape, never from a
+    hard-coded set of codes.
+
+    The rule, from the design:
+
+        name(code)      = TYPES[code][0]        if known, else "type_<code>"
+        suffix(pos)     = POSITIONS[pos]        if known, else "position_<pos>"
+                          "position_none"       if the measure carries none
+        segmental(code) = name(code) ends in "_segments"
+        repeated(code)  = this group holds more than one measure with the code
+        field           = name(code)                                if neither
+                        = name minus "_segments" + "_" + suffix(pos) if either
+    """
+
+    def test_a_whole_body_code_is_its_bare_name(self):
+        self.assertEqual(wi.field_name(1, None, False), "weight")
+
+    def test_a_whole_body_codes_position_is_discarded(self):
+        # The water types arrive at position 7 (whole_body). That is an
+        # electrode path, not an anatomy, and it must not reach the key.
+        self.assertEqual(wi.field_name(168, 7, False), "extracellular_water")
+
+    def test_a_segmental_code_loses_the_suffix_and_gains_the_position(self):
+        self.assertEqual(wi.field_name(175, 10, True), "muscle_mass_left_leg")
+        self.assertEqual(wi.field_name(174, 2, True), "fat_mass_right_arm")
+        self.assertEqual(wi.field_name(173, 12, True), "fat_free_mass_torso")
+
+    def test_a_lone_segmental_measure_still_takes_a_position(self):
+        # A partial reading - one limb, a failed contact - must not write a
+        # bare `fat_free_mass_segments`: a key in neither vocabulary, with its
+        # position discarded and no duplicate to stop the run, so successive
+        # partial readings from different limbs would pile into one column.
+        self.assertEqual(wi.field_name(173, 3, False), "fat_free_mass_left_arm")
+
+    def test_an_unknown_code_is_written_as_type_n(self):
+        self.assertEqual(wi.field_name(9999, None, False), "type_9999")
+
+    def test_an_unknown_repeated_code_takes_a_position_suffix(self):
+        # Five measures of an unknown code become five keys, not one.
+        self.assertEqual(wi.field_name(176, 2, True), "type_176_right_arm")
+
+    def test_an_unknown_position_is_written_as_position_n(self):
+        # Two unknown positions must not collide.
+        self.assertEqual(wi.field_name(175, 99, True),
+                         "muscle_mass_position_99")
+        self.assertEqual(wi.field_name(175, 98, True),
+                         "muscle_mass_position_98")
+
+    def test_a_repeated_code_with_no_position_is_position_none(self):
+        self.assertEqual(wi.field_name(1, None, True), "weight_position_none")
+
+    def test_no_types_name_can_collide_with_the_residue_form(self):
+        # `type_<n>` is reserved for an unnamed code. If a TYPES name ever
+        # matched it, residue and a named field would share a key.
+        residue = re.compile(r"^type_[0-9]+$")
+        for name, _unit in wi.TYPES.values():
+            self.assertIsNone(residue.match(name), name)
+
+    def test_a_field_key_is_escaped(self):
+        # A raw space would end the field key and the rest would misparse.
+        real = dict(wi.TYPES)
+        wi.TYPES[9998] = ("space name", "")
+        try:
+            self.assertEqual(wi.field_name(9998, None, False), "space\\ name")
+        finally:
+            wi.TYPES.clear()
+            wi.TYPES.update(real)
+
+
+class GroupId(unittest.TestCase):
+    """`grpid` is the per-reading entity and is now a TAG, so a group without
+    one has no identity and cannot be written."""
+
+    def test_a_grpid_becomes_an_escaped_tag_value(self):
+        self.assertEqual(wi.group_id({"grpid": 12345}), "12345")
+
+    def test_a_missing_grpid_raises(self):
+        with self.assertRaises(wi.IngestFailed):
+            wi.group_id({"date": 100})
+
+    def test_an_empty_grpid_raises(self):
+        with self.assertRaises(wi.IngestFailed):
+            wi.group_id({"grpid": ""})
+
+    def test_a_whitespace_grpid_raises(self):
+        with self.assertRaises(wi.IngestFailed):
+            wi.group_id({"grpid": "   "})
+
+    def test_a_null_grpid_raises(self):
+        with self.assertRaises(wi.IngestFailed):
+            wi.group_id({"grpid": None})
 
 
 class Points(unittest.TestCase):
