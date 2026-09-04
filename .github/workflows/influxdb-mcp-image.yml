@@ -5,24 +5,26 @@
 # CONTENT - `tree-<hash>` - so the pull request builds, pushes and signs the
 # exact artifact that master will later run, and merging only moves a tag.
 #
-#   On a pull request: `changes`, `lint`, `build`. The image is built and its
-#   guidance hook asserted; it is pushed and signed too, unless the pull
-#   request comes from a fork, whose GITHUB_TOKEN is read-only.
+#   On a pull request: `changes`, `lint`, `build`. The image is built, its
+#   guidance hook asserted, then pushed and signed. `build` runs ONLY here.
 #
-#   On a push to master: the same three, plus `promote`. `promote` finds the
-#   image the pull request already pushed and points `stable` at that same
-#   digest, so what master delivers is bit-for-bit what was reviewed and the
-#   signature made on the pull request still covers it.
+#   On a push to master: `changes`, `lint`, `promote`. `build` is skipped by its
+#   own `if:`, so a merge cannot rebuild: it verifies the signature on the image
+#   the pull request pushed and points `stable` at that same digest. What master
+#   delivers is bit-for-bit what was reviewed, by the same signature.
 #
-# THE RETAG AND ITS FALLBACK ARE THE ONLY MASTER-ONLY CODE. Everything that
-# builds, asserts, pushes and signs is the composite action in
-# .github/actions/build-push-sign/, which a pull request exercises in full on
-# every run. Nothing in the delivery path is first tried on master.
+# WHAT IS MASTER-ONLY, HONESTLY: the whole `promote` job - login, cosign,
+# crane, the lookup, the fallback, the verify and the retag - seven steps a
+# pull request never runs. The claim is narrower than "only a retag": what a
+# pull request DOES exercise in full is every step that builds, pushes and
+# signs, because the fallback is the same composite action
+# (.github/actions/build-push-sign/) that `build` calls. So the untested-on-a-
+# pull-request surface is the lookup, the verify, the retag and the wiring
+# around them.
 #
 # `promote` runs on EVERY master push, including one where `changes` said the
-# inputs did not move: the tag it needs may already exist from an earlier merge
-# and the retag is cheap, and the reverse - skipping it - would leave `stable`
-# behind after a squash that did change the tree.
+# inputs did not move: the retag is cheap and idempotent, and skipping it would
+# leave `stable` behind after a squash that did change the tree.
 #
 # WHY THE HASH COVERS THIS FILE. The build inputs are the mcp directory's tree
 # object AND this workflow's own blob, because a change to the build steps must
@@ -32,10 +34,17 @@
 #
 # WHY THE HASH MATCHES ACROSS THE MERGE. On a pull request GitHub runs the
 # workflow against the merge commit, whose tree is what a squash merge writes to
-# master, so the master run computes the same hash and finds the image. It stops
-# matching when master moved under the branch, or on a direct push to master
-# that had no pull request at all - which is exactly when `promote` falls back
-# to building the image itself.
+# master, so the master run computes the same hash and finds the image.
+#
+# SO A PULL REQUEST WHOSE BASE HAS MOVED MUST RE-RUN BEFORE IT MERGES. Once
+# master advances, the squash tree can differ from the merge commit the last run
+# saw, the hash changes, and `promote` misses. GitHub's "Update branch" button
+# re-triggers this workflow, which is the fix; the cost of forgetting is the
+# fallback, not a wrong image.
+#
+# A FORK'S PULL REQUEST gets a read-only GITHUB_TOKEN, so `build` builds and
+# asserts but pushes nothing. Its merge therefore always takes the fallback, and
+# that is the designed path, not a failure.
 #
 # REQUIRED STATUS CHECKS ON MASTER: `lint` and `build`. Both, not just `build`:
 # a job skipped because a dependency failed still satisfies a required check, so
@@ -163,9 +172,12 @@ jobs:
       - name: Lint the composite action's shell
         run: shellcheck .github/actions/*/*.sh
 
+  # PULL REQUESTS ONLY. On a master push this is skipped and `promote`'s
+  # fallback is the sole builder, so a merge can never overwrite an existing
+  # tree tag with a fresh, non-reproducible rebuild of the same inputs.
   build:
     needs: [changes, lint]
-    if: needs.changes.outputs.mcp == 'true'
+    if: github.event_name == 'pull_request' && needs.changes.outputs.mcp == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -184,14 +196,25 @@ jobs:
 
   # id-token: write is for the FALLBACK, which signs the image it had to build.
   # The retag path needs only packages: write.
+  #
+  # `needs: lint` as well as `changes`: without it a red lint on master still
+  # moves `stable`, because promote does not depend on `build` and a failing
+  # sibling job does not stop an independent one.
   promote:
-    needs: [changes]
+    needs: [changes, lint]
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
       id-token: write
+    # One promotion at a time, and never cancelled: two merges landing together
+    # would otherwise race to write `stable`, and the loser could be the newer
+    # one. cancel-in-progress: false because a cancelled promote can leave the
+    # image pushed and `stable` unmoved.
+    concurrency:
+      group: promote-stable
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@v7
 
@@ -230,27 +253,33 @@ jobs:
           push: 'true'
           token: ${{ secrets.GITHUB_TOKEN }}
 
+      # BEFORE the retag, never after. Verifying `stable` afterwards reports a
+      # bad promotion that has already happened; verifying the tree tag first
+      # means an unsigned or foreign image never becomes `stable` at all,
+      # because a failure here exits the job with the tag untouched.
+      #
+      # cosign v3 signs and verifies the new bundle format by default. If GHCR
+      # rejects the OCI 1.1 referrer, `--new-bundle-format=false` here and on
+      # the `cosign sign` in .github/actions/build-push-sign/push-and-sign.sh -
+      # both, or verification looks for a bundle the signature did not write.
+      - name: Verify the signature before promoting it
+        env:
+          IMAGE: ghcr.io/mnbf9rca/influxdb-mcp-server:tree-${{ needs.changes.outputs.hash }}
+        run: |
+          set -euo pipefail
+          cosign verify \
+            --certificate-identity-regexp '^https://github\.com/mnbf9rca/kubernetes_config/\.github/workflows/influxdb-mcp-image\.yml@' \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            "$IMAGE"
+
       # crane tag, not docker tag + docker push: it writes a new tag against the
       # digest that is already in the registry. Nothing is rebuilt, no new
-      # manifest is created, and the signature made on that digest still covers
-      # what `stable` now points at.
+      # manifest is created, and the signature just verified on that digest
+      # still covers what `stable` now points at - which is why no second
+      # verify follows: it would re-check the same digest under another name.
       - name: Point stable at that digest
         env:
           IMAGE: ghcr.io/mnbf9rca/influxdb-mcp-server:tree-${{ needs.changes.outputs.hash }}
         run: |
           set -euo pipefail
           crane tag "$IMAGE" stable
-
-      # The one thing only master does that a pull request never rehearses, so
-      # it is kept to a single command: confirm `stable` resolves to a digest
-      # this workflow signed. A failure here means the retag landed on something
-      # unsigned, and the job fails rather than leaving it unremarked.
-      - name: Verify the signature on stable
-        env:
-          STABLE: ghcr.io/mnbf9rca/influxdb-mcp-server:stable
-        run: |
-          set -euo pipefail
-          cosign verify \
-            --certificate-identity-regexp '^https://github\.com/mnbf9rca/kubernetes_config/\.github/workflows/influxdb-mcp-image\.yml@' \
-            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-            "$STABLE"

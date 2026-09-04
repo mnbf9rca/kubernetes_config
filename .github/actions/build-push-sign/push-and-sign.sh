@@ -14,6 +14,11 @@
 # One image, one tag, no loop. The loop over a multi-line tag list interpolated
 # into the script body is what broke the first master push; there is nothing
 # multi-line left to get wrong, and IMAGE arrives through the environment.
+#
+# cosign v3 writes the new bundle format by default, which GHCR stores as an
+# OCI 1.1 referrer. If it ever rejects that, `--new-bundle-format=false` is the
+# switch - here AND on the `cosign verify` in the workflow's promote job, or
+# verification looks for a bundle this signature did not write.
 set -euo pipefail
 
 docker push "$IMAGE"
