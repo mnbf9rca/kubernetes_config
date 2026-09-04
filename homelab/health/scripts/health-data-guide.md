@@ -245,8 +245,8 @@ The same quantity has three shapes here. Do not carry a query pattern across.
 
 | `deviceid` | Role |
 |---|---|
-| `DEVICE_ID_NEW` | The current scale, which produces the segmental and water fields |
-| `DEVICE_ID_OLD` | The older scale, and the continuity source for the long weight history |
+| `b85992ff4770833b2b0300b4a4f61a62fe4ce448` | `BodyFit`, the current scale, which produces the segmental and water fields. First reading 2026-09-03 |
+| `bbe9fb71807031b3f5c4a9748b75005e44b4d7eb` | `Body+`, the older scale, and the continuity source for the long weight history: readings from 2017 to 2026-09-03, with no `model` tag on groups before 2022-01-19 |
 
 **Never combine them.** They disagree on body composition by more than the change you are usually looking for. Filter or group on `deviceid` in any query that spans both.
 
