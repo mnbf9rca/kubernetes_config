@@ -84,8 +84,29 @@ jobs:
             echo "mcp=false" >> "$GITHUB_OUTPUT"
           fi
 
+  # Nothing else lints the inline shell in this file, which is how a `for` loop
+  # over a multi-line output reached master and broke the first push. actionlint
+  # parses the workflow and runs shellcheck over every `run:` body, so it is
+  # unconditional and ungated: it takes seconds and it is what catches that
+  # class. `build` needs it, so a lint failure stops the build - but note that a
+  # job skipped because a dependency failed still satisfies a required check, so
+  # make `lint` a required check on master too rather than relying on `build`.
+  # `make check-workflows` runs the same thing by hand.
+  lint:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+
+      # The official image, pinned; it ships shellcheck. With no file arguments
+      # actionlint lints every workflow in .github/workflows.
+      - uses: docker://rhysd/actionlint:1.7.12
+        with:
+          args: -color -shellcheck=shellcheck
+
   build:
-    needs: changes
+    needs: [changes, lint]
     if: needs.changes.outputs.mcp == 'true'
     runs-on: ubuntu-latest
     steps:
