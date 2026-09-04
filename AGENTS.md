@@ -183,7 +183,8 @@ The rules that must not be broken:
       gh pr view <n> --repo mnbf9rca/kubernetes_config --json statusCheckRollup
 
   A `PENDING` or failing check means the pull request is not this session's work: leave it open and say so at the close.
-  This repository runs **one** workflow, `.github/workflows/influxdb-mcp-image.yml`: it builds the InfluxDB MCP image from `homelab/health/mcp/` and, on a pull request, builds it without pushing and asserts the added tool is registered — so a pull request touching those inputs does carry a check, and it is the whole of that change's review.
+  This repository runs **one** workflow, `.github/workflows/influxdb-mcp-image.yml`: on a pull request it builds the InfluxDB MCP image from `homelab/health/mcp/`, asserts the added tool is registered, and pushes and signs it as `sha-<head sha>`; the merge then verifies that signature and promotes the same digest to `stable`.
+  So a pull request touching those inputs carries three checks — `changes`, `lint` and `build` — and they are the whole of that change's review.
   Every other pull request runs no check at all, which is the normal case for human and agent work and has nothing to wait for; the rule bites on a check that exists and has not gone green.
   Deploy-then-merge does not override this — a pull request can be applied and healthy and still be too young to merge.
 - **Concurrent deployed-but-unmerged branches are last-apply-wins on shared files.**

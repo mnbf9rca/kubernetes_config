@@ -434,6 +434,12 @@ check-vm-scripts:
 # multi-line output: that shipped to master on 2026-09-04 and broke the first
 # image push with a syntax error.
 #
+# Every piece of shell in the delivery path is a `run:` block in that workflow,
+# so this covers all of it. Keep it that way: actionlint lints WORKFLOWS and
+# does NOT reach a composite action's `run:` bodies even when a workflow
+# references it (verified), so shell moved under .github/actions/ would be shell
+# nothing checks.
+#
 # NOT in the diff-*/apply-* preflight: a workflow renders nothing and reaches
 # no cluster, so gating an apply on it would be noise. It runs in the `lint`
 # job of .github/workflows/influxdb-mcp-image.yml on every push and pull
