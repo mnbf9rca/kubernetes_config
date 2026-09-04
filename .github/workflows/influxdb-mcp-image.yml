@@ -24,11 +24,13 @@ on:
       - 'homelab/health/mcp/**'
       - '.github/workflows/influxdb-mcp-image.yml'
 
-# contents: read and packages: write, and nothing else. Login uses the job's own
-# GITHUB_TOKEN; no secret is added to the repository.
+# contents: read, packages: write, and id-token: write for keyless signing, and
+# nothing else. Login uses the job's own GITHUB_TOKEN; no secret is added to
+# the repository - the signing key is an ephemeral OIDC identity, not stored.
 permissions:
   contents: read
   packages: write
+  id-token: write
 
 jobs:
   build:
@@ -89,7 +91,23 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Push
+      - name: Install cosign
+        if: github.event_name == 'push'
+        uses: sigstore/cosign-installer@v4.1.2
+
+      # Keyless. The signature is made with the job's own OIDC identity and
+      # recorded in the public Rekor transparency log, so there is no key to
+      # store and none to rotate. It signs the DIGEST, so one signature covers
+      # both tags and survives keel rewriting the Deployment's digest.
+      #
+      # NOTHING VERIFIES IT AT ADMISSION - neither cluster runs a policy
+      # controller - so today it is provenance checked by hand:
+      #
+      #   cosign verify ghcr.io/mnbf9rca/influxdb-mcp-server:stable \
+      #     --certificate-identity-regexp \
+      #       '^https://github.com/mnbf9rca/kubernetes_config/' \
+      #     --certificate-oidc-issuer https://token.actions.githubusercontent.com
+      - name: Push and sign
         if: github.event_name == 'push'
         run: |
           set -euo pipefail
@@ -97,3 +115,5 @@ jobs:
             docker tag influxdb-mcp-server:ci "$tag"
             docker push "$tag"
           done
+          cosign sign --yes \
+            "$(docker inspect --format '{{index .RepoDigests 0}}' influxdb-mcp-server:ci)"
