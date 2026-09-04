@@ -14,7 +14,7 @@ Kubectl context: `cynexia-homelab`.
 | cert-manager | Let's Encrypt, Route53 DNS-01 solver, single wildcard `*.cynexia.net` cert |
 | local-path-provisioner | Backed by the node's SSD user volume (`/var/mnt/ssd`) |
 | NFS CSI driver | Static PV/PVCs against the Proxmox host's ZFS pool |
-| keel | Image auto-updates from floating tags — **except** the `health`, `ops`, `hindsight` and `backup` namespaces, which forbid keel outright, and except keel itself, which is digest-pinned (see [keel](#keel) below) |
+| keel | Image auto-updates from floating tags — **except** the `ops`, `hindsight` and `backup` namespaces, which forbid keel outright, `health`, which forbids it bar one named exception (`influxdb-mcp`, see [homelab-health.md](homelab-health.md#image-policy)), and keel itself, which is digest-pinned (see [keel](#keel) below) |
 | restic | Nightly CronJob (03:00 UTC) → Backblaze B2 `b2:homelab-restic-d5e15f22`, 7 daily / 4 weekly / 6 monthly. Pings healthchecks.io on start and exit code — see [monitoring.md](monitoring.md#the-restic-ping-wrapper) |
 | jottacloud-backup | Own namespace; rclone Jottacloud → NFS, then kopia → B2 `cloud-files-backup`; reports to the `jottacloud-backup` uptime-kuma push monitor |
 

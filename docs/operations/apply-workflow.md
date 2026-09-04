@@ -293,8 +293,9 @@ Both manager blocks are validated for patterns that match nothing, `kubernetes` 
 Both are exit 2.
 Exit 1 means a finding; exit 2 means the check could not run.
 
-Floating tags are forbidden in `health`, `hindsight`, `ops` and `backup`.
-`jottacloud-backup` is the single written exemption on the guard's `FLOATING_EXEMPT` list: it is a CronJob whose pods pull `:latest` on every scheduled run, so the schedule already delivers what keel would, which is why it carries no keel annotations and needs none.
+Floating tags are forbidden in `health`, `hindsight`, `ops` and `backup`, and the guard's `FLOATING_EXEMPT` list holds the two written exemptions.
+`jottacloud-backup` is a CronJob whose pods pull `:latest` on every scheduled run, so the schedule already delivers what keel would, which is why it carries no keel annotations and needs none.
+`influxdb-mcp` is the opposite case — the `health` namespace's one keel-managed workload, on a `stable` tag built from inputs in this repository ([homelab-health.md](homelab-health.md#image-policy)).
 
 **`check-renovate-scope-homelab` and `check-renovate-scope-vps` each run in their cluster's `diff-*` and `apply-*` preflight**, on the public half, as of the 2026-08-26 commit that widened Renovate to `homelab/**` and `vps/**`.
 Each chain now reads the same way: a context assertion, a vars-consistency check, **five per-cluster guards** — `check-script-substitution`, `check-job-ttl`, `check-ping-bodies`, `check-script-lint` and `check-renovate-scope`, each running as its own cluster's half — and one guard that has no half, `check-keel-fresh-parity`.

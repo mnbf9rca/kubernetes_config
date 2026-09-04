@@ -375,7 +375,7 @@ Measurement and detail: [uptime-kuma.md](uptime-kuma.md#push-monitors).
 ### The update watcher
 
 `update-watch` (namespace `ops`, 06:45Z daily) makes one unauthenticated GitHub call — `GET /repos/mnbf9rca/kubernetes_config/issues?state=open&per_page=100` — and drives the `homelab-update-watch` uptime-kuma push monitor.
-It exists because the `health` and `ops` namespaces forbid keel: their images are pinned, Renovate proposes the bumps, and until this watcher existed nothing pointed at the waiting pull requests.
+It exists because the `health` and `ops` namespaces forbid keel — bar `health`'s one named exception, `influxdb-mcp` — so their images are pinned, Renovate proposes the bumps, and until this watcher existed nothing pointed at the waiting pull requests.
 Detection for `health` came free on day one.
 
 **DOWN means one of nine things.**
@@ -717,10 +717,12 @@ Every branch in *this* script is determinate — its only peer is a ClusterIP, s
 The rest — the metric names, the stored state, the resolved endpoint — is in the pod log.
 
 **The image floor is a literal and it does not track reality on its own.**
-It was set at rollout to the steady-state tracked-image count with margin: 5 against the 6 homelab's own script records, one container clear, and 7 against the 9 measured on the VPS, two clear.
-The homelab floor read 4 against 5 until September 2, 2026, when tinyproxy added a sixth tracked image and the floor was re-derived.
+It is set to the steady-state tracked-image count with margin: today, **6 against the 7 homelab's own script records**, one container clear, and 7 against the 9 measured on the VPS, two clear.
+The homelab floor has moved twice as the keel-managed set grew — 4 against 5 until September 2, 2026, when tinyproxy added a sixth image, then 5 against 6 until September 4, 2026, when `influxdb-mcp` became the `health` namespace's one keel-managed workload and added a seventh.
+Each move re-derived the count from `kustomize build homelab` rather than from the previous sentence, which is the only way this number stays honest.
 The margins differ because the VPS floor was fixed before its count was measured and left alone once the measurement came in higher than expected — a floor with more headroom than the rule asks for is not worth moving.
-Reconciling either number against a list of keel-annotated workloads is off by however many distinct sidecar images those workloads carry: the gauge counts **images**, and keel tracks every container in an annotated workload, which is why the VPS reads 9 over 8 Deployments.
+Reconciling either number against a list of keel-annotated workloads is off by however many distinct sidecar images those workloads carry, and off again where two workloads share an image: the gauge counts **images**, and keel tracks every container in an annotated workload.
+The VPS is where both effects show — 9 images across 13 containers in 9 Deployments, because four workloads carry an `alpine` quiesce sidecar and `homelab-proxy` runs the same `cloudflared` image as `cloudflared` does.
 A workload on an image the gauge already tracks does not raise either floor; a workload that adds a new image does, and the floor is re-derived at that point.
 Removing several without taking that estate below its floor does not lower it.
 Revisit them whenever the keel-managed set changes materially — a floor that has drifted below reality is a check that has stopped checking.
@@ -789,9 +791,12 @@ The guard also settles the scope question that used to sit under it.
 Renovate watches `homelab/**` and `vps/**` as of the same date, so a pinned, keel-free container has to be named by a file in its own cluster's tree that `kubernetes.managerFilePatterns` matches — and the guard fails the apply when it is not.
 What the guard does *not* claim to cover is an image it never sees: one from a remote base, which it reports as advisory because nothing here can edit it, and one embedded inside another resource, such as local-path-provisioner's helper Pod inside a ConfigMap.
 
-`jottacloud-backup` is the one written exemption on that guard's `FLOATING_EXEMPT` list, and not because it is keel-managed — it carries no keel annotations at all.
+Two workloads are written exemptions on that guard's `FLOATING_EXEMPT` list, for opposite reasons.
+`jottacloud-backup` is exempt and **not** because it is keel-managed — it carries no keel annotations at all.
 It is a CronJob, so every scheduled run starts a fresh pod that pulls `:latest`, which already delivers the auto-pull behaviour keel would provide.
 Correct anywhere the estate's own text says otherwise.
+`influxdb-mcp` is exempt because it **is** keel-managed, and it is the `health` namespace's only such workload: a stateless HTTP server on a self-built image, where what gets reviewed is the build input under `homelab/health/mcp/` and the roll only delivers it ([homelab-health.md](homelab-health.md#image-policy)).
+Both entries carry their reason in the guard's own source, which is where to read it before adding a third.
 
 ### Named accepted residual: the ingest signal leaks a presence timeline
 
