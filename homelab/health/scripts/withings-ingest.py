@@ -94,20 +94,41 @@ FIRST_RUN_START = "2009-01-01"
 # second browser round trip. No endpoint here calls either.
 SCOPE = "user.metrics,user.activity"
 
-# Withings measure type codes, transcribed from developer.withings.com's
-# openapi.yaml (info.version 2.0), the `meastype` parameter description. The
-# numeric code stays the data - it is the tag every panel filters on - and this
-# table only adds the name and the unit the spec itself states, so an MCP caller
-# or a Grafana query needs no copy of the code table.
+# Withings measure type codes. Transcribed from the documentation bundle
+# Withings actually serves, https://developer.withings.com/assets/js/
+# main.8ae1c0ad.js, the `meastype` parameter description: developer.withings.com
+# no longer serves openapi.yaml as a file, so the older reference to one was a
+# reference to nothing.
+#
+# CHECKED SEPTEMBER 4, 2026: 43 codes each side, exact parity, no spec-only code
+# and no TYPES-only code.
+#
+# A SPEC NAME CAN CHANGE UNDER A STABLE CODE. Code 196 read "Electrodermal
+# activity feet" in an earlier copy and reads "Nerve Response Score (NRS)"
+# today, so a name here is a transcription of one reading of the spec and not a
+# stable identifier.
+#
+# UNDER THE WIDE SCHEMA THE NUMERIC CODE LEAVES THE DATA ENTIRELY: the field key
+# is the name, so this table is the estate's only code-to-name record. Naming a
+# code later MOVES ITS FIELD KEY, so historical points keep `type_<n>` and the
+# column splits visibly. The wipe that a rename used to force is now optional.
 #
 # AN EMPTY UNIT MEANS THE SPEC STATES NONE, AND IS NOT A GUESS TO BE FILLED IN.
 # Twelve of these 43 codes are unitless there - counted from the table below,
-# not from memory - and the `unit` tag is simply absent on each of them. Five
-# more that the spec leaves blank carry an `app-observed` comment instead: the
-# operator read those units off the Withings app itself, which is an
-# observation rather than a guess.
-# A code missing from this table is written unchanged with type_name=unknown -
-# newer firmware invents codes, and dropping one would lose the reading.
+# not from memory. Five more that the spec leaves blank carry an `app-observed`
+# comment instead: the operator read those units off the Withings app itself,
+# which is an observation rather than a guess. `POSITIONS[7] = whole_body` is a
+# third tier again - a maintained client library's enum, corroborated by the
+# data - and is marked at its own entry.
+#
+# A code missing from this table is written as the field `type_<code>` and no
+# reading is lost, which is why the four speculative nerve and electrodermal
+# codes (158, 159, 197, 198) are NOT added: the account's two scales cannot
+# emit them, and a row added on speculation is a row that rots.
+#
+# https://developer.withings.com/llms.md IS NOT A SPEC. It puts vascular age at
+# code 140 where the spec says 155, and it omits everything a Body Scan
+# produces.
 TYPES = {
     1:   ("weight", "kg"),
     4:   ("height", "m"),
@@ -159,10 +180,9 @@ TYPES = {
 # The device position a measure was taken at, verbatim from the Withings spec at
 # components.schemas.measure_object.properties.position. Codes 0-28; the spec
 # lists no 7, which is supplied from elsewhere and marked at its entry below.
-# Segmental types (173, 174, 175) repeat one type per position, so
-# without a name a panel legend reads as bare integers.
-# A position missing from this table is tagged position_name=unknown and the
-# numeric `position` tag still carries the code, exactly as an unknown type is.
+# A name here becomes a FIELD-KEY SUFFIX on a repeated or per-position code, so
+# a position missing from this table produces the suffix `_position_<n>`, and
+# two unknown positions cannot collide.
 POSITIONS = {
     0:  "right_wrist",
     1:  "left_wrist",
@@ -486,27 +506,33 @@ def make_pusher(push_url):
 # --- resume point -----------------------------------------------------------
 
 def resume_point(cfg):
-    """Newest point in the bucket, or None if it has never been written.
+    """Newest point in this measurement, or None if it has never been written.
 
-    DO NOT "tidy" the filter away. This bucket carries a float field, `value`,
-    and a string field, `grpid`, so a bare group() over every field merges
-    tables whose _value types differ and InfluxDB answers `schema collision:
-    cannot group float and string types together`. That error body parses as
-    "no data" to a naive reader, which is how ingest-freshness reported STALE
-    for 25 straight days. Filtering to the one float field before grouping is
-    what makes the merge type-safe, and `_field == "value"` covers every point
-    this job writes.
+    THE MEASUREMENT FILTER IS LOAD-BEARING AND THE FIELD FILTER IS GONE. The
+    old query filtered `_field == "value"` because this bucket carried a float
+    field and a string field, and a bare group() over both answered `schema
+    collision: cannot group float and string types together` - an error body
+    that parses as "no data" to a naive reader, which is how ingest-freshness
+    reported STALE for 25 straight days. The wide schema has no string field,
+    so nothing needs filtering out; a `_field == "value"` filter would now
+    match nothing and read as an empty bucket on every run.
 
-    NEVER READ _value FROM THESE ROWS. It is a body measurement, and the pod log
-    is not where one belongs. keep() drops it, so the last column is _time.
+    The measurement filter replaces it for a different reason: the old
+    `withings_measure` measurement stays queryable in this bucket until it is
+    deleted, and the resume point must not see it. Scoping here is what makes
+    the first run after the rename find an empty result and page the account
+    from FIRST_RUN_START, which is the whole of the backfill.
+
+    NEVER READ _value FROM THESE ROWS. It is a body measurement, and the pod
+    log is not where one belongs. keep() drops it, so the last column is _time.
     """
     flux = (
         'from(bucket:"%s")\n'
         '  |> range(start: 1970-01-01T00:00:00Z)\n'
-        '  |> filter(fn: (r) => r._field == "value")\n'
+        '  |> filter(fn: (r) => r._measurement == "%s")\n'
         '  |> group()\n'
         '  |> max(column: "_time")\n'
-        '  |> keep(columns: ["_time"])\n' % cfg["bucket"]
+        '  |> keep(columns: ["_time"])\n' % (cfg["bucket"], MEASUREMENT)
     )
     url = "%s/api/v2/query?org=%s" % (cfg["url"], cfg["org"])
     headers = {
@@ -676,69 +702,86 @@ def group_date(group):
 
 
 def points(groups):
-    """Line protocol for every measure, OLDEST FIRST.
+    """Line protocol, ONE LINE PER MEASURE GROUP, OLDEST FIRST.
 
     The ordering is load-bearing, not cosmetic: influx_write sends these in
-    batches, so a later batch can fail with earlier ones already durably stored.
-    Oldest-first makes any partial write a PREFIX, which the next run's overlap
-    covers.
+    batches, so a later batch can fail with earlier ones already durably
+    stored. Oldest-first makes any partial write a PREFIX, which the next run's
+    overlap covers.
 
-    ONE MEASUREMENT WITH A `type` TAG, not one measurement per type. The type
-    space is open - newer hardware adds codes - so an unknown code is one more
-    tag value in a series that already exists, and every panel is a filter on
-    `type`. `grpid` is a FIELD and `deviceid` is a TAG: deviceid has a handful of
-    values for the life of the account, grpid has one per weigh-in forever and as
-    a tag would multiply series cardinality by the number of weigh-ins.
+    ONE POINT PER WEIGH-IN, WITH ONE FLOAT FIELD PER MEASURE. The old shape
+    wrote one point per measure with `grpid` as a string field, and three
+    faults followed: a pivot on `type_name` returned one of five segmental
+    positions as the whole-body value, silently; `grpid` could not be filtered
+    or grouped on; and the string field made an ungrouped aggregate answer
+    `schema collision`, an error body that reads as "no data" to a naive
+    caller. Here `schema.fieldKeys` is the whole vocabulary and the naive pivot
+    is the correct pivot.
 
-    `type_name`, `unit`, `position` and `position_name` ride alongside the
-    numeric `type` so a reader needs no copy of TYPES or POSITIONS. `unit` is
-    omitted where the spec states none and both position tags where the measure
-    carries none, because an absent tag is honest and a placeholder forks a
-    series for nothing.
+    ALL FOUR TAGS ARE GROUP-LEVEL and none is derived from a repo constant, so
+    editing TYPES moves a FIELD KEY and never a point's identity. `modelid` is
+    not written at all: it is the same fact under a second name, on a point
+    `deviceid` already keys. `model` is written exactly as the API sent it, and
+    a group from before 2022 carries none - which leaves the one surviving
+    duplicate class, a `grpid` written once with `model` and once without, that
+    the guide's dedupe query detects.
 
-    `modelid` and `model` name the device that took the group, so a panel can
-    separate two scales without anyone holding a table of opaque deviceids.
-    Both are absent where the group carries neither, on the same reasoning.
+    A DUPLICATE FIELD KEY RAISES, AND THE RUN WEDGES ON PURPOSE. Two cases
+    reach it and only two: the same code at the same position twice in one
+    group, and a repeated code where more than one measure carries no position.
+    Raising here means no line is written for ANY group in the run, STAGE is
+    still `fetch` so the heartbeat reads `failure=fetch`, the resume point does
+    not advance, and every later run fails the same way until a person looks.
+    There is nothing to clean up: the write never happened. The alternative is
+    a silently overwritten reading.
     """
     lines = []
     unknown = set()
     for group in sorted(groups, key=group_date):
         ts = group_date(group)
-        grpid = group.get("grpid", "")
-        deviceid = group.get("deviceid") or "unknown"
-        device = ",deviceid=%s" % esc_tag(deviceid)
-        # The spec spells this field `model_id` on the measure group and
-        # `modelid` on the activity object, so read both names rather than bet
-        # on which one the live account sends.
-        modelid = group.get("modelid", group.get("model_id"))
-        if modelid is not None:
-            device += ",modelid=%s" % esc_tag(modelid)
-        model = group.get("model")
-        if isinstance(model, str) and model:
-            device += ",model=%s" % esc_tag(model)
+        # Validate every measure BEFORE counting, so a malformed one reports
+        # the fault it always did rather than a counting error.
+        parsed = []
         for measure in group.get("measures") or []:
             try:
+                mtype = measure["type"]
                 value = measure["value"]
                 unit = measure["unit"]
-                mtype = measure["type"]
             except (KeyError, TypeError):
                 raise IngestFailed(
                     "measure group is missing value, unit or type")
+            parsed.append((mtype, measure.get("position"), value, unit))
+
+        counts = {}
+        for mtype, _position, _value, _unit in parsed:
+            counts[mtype] = counts.get(mtype, 0) + 1
+
+        fields = {}
+        for mtype, position, value, unit in parsed:
             if mtype not in TYPES:
                 unknown.add(mtype)
-            type_name, unit_name = TYPES.get(mtype, ("unknown", ""))
-            tags = ("person=%s,type=%s,type_name=%s"
-                    % (esc_tag(PERSON), esc_tag(mtype), esc_tag(type_name)))
-            if unit_name:
-                tags += ",unit=%s" % esc_tag(unit_name)
-            tags += device
-            position = measure.get("position")
-            if position is not None:
-                tags += ",position=%s,position_name=%s" % (
-                    esc_tag(position),
-                    esc_tag(POSITIONS.get(position, "unknown")))
-            lines.append('withings_measure,%s grpid="%s",value=%s %d'
-                         % (tags, esc_field(grpid), scaled(value, unit), ts))
+            key = field_name(mtype, position, counts[mtype] > 1)
+            if key in fields:
+                raise IngestFailed(
+                    "measure group holds two measures for field %s" % key)
+            fields[key] = scaled(value, unit)
+
+        # A line with no fields is not valid line protocol, and a group with no
+        # measures is a real answer rather than a fault.
+        if not fields:
+            continue
+
+        tags = "person=%s,grpid=%s,deviceid=%s" % (
+            esc_tag(PERSON), group_id(group),
+            esc_tag(group.get("deviceid") or "unknown"))
+        model = group.get("model")
+        if isinstance(model, str) and model:
+            tags += ",model=%s" % esc_tag(model)
+
+        # Sorted, so two runs of the same group produce identical bytes.
+        body = ",".join("%s=%s" % (key, fields[key])
+                        for key in sorted(fields))
+        lines.append("%s,%s %s %d" % (MEASUREMENT, tags, body, ts))
     # A COUNT, NOT THE CODES, AND THE POD LOG RATHER THAN THE HEARTBEAT: the
     # heartbeat's allowlist admits neither, and a code nobody has mapped is a
     # thing to go and look at, not a thing to alert on.

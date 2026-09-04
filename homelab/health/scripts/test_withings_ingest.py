@@ -209,6 +209,36 @@ class ResumePoint(unittest.TestCase):
         with self.assertRaises(wi.IngestFailed):
             wi.resume_point(CFG)
 
+    def test_the_query_is_scoped_to_the_new_measurement(self):
+        # The old measurement stays queryable in this bucket until it is
+        # deleted, and the resume point must not see it: scoping the filter is
+        # what makes the first run after the rename find an empty result and
+        # page the account from FIRST_RUN_START.
+        seen = {}
+
+        def _post(url, body, headers, timeout=None):
+            seen["flux"] = body.decode()
+            return 200, CSV_EMPTY
+
+        wi.http_post = _post
+        self.assertIsNone(wi.resume_point(CFG))
+        self.assertIn('r._measurement == "withings_measure_group"',
+                      seen["flux"])
+
+    def test_the_query_no_longer_filters_on_a_field(self):
+        # There is no string field left, so nothing has to be filtered out
+        # before the group() - and a `_field == "value"` filter would now match
+        # nothing at all and read as an empty bucket on every run.
+        seen = {}
+
+        def _post(url, body, headers, timeout=None):
+            seen["flux"] = body.decode()
+            return 200, CSV_EMPTY
+
+        wi.http_post = _post
+        wi.resume_point(CFG)
+        self.assertNotIn("_field", seen["flux"])
+
     def test_a_future_resume_point_is_clamped_to_now(self):
         # A scale with a wrong clock can date a point in the future, which would
         # otherwise push lastupdate past the present and skip everything
@@ -407,6 +437,10 @@ class GroupId(unittest.TestCase):
 
 
 class Points(unittest.TestCase):
+    """ONE GROUP IS ONE LINE. The old shape wrote one line per measure with
+    `grpid` as a string field; the string field poisoned every ungrouped
+    aggregate and the naive pivot returned a segment as the whole body."""
+
     def setUp(self):
         self.real_log = wi.log
         wi.log = lambda msg: None
@@ -418,131 +452,184 @@ class Points(unittest.TestCase):
         groups = [
             {"grpid": 7, "date": 200, "deviceid": "dev1",
              "measures": [{"type": 1, "value": 74850, "unit": -3}]},
-            {"grpid": 6, "date": 100, "measures":
-                [{"type": 130, "value": 1234, "unit": -2}]},
+            {"grpid": 6, "date": 100,
+             "measures": [{"type": 130, "value": 1234, "unit": -2}]},
         ]
-        lines = wi.points(groups)
-        self.assertEqual(lines, [
-            'withings_measure,person=rob,type=130,'
-            'type_name=atrial_fibrillation_result,'
-            'deviceid=unknown grpid="6",value=12.34 100',
-            'withings_measure,person=rob,type=1,type_name=weight,unit=kg,'
-            'deviceid=dev1 grpid="7",value=74.850 200',
+        self.assertEqual(wi.points(groups), [
+            "withings_measure_group,person=rob,grpid=6,deviceid=unknown"
+            " atrial_fibrillation_result=12.34 100",
+            "withings_measure_group,person=rob,grpid=7,deviceid=dev1"
+            " weight=74.850 200",
         ])
 
-    def test_a_known_type_carries_its_name_and_unit(self):
-        # A caller reading this bucket should not need the code table.
-        line = wi.points([{"grpid": 1, "date": 100, "deviceid": "d",
-                           "measures": [{"type": 11, "value": 62,
-                                         "unit": 0}]}])[0]
-        self.assertIn(",type_name=heart_pulse,", line)
-        self.assertIn(",unit=bpm,", line)
+    def test_one_group_is_one_line_however_many_measures(self):
+        lines = wi.points([{"grpid": 1, "date": 100, "deviceid": "d",
+                            "measures": [
+                                {"type": 1, "value": 74850, "unit": -3},
+                                {"type": 6, "value": 1834, "unit": -2},
+                                {"type": 8, "value": 13729, "unit": -3},
+                            ]}])
+        self.assertEqual(len(lines), 1)
+        self.assertIn(" fat_mass_weight=13.729,fat_ratio=18.34,"
+                      "weight=74.850 100", lines[0])
 
-    def test_an_app_observed_unit_is_tagged_like_any_other(self):
-        # The spec leaves 226 blank; the operator read kcal off the app.
+    def test_fields_are_sorted_by_key(self):
+        # Sorted, so two runs of the same group produce identical bytes.
         line = wi.points([{"grpid": 1, "date": 100, "deviceid": "d",
-                           "measures": [{"type": 226, "value": 1700,
-                                         "unit": 0}]}])[0]
-        self.assertIn(",type_name=basal_metabolic_rate,", line)
-        self.assertIn(",unit=kcal,", line)
+                           "measures": [
+                               {"type": 88, "value": 3200, "unit": -3},
+                               {"type": 1, "value": 74850, "unit": -3},
+                           ]}])[0]
+        body = line.split(" ")[1]
+        keys = [pair.split("=")[0] for pair in body.split(",")]
+        self.assertEqual(keys, sorted(keys))
 
-    def test_a_type_the_spec_gives_no_unit_for_carries_no_unit_tag(self):
-        # Twelve codes are still blank; an absent tag beats a guess.
+    def test_there_is_no_string_field(self):
+        # The schema-collision error class is gone from this bucket only if
+        # nothing here writes a quoted value.
         line = wi.points([{"grpid": 1, "date": 100, "deviceid": "d",
-                           "measures": [{"type": 130, "value": 0,
-                                         "unit": 0}]}])[0]
-        self.assertIn(",type_name=atrial_fibrillation_result,", line)
-        self.assertNotIn("unit=", line)
+                           "measures": [{"type": 1, "value": 74850,
+                                         "unit": -3}]}])[0]
+        self.assertNotIn('"', line)
 
-    def test_an_unknown_code_is_named_unknown_and_is_still_written(self):
-        # Newer firmware invents codes. Dropping one would lose the reading.
+    def test_grpid_is_a_tag(self):
+        line = wi.points([{"grpid": 4242, "date": 100, "deviceid": "d",
+                           "measures": [{"type": 1, "value": 1,
+                                         "unit": 0}]}])[0]
+        self.assertIn(",grpid=4242,", line)
+
+    def test_a_group_without_a_grpid_raises(self):
+        with self.assertRaises(wi.IngestFailed):
+            wi.points([{"date": 100, "deviceid": "d",
+                        "measures": [{"type": 1, "value": 1, "unit": 0}]}])
+
+    def test_a_group_without_a_deviceid_is_tagged_unknown(self):
+        line = wi.points([{"grpid": 1, "date": 100,
+                           "measures": [{"type": 4, "value": 1780,
+                                         "unit": -3}]}])[0]
+        self.assertIn(",deviceid=unknown ", line)
+
+    def test_a_model_string_is_tagged_verbatim(self):
+        line = wi.points([{"grpid": 1, "date": 100, "deviceid": "d",
+                           "model": "Body Cardio",
+                           "measures": [{"type": 1, "value": 1,
+                                         "unit": 0}]}])[0]
+        self.assertIn(",model=Body\\ Cardio ", line)
+
+    def test_a_group_without_a_model_carries_no_model_tag(self):
+        # Groups from before 2022 carry none, and nothing invents one.
+        line = wi.points([{"grpid": 1, "date": 100, "deviceid": "d",
+                           "measures": [{"type": 1, "value": 1,
+                                         "unit": 0}]}])[0]
+        self.assertNotIn("model=", line)
+
+    def test_modelid_is_not_written(self):
+        # The same fact under a second name, on a point deviceid already keys.
+        line = wi.points([{"grpid": 1, "date": 100, "deviceid": "d",
+                           "modelid": 6, "model_id": 6,
+                           "measures": [{"type": 1, "value": 1,
+                                         "unit": 0}]}])[0]
+        self.assertNotIn("modelid=", line)
+        self.assertNotIn("model_id=", line)
+
+    def test_a_segmental_family_writes_five_fields_on_one_line(self):
+        measures = [{"type": 175, "value": 3000 + n, "unit": -3,
+                     "position": p}
+                    for n, p in enumerate([2, 3, 12, 10, 11])]
+        line = wi.points([{"grpid": 1, "date": 100, "deviceid": "d",
+                           "measures": measures}])[0]
+        for suffix in ("right_arm", "left_arm", "torso",
+                       "left_leg", "right_leg"):
+            self.assertIn("muscle_mass_%s=" % suffix, line)
+
+    def test_a_whole_body_code_at_position_seven_keeps_its_bare_name(self):
+        line = wi.points([{"grpid": 1, "date": 100, "deviceid": "d",
+                           "measures": [{"type": 168, "value": 12000,
+                                         "unit": -3, "position": 7}]}])[0]
+        self.assertIn(" extracellular_water=12.000 ", line)
+
+    def test_an_unknown_code_is_written_as_type_n_and_is_not_dropped(self):
         line = wi.points([{"grpid": 1, "date": 100, "deviceid": "d",
                            "measures": [{"type": 9999, "value": 5,
                                          "unit": 0}]}])[0]
-        self.assertIn(",type=9999,", line)
-        self.assertIn(",type_name=unknown,", line)
-        self.assertNotIn("unit=", line)
-        self.assertTrue(line.endswith('grpid="1",value=5 100'))
+        self.assertIn(" type_9999=5 ", line)
 
-    def test_a_segmental_measure_carries_its_position(self):
-        # Types 173, 174 and 175 repeat a type per body position, 0-28.
+    def test_a_duplicate_field_key_stops_the_run(self):
+        # The same code at the same position twice in one group. It raises
+        # rather than overwriting: a silently overwritten reading is worse
+        # than a job that wedges until a person looks.
+        with self.assertRaises(wi.IngestFailed):
+            wi.points([{"grpid": 1, "date": 100, "deviceid": "d",
+                        "measures": [
+                            {"type": 175, "value": 1, "unit": 0,
+                             "position": 2},
+                            {"type": 175, "value": 2, "unit": 0,
+                             "position": 2},
+                        ]}])
+
+    def test_two_positionless_measures_of_one_code_stop_the_run(self):
+        # Both resolve to `_position_none`, which is the second and last way
+        # the duplicate stop is reachable.
+        with self.assertRaises(wi.IngestFailed):
+            wi.points([{"grpid": 1, "date": 100, "deviceid": "d",
+                        "measures": [
+                            {"type": 1, "value": 74850, "unit": -3},
+                            {"type": 1, "value": 74855, "unit": -3},
+                        ]}])
+
+    def test_a_new_segmental_code_cannot_reach_the_duplicate_stop(self):
+        # Repetition is read from the group's shape, so an unknown code
+        # repeated across five positions needs no edit and raises nothing.
+        measures = [{"type": 176, "value": 100 + p, "unit": -2,
+                     "position": p} for p in (2, 3, 12, 10, 11)]
         line = wi.points([{"grpid": 1, "date": 100, "deviceid": "d",
-                           "measures": [{"type": 174, "value": 1234,
-                                         "unit": -3, "position": 5}]}])[0]
-        self.assertIn(",position=5,", line)
+                           "measures": measures}])[0]
+        self.assertIn("type_176_right_arm=", line)
+        self.assertIn("type_176_left_leg=", line)
 
-    def test_a_segmental_measure_carries_its_position_name(self):
-        # The numeric code alone makes a panel legend unreadable.
-        line = wi.points([{"grpid": 1, "date": 100, "deviceid": "d",
-                           "measures": [{"type": 175, "value": 1234,
-                                         "unit": -3, "position": 10}]}])[0]
-        self.assertIn(",position=10,", line)
-        self.assertIn(",position_name=left_leg ", line)
+    def test_nothing_is_written_for_any_group_when_one_raises(self):
+        # points() raises, so no line is written for ANY group in the run, the
+        # resume point does not advance, and every later run fails the same way
+        # until a person looks.
+        good = {"grpid": 1, "date": 100, "deviceid": "d",
+                "measures": [{"type": 1, "value": 1, "unit": 0}]}
+        bad = {"grpid": 2, "date": 200, "deviceid": "d",
+               "measures": [{"type": 1, "value": 1, "unit": 0},
+                            {"type": 1, "value": 2, "unit": 0}]}
+        with self.assertRaises(wi.IngestFailed):
+            wi.points([good, bad])
 
-    def test_position_7_is_whole_body(self):
-        # The spec omits 7; the water types arrive at it and must not read as
-        # `unknown` on every panel that shows them.
-        line = wi.points([{"grpid": 1, "date": 100, "deviceid": "d",
-                           "measures": [{"type": 168, "value": 1234,
-                                         "unit": -3, "position": 7}]}])[0]
-        self.assertIn(",position=7,", line)
-        self.assertIn(",position_name=whole_body ", line)
-
-    def test_a_position_outside_the_table_is_named_unknown(self):
-        # Newer hardware invents positions, exactly as it invents type codes.
-        line = wi.points([{"grpid": 1, "date": 100, "deviceid": "d",
-                           "measures": [{"type": 175, "value": 1234,
-                                         "unit": -3, "position": 99}]}])[0]
-        self.assertIn(",position=99,", line)
-        self.assertIn(",position_name=unknown ", line)
-
-    def test_a_measure_without_a_position_carries_no_position_tag(self):
-        line = wi.points([{"grpid": 1, "date": 100, "deviceid": "d",
-                           "measures": [{"type": 1, "value": 74850,
-                                         "unit": -3, "position": None}]}])[0]
-        self.assertNotIn("position=", line)
-        self.assertNotIn("position_name", line)
-
-    def test_a_tag_value_holding_a_space_is_escaped(self):
-        # A raw space would end the tag set and the rest would parse as fields.
-        real = dict(wi.TYPES)
-        wi.TYPES[9998] = ("space name", "a b")
-        try:
-            line = wi.points([{"grpid": 1, "date": 100, "deviceid": "d",
-                               "measures": [{"type": 9998, "value": 1,
-                                             "unit": 0}]}])[0]
-        finally:
-            wi.TYPES.clear()
-            wi.TYPES.update(real)
-        self.assertIn(",type_name=space\\ name,", line)
-        self.assertIn(",unit=a\\ b,", line)
-
-    def test_a_group_carrying_a_device_model_tags_both_code_and_name(self):
-        # The account has more than one scale; a panel needs to tell them apart
-        # without anyone memorising which opaque deviceid is which.
-        line = wi.points([{"grpid": 1, "date": 100, "deviceid": "d",
-                           "modelid": 6, "model": "Body Cardio",
-                           "measures": [{"type": 1, "value": 74850,
+    def test_a_typed_height_is_one_point_with_one_field(self):
+        line = wi.points([{"grpid": 1, "date": 100,
+                           "measures": [{"type": 4, "value": 1780,
                                          "unit": -3}]}])[0]
-        self.assertIn(",modelid=6,", line)
-        self.assertIn(",model=Body\\ Cardio ", line)
+        self.assertEqual(
+            line,
+            "withings_measure_group,person=rob,grpid=1,deviceid=unknown"
+            " height=1.780 100")
 
-    def test_a_group_without_a_device_model_carries_neither_tag(self):
-        # Older groups predate the field; an absent tag beats a placeholder.
-        line = wi.points([{"grpid": 1, "date": 100, "deviceid": "d",
-                           "measures": [{"type": 1, "value": 74850,
-                                         "unit": -3}]}])[0]
-        self.assertNotIn("modelid=", line)
-        self.assertNotIn("model=", line)
+    def test_a_cuff_reading_is_one_point_with_three_fields(self):
+        line = wi.points([{"grpid": 1, "date": 100, "deviceid": "cuff",
+                           "measures": [
+                               {"type": 9, "value": 78, "unit": 0},
+                               {"type": 10, "value": 121, "unit": 0},
+                               {"type": 11, "value": 62, "unit": 0},
+                           ]}])[0]
+        self.assertIn(" diastolic_blood_pressure=78,heart_pulse=62,"
+                      "systolic_blood_pressure=121 100", line)
+
+    def test_a_group_with_no_measures_writes_no_line(self):
+        # A line with no fields is not valid line protocol.
+        self.assertEqual(
+            wi.points([{"grpid": 1, "date": 100, "measures": []}]), [])
 
     def test_a_measure_missing_a_field_raises_rather_than_writing_junk(self):
         with self.assertRaises(wi.IngestFailed):
             wi.points([{"grpid": 1, "date": 1, "measures": [{"type": 1}]}])
 
     def test_a_group_missing_its_date_raises_rather_than_landing_at_epoch(self):
-        # A group with no `date` is the same class of fault as a measure with no
-        # `value`, and gets the same answer. Dropping it at epoch 0 would put a
-        # 1970 outlier on every panel that no later run corrects.
+        # A defaulted timestamp writes a 1970 outlier that every panel shows
+        # and that no later run corrects.
         with self.assertRaises(wi.IngestFailed):
             wi.points([{"grpid": 1,
                         "measures": [{"type": 1, "value": 1, "unit": 0}]}])
@@ -770,6 +857,85 @@ class Heartbeat(unittest.TestCase):
         self.assertEqual(done.returncode, 1)
         self.assertIn("INFLUX_TOKEN", done.stdout)
         self.assertIn("verdict=failed", done.stdout)
+
+
+class GuideDrift(unittest.TestCase):
+    """The guide's units table, asserted against TYPES and POSITIONS.
+
+    THIS IS THE ONE COPY THAT CANNOT BE DELETED. Its readers are LLMs holding
+    an MCP connection and nothing else: no checkout of this repository, and no
+    file system to read TYPES from. So a units correction made in TYPES and not
+    in the guide is a wrong answer served to every MCP client - and the units
+    were corrected five at a time inside one day (commit e4c6e6d), so the drift
+    this guards is observed rather than hypothetical.
+
+    There is no generator: the assertion removes the drift a generator would
+    exist to prevent, at a fraction of the code. If a later redesign drops the
+    guide's units table, this class goes with it.
+    """
+
+    GUIDE = os.path.join(_HERE, "health-data-guide.md")
+    ROW = re.compile(
+        r"^\|\s*`([a-z0-9_]+(?:_<position>)?)`\s*\|\s*(.+?)\s*\|\s*(\d+)\s*\|$")
+    SEGMENT = "_<position>"
+    NO_UNIT = "—"        # the em dash the table uses for "no unit stated"
+
+    def block(self, name):
+        """The text between `<!-- name -->` and `<!-- /name -->`."""
+        with open(self.GUIDE, encoding="utf-8") as handle:
+            body = handle.read()
+        opener = "<!-- %s -->" % name
+        closer = "<!-- /%s -->" % name
+        self.assertIn(opener, body, "the guide lost the %s marker" % name)
+        self.assertIn(closer, body, "the guide lost the /%s marker" % name)
+        return body.split(opener, 1)[1].split(closer, 1)[0]
+
+    def rows(self):
+        found = []
+        for line in self.block("field-table").splitlines():
+            match = self.ROW.match(line.strip())
+            if match:
+                found.append(match.groups())
+        return found
+
+    def test_the_table_holds_every_live_field(self):
+        # 18 whole-body names plus the three segmental families as three rows.
+        self.assertEqual(len(self.rows()), 21)
+
+    def test_every_row_names_a_code_that_types_holds(self):
+        for name, _unit, code in self.rows():
+            self.assertIn(int(code), wi.TYPES, name)
+
+    def test_every_row_agrees_with_the_types_name(self):
+        for name, _unit, code in self.rows():
+            expected = wi.TYPES[int(code)][0]
+            if name.endswith(self.SEGMENT):
+                expected = expected.replace("_segments", "") + self.SEGMENT
+            self.assertEqual(name, expected,
+                             "guide row %r disagrees with TYPES[%s]"
+                             % (name, code))
+
+    def test_every_row_agrees_with_the_types_unit(self):
+        for name, unit, code in self.rows():
+            expected = wi.TYPES[int(code)][1]
+            written = "" if unit == self.NO_UNIT else unit
+            self.assertEqual(written, expected,
+                             "guide unit for %r disagrees with TYPES[%s]"
+                             % (name, code))
+
+    def test_a_segmental_row_names_a_segments_type(self):
+        # The `_segments` strip belongs to the naming rule, not to the table,
+        # so a row written with the placeholder must come from such a code.
+        for name, _unit, code in self.rows():
+            if name.endswith(self.SEGMENT):
+                self.assertTrue(wi.TYPES[int(code)][0].endswith("_segments"),
+                                name)
+
+    def test_every_named_segment_position_is_in_positions(self):
+        named = re.findall(r"`([a-z_]+)`", self.block("segment-positions"))
+        self.assertEqual(len(named), 5)
+        for position in named:
+            self.assertIn(position, wi.POSITIONS.values(), position)
 
 
 if __name__ == "__main__":
