@@ -1,7 +1,7 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": ["config:recommended"],
-  "enabledManagers": ["kubernetes", "kustomize"],
+  "enabledManagers": ["kubernetes", "kustomize", "dockerfile", "npm"],
   "recreateWhen": "always",
   "pinDigests": true,
   "minimumReleaseAge": "3 days",
@@ -16,8 +16,18 @@
       "/(^|/)kustomization\\.ya?ml$/"
     ]
   },
+  "dockerfile": {
+    "managerFilePatterns": [
+      "/^homelab/health/mcp/Dockerfile$/"
+    ]
+  },
+  "npm": {
+    "managerFilePatterns": [
+      "/^homelab/health/mcp/package\\.json$/"
+    ]
+  },
   "description": [
-    "SETTING ignorePaths REPLACES THE config:recommended DEFAULTS. config:recommended pulls in :ignoreModulesAndTests, whose ignorePaths cover node_modules, bower_components, vendor, and assorted test/fixture directories. Declaring this key overrides that list wholesale rather than adding to it. No practical effect here - this repo manages no YAML under any of those paths - but a future manager (npm, gomod) added to enabledManagers would scan vendored trees this list no longer excludes. Re-add the defaults if that happens.",
+    "SETTING ignorePaths REPLACES THE config:recommended DEFAULTS. config:recommended pulls in :ignoreModulesAndTests, whose ignorePaths cover node_modules, bower_components, vendor, and assorted test/fixture directories. Declaring this key overrides that list wholesale rather than adding to it. THE DEFAULTS ARE NOT RE-ADDED, AND THAT IS THE DECISION RATHER THAN AN OVERSIGHT: the npm manager arrived on 2026-09-04 and is scoped by managerFilePatterns to homelab/health/mcp/package.json alone, so it scans no vendored tree, and node_modules/ is in .gitignore, which stops the one live case - a local npm install committed by accident - one step earlier than an ignorePaths entry would. Re-adding the defaults would only filter what git never tracks. Revisit if a manager is ever enabled unscoped.",
     "legacy-microk8s/** and no_longer_used/** currently match NOTHING. Both managerFilePatterns are anchored to ^homelab/ and ^vps/, so neither frozen tree is scanned in the first place. They are listed as defence in depth against a future pattern that is not anchored, not as active exclusions. **/secrets/** is the opposite and is the one genuinely active entry of the three: the homelab pattern does match homelab/secrets/*.yaml, and this excludes it. Harmless either way, since those files hold only ${VAR} placeholders and name no image, but the exclusion is real rather than defensive.",
     "DO NOT SET suppressNotifications: [\"dependencyLookupWarnings\"]. homelab/ops/scripts/update-watch.py reads the dependency-lookup warning block off the dependency dashboard issue, and that suppression deletes it from the body."
   ],
@@ -40,6 +50,9 @@
       "groupName": "health stack",
       "automerge": false,
       "prPriority": 5 },
+    { "matchFileNames": ["homelab/health/mcp/**"],
+      "groupName": "influxdb-mcp build inputs",
+      "description": "The build inputs for ghcr.io/mnbf9rca/influxdb-mcp-server: the node base image and the upstream package with the lockfile that moves with it. MERGING ONE OF THESE DEPLOYS NOTHING BY ITSELF. It renders no manifest; the master build makes the image and keel delivers it on its six-hour poll, so do not go looking for an apply step. Placed after the homelab/health/** rule so this groupName wins for these files while that rule's automerge and prPriority still apply." },
     { "matchFileNames": ["homelab/ops/**"],
       "groupName": "ops tooling",
       "automerge": false,

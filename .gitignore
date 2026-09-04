@@ -9,3 +9,7 @@ docs/superpowers/
 # Byte-code from running the health scripts tests locally.
 __pycache__/
 *.pyc
+
+# A local `npm install` in homelab/health/mcp/ to refresh package-lock.json.
+# The lockfile is committed; the tree it describes is not.
+node_modules/

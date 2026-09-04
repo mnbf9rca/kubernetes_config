@@ -1,0 +1,99 @@
+# The only workflow in this repository. It builds ghcr.io/mnbf9rca/influxdb-mcp-server
+# from homelab/health/mcp/ and gates its own inputs on a pull request.
+#
+# NO workflow_dispatch. Every input is pinned and the lockfile is committed, so
+# a manual run would rebuild what the last master build already pushed;
+# retrying a failed push is GitHub's own re-run button on the run that failed.
+#
+# A ROLLBACK IS NOT A TAG EDIT. check-renovate-scope reads a pinned reference
+# under a complete keel annotation set as the frozen state and hard-fails
+# apply-homelab, so pointing the Deployment at sha-<n> means stripping the keel
+# annotations in the same emergency edit. The rollback is what every other
+# update here does: revert the build input, let the master build make the
+# image, and keel delivers it.
+name: influxdb-mcp image
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'homelab/health/mcp/**'
+      - '.github/workflows/influxdb-mcp-image.yml'
+  pull_request:
+    paths:
+      - 'homelab/health/mcp/**'
+      - '.github/workflows/influxdb-mcp-image.yml'
+
+# contents: read and packages: write, and nothing else. Login uses the job's own
+# GITHUB_TOKEN; no secret is added to the repository.
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Compute the tags
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/mnbf9rca/influxdb-mcp-server
+          # `stable` is what the cluster runs and keel follows. `sha-<short>`
+          # says which commit's inputs an image came from, and comes from the
+          # workflow's own commit context with no parsing.
+          tags: |
+            type=raw,value=stable,enable={{is_default_branch}}
+            type=sha
+
+      # Built once, loaded into the local daemon, and asserted BEFORE anything
+      # is pushed - on master as well as on a pull request.
+      - name: Build
+        uses: docker/build-push-action@v6
+        with:
+          context: homelab/health/mcp
+          platforms: linux/amd64
+          load: true
+          push: false
+          tags: influxdb-mcp-server:ci
+
+      # The one failure mode the hook has: the SDK moved and the patch no
+      # longer registers. Nothing in this repository can run a JavaScript test,
+      # so this build is the hook's only check. stdio, not --http, because that
+      # needs no session id and no SSE parsing. The InfluxDB environment is
+      # dummy: the assertion is the tool list, not a query.
+      - name: Assert the guidance tool is registered
+        run: |
+          set -euo pipefail
+          printf '%s\n' \
+            '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"ci","version":"0"}}}' \
+            '{"jsonrpc":"2.0","method":"notifications/initialized","params":{}}' \
+            '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}' \
+            | timeout 60 docker run -i --rm \
+                -e INFLUXDB_URL=http://127.0.0.1:8086 \
+                -e INFLUXDB_TOKEN=not-a-real-token \
+                -e INFLUXDB_ORG=ci \
+                influxdb-mcp-server:ci > tools.json || true
+          cat tools.json
+          grep -q 'how-to-use-health-data' tools.json
+
+      - name: Log in to GHCR
+        if: github.event_name == 'push'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Push
+        if: github.event_name == 'push'
+        run: |
+          set -euo pipefail
+          for tag in ${{ steps.meta.outputs.tags }}; do
+            docker tag influxdb-mcp-server:ci "$tag"
+            docker push "$tag"
+          done
