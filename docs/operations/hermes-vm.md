@@ -650,6 +650,12 @@ That is why the units set `HERMES_HOME` rather than extending PATH: a wrong or a
 **`hermes update` restarts the three gateway units itself** — `hermes update --plan` says so — and does **not** restart `hermes-webui` or `hermes-dashboard`, because neither runs the `hermes` entry point.
 Without a deliberate restart of those two, the WebUI keeps serving the module already resident in memory, and the break surfaces at the next restart or the 04:45 reboot.
 
+**A Hermes process discovers an MCP server's tools once, when it connects, so a tool added to a server is invisible to every already-running Hermes process until that process restarts.**
+Nothing re-lists tools on a live connection, and neither the server's own restart nor a reconnect re-runs discovery, so the stale process keeps serving the tool list it captured — which is how the `how-to-use-health-data` tool added to the health MCP server on September 4, 2026 stayed missing on September 5.
+**A WebUI chat does not run in the profile gateway**, it runs in `hermes-webui`, so restarting `hermes-gateway-<profile>` fixes the profile's cron and messaging turns and changes nothing about the conversation in the browser.
+Restart all three — `hermes-gateway-<profile>`, `hermes-webui` and `hermes-dashboard` — and prove each one by its `tools.mcp_tool` registration line, `MCP server '<name>' (HTTP): registered N tool(s): …`, which names every tool and so carries the new count: a profile gateway writes it to `~/.hermes/profiles/<profile>/logs/agent.log`, while `hermes-webui` and `hermes-dashboard` run under the base `HERMES_HOME` and write it to `~/.hermes/logs/agent.log`.
+Those two connect **lazily**, on the first turn that uses the server rather than at start — the WebUI process that served the stale list had been up since 17:56 on September 3 and registered the server at 22:46 that evening — so the line appears only after a chat in that profile touches the server, and its absence straight after a restart is not a fault.
+
 **Update snapshots live in `~/.hermes/backups/`**, not `~/.hermes/pre_update_backups/` — an earlier draft of this design named the second path and it does not exist.
 Retention is five snapshots, pruned after each write and floored at one, at roughly 200 MiB each.
 
