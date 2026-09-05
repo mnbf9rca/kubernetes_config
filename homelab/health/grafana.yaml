@@ -60,7 +60,7 @@ spec:
       securityContext: { fsGroup: 472 }   # grafana image runs as uid/gid 472
       containers:
         - name: grafana
-          image: grafana/grafana:13.2.0@sha256:3fd54ae1214669f8355f065ec9f6445d5279a3d77095ab048ca045685272429b   # pin: latest stable as of 2026-07-26; Renovate proposes updates
+          image: grafana/grafana:13.2.1@sha256:f772d434e8fab0049deb2b1b30abd43342bcfca1537614aa8d36080232cf4283   # pin: latest stable as of 2026-07-26; Renovate proposes updates
           env:
             - { name: GF_INSTALL_PLUGINS, value: marcusolsson-hourly-heatmap-panel }
             - { name: GF_SECURITY_ADMIN_USER, value: rob }
