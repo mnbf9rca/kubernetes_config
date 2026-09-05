@@ -254,6 +254,23 @@ spec:
                   # raise the two together.
                   # It appears in BOTH lists deliberately: the dump is produced on a schedule, so
                   # a stale one is as bad as a missing one, and only FRESH_ARTIFACTS notices that.
+                  #
+                  # `withings-tokens` holds two short strings - a refresh token and a userid -
+                  # and measured 83 bytes on 2026-09-02. Its floor is therefore 64, NOT the 256
+                  # that `garmin-tokens` carries, which would fail the gate every night.
+                  # That size tracks the length of Withings' own tokens, so a provider change
+                  # that shortened them would fail this row on a perfectly healthy file.
+                  #
+                  # A RESTORE IS NOT A RECOVERY PATH HERE. The garmin credential this row
+                  # mirrors lasts a year; this one rotates every six hours and the previous
+                  # token dies when the successor's access token is used, seconds later in the
+                  # same run. Restoring withings_tokens.json yields a usable token only for a
+                  # loss falling between the 03:00 snapshot and the next successful run.
+                  # Outside that window the symptom is `verdict=failed failure=refresh`, and
+                  # the recovery is a --auth run. This row's real job is to detect that the
+                  # PVC stopped being captured. It gets no FRESH_ARTIFACTS entry: freshness
+                  # there means "produced on a schedule", and this file changes only when the
+                  # job runs, which the `withings-ingest` monitor already reports.
                   EXPECTED_ARTIFACTS="
                   emby-library:/data/pvc-*_downloads_emby-config/data/library.db:1048576
                   hydra2-config:/data/pvc-*_downloads_hydra2-config/nzbhydra.yml:4096
@@ -264,6 +281,7 @@ spec:
                   grafana-dump:/data/pvc-*_health_health-dumps/grafana/*-grafana.db:204800
                   influxdb-bolt:/data/pvc-*_health_influxdb-data/influxd.bolt:32768
                   garmin-tokens:/data/pvc-*_health_garmin-tokens/garmin_tokens.json:256
+                  withings-tokens:/data/pvc-*_health_withings-tokens/withings_tokens.json:64
                   hermes-zip:/data/pvc-*_backup_hermes-dumps/hermes-*.zip:16777216
                   hindsight-dump:/data/pvc-*_hindsight_hindsight-dumps/hindsight-*.sql.gz:4096
                   "

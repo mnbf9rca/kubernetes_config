@@ -462,6 +462,7 @@ Skip it for an isolated worker, which is the `safer_web_reader` pattern ([safer-
 
 **Launching a profile from the WebUI writes those same three entries itself**, into the profile's `config.yaml` and as `TERMINAL_DOCKER_VOLUMES` in its `.env`.
 The helper then finds all three present and writes nothing, which is the intended outcome rather than a sign it failed.
+The `.env` line the WebUI writes is double-quoted, which the WebUI's own parser then cannot read — see [The docker terminal sandboxes](#the-docker-terminal-sandboxes).
 
 ### 8. An always-on gateway, for any messaging platform
 
@@ -649,6 +650,12 @@ That is why the units set `HERMES_HOME` rather than extending PATH: a wrong or a
 **`hermes update` restarts the three gateway units itself** — `hermes update --plan` says so — and does **not** restart `hermes-webui` or `hermes-dashboard`, because neither runs the `hermes` entry point.
 Without a deliberate restart of those two, the WebUI keeps serving the module already resident in memory, and the break surfaces at the next restart or the 04:45 reboot.
 
+**A Hermes process discovers an MCP server's tools once, when it connects, so a tool added to a server is invisible to every already-running Hermes process until that process restarts.**
+Nothing re-lists tools on a live connection, and neither the server's own restart nor a reconnect re-runs discovery, so the stale process keeps serving the tool list it captured — which is how the `how-to-use-health-data` tool added to the health MCP server on September 4, 2026 stayed missing on September 5.
+**A WebUI chat does not run in the profile gateway**, it runs in `hermes-webui`, so restarting `hermes-gateway-<profile>` fixes the profile's cron and messaging turns and changes nothing about the conversation in the browser.
+Restart all three — `hermes-gateway-<profile>`, `hermes-webui` and `hermes-dashboard` — and prove each one by its `tools.mcp_tool` registration line, `MCP server '<name>' (HTTP): registered N tool(s): …`, which names every tool and so carries the new count: a profile gateway writes it to `~/.hermes/profiles/<profile>/logs/agent.log`, while `hermes-webui` and `hermes-dashboard` run under the base `HERMES_HOME` and write it to `~/.hermes/logs/agent.log`.
+Those two connect **lazily**, on the first turn that uses the server rather than at start — the WebUI process that served the stale list had been up since 17:56 on September 3 and registered the server at 22:46 that evening — so the line appears only after a chat in that profile touches the server, and its absence straight after a restart is not a fault.
+
 **Update snapshots live in `~/.hermes/backups/`**, not `~/.hermes/pre_update_backups/` — an earlier draft of this design named the second path and it does not exist.
 Retention is five snapshots, pruned after each write and floored at one, at roughly 200 MiB each.
 
@@ -728,6 +735,10 @@ The cause was not pinned down; `hermes config set` was tested and exonerated, wh
 The credential was rotated and the placeholder restored the same day.
 After any configuration change made outside the CLI, `grep -c '\${' <profile home>/config.yaml` and confirm the placeholders are still placeholders.
 
+**`TERMINAL_DOCKER_VOLUMES` must be single-quoted in a profile's `.env`, or the WebUI cannot read it.**
+hermes-webui parses that file itself — `v.strip().strip('"').strip("'")` at `api/profiles.py:903`, and again at 1561 on the profile-switch reload — which strips the enclosing quotes without undoing dotenv's `\"` escaping, so the double-quoted form the platform writes reaches the WebUI process as literal backslashes and its terminal cleanup thread logs an `expected valid JSON` error into `~/.hermes/logs/errors.log` once a minute.
+Single-quoted JSON parses identically under both readers, and was applied to the four profiles carrying the key on September 3, 2026; a WebUI profile launch writes the double-quoted form back, so expect it to return until the parser is fixed upstream.
+
 **Containers are created lazily, per (profile, task-id), so one profile can own several at once.**
 Each is named `hermes-<hex>` and labelled `hermes-profile:<name>` and `hermes-task-id:<id>`.
 The label is what tooling selects on; the name carries nothing.
@@ -747,6 +758,19 @@ The sandbox userland is hygiene, not the containment boundary — the boundary i
 
 **`no_agent` cron scripts are unaffected by any of this.**
 The scheduler runs them as plain host subprocesses (`subprocess.Popen` in `cron/scheduler.py`), so `hermes-app-alive` still runs on the host and reports on the host whatever a profile's terminal backend is set to.
+
+### The Home Assistant event feed on `hal`
+
+**`hal` is the only profile that watches Home Assistant.**
+Its settings live in `platforms.homeassistant.extra` in `~/.hermes/profiles/hal/config.yaml` — agent state on the VM, carried by the nightly `hermes backup` zip, with no copy in this repository — so a change is made on the VM and recorded here.
+
+**`enabled: false` under `platforms.homeassistant` does not disable the platform.**
+The gateway marks an explicit enable or disable only for a **top-level** platform block (`enabled_was_explicit`, `gateway/config.py`), so a nested block never sets that marker and the later env-driven pass re-enables the platform on the presence of `HASS_TOKEN`.
+Empty `watch_domains` and `watch_entities` with `watch_all: false` is the control that holds.
+The same trap applies to any plugin platform whose token is injected: read the enable state out of the journal after a restart, not out of the file.
+
+On September 3, 2026 the operator emptied `hal`'s watch lists, and removed the default profile's `homeassistant` block, its `HA_AUTH_TOKEN` reference and its `homeassistant` toolset entry.
+Every watched state change was a full agent turn and so a hindsight retain, which made `hal` about 99% of hindsight's LLM spend.
 
 ### `hermes` CLI spellings
 

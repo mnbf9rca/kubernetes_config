@@ -5,6 +5,7 @@
   "recreateWhen": "always",
   "pinDigests": true,
   "minimumReleaseAge": "3 days",
+  "rebaseWhen": "behind-base-branch",
   "kubernetes": {
     "managerFilePatterns": [
       "/^homelab/.+\\.ya?ml$/",
@@ -34,6 +35,7 @@
   "description": [
     "SETTING ignorePaths REPLACES THE config:recommended DEFAULTS. config:recommended pulls in :ignoreModulesAndTests, whose ignorePaths cover node_modules, bower_components, vendor, and assorted test/fixture directories. Declaring this key overrides that list wholesale rather than adding to it. THE DEFAULTS ARE NOT RE-ADDED, AND THAT IS THE DECISION RATHER THAN AN OVERSIGHT: the npm manager arrived on 2026-09-04 and is scoped by managerFilePatterns to homelab/health/mcp/package.json alone, so it scans no vendored tree, and node_modules/ is in .gitignore, which stops the one live case - a local npm install committed by accident - one step earlier than an ignorePaths entry would. Re-adding the defaults would only filter what git never tracks. Revisit if a manager is ever enabled unscoped.",
     "legacy-microk8s/** and no_longer_used/** currently match NOTHING. Both managerFilePatterns are anchored to ^homelab/ and ^vps/, so neither frozen tree is scanned in the first place. They are listed as defence in depth against a future pattern that is not anchored, not as active exclusions. **/secrets/** is the opposite and is the one genuinely active entry of the three: the homelab pattern does match homelab/secrets/*.yaml, and this excludes it. Harmless either way, since those files hold only ${VAR} placeholders and name no image, but the exclusion is real rather than defensive.",
+    "REBASE EVERY OPEN PULL REQUEST WHEN master MOVES. The master branch ruleset requires the checks `changes`, `lint` and `build`, which exist only on a pull request head the workflow has actually run on, so a pull request opened before the workflow existed - or left behind while master moved - can never merge until Renovate pushes a new head; Renovate's default rebaseWhen: auto only rebases on conflict, which is not enough.",
     "DO NOT SET suppressNotifications: [\"dependencyLookupWarnings\"]. homelab/ops/scripts/update-watch.py reads the dependency-lookup warning block off the dependency dashboard issue, and that suppression deletes it from the body."
   ],
   "ignorePaths": [
@@ -45,6 +47,7 @@
     { "matchFileNames": [
         "homelab/workloads/**",
         "homelab/bootstrap/keel/**",
+        "homelab/health/influxdb-mcp.yaml",
         "vps/workloads/**",
         "vps/bootstrap/keel/**",
         "vps/bootstrap/cloudflared/**"
@@ -57,7 +60,10 @@
       "prPriority": 5 },
     { "matchFileNames": ["homelab/health/mcp/**", ".github/workflows/influxdb-mcp-image.yml"],
       "groupName": "influxdb-mcp build inputs",
-      "description": "The build inputs for ghcr.io/mnbf9rca/influxdb-mcp-server: the node base image, the upstream package with the lockfile that moves with it, and the actions the workflow runs. MERGING ONE OF THESE DEPLOYS NOTHING BY ITSELF. It renders no manifest; the pull request's own build makes the image and pushes it, the merge promotes that same digest to `stable`, and keel delivers it on its six-hour poll, so do not go looking for an apply step. Placed after the homelab/health/** rule so this groupName wins for these files while that rule's automerge and prPriority still apply - note that the workflow path is outside homelab/, so it takes this groupName but neither of those two fields. THE github-actions MANAGER WAS ENABLED ON 2026-09-04, reversing the design's default of no: all five actions in this workflow had gone stale unwatched and the operator caught it in review. It is scoped to this one workflow file, which is the only one this repository has. Top-level pinDigests is left ON for it deliberately, so Renovate will also propose pinning each action to a commit sha - the wanted end state for a workflow that pushes and signs an image, and not the drift the keel rule above exists to prevent, since nothing rewrites a workflow file outside a pull request." },
+      "automerge": true,
+      "automergeType": "pr",
+      "automergeStrategy": "squash",
+      "description": "The build inputs for ghcr.io/mnbf9rca/influxdb-mcp-server: the node base image, the upstream package with the lockfile that moves with it, and the actions the workflow runs. MERGING ONE OF THESE DEPLOYS NOTHING BY ITSELF. It renders no manifest; the pull request's own build makes the image and pushes it, the merge promotes that same digest to `stable`, and keel delivers it on its six-hour poll, so do not go looking for an apply step. Placed after the homelab/health/** rule so this groupName wins for these files; that rule's prPriority still applies to them, but its automerge: false NO LONGER DOES, because this rule sets automerge itself and later rules win per field. THIS GROUP AUTOMERGES ON PURPOSE: there is nothing for a human to do between the two runs, since the pull request run is the whole test (it builds the image, asserts the tool is registered, and pushes and signs it) and the merge run is the whole deploy (it verifies that digest and retags it `stable`), with the three required checks and Renovate's own stability-days wait as the gate. The top-level rebaseWhen: behind-base-branch is what stops two build-input pull requests merging out of order - the second rebases, rebuilds and re-pushes before it merges, so `stable` always lands on the digest built from the tree that actually merged. automergeStrategy is squash because the repository allows no other merge. Note that the workflow path is outside homelab/, so it takes this groupName but neither of the health rule's two fields. THE github-actions MANAGER WAS ENABLED ON 2026-09-04, reversing the design's default of no: all five actions in this workflow had gone stale unwatched and the operator caught it in review. It is scoped to this one workflow file, which is the only one this repository has. Top-level pinDigests is left ON for it deliberately, so Renovate will also propose pinning each action to a commit sha - the wanted end state for a workflow that pushes and signs an image, and not the drift the keel rule above exists to prevent, since nothing rewrites a workflow file outside a pull request." },
     { "matchFileNames": ["homelab/ops/**"],
       "groupName": "ops tooling",
       "automerge": false,

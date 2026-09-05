@@ -39,8 +39,8 @@ THE ALLOWLIST IS DELIBERATELY NARROW, and every entry is a per-cluster fact
 that CANNOT be shared:
 
   script    the copy note itself (VPS only -- it names the other file)
-            the `IMAGE_FLOOR` constant and its comment: 4 on homelab against a
-              steady state of 5, 7 on the VPS against 9
+            the `IMAGE_FLOOR` constant and its comment: 6 on homelab against a
+              steady state of 7, 7 on the VPS against 9
             the manifest path in the push-URL note
 
   manifest  the copy note itself (VPS only)

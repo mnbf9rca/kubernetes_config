@@ -43,7 +43,14 @@ kind: Namespace
 metadata:
   name: health
   # PSA baseline (cluster default). Nothing in health uses hostPath/hostNetwork.
-  # NO keel in this namespace: images are digest/version-pinned (health data pipeline).
+  # NO keel in this namespace, with ONE named exception. Images here are
+  # digest/version-pinned because they are stateful or third-party and must not
+  # roll unreviewed: a roll can migrate data or change behaviour nobody read.
+  # The exception is influxdb-mcp, which runs the floating tag `stable` on an
+  # image this repository builds from its own homelab/health/mcp/ inputs. It is
+  # stateless, and the reviewed decision is the build input rather than the
+  # roll, which is the other side of that same line. The exemption is written
+  # down in scripts/check-renovate-scope.py's FLOATING_EXEMPT list.
 ---
 apiVersion: v1
 kind: Namespace
@@ -73,6 +80,19 @@ metadata:
   # stateful store that runs Alembic migrations on startup and holds an agent's
   # memory, so an unattended auto-update is exactly the failure to design out.
   # Renovate proposes the bumps; `make hindsight-upgrade` takes the dump first.
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: proxy
+  # PSA baseline (cluster default), so no labels. tinyproxy needs no hostPath,
+  # no hostNetwork, no ServiceAccount and no RBAC - only a ClusterIP the
+  # health-namespace cloudflared pod can dial, and ordinary outbound egress.
+  #
+  # keel DOES run here, unlike health, ops, hindsight and backup: this is a
+  # workload namespace, its one image floats and carries the full annotation
+  # set, so its updates arrive on keel's poll and nothing here needs a hand
+  # update.
 ---
 # NOTE: cert-manager and local-path-storage namespaces are created by their
 # respective upstream manifests, so they're omitted here (kustomize rejects

@@ -150,14 +150,17 @@ spec:
             - { name: LOGGER_LEVEL, value: "DEBUG" }
             - { name: SCREENSHOT_MAX_HEIGHT, value: "16000" }
             - { name: TZ, value: "Europe/London" }
-            # DO NOT set HTTP_PROXY / HTTPS_PROXY — the old setup routed
-            # through a sibling `proxy-client` container that chained to
-            # homelab's tinyproxy over Cloudflare Access TCP. Homelab was
-            # rebuilt without tinyproxy so the chain is dead. VPS now
-            # egresses directly. Migrated watches that referenced the
-            # named proxy "homelab" had their `"proxy"` field cleared
-            # post-migration (see feedback_changedetection_proxy_cleanup.md
-            # in agent memory).
+            # DO NOT set HTTP_PROXY / HTTPS_PROXY. The homelab egress proxy is
+            # live again - `homelab-proxy` on port 8888, a cloudflared access
+            # client reaching tinyproxy over the homelab cloudflared tunnel
+            # (`cynexia-health`) - but it is assigned PER WATCH from
+            # changedetection's own settings, never from the environment. An
+            # environment proxy would route every fetch through a cross-cluster
+            # chain, including the ones that already work directly, which is
+            # slower and has more ways to fail. The watches that need the
+            # residential exit address carry
+            # http://homelab-proxy.vps.svc.cluster.local:8888 in their proxy
+            # field. See docs/operations/vps.md.
           ports:
             - containerPort: 5000
           # There is no upstream HEALTHCHECK (open since 2022) and the image

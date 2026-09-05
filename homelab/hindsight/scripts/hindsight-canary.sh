@@ -132,14 +132,12 @@ trap on_exit EXIT
 msg_reset
 
 # ---- the request bodies ---------------------------------------------------
-# A FIXED sentinel fact, so Hindsight's dedup (present since 0.5.0, satisfied by
-# the image pin) keeps this bank at one memory however many thousand times the
-# canary runs. `"async": false` makes retain synchronous, so the recall below
-# tests the same write this run performed rather than a previous one's.
-# The sentence deliberately does NOT name the schedule: changing its wording
-# changes the dedup key, so a cadence change would otherwise leave a second
-# stale memory in the bank for no reason. Editing it at all costs one extra
-# memory, once.
+# A FIXED sentinel fact. NOTHING DEDUPLICATES IT: every run adds one memory, so
+# the bank grows without bound at 24 a day (253 units on 2026-09-03), and that
+# costs nothing worth acting on because consolidation is windowed at about 7,000
+# input tokens per run whatever the bank holds (measured the same day).
+# `"async": false` makes retain synchronous, so the recall below tests the same
+# write this run performed rather than a previous one's.
 cat > "$REQ" <<'JSON'
 {"items":[{"content":"The hindsight canary writes this sentence on every run to prove the write path is alive.","context":"hindsight canary"}],"async":false}
 JSON

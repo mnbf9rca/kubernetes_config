@@ -99,6 +99,7 @@ kubectl --context cynexia-vps -n kube-system get ds kube-flannel \
 | umami | `analytics.cynexia.com` | dedicated postgres |
 | n8n | `n8n.cynexia.com` | sqlite |
 | karakeep (+ meilisearch) | `keep.cynexia.com` | sqlite |
+| homelab-proxy | none — ClusterIP only | none |
 
 Every container here carries readiness and — where a restart is a safe remedy — liveness probes.
 Per-service targets and the reasoning behind each, including the deliberately shallow ones, are in [monitoring.md](monitoring.md#vps-cluster).
@@ -244,9 +245,31 @@ Config lives in the FreshRSS sqlite DB on the PVC (restic + sidecar backed up), 
 Use `dgtlmoon/sockpuppetbrowser`.
 `browserless/chrome:latest` is the deprecated v1 line and leaks CDP sessions under modern Playwright.
 
+### Residential egress through the homelab
+
+Several watched sites answer a fetch from Hetzner's address ranges with 403, so those watches leave from the operator's home connection instead.
+
+The chain is: changedetection — or chrome inside `sockpuppetbrowser`, for a Playwright watch — dials the `homelab-proxy` Service on port 8888; that pod runs `cloudflared access tcp`, which presents a Cloudflare Access service token and reaches `proxy.cynexia.com` on the homelab's `cynexia-health` tunnel; the tunnel's connector dials tinyproxy in the homelab `proxy` namespace, which opens the outbound connection over the home connection's default route.
+For an HTTPS watch the TLS session is end to end between changedetection and the target site, so no hop in the chain sees plaintext.
+
+Assign the proxy per watch, in changedetection's own proxy settings, as an entry named `homelab`:
+
+```
+http://homelab-proxy.vps.svc.cluster.local:8888
+```
+
 Do **not** set `HTTP_PROXY`/`HTTPS_PROXY` on changedetection.
-The old setup routed through a sibling `proxy-client` container chaining to homelab's tinyproxy over Cloudflare Access TCP; homelab was rebuilt without tinyproxy, so that chain is dead and the VPS now egresses directly.
-Migrated watches that referenced the named proxy `homelab` had their `proxy` field cleared post-migration — stale proxy references hide in `/datastore` inside both the watch entries and `changedetection.json`, and a URL-grep misses them because the compose-era proxy URL was a sibling container name rather than a hostname.
+An environment proxy routes every fetch through the cross-cluster chain, including the fetches that already work directly, which is slower and has more ways to fail.
+
+A watch with the proxy assigned **errors** when any pod in the chain is down; it does not fall back to direct egress.
+Unproxied watches are unaffected, so proxied-only failures point at the chain rather than at the internet.
+Recovery is `kubectl rollout restart` on the pod the error points at: `deploy/homelab-proxy` in `vps`, `deploy/cloudflared` in the homelab's `health` namespace, or `deploy/tinyproxy` in the homelab's `proxy` namespace.
+Every proxied watch failing at once, with unproxied ones fine, is the Access service token instead — read the `homelab-proxy` pod log, which records the refusal on every dial.
+
+The Access application is the whole gate, and it fails open: tinyproxy authenticates nobody, so a deleted or disabled application publishes an open HTTP proxy egressing from the home address rather than closing the path.
+The `proxy.cynexia.com` uptime-kuma monitor exists to detect exactly that — see [uptime-kuma.md](uptime-kuma.md#monitor-list).
+
+Stale proxy references hide in `/datastore`, inside both the watch entries and `changedetection.json`, and a URL-grep misses them because the compose-era proxy URL was a sibling container name rather than a hostname.
 
 ## Database shape
 

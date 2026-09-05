@@ -129,15 +129,24 @@ KEEL_ANNOTATIONS = frozenset({
     "keel.sh/pollSchedule",
 })
 
-# Namespaces where an unattended update is the failure to design out: stateful
-# stores that run forward-only migrations, scheduled jobs whose output nothing
-# re-verifies, and the backup runners themselves. These are the namespaces that
-# forbid keel in AGENTS.md, expressed as the render sees them.
+# Namespaces that forbid a floating tag, expressed as the render sees them.
+# WHAT THE PROHIBITION IS FOR: these namespaces hold stateful or third-party
+# images that must not roll unreviewed, because a roll can migrate data or
+# change behaviour nobody read - a forward-only schema migration on startup, a
+# scheduled job whose output nothing re-verifies, a backup runner. The reason is
+# the image's provenance and its effect on data, not the namespace's name.
+# FLOATING_EXEMPT below is the other side of that line: it is for stateless
+# images this repository builds itself from reviewed inputs, where the reviewed
+# decision is the build input and the roll only delivers it.
 NO_FLOAT_NAMESPACES = frozenset({"health", "hindsight", "ops", "backup"})
 
-# The written exemptions to the floating ban. An entry is a deliberate act and
-# must carry a namespace, an image and a reason; the test suite asserts all
-# three are non-empty. Consulted on BOTH floating arms below, not just inside
+# The written exemptions to the floating ban. AN ENTRY BELONGS HERE ONLY IF THE
+# IMAGE IS STATELESS AND THIS REPOSITORY BUILDS IT FROM REVIEWED INPUTS: nothing
+# to migrate when it rolls, and a human already read the change that produced
+# the image. An unattended third-party update is the thing the ban exists to
+# stop, and no entry here may be one. An entry is a deliberate act and must
+# carry a namespace, an image and a reason; the test suite asserts all three are
+# non-empty. Consulted on BOTH floating arms below, not just inside
 # the NO_FLOAT_NAMESPACES branch - keyed to a namespace the workload does not
 # live in, or reachable from only one arm, an exemption is dead code that looks
 # like policy.
@@ -161,6 +170,22 @@ FLOATING_EXEMPT = (
             "The same workload, listed a second time against the namespace it "
             "would land in if it is ever folded in with restic, so that move "
             "cannot turn this guard red for a reason nobody wrote down."),
+    },
+    {
+        "namespace": "health",
+        "image": "ghcr.io/mnbf9rca/influxdb-mcp-server",
+        "reason": (
+            "The one keel-managed workload in a namespace that otherwise "
+            "forbids floating tags. It is a stateless HTTP server with no "
+            "data to migrate - nothing to dump before a roll and nothing a "
+            "roll can migrate in place - and the image is SELF-BUILT here, "
+            "from inputs under homelab/health/mcp/ that Renovate proposes and "
+            "the operator merges. So the reviewed decision is the build input "
+            "and the roll only delivers it, which is the opposite of the "
+            "unattended third-party update the no-keel rule exists to stop. "
+            "The guard's is_floating_tag accepts `stable` and treats `0.2` as "
+            "pinned, so moving to a two-part version tag would need this "
+            "exemption removed and the keel annotations with it."),
     },
 )
 

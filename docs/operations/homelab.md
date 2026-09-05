@@ -14,7 +14,7 @@ Kubectl context: `cynexia-homelab`.
 | cert-manager | Let's Encrypt, Route53 DNS-01 solver, single wildcard `*.cynexia.net` cert |
 | local-path-provisioner | Backed by the node's SSD user volume (`/var/mnt/ssd`) |
 | NFS CSI driver | Static PV/PVCs against the Proxmox host's ZFS pool |
-| keel | Image auto-updates from floating tags — **except** the `health`, `ops`, `hindsight` and `backup` namespaces, which forbid keel outright, and except keel itself, which is digest-pinned (see [keel](#keel) below) |
+| keel | Image auto-updates from floating tags — **except** the `ops`, `hindsight` and `backup` namespaces, which forbid keel outright, `health`, which forbids it bar one named exception (`influxdb-mcp`, see [homelab-health.md](homelab-health.md#image-policy)), and keel itself, which is digest-pinned (see [keel](#keel) below) |
 | restic | Nightly CronJob (03:00 UTC) → Backblaze B2 `b2:homelab-restic-d5e15f22`, 7 daily / 4 weekly / 6 monthly. Pings healthchecks.io on start and exit code — see [monitoring.md](monitoring.md#the-restic-ping-wrapper) |
 | jottacloud-backup | Own namespace; rclone Jottacloud → NFS, then kopia → B2 `cloud-files-backup`; reports to the `jottacloud-backup` uptime-kuma push monitor |
 
@@ -55,12 +55,17 @@ Verify keel's permissions with a SelfSubjectAccessReview issued with keel's own 
 | `traefik` | Ingress | Traefik DaemonSet (PSA privileged — hostNetwork) |
 | `keel` | Auto-updates | keel controller |
 | `backup` | Backup | restic init Job + nightly CronJob (PSA privileged — hostPath) |
-| `health` | Personal health data pipeline | influxdb, apple-health-ingester, garmin-grafana, grafana, influxdb-mcp (behind Cloudflare Access), cloudflared, backup + freshness CronJobs — see [homelab-health.md](homelab-health.md) |
+| `health` | Personal health data pipeline | influxdb, apple-health-ingester, garmin-grafana, grafana (also public at `grafana.cynexia.com` behind Cloudflare Access), influxdb-mcp (behind Cloudflare Access), cloudflared, backup + freshness CronJobs — see [homelab-health.md](homelab-health.md) |
+| `hindsight` | Memory backend for the Hermes profiles | hindsight API, its PostgreSQL, the nightly `pg_dump` and the 15-minute canary — see [hindsight.md](hindsight.md) |
 | `ops` | Cluster-wide operational jobs | `update-watch` and `keel-fresh` CronJobs — see below |
+| `proxy` | Residential egress for changedetection on the VPS | tinyproxy — see [vps.md](vps.md#residential-egress-through-the-homelab) |
 
-Ingress hostnames are `*.cynexia.net` (Route53), Traefik-fronted, LAN/Tailscale only: `sonarr`, `radarr`, `sab`, `hydra`, `emby`, `grafana-health`.
+Ingress hostnames are `*.cynexia.net` (Route53), Traefik-fronted, LAN/Tailscale only: `sonarr`, `radarr`, `sab`, `hydra`, `emby`, `grafana-health`, `hindsight`, `hindsight-ui`.
+`grafana-health` is the only one of those that is also reachable from outside, on `grafana.cynexia.com` through the homelab cloudflared tunnel behind Cloudflare Access — the Traefik hostname itself stays LAN/Tailscale only.
 
-Retired in the rebuild: immich, ollama, open-webui, komga, jellyfin, mylar3, lazylibrarian, caddy, postgresql, **tinyproxy**. cloudflared was retired from the downloads-era stack but is not retired homelab-wide — the `health` namespace runs its own dedicated `cynexia-health` tunnel, separate from the VPS cluster's `cynexia-vps` tunnel.
+Retired in the rebuild: immich, ollama, open-webui, komga, jellyfin, mylar3, lazylibrarian, caddy, postgresql.
+tinyproxy was on that list until September 2, 2026, when it returned in its own `proxy` namespace to serve changedetection on the VPS — see [vps.md](vps.md#residential-egress-through-the-homelab).
+cloudflared was retired from the downloads-era stack but is not retired homelab-wide — the `health` namespace runs the `cynexia-health` tunnel, separate from the VPS cluster's `cynexia-vps` tunnel. It is the whole cluster's tunnel rather than the namespace's own: `proxy.cynexia.com` fronts an origin in the `proxy` namespace.
 
 ### The `ops` namespace
 
@@ -87,7 +92,7 @@ Three things about this namespace are deliberate and should survive a refactor:
   Every image is version-pinned and Renovate watches this tree, so neither job's own pin is an unwatched image.
   Since 2026-08-26 that is gated: `check-renovate-scope-homelab` runs in the `diff-homelab`/`apply-homelab` preflight, so losing the scope fails the next apply.
 - **Removal is one commit,** with a long list in it.
-  Drop `- ops` from `homelab/kustomization.yaml`, `rm -r homelab/ops/`, remove the namespace block, remove every `OPS_*` variable from `.env.tpl` and from both Makefile lists — `OPS_KUMA_UPDATE_TOKEN` and `OPS_KUMA_KEEL_TOKEN`, plus `OPS_HC_UPDATE_UUID` for as long as that retired line is still wired; grep rather than working from a list here — and from `scripts/check-ping-bodies.py` remove **both** `REQUIRED_TARGETS` entries (`update-watch.py` and `keel-fresh.sh`), **every name in that file's `update-watch.py` block of `PY_VALUE_ALLOWLIST`** — no count is written here, because it read "eight" while the block held nine and it now holds eleven, and a stale count leaves names on a security allowlist for code that no longer exists — and `PUSH_URL` from `DENY_VARS`.
+  Drop `- ops` from `homelab/kustomization.yaml`, `rm -r homelab/ops/`, remove the namespace block, remove every `OPS_*` variable from `.env.tpl` and from both Makefile lists — `OPS_KUMA_UPDATE_TOKEN` and `OPS_KUMA_KEEL_TOKEN`, plus `OPS_HC_UPDATE_UUID` for as long as that retired line is still wired; grep rather than working from a list here — and from `scripts/check-ping-bodies.py` remove **both** `REQUIRED_TARGETS` entries (`update-watch.py` and `keel-fresh.sh`), **every name in that file's `update-watch.py` block of `PY_VALUE_ALLOWLIST`** — no count is written here, because it read "eight" while the block held nine, and a stale count leaves names on a security allowlist for code that no longer exists — and `PUSH_URL` from `DENY_VARS`.
   Then apply, `kubectl delete namespace ops` — which takes the `keel-fresh-state` PVC with it — and delete the `keel` **Service** in the `keel` namespace, which exists only to serve `keel-fresh` and survives deletion of the `ops` namespace.
   Finally retire both instruments: the `homelab-update-watch` *and* `homelab-keel-fresh` uptime-kuma push monitors — both push monitors since August 26, 2026 — then delete both 1Password items.
 
@@ -144,7 +149,7 @@ aws route53 change-resource-record-sets --hosted-zone-id Z3409TNW35PGSS \
 
 TTL is 60s, so after a change browsers need a hard refresh (Cmd+Shift+R) to stop using the cached target.
 
-`cynexia.com` is a **different** zone on Cloudflare, used by the VPS cluster and the health tunnel.
+`cynexia.com` is a **different** zone on Cloudflare, used by the VPS cluster and by the homelab cloudflared tunnel (Cloudflare name `cynexia-health`, run from the `health` namespace).
 It has nothing to do with Route53.
 
 ## Encryption at rest
@@ -379,7 +384,7 @@ That file is inside `~/.hermes`, so unlike the unit it **is** in the nightly zip
 `hermes-webui` ([github.com/nesquena/hermes-webui](https://github.com/nesquena/hermes-webui)) runs on port 8787 as the `hermes-webui` systemd user unit, published at `https://hermes-app.cynexia.com` through the `cynexia-health` tunnel ([homelab-health.md](homelab-health.md#ingress)).
 
 **One instance serves every profile.**
-It reads `~/.hermes/profiles/<name>` off disk and switches per client on a `hermes_profile` cookie, so `emh`, `hal` and the default profile share one process and clients get an in-app switcher.
+It reads `~/.hermes/profiles/<name>` off disk and switches per client on a `hermes_profile` cookie, so every profile under that directory shares one process and clients get an in-app switcher.
 There is no second unit and no second port.
 It is a third, distinct service alongside the dashboard on 9119 and the gateways on 8642 — none of the three replaces another.
 
@@ -432,7 +437,7 @@ With `-c`, pip fails loudly and a person decides.
 #### Rollback when an update breaks the app
 
 **Nothing rolls back on its own.**
-Rollback is a manual, judgement-bearing procedure, and the full form — agent, WebUI, `hindsight-client` and the five units, in the order that matters — is [the runbook's Rollback section](hermes-vm-updates.md#rollback).
+Rollback is a manual, judgement-bearing procedure, and the full form — agent, WebUI, `hindsight-client` and the six units, in the order that matters — is [the runbook's Rollback section](hermes-vm-updates.md#rollback).
 Read its caveat before you start: **a rollback restores code and pinned versions, and cannot restore state**, because `hermes update`'s configuration and `state.db` migrations are forward-only.
 State comes back only from the `--backup` snapshot, and only by discarding everything since.
 
@@ -519,9 +524,9 @@ systemctl --user enable --now hermes-webui
 ```
 
 **`loginctl enable-linger hermes` is not optional and is easy to miss.**
-Without it the `hermes` user manager stops when the last session ends, so all five user units die at the next reboot, which is now automatic and can happen any night at 04:45 UTC.
+Without it the `hermes` user manager stops when the last session ends, so all six user units die at the next reboot, which is now automatic and can happen any night at 04:45 UTC.
 Part of the failure hides itself: the daily liveness check runs as a cron job inside `hermes-gateway`, so the thing that would push a `down` dies with everything else. uptime-kuma sees silence and that monitor stays green until its heartbeat lapses about 30 hours later.
-The existing `hermes` HTTP monitor does catch it sooner, because the dashboard it probes is one of the units that died.
+The existing `hermes API` HTTP monitor does catch it sooner, because the dashboard it probes is one of the units that died.
 Confirm lingering with `loginctl show-user hermes -p Linger`, which must print `Linger=yes`.
 
 `webui.env` comes back with the restored `~/.hermes`, so no password step is needed on a restore — only on a first install.
@@ -581,7 +586,7 @@ Rebuild the OS; restore the state.
 
    ```
    systemctl --user stop hermes-dashboard hermes-gateway hermes-gateway-emh \
-     hermes-gateway-hal hermes-webui
+     hermes-gateway-hal hermes-gateway-web_watcher hermes-webui
    ```
 
 4. Import and verify (`~/.local/bin` is not on the non-login PATH):
@@ -591,7 +596,7 @@ Rebuild the OS; restore the state.
    ~/.local/bin/hermes config check
    ```
 
-5. Restart the five services and confirm the dashboard at hermes.cynexia.com.
+5. Restart the six services and confirm the dashboard at hermes.cynexia.com.
 6. On a fresh VM rebuild: install hermes first, then run steps 2–5, then `hermes setup`.
    Run `loginctl enable-linger hermes` before enabling any user unit, or every one of them dies at the next reboot.
    `hermes-webui` is a separate install that the zip does not carry — re-clone it and re-create its unit from [Hermes WebUI on the VM](#rebuild-step) before step 5 restarts it.
