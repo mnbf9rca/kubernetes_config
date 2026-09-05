@@ -34,9 +34,8 @@ The pod's `sqlite-snapshot` sidecar writes `kuma.db.restic` beside the database 
 | Accepted status codes | per monitor | — |
 | Certificate expiry, ignore TLS | defaults | TLS terminates at the Cloudflare edge |
 
-The retries row is the current state as of September 5, 2026: all seventeen HTTP monitors run at 3 retries, apart from `blog.cynexia.com homepage`, which deliberately keeps 1 retry at a 5s interval.
-The fourteen that were short were moved in a single sweep through the Socket.IO API, below.
-The timeout row is still the standard rather than the state: those same fourteen run uptime-kuma's 48s default, `blog.cynexia.com homepage` runs 10s, and only `health-grafana` and `homelab-proxy` sit at 20s.
+The retries and timeout rows are the current state as of September 5, 2026, not just the standard: all seventeen HTTP monitors run at 3 retries and a 20s timeout, apart from `blog.cynexia.com homepage`, which deliberately keeps 1 retry at a 5s interval and a 10s timeout.
+The same fourteen were short of both, and were moved in two sweeps through the Socket.IO API, below.
 
 Reach for a keyword or JSON-query monitor only when the status code cannot fail on its own.
 uptime-kuma evaluates the keyword after the status check passes, so against an origin that returns 5xx or a Cloudflare `1033` it adds nothing — `saveErrorResponse` already captures the error body into the alert, which makes a `1033` diagnosable.
@@ -54,7 +53,8 @@ kubectl --context cynexia-vps -n vps port-forward svc/uptime-kuma 13001:3001
 ```
 
 Then run this against it from a throwaway venv (`python3 -m venv venv`, then `./venv/bin/pip install uptime-kuma-api`).
-The ids and the field below are the September 5, 2026 retries sweep; change those two things and the rest carries over.
+The ids and the field below are the first of the two September 5, 2026 sweeps, which set `maxretries` to 3.
+The second set `timeout` to 20 on the same fourteen and was the same script with those two constants changed, which is the whole of how it generalises.
 
 ```python
 import subprocess, sys
@@ -92,7 +92,7 @@ Every credential is read by `op read` inside the Python process and handed strai
 The script is read-only unless it is given `--apply`, so the run that does the writing can be rehearsed first against the real server.
 
 `edit_monitor` fetches the whole monitor, merges the keyword arguments over it and saves the result, so fields the call does not name survive.
-That was checked rather than assumed after the September 5 sweep: `maxredirects: 0`, the accepted status codes and the five service-token `Headers` boxes all came through unchanged.
+That was checked rather than assumed after both September 5 sweeps: `maxredirects: 0`, the accepted status codes and the five service-token `Headers` boxes all came through unchanged.
 
 Verify from `kuma.db` rather than from the script's own read-back, which only proves the server echoed what it was sent.
 Take the inventory query at the top of this file before and after, and `diff` the two — the sweep should touch one column and no other row.
