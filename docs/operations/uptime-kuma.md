@@ -4,7 +4,10 @@ uptime-kuma on the VPS cluster is layer 3 of the four detection layers in [monit
 This file is the procedure for maintaining it.
 The policy — why the layer exists, and what it still does not catch — stays in [monitoring.md](monitoring.md).
 
-**Create monitors by hand in the UI and record them here.** uptime-kuma v2 offers no supported programmatic path: monitor CRUD is Socket.IO only, the one API-key-protected HTTP route is `/metrics`, the REST API issue (#118) has been open since 2021 with two bridge PRs closed unmerged, and the community Python wrapper stops at v1.23.2.
+**Create monitors by hand in the UI and record them here.** uptime-kuma v2 offers no *supported* programmatic path: monitor CRUD is Socket.IO only, the one API-key-protected HTTP route is `/metrics`, and the REST API issue (#118) has been open since 2021 with two bridge PRs closed unmerged.
+The community Python wrapper, `uptime-kuma-api`, documents v1.23.2 as its ceiling, but that is the version it was tested against and not a gate: it asserts no version, branching only on `>= 1.22` and `>= 1.23` for two features, and on September 5, 2026 it logged in to the live 2.5.3 and edited monitors there unaltered.
+Creating a monitor stays a UI job, because the point of the rule is that a new monitor gets recorded in this file.
+Changing one field across many existing monitors is not — see [Editing monitors in bulk](#editing-monitors-in-bulk).
 
 To read the monitor inventory, query `kuma.db` read-only:
 
@@ -31,12 +34,68 @@ The pod's `sqlite-snapshot` sidecar writes `kuma.db.restic` beside the database 
 | Accepted status codes | per monitor | — |
 | Certificate expiry, ignore TLS | defaults | TLS terminates at the Cloudflare edge |
 
-The retries and timeout rows are the standard, not the current state: on September 3, 2026, fourteen of the seventeen HTTP monitors still run at 0 retries and uptime-kuma's 48s default timeout.
-The operator sets both fields by hand in each monitor's UI page, so the gap closes one monitor at a time.
+The retries row is the current state as of September 5, 2026: all seventeen HTTP monitors run at 3 retries, apart from `blog.cynexia.com homepage`, which deliberately keeps 1 retry at a 5s interval.
+The fourteen that were short were moved in a single sweep through the Socket.IO API, below.
+The timeout row is still the standard rather than the state: those same fourteen run uptime-kuma's 48s default, `blog.cynexia.com homepage` runs 10s, and only `health-grafana` and `homelab-proxy` sit at 20s.
 
 Reach for a keyword or JSON-query monitor only when the status code cannot fail on its own.
 uptime-kuma evaluates the keyword after the status check passes, so against an origin that returns 5xx or a Cloudflare `1033` it adds nothing — `saveErrorResponse` already captures the error body into the alert, which makes a `1033` diagnosable.
 It earns its place against an origin that answers 200 while broken, which is what `blog database status` and the two `api.recordwell.app` monitors assert.
+
+### Editing monitors in bulk
+
+The UI edits one field of one monitor at a time, which is right for a new monitor and painful for a sweep across seventeen.
+For a sweep, drive the same Socket.IO API the UI itself uses, through the `uptime-kuma-api` Python wrapper.
+
+Reach the server by port-forward rather than through `uptime.cynexia.com`, so Cloudflare Access is not in the path:
+
+```bash
+kubectl --context cynexia-vps -n vps port-forward svc/uptime-kuma 13001:3001
+```
+
+Then run this against it from a throwaway venv (`python3 -m venv venv`, then `./venv/bin/pip install uptime-kuma-api`).
+The ids and the field below are the September 5, 2026 retries sweep; change those two things and the rest carries over.
+
+```python
+import subprocess, sys
+from uptime_kuma_api import UptimeKumaApi
+
+def opread(ref):
+    return subprocess.run(["op", "read", ref], capture_output=True, text=True,
+                          check=True).stdout.strip()
+
+IDS = [1, 3, 5, 6, 7, 8, 9, 10, 12, 13, 14, 15, 16, 39]
+
+api = UptimeKumaApi("http://127.0.0.1:13001", wait_events=1.0)
+try:
+    api.login(opread("op://VPS/uptime-kuma/username"),
+              opread("op://VPS/uptime-kuma/password"),
+              opread("op://VPS/uptime-kuma/one-time password?attribute=otp"))
+    apply = "--apply" in sys.argv
+    for i in IDS:
+        m = api.get_monitor(i)
+        if apply and m["maxretries"] != 3:
+            api.edit_monitor(i, maxretries=3)
+            m = api.get_monitor(i)
+        print(i, m["name"], m["maxretries"])
+finally:
+    api.disconnect()
+```
+
+Four things in that script are load-bearing.
+
+The admin login is the `username` and `password` on `op://VPS/uptime-kuma`, and the account has 2FA enabled, so `login` needs a third argument: the item's `one-time password` field read with `?attribute=otp`, which `op` computes fresh on every read.
+Both plain fields sat empty until the operator populated them on September 5, 2026 — an empty one returns a bare newline and fails as `authIncorrectCreds`, which reads like a wrong password rather than a missing one.
+
+Every credential is read by `op read` inside the Python process and handed straight to `login`, so no value lands on argv, in a shell variable, or in the terminal.
+
+The script is read-only unless it is given `--apply`, so the run that does the writing can be rehearsed first against the real server.
+
+`edit_monitor` fetches the whole monitor, merges the keyword arguments over it and saves the result, so fields the call does not name survive.
+That was checked rather than assumed after the September 5 sweep: `maxredirects: 0`, the accepted status codes and the five service-token `Headers` boxes all came through unchanged.
+
+Verify from `kuma.db` rather than from the script's own read-back, which only proves the server echoed what it was sent.
+Take the inventory query at the top of this file before and after, and `diff` the two — the sweep should touch one column and no other row.
 
 ## The Cloudflare Access trap
 
