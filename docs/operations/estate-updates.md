@@ -18,6 +18,12 @@ Which signal lives in healthchecks.io and which in uptime-kuma, and why, is in [
 The rule that keeps them apart: **a floating tag means keel; a pinned tag means Renovate; never both.**
 A `match-tag: "true"` annotation on a semver pin refreshes the digest only, so a pinned image carrying keel annotations is frozen while looking covered.
 
+**Renovate opens its pull requests in a monthly window**, on the first of the month, set by the top-level `schedule` in `renovate.json`.
+They then wait for the next session, which the operator starts by asking for it every four to six weeks and which the `estate-update` dead-man check nags at 45 days — so a pull request opened continuously would only age on the dashboard until that session came round anyway.
+The window limits branch creation alone: an already-open pull request still rebases and automerges outside it, and the three-day `minimumReleaseAge` wait is unchanged.
+The one group that keeps opening pull requests at any time is **influxdb-mcp build inputs**, because it is also the one group that automerges, and it automerges because its merge deploys nothing that needs an apply.
+An unattended apply was considered and declined: `health` and `hindsight` hold state that an unwatched rollout can damage — a Grafana major migrates `grafana.db` in place and hindsight runs forward-only Alembic migrations against an agent's memory — so every other bump keeps its human-started session.
+
 **One image in this estate is built here, and its update has no apply step.**
 `ghcr.io/mnbf9rca/influxdb-mcp-server` is built from `homelab/health/mcp/` by this repository's one workflow, and the Deployment follows its floating `stable` tag under keel.
 So a Renovate pull request against those build inputs — the `node` base image, or the pinned `influxdb-mcp-server` package with the lockfile that moves with it, grouped as **influxdb-mcp build inputs** — **deploys nothing when it merges**.
