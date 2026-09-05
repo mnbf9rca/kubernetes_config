@@ -238,9 +238,14 @@ spec:
             # plenty for one or two personal agents.
             - { name: HINDSIGHT_API_WORKER_ID, value: hindsight-api-0 }
             # Extraction runs SERVER-SIDE ONLY. Hermes talks pure HTTP in
-            # `local_external` mode, so this key never lands on VM 103. Switching
-            # provider later is these two lines plus a new value in the same Secret
-            # key — which is why that key is the provider-neutral `llm-api-key`.
+            # `local_external` mode, so this key never lands on VM 103.
+            #
+            # The provider stays `openai` because that is hindsight's name for the
+            # OpenAI *wire format*, not for the company: with a custom
+            # HINDSIGHT_API_LLM_BASE_URL it drives any OpenAI-compatible endpoint,
+            # and the provider itself switches to the widely-supported `max_tokens`
+            # parameter as soon as a non-Azure base URL is set
+            # (engine/providers/openai_compatible_llm.py, `_max_tokens_param_name`).
             - { name: HINDSIGHT_API_LLM_PROVIDER, value: openai }
             # Bank-template manifest applied to every NEWLY created bank
             # (undocumented but real: _parse_default_bank_template in the API's
@@ -251,7 +256,27 @@ spec:
             # set by hand 2026-08-24, and nothing rescans old memories.
             - name: HINDSIGHT_API_DEFAULT_BANK_TEMPLATE
               value: '{"version":"1","bank":{"memory_defense":{"enabled":true,"rules":[{"on":"sensitive_data","action":"redact"}]}}}'
-            - { name: HINDSIGHT_API_LLM_MODEL, value: gpt-4o-mini }
+            # DEEPINFRA, NOT OPENAI, since 2026-09-03. Privacy is the reason that
+            # decided it — DeepInfra states it does not store or train on inference
+            # inputs and outputs without explicit consent, and every retain sends
+            # this model the agent's raw conversation text. Cost is the bonus:
+            # $0.075 in / $0.25 out per million tokens on 2026-09-03, under a
+            # standing 50% promotion whose expiry nobody controls — the standard
+            # price is $0.15 / $0.50, and that is the figure to budget against.
+            #
+            # Nothing else moved. Embeddings and the reranker stay on the `local`
+            # provider defaults inside the full image, so recall never leaves the
+            # cluster and a DeepInfra outage still degrades only to read-only
+            # memory. The CONSOLIDATION_LLM_* settings stay unset on purpose:
+            # config.py resolves them with `or None`, so consolidation follows the
+            # primary LLM and needs no second copy of these two lines.
+            #
+            # Rollback is these two lines (delete the base URL, restore
+            # `gpt-4o-mini`) plus `llm-api-key` in homelab/secrets/hindsight.yaml.
+            - { name: HINDSIGHT_API_LLM_BASE_URL, value: "https://api.deepinfra.com/v1/openai" }
+            - { name: HINDSIGHT_API_LLM_MODEL, value: zai-org/GLM-5.3-Flash }
+            # Provider-neutral key name, deliberately: the value behind it is now a
+            # DeepInfra token and the manifest did not have to be renamed for that.
             - name: HINDSIGHT_API_LLM_API_KEY
               valueFrom: { secretKeyRef: { name: hindsight, key: llm-api-key } }
             # AUTH ON FROM DAY ONE. The server default is no authentication at all

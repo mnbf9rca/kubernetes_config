@@ -1,0 +1,79 @@
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: homelab-proxy
+  namespace: vps
+spec:
+  selector: { app: homelab-proxy }
+  ports:
+    - { name: proxy, port: 8888, targetPort: proxy, protocol: TCP }
+---
+# The VPS end of the residential egress path. `cloudflared access tcp` holds a
+# Cloudflare Access service token, dials proxy.cynexia.com, and presents the
+# far end as a local TCP listener; the far end is tinyproxy on the homelab.
+#
+# It is its own Deployment rather than a container inside changedetection
+# because TWO pods consume it: changedetection's plain fetcher dials it
+# directly, and for a Playwright watch changedetection hands the proxy URL to
+# chrome inside the sockpuppetbrowser pod. A sidecar would be reachable only
+# on changedetection's own localhost.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: homelab-proxy
+  namespace: vps
+  annotations:
+    keel.sh/policy: force
+    keel.sh/match-tag: "true"
+    keel.sh/trigger: poll
+    keel.sh/pollSchedule: "@every 24h"
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: homelab-proxy } }
+  template:
+    metadata:
+      labels: { app: homelab-proxy }
+    spec:
+      containers:
+        - name: cloudflared
+          # Same image, same update mode and the same (absent) securityContext
+          # as this cluster's tunnel cloudflared
+          # (vps/bootstrap/cloudflared/cloudflared.yaml).
+          image: cloudflare/cloudflared:latest
+          # The image ENTRYPOINT is already `cloudflared --no-autoupdate`, so
+          # args begin at the subcommand. --url MUST bind 0.0.0.0: the default
+          # is loopback, which gives the Service a listener it cannot reach.
+          args:
+            - access
+            - tcp
+            - --hostname
+            - proxy.cynexia.com
+            - --url
+            - 0.0.0.0:8888
+          env:
+            # The flags are --service-token-id and --service-token-secret;
+            # these are the environment variables cloudflared declares for
+            # them in cmd/cloudflared/access/cmd.go. cloudflared turns them
+            # into the CF-Access-Client-Id and CF-Access-Client-Secret headers.
+            - name: TUNNEL_SERVICE_TOKEN_ID
+              valueFrom:
+                secretKeyRef: { name: homelab-proxy, key: access-client-id }
+            - name: TUNNEL_SERVICE_TOKEN_SECRET
+              valueFrom:
+                secretKeyRef: { name: homelab-proxy, key: access-client-secret }
+          ports:
+            - { name: proxy, containerPort: 8888, protocol: TCP }
+          # `access tcp` binds its listener at start and dials Cloudflare only
+          # when a client connects, so this proves the process is up and
+          # NOTHING about the path to the homelab. It still earns its place:
+          # it keeps a starting pod out of the Service. No liveness, for the
+          # same reason as tinyproxy.
+          readinessProbe:
+            tcpSocket: { port: proxy }
+            periodSeconds: 15
+            timeoutSeconds: 3
+            failureThreshold: 3
+          resources:
+            requests: { cpu: 50m, memory: 64Mi }
+            limits: { memory: 256Mi }

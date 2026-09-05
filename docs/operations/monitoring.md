@@ -10,12 +10,14 @@ Read [What this does not catch](#what-this-does-not-catch) before you trust a gr
 |---|---|
 | A restic check is red | `failed_step=` in the ping body names the phase, and `prune=` says whether retention ran — [Reading a restic failure body](#reading-a-restic-failure-body) |
 | `mount_ok=no` on homelab restic | The SSD did not mount, so the backup captured nothing — [the gates](#the-backup-verification-gates) |
-| `health-ingest` is DOWN | Check whether the operator synced a watch before suspecting the pipeline. The last heartbeat's `apple_age_h=`/`garmin_age_h=` names which path was ageing — [the push monitors](uptime-kuma.md#push-monitors) |
+| `health-garmin-and-apple-ingest` is DOWN | Check whether the operator synced a watch before suspecting the pipeline. The last heartbeat's `apple_age_h=`/`garmin_age_h=` names which path was ageing — [the push monitors](uptime-kuma.md#push-monitors) |
+| `Withings-ingest` is DOWN | `failure=` names the stage it reached. `failure=token_persist` is the one with a clock on it: the refresh succeeded, the rotated token was lost, and the old one is running down an eight-hour grace, so fix the volume and force a run inside that window or the repair is a browser re-authorization. Every other stage is safe until the next run — [homelab-health.md](homelab-health.md#the-token-rule) |
 | `homelab-update-watch` is DOWN | In a fresh heartbeat, `verdict=` names the cause and `next=` names the command to run; a stale `run_epoch=` means the watcher itself went quiet — [The update watcher](#the-update-watcher) |
 | A sidecar shows `RESTARTS: 0` but its snapshot is missing | Expected; they log rather than exit. Read the sidecar's stderr — [Why the sidecars have no probes](#why-the-sidecars-have-no-probes) |
 | `hindsight-canary` is DOWN | Read `verdict=`: `retain-failed` is the API, the database or the tenant key; `recall-miss` is the retrieval side. An agent is losing memories right now — [hindsight.md](hindsight.md) |
 | `hermes-update` is red | Nobody pinged it, the only way it goes red: the runbook reports on success and sends nothing on failure. Either no update session ran inside the period, or one ran and stopped before its report step. **Read the mtime of `~/.hermes/hermes-update.pre-run` before its contents** — the runbook's preconditions truncate that file at the start of every session, so a record older than the alarm period is the last *successful* session's and describes that run, not a stalled one. Only in a record written since the alarm do the keys say how far the session got: no `target_sha` means it stopped in change analysis, a `webui_target_sha` means the update itself ran — [the runbook](hermes-vm-updates.md#report) |
 | `hermes-app-alive` is DOWN | Read `verdict=`: `units-down` is the user manager or lingering, `import-failed` is the shared venv, `webui-unreachable` is the WebUI itself. No beat at all means the VM, the timer or the Access bypass — [Reading a DOWN `hermes-app-alive`](hermes-vm.md#reading-a-down-hermes-app-alive) |
+| Proxied changedetection watches error while unproxied ones are fine | The residential egress chain, not the internet. One pod down, or the Access service token gone — the failure table and the per-pod recovery are in [vps.md](vps.md#residential-egress-through-the-homelab) |
 | `disk_pct` is climbing on homelab restic | `local-path` has no quota, so this is the node SSD every workload shares — [the gates](#the-backup-verification-gates) |
 | An uptime-kuma monitor is UP but the service is down | Suspect an Access redirect — [uptime-kuma.md](uptime-kuma.md#the-cloudflare-access-trap) |
 | Everything is green and the data is still wrong | Expected; several probes are shallow by design — [What this does not catch](#what-this-does-not-catch) |
@@ -84,13 +86,14 @@ Defaults, unless a service's entry below says otherwise:
 | postgres (umami) | readiness plain `pg_isready`; liveness and startup as `sh -c 'pg_isready -q …; test $? -lt 2'` | Exit 1 means "rejecting connections during recovery". Liveness and startup count that as alive so recovery can finish; readiness does not, so traffic waits. A plain `pg_isready` liveness kills the postmaster mid-recovery and never converges |
 | keel-fresh | none | Scheduled work. The `vps-keel-fresh` kuma push monitor plus `activeDeadlineSeconds: 300` is the instrument |
 | the 5 quiesce sidecars | none | Deliberate — see below |
+| homelab-proxy (cloudflared) | readiness `tcpSocket` (:8888) | Readiness-only. `access tcp` binds its listener at start and dials Cloudflare only when a client connects, so this proves the process is up and nothing about the path to the homelab. It still keeps a starting pod out of the Service. No liveness: a restart does not repair a broken Access token or a dead tunnel |
 
 ### Homelab cluster
 
 | Container | Target | Note |
 |---|---|---|
 | influxdb-mcp | liveness and readiness `tcpSocket` | The MCP server exposes no health endpoint. TCP detects process death, not a wedged handler |
-| cloudflared (both clusters) | liveness and readiness `/ready` (:2000) | Neither Deployment has a Service, so readiness gates the rolling update and shows connector state. It routes nothing |
+| cloudflared tunnel connectors (both clusters) | liveness and readiness `/ready` (:2000) | Neither of those two Deployments has a Service — unlike the VPS `homelab-proxy` cloudflared above, which does — so readiness gates the rolling update and shows connector state. It routes nothing |
 | influxdb | `/health` | — |
 | grafana | `/api/health` | — |
 | apple-health-ingester | `tcpSocket` | No HTTP health endpoint upstream |
@@ -98,14 +101,16 @@ Defaults, unless a service's entry below says otherwise:
 | traefik | exec `traefik healthcheck --ping` | `hostNetwork` makes the pod IP the storage NIC, where the ping endpoint is not bound. The CLI queries loopback |
 | keel (both clusters) | `/healthz` | Liveness 15s × 6 is laxer than readiness 10s × 3 |
 | jottacloud-backup | none | Its old liveness probe could not fail. `activeDeadlineSeconds: 21600` bounds the run |
-| garmin-grafana | none | It serves nothing. The `health-ingest` push monitor is the correct instrument |
+| garmin-grafana | none | It serves nothing. The `health-garmin-and-apple-ingest` push monitor is the correct instrument |
 | cloudflare-analytics | none | Scheduled work. `homelab-cloudflare-analytics` plus `activeDeadlineSeconds: 1200` is the instrument |
+| withings-ingest | none | Scheduled work. `withings-ingest` plus `activeDeadlineSeconds: 600` is the instrument |
 | update-watch | none | Scheduled work. `homelab-update-watch` plus `activeDeadlineSeconds: 300` is the instrument |
 | keel-fresh | none | Scheduled work. The `homelab-keel-fresh` kuma push monitor plus `activeDeadlineSeconds: 300` is the instrument |
 | hindsight api | liveness `/health/live`, readiness and startup `/health` (:8888) | Split on purpose, the same way n8n's is. `/health` is database-gated, so a broken postgres drains traffic; `/health/live` is in-process and never touches the database, so a slow or recovering postgres cannot crashloop the single replica. `/health/live` needs image ≥ 0.9.1 — keep the pin at or above it |
 | hindsight control-plane | readiness `/` (:9999) | No liveness: a wedged admin UI is an inconvenience, not an outage, and restarting a single-replica pod over it buys risk for nothing |
 | postgres (hindsight) | readiness plain `pg_isready`; liveness and startup as `sh -c 'pg_isready -q …; test $? -lt 2'` | Copied verbatim from umami-postgres above, and for the same reasons |
 | hindsight-pg-dump, hindsight-canary | none | Scheduled work. `hindsight-pg-dump` and `hindsight-canary` plus their `activeDeadlineSeconds` are the instruments |
+| tinyproxy | readiness `tcpSocket` (:8888) | Readiness-only. A tcpSocket proves the listener bound, which is all it can prove. No liveness: the only fault it detects is a dead process, and a dead process exits the container, which the kubelet restarts anyway |
 
 ## Why the sidecars have no probes
 
@@ -144,14 +149,16 @@ Generated scripts also pass through envsubst, so run `make check-script-substitu
 | Field | Value | Why |
 |---|---|---|
 | `timeZone: "UTC"` | every job | Otherwise the schedule follows kube-controller-manager's local zone |
-| `startingDeadlineSeconds` | 3600 (update-watch and both clusters' keel-fresh included), except 1800 for cloudflare-analytics, 600 for hindsight-canary, 300 for jottacloud, and unset for `ingest-freshness` | A missed window retries for that long, then drops. `update-watch` takes the 3600 default deliberately: a silently skipped run is the failure it exists to prevent |
-| `activeDeadlineSeconds` | restic 14400, influx-backup 3600, hindsight-pg-dump 3600, hermes-pull 1800, cloudflare-analytics 1200, ingest-freshness 300, update-watch 300, keel-fresh 300 on both clusters, hindsight-canary 300, jottacloud 21600 | With `concurrencyPolicy: Forbid`, one hung run silently blocks every later run |
-| `ttlSecondsAfterFinished` | 259200 on both restic jobs, hermes-pull, cloudflare-analytics, update-watch and both clusters' keel-fresh; 172800 on influx-backup and hindsight-pg-dump; 3600 on hindsight-canary, which runs hourly; 86400 on the rest | A Friday failure on the restic jobs survives until Monday |
+| `startingDeadlineSeconds` | 3600 (update-watch and both clusters' keel-fresh included), except 1800 for cloudflare-analytics, 600 for withings-ingest and hindsight-canary, 300 for jottacloud, and unset for `ingest-freshness` | A missed window retries for that long, then drops. `update-watch` takes the 3600 default deliberately: a silently skipped run is the failure it exists to prevent |
+| `activeDeadlineSeconds` | restic 14400, influx-backup 3600, hindsight-pg-dump 3600, hermes-pull 1800, cloudflare-analytics 1200, withings-ingest 600, ingest-freshness 300, update-watch 300, keel-fresh 300 on both clusters, hindsight-canary 300, jottacloud 21600 | With `concurrencyPolicy: Forbid`, one hung run silently blocks every later run |
+| `ttlSecondsAfterFinished` | 259200 on both restic jobs, hermes-pull, cloudflare-analytics, withings-ingest, update-watch and both clusters' keel-fresh; 172800 on influx-backup and hindsight-pg-dump; 3600 on hindsight-canary, which runs hourly; 86400 on the rest | A Friday failure on the restic jobs survives until Monday |
 | `terminationGracePeriodSeconds` | not set on any job | busybox `ash` runs as PID 1 and never forwards SIGTERM to restic, so a grace period only slows teardown. `restic unlock` at the head of the next run recovers the lock |
 
 Two of those are the hindsight jobs.
 `hindsight-pg-dump` runs at 02:15Z — after `hermes-pull` at 02:00, before `influx-backup` at 02:30 and the 03:00 sweep — on `influx-backup`'s figures exactly.
 `hindsight-canary` runs hourly, and its `activeDeadlineSeconds: 300` is deliberately far shorter than its own schedule, so a hung run can never block the next one under `concurrencyPolicy: Forbid`; its `ttlSecondsAfterFinished: 3600` reaps a completed run before the next one lands.
+`withings-ingest` is the same shape at a tighter cadence: it runs every 15 minutes, so both its deadlines sit at 600 seconds, below the 900-second interval.
+Its `ttlSecondsAfterFinished` stays at 259200, because at 96 runs a day the history limits (3 successful, 2 failed) reap a finished Job long before the TTL does.
 
 **Neither hindsight CronJob carries a probe of any kind**, like every other scheduled job here.
 
@@ -196,7 +203,7 @@ An unparseable `df` reading **fails**, on the same "I could not look" rule as th
 The residual is honest and small: this samples once a night, so a fill faster than a day still lands between runs.
 
 Both promote to failure only when restic itself succeeded, so a real restic failure keeps its own, more specific exit code.
-Both announce their passes (`11/11 artifacts present`, `5/5 newer than 30h`): a gate that prints nothing when happy is indistinguishable from one that never ran.
+Both announce their passes (`12/12 artifacts present`, `5/5 newer than 30h`): a gate that prints nothing when happy is indistinguishable from one that never ran.
 In both, **"I could not look" must never be reported as "everything is fine"** — an unreadable `/data` or an unopenable PVC directory fails the job.
 
 **The one deliberate divergence is that homelab gates the prune**, because pruning is the step that destroys data: failing the job afterwards still alerts, but the seven good daily snapshots are already being expired on schedule while the alert goes unread.
@@ -224,6 +231,7 @@ An explicit list beats a wildcard, which cannot tell "no databases exist" from "
 | homelab | grafana-dump | `/data/pvc-*_health_health-dumps/grafana/*-grafana.db` | ≥200 KiB **and** <30h |
 | homelab | influxdb-bolt | `/data/pvc-*_health_influxdb-data/influxd.bolt` | ≥32 KiB |
 | homelab | garmin-tokens | `/data/pvc-*_health_garmin-tokens/garmin_tokens.json` | ≥256 B |
+| homelab | withings-tokens | `/data/pvc-*_health_withings-tokens/withings_tokens.json` | ≥64 B |
 | homelab | influx-native-dump | `/data/pvc-*_health_health-dumps/native/*` | <30h |
 | homelab | influx-lp-export | `/data/pvc-*_health_health-dumps/lp/*.lp.gz` | <30h |
 | homelab | hermes-zip | `/data/pvc-*_backup_hermes-dumps/hermes-*.zip` | ≥16 MiB **and** <30h |
@@ -233,6 +241,10 @@ Homelab byte floors sit an order of magnitude under observed sizes: they reject 
 The two newest rows follow the same derivation from a measured seed run: `grafana-dump` at 200 KiB, from 2,039,808 B / 273 schema objects on 2026-08-24, and `hindsight-dump` at 4 KiB, from 48,829 B / 23 tables at rollout step 5 the same day.
 Each has a twin `MIN_BYTES` in the script that writes it — `homelab/health/scripts/grafana-sqlite-backup.py` and `homelab/hindsight/scripts/hindsight-pg-dump.sh` — and the pair must be raised together.
 Live sizes are reported as `grafana_kib=` and `dump_kib=` in their heartbeat messages.
+
+`withings-tokens` sits at 64 B rather than the 256 B its `garmin-tokens` neighbour carries, because that file holds two strings and measured 83 bytes on September 2, 2026.
+That size tracks the length of Withings' own tokens, so a provider change that shortened them would fail this row on a perfectly healthy file.
+It is also the one row whose artifact cannot usefully be restored: the refresh token rotates every six hours, so the gate detects that the PVC stopped being captured rather than promising a recovery.
 
 `influx-backup` writes the influx dumps *and* the Grafana dump at 02:30Z, 30 minutes before this job, so 30h tolerates one missed run (`health-influx-backup` is the monitor for *that*) and fails on two consecutive misses; `hermes-pull` writes its zip at 02:00Z on the same terms, with `homelab-hermes-pull` as its own first-line check.
 Nothing else is freshness-checked: a deadline on live application state manufactures reds on any file an app happens not to touch for a day.
@@ -309,7 +321,7 @@ An uptime-kuma **HTTP** monitor could not have done this: kuma runs on the VPS, 
 A **push** monitor reverses the direction — the canary pod calls out to `uptime.cynexia.com` — which is why the reporting side moved to kuma on August 26, 2026 while the probing side could not.
 **Rotating the tenant key is not finished until the VM-side smoke test in [hindsight.md](hindsight.md) has been re-run** — the canary proves the server accepts writes, not that Hermes still sends them.
 
-**The two ingest signals are now one monitor, `health-ingest`, and it stays success-only.**
+**The two ingest signals are now one monitor, `health-garmin-and-apple-ingest`, and it stays success-only.**
 One `ingest-freshness` CronJob checks both buckets in one process, so two monitors would be one signal counted twice.
 It pushes `up` only when both buckets are fresh and pushes **nothing** on every other path — a stale bucket, a failed query, a dead InfluxDB.
 A `down` push on a stale bucket would flip the monitor at the first 6-hourly run that found nothing, trading a 36-hour tolerance for a 6-hour one, on a signal that depends on the operator syncing a watch.
@@ -363,7 +375,7 @@ Measurement and detail: [uptime-kuma.md](uptime-kuma.md#push-monitors).
 ### The update watcher
 
 `update-watch` (namespace `ops`, 06:45Z daily) makes one unauthenticated GitHub call — `GET /repos/mnbf9rca/kubernetes_config/issues?state=open&per_page=100` — and drives the `homelab-update-watch` uptime-kuma push monitor.
-It exists because the `health` and `ops` namespaces forbid keel: their images are pinned, Renovate proposes the bumps, and until this watcher existed nothing pointed at the waiting pull requests.
+It exists because the `health` and `ops` namespaces forbid keel — bar `health`'s one named exception, `influxdb-mcp` — so their images are pinned, Renovate proposes the bumps, and until this watcher existed nothing pointed at the waiting pull requests.
 Detection for `health` came free on day one.
 
 **DOWN means one of nine things.**
@@ -585,7 +597,7 @@ Read that as one rule with three outcomes rather than three rules.
 
 Everything that used to be a body line is now printed to the pod log as well — the shell runners as a `detail:` line from the exit trap, the Python jobs as a `heartbeat message (full):` block — so nothing was lost, it moved.
 **Read the pod log first**; the heartbeat history is the fallback, not the record.
-The pod log's window is `ttlSecondsAfterFinished` on the Job, and that varies more than it looks: **3 days** for `cloudflare-analytics`, `hermes-pull`, `update-watch` and both `keel-fresh` jobs; **2 days** for `influx-backup` and `hindsight-pg-dump`; **1 day** for `ingest-freshness` and `jottacloud-backup`; and **1 hour** for `hindsight-canary`, which runs hourly.
+The pod log's window is `ttlSecondsAfterFinished` on the Job, and that varies more than it looks: **3 days** for `cloudflare-analytics`, `withings-ingest`, `hermes-pull`, `update-watch` and both `keel-fresh` jobs; **2 days** for `influx-backup` and `hindsight-pg-dump`; **1 day** for `ingest-freshness` and `jottacloud-backup`; and **1 hour** for `hindsight-canary`, which runs hourly.
 So it is an hour on the canary and no more than three days on anything.
 
 `make check-ping-bodies` enforces all of this.
@@ -652,14 +664,15 @@ One consequence bites from this side: a monitor that follows redirects reports U
 
 Layer 3 is no longer only outbound HTTP checks.
 It also holds **push monitors**, driven by jobs that send a heartbeat rather than answering a request — the dead-man's-switch shape that used to mean a healthchecks.io check.
-Ten were created on August 26, 2026: `homelab-keel-fresh` and `vps-keel-fresh`, and the eight that took over the routine heartbeats — `health-influx-backup`, `health-ingest`, `homelab-cloudflare-analytics`, `homelab-hermes-pull`, `hindsight-pg-dump`, `hindsight-canary`, `homelab-update-watch` and `jottacloud-backup`.
+Ten were created on August 26, 2026: `homelab-keel-fresh` and `vps-keel-fresh`, and the eight that took over the routine heartbeats — `health-influx-backup`, `health-garmin-and-apple-ingest`, `homelab-cloudflare-analytics`, `homelab-hermes-pull`, `hindsight-pg-dump`, `hindsight-canary`, `homelab-update-watch` and `jottacloud-backup`.
 An eleventh, **`hermes-app-alive`**, is the one driven from **outside** both clusters: a `no_agent` cron job inside the hermes agent on the off-cluster VM at 05:45 UTC, `up` on exit 0 and `down` otherwise ([hermes-vm.md](hermes-vm.md#reading-a-down-hermes-app-alive)).
 That widens the `/api/push/*` Access bypass's blast radius past "the clusters".
+A twelfth, **`Withings-ingest`**, was added on September 2, 2026 for the `withings-ingest` CronJob in `health`.
 Because the healthchecks.io account is capped at 20 checks, new scheduled work takes a push monitor instead.
 Both the roster and the Cloudflare Access bypass that lets a job reach the push endpoint are in **[uptime-kuma.md](uptime-kuma.md#push-monitors)**.
 
 **The monitors deliberately kept the retired checks' names**, so the estate reads as one inventory across the change: `health-influx-backup` names the same job it always did, in a different place.
-The one exception is the merge — `health-apple-ingest` and `health-garmin-ingest` became the single `health-ingest`, because one CronJob checked both in one process.
+The one exception is the merge — `health-apple-ingest` and `health-garmin-ingest` became the single `health-garmin-and-apple-ingest`, because one CronJob checked both in one process.
 
 What that costs: a push carries one short `msg` line rather than a multi-line body, and there is no `/start`.
 The verdict and one or two counters travel with the alert; the full diagnostic stays in the pod log until `ttlSecondsAfterFinished` reaps it, so read the pod log first and the kuma heartbeat history second.
@@ -681,7 +694,7 @@ It is a deliberate copy rather than a shared file: a homelab pod holding a VPS k
 
 `vps-keel-fresh` is pushed from the same cluster uptime-kuma runs on, so a VPS-wide outage takes the job and its watcher together.
 That is layer 4's job, not this monitor's: `vps-uptime-kuma-alive` is at healthchecks.io precisely so something outside the VPS notices.
-The same reasoning now covers ten push monitors rather than two, and it is the reason `vps-uptime-kuma-alive` may never move: if kuma dies, every heartbeat in the estate stops arriving and only something outside it can say so.
+The same reasoning now covers twelve push monitors rather than two, and it is the reason `vps-uptime-kuma-alive` may never move: if kuma dies, every heartbeat in the estate stops arriving and only something outside it can say so.
 
 | `verdict=` | Means |
 |---|---|
@@ -704,10 +717,14 @@ Every branch in *this* script is determinate — its only peer is a ClusterIP, s
 The rest — the metric names, the stored state, the resolved endpoint — is in the pod log.
 
 **The image floor is a literal and it does not track reality on its own.**
-It was set at rollout to the steady-state tracked-image count with margin: 4 against the 5 homelab's own script records, one container clear, and 7 against the 9 measured on the VPS, two clear.
+It is set to the steady-state tracked-image count with margin: today, **6 against the 7 homelab's own script records**, one container clear, and 7 against the 9 measured on the VPS, two clear.
+The homelab floor has moved twice as the keel-managed set grew — 4 against 5 until September 2, 2026, when tinyproxy added a sixth image, then 5 against 6 until September 4, 2026, when `influxdb-mcp` became the `health` namespace's one keel-managed workload and added a seventh.
+Each move re-derived the count from `kustomize build homelab` rather than from the previous sentence, which is the only way this number stays honest.
 The margins differ because the VPS floor was fixed before its count was measured and left alone once the measurement came in higher than expected — a floor with more headroom than the rule asks for is not worth moving.
-Reconciling either number against a list of keel-annotated workloads is off by however many distinct sidecar images those workloads carry: the gauge counts **images**, and keel tracks every container in an annotated workload, which is why the VPS reads 9 over 8 Deployments.
-Adding a keel-managed workload does not raise either floor; removing several without taking that estate below its floor does not lower it.
+Reconciling either number against a list of keel-annotated workloads is off by however many distinct sidecar images those workloads carry, and off again where two workloads share an image: the gauge counts **images**, and keel tracks every container in an annotated workload.
+The VPS is where both effects show — 9 images across 13 containers in 9 Deployments, because four workloads carry an `alpine` quiesce sidecar and `homelab-proxy` runs the same `cloudflared` image as `cloudflared` does.
+A workload on an image the gauge already tracks does not raise either floor; a workload that adds a new image does, and the floor is re-derived at that point.
+Removing several without taking that estate below its floor does not lower it.
 Revisit them whenever the keel-managed set changes materially — a floor that has drifted below reality is a check that has stopped checking.
 
 **A day-apart comparison needs a day.**
@@ -728,7 +745,7 @@ Probes fix hung request paths, not silently stopped background work — often th
 | **freshrss** | `/api/` never opens the database, and feed refresh runs from a separate `crond`. A dead cron serves the UI perfectly and stops fetching news |
 | **garmin-grafana** | `write_points_to_influxdb()` catches InfluxDB errors, logs them and returns normally, after which the caller advances the watermark. An InfluxDB outage causes permanent data loss for that window with the process Running and Ready. `ingest-freshness` covers it; no probe improves on that |
 | **influxdb-mcp** | Its probes are `tcpSocket`. A wedged HTTP handler with a live listener passes them. The MCP server exposes no health endpoint |
-| **homelab services** | The external layer runs on the VPS, which has no route to `*.cynexia.net`, so no kuma **HTTP** monitor can reach them. Only the three health-tunnel hostnames get that coverage. sonarr, radarr, sabnzbd, emby, hydra2 and grafana have probes and nothing external. `hindsight` is the one exception, and it got there by giving up on an inbound prober entirely: its noticer is an **in-cluster** authenticated canary CronJob that pushes *outward* to a kuma push monitor, which needs no route in and no public exposure. Every migrated homelab job now reports the same way — outbound, through the Access bypass — which is what makes a private cluster visible to a monitor it cannot be reached from |
+| **homelab services** | The external layer runs on the VPS, which has no route to `*.cynexia.net`, so no kuma **HTTP** monitor can reach them. Only the five hostnames on the homelab cloudflared tunnel get that coverage, grafana among them since September 2, 2026. sonarr, radarr, sabnzbd, emby and hydra2 have probes and nothing external. `hindsight` is the one exception, and it got there by giving up on an inbound prober entirely: its noticer is an **in-cluster** authenticated canary CronJob that pushes *outward* to a kuma push monitor, which needs no route in and no public exposure. Every migrated homelab job now reports the same way — outbound, through the Access bypass — which is what makes a private cluster visible to a monitor it cannot be reached from |
 | **the VPS gate** | It proves each snapshot exists and is recent, and — through the sidecar's own refusal to publish a schema-less snapshot — that it holds at least one schema object. It does not prove the contents are complete or uncorrupted. A snapshot missing rows, or with a corrupt page below the `sqlite_master` read, passes everything here and surfaces at restore time |
 | **VPS etcd member count** | Nothing checks it. After the August 28, 2026 expansion the cluster runs three control planes, and a node that dies and stays dead silently returns it to the fault tolerance it had before — two members, then one. Every workload keeps serving and no check flips. Noticed only by a human running `talosctl -n ubuntu-16gb-fsn1-2 etcd members` |
 | **cloudflared node spread** | The Deployment reports `2/2` whether the two replicas sit on two nodes or on one. Required anti-affinity prevents the scheduler from co-locating them, so the realistic path is a node staying down long enough that only one replica is effectively serving — which reads as fully healthy from outside. Nothing asserts the spread |
@@ -744,12 +761,19 @@ Probes fix hung request paths, not silently stopped background work — often th
 | **update-watch (Renovate silence)** | Renovate is installed, has opened no error issue, and is proposing nothing. Since August 26, 2026 the *idle* form is a determinate verdict on this same monitor: a Dependency Dashboard that has not moved in `renovate_alive_max_days=` is `verdict=renovate-stale`, pushed `down`. What is left uncovered is a Renovate that keeps touching its dashboard while proposing nothing — a `managerFilePatterns` that stopped matching. A registry lookup failing silently was on that list until August 28, 2026 and no longer is: `verdict=renovate-lookup-failed` reads the dashboard's repository-problems block and pushes `down` on it. What that leaves is a lookup that fails without Renovate saying so, and a reworded problems block, which loses the verdict and nothing else. `make check-renovate-scope` closes the commonest remaining variant, a pinned image no in-scope file names; the rest is the narrowed quarterly drill above |
 | **update-watch (held on the dashboard)** | The watcher counts OPEN pull requests, and an update held by any `dependencyDashboardApproval` rule in `renovate.json` — today all majors, `kroniak/ssh-client` digests and `thisisarpanghosh/garmin-fetch-data`, but read the config, not this cell — is a dashboard checkbox, not a pull request. It can wait for a human tick indefinitely while the monitor reads `ok`, and `renovate-stale` will not fire because Renovate is alive and updating the dashboard throughout. The cover is procedural: read the Dependency Dashboard at the start of every update session |
 | **update-watch (merged but not applied)** | It watches the **repository**, not the cluster. Merging a Renovate pull request closes it, so the next run reports zero and the monitor goes UP while the cluster still runs the old image. Merge and apply are one runbook operation for that reason; the independent noticer is drift in `make diff-homelab` |
+| **the residential egress chain** | Nothing detects a broken chain — tinyproxy in the homelab `proxy` namespace, the `cynexia-health` tunnel, the Cloudflare Access application, or the `homelab-proxy` client on the VPS — before a proxied changedetection watch errors. The spec accepts that: the watch error is the detector, and recovery is the rollout restart named in [vps.md](vps.md#residential-egress-through-the-homelab). The `proxy.cynexia.com` monitor asserts the Access challenge only, so it stays green through every fault below it |
 
 The three VPS expansion gaps above stay accepted gaps rather than becoming checks.
 The natural home for an etcd-member-count and a node-spread assertion is the `vps-keel-fresh` CronJob, but both need cluster-read credentials that job does not have, and the estate's standing rule is that a new noticer must not introduce a new credential — the same reason the Omni-side check was refused.
 Note also that the external prober runs **on the VPS storage node**, so it cannot observe a VPS-wide control-plane problem at all.
 
 Queued, not configured: a changedetection `overdue_watches` json-query monitor and a karakeep queue-depth alert; both need an API credential in the monitor.
+
+**Nothing detects a scale that stops syncing to Withings.**
+The `withings-ingest` job runs, fetches zero groups, reports `verdict=ok groups=0` and stays green, because an empty window is a legitimate success — Withings reports a failed call with a non-zero `status`, not with an empty result.
+The `groups=` counter in the heartbeat history is the only signal, and reading it is a human act.
+A freshness check on the bucket would be the detector, and it is deliberately not built until the weighing habit is regular enough for a threshold to mean something.
+Adding `withings` to `ingest-freshness` is the wrong fix: that check pushes `up` only when every bucket it watches is fresh, so a day without a weigh-in would silence the Apple and Garmin signal too.
 
 Snapshot integrity stays partly verified by choice.
 On VPS the `sqlite_master` assertion closes the worst case — a fresh, valid, empty snapshot from a truncated source — by proving a schema exists, not that the data is there; homelab has no equivalent, having no quiesce sidecars to assert against, so its gate stops at shape.
@@ -767,13 +791,16 @@ The guard also settles the scope question that used to sit under it.
 Renovate watches `homelab/**` and `vps/**` as of the same date, so a pinned, keel-free container has to be named by a file in its own cluster's tree that `kubernetes.managerFilePatterns` matches — and the guard fails the apply when it is not.
 What the guard does *not* claim to cover is an image it never sees: one from a remote base, which it reports as advisory because nothing here can edit it, and one embedded inside another resource, such as local-path-provisioner's helper Pod inside a ConfigMap.
 
-`jottacloud-backup` is the one written exemption on that guard's `FLOATING_EXEMPT` list, and not because it is keel-managed — it carries no keel annotations at all.
+Two workloads are written exemptions on that guard's `FLOATING_EXEMPT` list, for opposite reasons.
+`jottacloud-backup` is exempt and **not** because it is keel-managed — it carries no keel annotations at all.
 It is a CronJob, so every scheduled run starts a fresh pod that pulls `:latest`, which already delivers the auto-pull behaviour keel would provide.
 Correct anywhere the estate's own text says otherwise.
+`influxdb-mcp` is exempt because it **is** keel-managed, and it is the `health` namespace's only such workload: a stateless HTTP server on a self-built image, where what gets reviewed is the build input under `homelab/health/mcp/` and the roll only delivers it ([homelab-health.md](homelab-health.md#image-policy)).
+Both entries carry their reason in the guard's own source, which is where to read it before adding a third.
 
 ### Named accepted residual: the ingest signal leaks a presence timeline
 
-`apple_age_h=` and `garmin_age_h=` are written on every successful `health-ingest` heartbeat, up to four times a day, and over the retained window they constitute a sync-and-absence timeline for an identified individual: when the operator last wore and synced a watch, and by inference when they were away, asleep or not wearing a device.
+`apple_age_h=` and `garmin_age_h=` are written on every successful `health-garmin-and-apple-ingest` heartbeat, up to four times a day, and over the retained window they constitute a sync-and-absence timeline for an identified individual: when the operator last wore and synced a watch, and by inference when they were away, asleep or not wearing a device.
 They are written anyway — the ages *are* the finding this signal exists to deliver, and after the merge they are also the only thing that says which of the two paths went stale.
 
 **The move to a push monitor changed the premise of this residual, and it is worth restating rather than renaming.**
@@ -800,7 +827,7 @@ These are settled.
 Do not relitigate them without new evidence.
 
 - **Any probe on `garmin-grafana`.**
-  The `health-ingest` freshness monitor covers it.
+  The `health-garmin-and-apple-ingest` freshness monitor covers it.
 - **Token-mtime freshness probe for garmin.**
   The token file is written only on the interactive login path, so its mtime changes about once a year: the probe detects nothing and false-positives on any sane threshold.
 - **Staleness-based liveness for garmin.**

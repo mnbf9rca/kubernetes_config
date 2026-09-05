@@ -48,7 +48,8 @@ spec:
             - { name: dumps, mountPath: /backups }
           resources:
             requests: { cpu: 250m, memory: 512Mi }
-            limits: { memory: 2Gi }
+            # raised 2026-09-02 after OOM kills; InfluxDB opens every shard at start (1099 shards, ~1 GB idle) and the floor grows with each bucket's shards
+            limits: { memory: 3Gi }
       volumes:
         - name: data
           persistentVolumeClaim: { claimName: influxdb-data }

@@ -71,6 +71,7 @@ HEALTH_KUMA_CLOUDFLARE_TOKEN=op://Homelab/health-healthchecks/cloudflare-kuma-pu
 # ONE token for both ingest buckets: a single CronJob checks apple and garmin in
 # one process, so two monitors would be one signal counted twice.
 HEALTH_KUMA_INGEST_TOKEN=op://Homelab/health-healthchecks/ingest-kuma-push-token
+HEALTH_KUMA_WITHINGS_TOKEN=op://Homelab/health-healthchecks/withings-kuma-push-token
 
 # health namespace — healthchecks.io ping UUIDs
 HEALTH_HC_APPLE_UUID=op://Homelab/health-healthchecks/apple-uuid
@@ -78,14 +79,25 @@ HEALTH_HC_GARMIN_UUID=op://Homelab/health-healthchecks/garmin-uuid
 HEALTH_HC_BACKUP_UUID=op://Homelab/health-healthchecks/backup-uuid
 HEALTH_HC_CLOUDFLARE_UUID=op://Homelab/health-healthchecks/cloudflare-uuid
 
-# health namespace — InfluxDB (admin creds + generated tokens; ingester/read
-# tokens are minted via `make health-influx-bootstrap` and pasted into 1Password)
+# health namespace — InfluxDB (admin creds + generated tokens; a bucket's ingest
+# token is minted via `make health-influx-bucket-bootstrap BUCKET=<name>` and
+# pasted into 1Password; the shared read token is minted by hand, once, and the
+# command is recorded in docs/operations/homelab-health.md)
 HEALTH_INFLUX_ADMIN_PASSWORD=op://Homelab/health-influxdb/admin-password
 HEALTH_INFLUX_ADMIN_TOKEN=op://Homelab/health-influxdb/admin-token
 HEALTH_INFLUX_GARMIN_V1_PASSWORD=op://Homelab/health-influxdb/garmin-v1-password
 HEALTH_INFLUX_INGESTER_TOKEN=op://Homelab/health-influxdb/ingester-token
 HEALTH_INFLUX_READ_TOKEN=op://Homelab/health-influxdb/read-token
 HEALTH_INFLUX_CLOUDFLARE_TOKEN=op://Homelab/health-influxdb/cloudflare-token
+HEALTH_INFLUX_WITHINGS_TOKEN=op://Homelab/health-influxdb/withings-token
+
+# health namespace — Withings OAuth2 client ("Public API integration",
+# Development environment). The client id is an identifier rather than a
+# secret, but it identifies the account, so it stays out of this public repo
+# like the Cloudflare zone IDs. The refresh token is NOT here: Withings rotates
+# it on every refresh and it lives on the withings-tokens PVC.
+HEALTH_WITHINGS_CLIENT_ID=op://Homelab/health-withings/client-id
+HEALTH_WITHINGS_CLIENT_SECRET=op://Homelab/health-withings/client-secret
 
 # health namespace — Cloudflare analytics ingest. The API token must carry
 # Zone.Analytics:Read and NOTHING else (the job never writes to Cloudflare).
@@ -110,10 +122,11 @@ HEALTH_GRAFANA_ADMIN_PASSWORD=op://Homelab/health-grafana/admin-password
 # the database DSN in homelab/secrets/hindsight.yaml, and a character needing
 # percent-encoding there is a debugging session nobody needs.
 #
-# The extraction-LLM key's 1Password field is named for the provider it currently
-# holds (`openai-api-key`), while the k8s Secret key it lands in stays the
-# provider-neutral `llm-api-key`. Switching provider is two env lines in
-# hindsight.yaml plus a new field here.
+# The extraction LLM moved from OpenAI to DeepInfra on 2026-09-03, so the value
+# that lands in the provider-neutral k8s Secret key `llm-api-key` now comes from
+# HINDSIGHT_DEEPINFRA_API_KEY. HINDSIGHT_LLM_API_KEY is kept, still pointing at
+# the OpenAI field, as the rollback: reverting the switch is one line in
+# homelab/secrets/hindsight.yaml and two in homelab/hindsight/hindsight.yaml.
 #
 # tenant-api-key is shared by the API, the control plane and the canary. The Hermes
 # gateways on VM 103 send the same value but do NOT read it from here: they resolve
@@ -123,6 +136,7 @@ HEALTH_GRAFANA_ADMIN_PASSWORD=op://Homelab/health-grafana/admin-password
 # — see docs/operations/hindsight.md.
 HINDSIGHT_PG_PASSWORD=op://Homelab/hindsight/pg-password
 HINDSIGHT_LLM_API_KEY=op://Homelab/hindsight/openai-api-key
+HINDSIGHT_DEEPINFRA_API_KEY=op://Homelab/deepinfra/api_key
 HINDSIGHT_TENANT_API_KEY=op://Homelab/hindsight/tenant-api-key
 HINDSIGHT_CP_ACCESS_KEY=op://Homelab/hindsight/cp-access-key
 # uptime-kuma push tokens: the nightly pg_dump and the hourly canary
@@ -168,6 +182,13 @@ KARAKEEP_OPENAI_API_KEY=op://VPS/karakeep/openai_secret_key
 # cluster. Its own token and its own vault item: a homelab job must not hold a
 # VPS credential, and a shared monitor could not tell the two clusters apart.
 VPS_OPS_KUMA_KEEL_TOKEN=op://VPS/keel-fresh/kuma-push-token
+
+# Cloudflare Access service token for proxy.cynexia.com, the homelab egress
+# proxy hostname. Read by the `homelab-proxy` cloudflared client on this
+# cluster. Token `vps-proxy-access`, expires 2031-09-01 - see
+# docs/operations/uptime-kuma.md.
+VPS_HOMELAB_PROXY_ACCESS_CLIENT_ID=op://VPS/homelab-proxy/access-client-id
+VPS_HOMELAB_PROXY_ACCESS_CLIENT_SECRET=op://VPS/homelab-proxy/access-client-secret
 
 # karakeep admin API key for scripts/karakeep-tag-*.py (NOT used in any manifest — shell env only)
 KARAKEEP_CLEANUP_API_KEY=op://VPS/karakeep/cleanup_api_key

@@ -14,9 +14,9 @@ Cluster-specific detail, runbooks and procedures live under `docs/`, referenced 
 | `docs/operations/homelab.md` | Homelab cluster: platform stack, namespaces/workloads, NFS and storage, node network, DNS/Route53, encryption at rest, operational gotchas |
 | `docs/operations/homelab-health.md` | The `health` namespace: ingest pipeline, image-pin rationale, InfluxDB bootstrap, backups/restore, Garmin re-auth, monitoring, probe rationale |
 | `docs/operations/vps.md` | VPS cluster: shape, workloads, Cloudflare tunnel/Access, DB decisions, backups |
-| `docs/operations/monitoring.md` | How failures get noticed: the triage table, probe policy and inventory, CronJob deadlines, the backup verification gates, the five healthchecks.io checks that remain, the eleven uptime-kuma push monitors, the disclosure rules for both, and what none of it catches |
+| `docs/operations/monitoring.md` | How failures get noticed: the triage table, probe policy and inventory, CronJob deadlines, the backup verification gates, the five healthchecks.io checks that remain, the twelve uptime-kuma push monitors, the disclosure rules for both, and what none of it catches |
 | `docs/operations/uptime-kuma.md` | Layer 3/4 runbook: creating uptime-kuma monitors by hand, per-monitor HTTP settings, the Cloudflare Access trap, the push monitors driven from inside the clusters (and the one driven from the hermes VM) and the bypass they need, the self-monitor |
-| `docs/operations/hindsight.md` | The `hindsight` namespace: the self-hosted memory backend for the Hermes profiles — topology, auth, the canary, upgrade and restore runbooks, the restore drill, key rotation, and the removal path |
+| `docs/operations/hindsight.md` | The `hindsight` namespace: the self-hosted memory backend for the Hermes profiles — topology, auth, the extraction LLM and its provider, the canary, upgrade and restore runbooks, the restore drill, key rotation, and the removal path |
 | `docs/operations/estate-updates.md` | How the estate gets patched: the two update modes, the Talos/Kubernetes version ledger, the advisory feeds and the out-of-band rule, the hand-managed kustomize pins, and the Omni etcd-backup mechanism. The Hermes VM step is `docs/operations/hermes-vm-updates.md`; the session that does the work is the `/update-estate` skill |
 | `docs/operations/hermes-vm.md` | The Hermes VM itself: lingering, triaging a DOWN `hermes-app-alive`, installing the kept components, `unattended-upgrades` with its automatic reboot, what the daily check does not watch, the trade the in-gateway cron job makes, the docker terminal sandboxes with their managed scope and per-profile mounts, the runbook for creating a profile, and the VM's own facts |
 | `docs/operations/hermes-vm-updates.md` | The update runbook for the Hermes application stack, run by an agent or the operator roughly weekly: preconditions, change analysis, the detached update, verification, the report ping, and manual rollback. Steps and latent hazards only — everything observable at failure time is left to the agent running it |
@@ -31,7 +31,7 @@ Design documents and implementation plans are local-only under the gitignored `d
 | kubectl context | `cynexia-homelab` | `cynexia-vps` |
 | Omni cluster name | `homelab` | `vps` |
 | Domain | `*.cynexia.net` (Route53) | `*.cynexia.com` (Cloudflare) |
-| Exposure | Private — LAN/Tailscale only, except the `health` namespace's own `cynexia-health` tunnel | Public, through the `cynexia-vps` cloudflared tunnel + Cloudflare Access |
+| Exposure | Private — LAN/Tailscale only, except the `cynexia-health` cloudflared tunnel, run from the `health` namespace | Public, through the `cynexia-vps` cloudflared tunnel + Cloudflare Access |
 | Ingress | Traefik hostNetwork DaemonSet + cert-manager wildcard | cloudflared only (no Traefik, no cert-manager) |
 | Apply | `make apply-homelab` | `make apply-vps` |
 
@@ -120,6 +120,8 @@ The rules that must not be broken:
   Two things that mask does not do: it does not touch a value shorter than 24 characters, and it only sees a single `key: value` line, so a block-scalar payload such as the `last-applied-configuration` annotation passes through untouched.
   It leaves image references intact, because every image reference in this repo carries a tag or an `@sha256:` digest and so misses the pattern — by convention, not by guarantee.
   Neither command redirects, and neither may be changed into one.
+  When a session's tooling refuses either pipeline — the worktree Bash guard did so on 2026-09-02 — read every resource the list names directly instead: the live object with `kubectl get <kind> <name> -n <ns> -o yaml`, plus the branch diff for the file that renders it.
+  Never skip the read, and never redirect to a file.
 - **`ENVSUBST_VARS` is an explicit allowlist, passed single-quoted.**
   Never call envsubst without one: with no allowlist it eats every `${VAR}` in the stream, including shell variables inside upstream manifests (`$VOL_DIR` in local-path-provisioner's helper pod); with double quotes the shell expands the tokens before envsubst sees them.
 - **Adding a secret means four edits:** the `op://` line in `.env.tpl`, the name in `ENVSUBST_VAR_NAMES`, the name in `REQUIRED_VARS`, and the `${VAR}` placeholder in the manifest.
@@ -136,6 +138,12 @@ The rules that must not be broken:
 - **Agent work happens in an isolated git worktree, never in the main checkout** (`.claude/worktrees/` or equivalent; operator ruling, 2026-08-27).
   Several agents and sessions share that checkout at once, so its current branch is not yours to assume: run `git branch --show-current`, confirm it, and only then commit.
   A guidance edit that day landed on another agent's branch because the shared checkout had been switched mid-flight.
+- **The main session is a strict orchestrator.**
+  The operator's session — the main Claude Code context — coordinates and does not do the work.
+  Every task, however small, is dispatched to a subagent or a Workflow: reading a document, setting up a worktree's `direnv allow` and lint baseline, running a command, writing a file, drafting a memo.
+  The main session only classifies the task, dispatches it, relays the result in plain words, asks the operator the decisions and holds the approval gates.
+  Work done in the main session pollutes the coordinating context, slows the loop and duplicates what the agents were dispatched for.
+  Operator ruling, 2026-09-02, after the main session ran a worktree setup and a lint baseline itself while three research agents were already running.
 - **Deploy, then merge.**
   A PR branch is applied to the cluster and verified healthy **before** the PR merges: `master` records what has been successfully deployed, never intent.
   Apply from the branch checkout (the preflight guards still run), confirm the workload is healthy, then the operator merges.
@@ -185,6 +193,7 @@ The rules that must not be broken:
   A `PENDING` or failing check means the pull request is not this session's work: leave it open and say so at the close.
   This repository runs **one** workflow, `.github/workflows/influxdb-mcp-image.yml`: on a pull request it builds the InfluxDB MCP image from `homelab/health/mcp/`, asserts the added tool is registered, and pushes and signs it as `sha-<head sha>`; the merge then verifies that signature and promotes the same digest to `stable`.
   So a pull request touching those inputs carries three checks — `changes`, `lint` and `build` — and they are the whole of that change's review.
+  Renovate's own build-inputs pull requests **automerge** once those three and the stability wait have passed, so nobody normally sees one; what a failed automerge leaves behind is an open Renovate pull request with a red check, and that is the thing to read.
   Every other pull request runs no check at all, which is the normal case for human and agent work and has nothing to wait for; the rule bites on a check that exists and has not gone green.
   Deploy-then-merge does not override this — a pull request can be applied and healthy and still be too young to merge.
 - **Concurrent deployed-but-unmerged branches are last-apply-wins on shared files.**
@@ -217,6 +226,9 @@ The rules that must not be broken:
 
 - Keep the one-file-per-service pattern; keep all of a service's resources in that file.
 - Every new Deployment must include the full keel annotation set above — **except** in the `health`, `ops`, `hindsight` and `backup` namespaces, which explicitly forbid keel, and **except keel itself**, which is digest-pinned on both clusters so the update engine cannot update itself (`homelab/bootstrap/keel/keel.yaml`, `vps/bootstrap/keel/keel.yaml`).
+  **What that prohibition is for**: those four namespaces hold stateful or third-party images that must not roll unreviewed, because a roll can migrate data or change behaviour nobody read — a forward-only migration on startup, a scheduled job whose output nothing re-verifies, a backup runner.
+  The reason is the image's provenance and its effect on data, not the namespace's name, so an image that is **stateless and built by this repository from reviewed inputs** is on the other side of the line: the reviewed decision is the build input and the roll only delivers it.
+  `influxdb-mcp` in `health` is the one such exemption today, written down in `scripts/check-renovate-scope.py`'s `FLOATING_EXEMPT` list and named in the namespace comment; adding a second means meeting both halves of that test and writing it in the same two places.
   The rule that decides which mode a workload is in: **floating tag means keel; pinned tag means Renovate; never both.**
   `match-tag: "true"` on a pinned tag only refreshes the digest, so a semver pin carrying keel annotations is frozen while looking covered.
 - **Every pinned image in both clusters is inside Renovate's scope, and keeping it that way is a standing obligation.**
@@ -402,6 +414,8 @@ The rules that must not be broken:
   Do not record repo, cluster, or account state in an agent's private memory system — that hides operational knowledge from the operator, from other agents, and from review.
   Anything worth remembering goes in `docs/` (or this file, per the rule above), where it is versioned, diffable and shared.
   This applies to facts about adjacent infrastructure the repo touches (VMs, DNS, Cloudflare account state), not just the manifests themselves.
+  It covers the operator's working-style preferences and process rulings too: how the operator wants agents to work is never a private-memory entry, it belongs in this file, where every session reads it.
+  Restated on 2026-09-02 after an agent wrote a preference into its memory store despite this bullet.
 
 ## Legacy Reference
 

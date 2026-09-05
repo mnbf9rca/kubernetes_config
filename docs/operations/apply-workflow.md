@@ -196,7 +196,8 @@ Use it only for secrets that genuinely can't be single-line; everything else flo
 | `route-vps-dns` | `cloudflared tunnel route dns cynexia-vps <host>` for every hostname in `vps/bootstrap/cloudflared/cloudflared.yaml` |
 | `create-cloudflared-secret` | Imperative Secret creation for the VPS tunnel creds from `op://VPS/cloudflared/credentials-json` |
 
-Targets that read a single field imperatively — `create-jotta-secret`, `create-hermes-ssh-secret`, both `create-*-cloudflared-secret` targets and the `health-influx-*-bootstrap` targets — call `op read` / `op document get` directly rather than going through `op run`; they authenticate with the same service-account token from `.envrc`.
+Targets that read a single field imperatively — `create-jotta-secret`, `create-hermes-ssh-secret` and both `create-*-cloudflared-secret` targets — call `op read` / `op document get` directly rather than going through `op run`; they authenticate with the same service-account token from `.envrc`.
+**No influx target touches 1Password at all**, and that is worth stating because one used to: `health-influx-bucket-bootstrap` runs entirely through the in-pod `influx` CLI and `jq`, so the admin token stays inside the cluster instead of landing in this shell's argv where `ps` can read it. The Garmin v1 password the deleted `health-influx-bootstrap` read with `op read` now lives in the already-done paragraph in [homelab-health.md](homelab-health.md).
 
 The VPS block is a deliberate copy-paste of the homelab block rather than a parameterised macro — reading `apply-vps` top to bottom is clearer than chasing a generated target, and two clusters is not enough to justify the abstraction.
 
@@ -204,10 +205,9 @@ The VPS block is a deliberate copy-paste of the homelab block rather than a para
 
 | Target | What it does |
 |---|---|
-| `create-health-cloudflared-secret` | Recreates the health tunnel creds Secret via `op document get health-cloudflared` |
+| `create-health-cloudflared-secret` | Recreates the homelab cloudflared tunnel's creds Secret (Cloudflare name `cynexia-health`) via `op document get health-cloudflared` |
 | `route-health-dns` | CNAMEs for every hostname in `homelab/health/cloudflared.yaml` onto the `cynexia-health` tunnel |
-| `health-influx-bootstrap` | InfluxDB buckets, v1 DBRP mapping, v1-compat auth user, and the two scoped tokens — see [homelab-health.md](homelab-health.md) |
-| `health-influx-cloudflare-bootstrap` | Creates the `cloudflare` bucket and mints its ingest token plus a replacement read token covering all four buckets. Prints both for pasting into 1Password; applies nothing |
+| `health-influx-bucket-bootstrap` | `BUCKET=<name>`. Creates one bucket with infinite retention and mints one read-and-write ingest token on it. Prints that token for pasting into 1Password; touches the shared read token not at all, and applies nothing |
 | `health-upgrade` | Creates a one-off Job from `cronjob/influx-backup`, waits for it, tails the log and **stops** — the pre-upgrade dump of InfluxDB *and* Grafana, and nothing else. The script's sizes and counts arrive on the log's `detail:` line, which the target tails; the one-line heartbeat sent to the `health-influx-backup` monitor carries only the verdict, `buckets=` and `grafana_kib=`. Applies nothing, merges nothing, edits no pin. See [homelab-health.md](homelab-health.md) |
 
 ### Hindsight namespace
@@ -283,7 +283,7 @@ Failing an apply on somebody else's manifest produces a gate people route around
 Ownership is therefore established *before* any verdict, not only before the scope one: a remote base that ever shipped keel annotations on a pinned tag would otherwise hard-fail an apply over a manifest this repo cannot edit.
 
 **The ownership lookup is confined to the cluster being analysed**, and that confinement is load-bearing.
-Both trees name `restic/restic:0.17.3` and the same keel digest, so a repo-wide lookup lets a watched homelab file vouch for a VPS container nothing watches.
+Both trees name `restic/restic:0.19.1` and the same keel digest, so a repo-wide lookup lets a watched homelab file vouch for a VPS container nothing watches.
 Simulated with scope widened to `homelab/**` alone, a repo-wide lookup dropped the VPS render from nine findings to six — `restic-backup`, `restic-init` and `keel` all fell silent while `vps/backup/*.yaml` and `vps/bootstrap/keel/keel.yaml` were still genuinely unwatched.
 The lookup also compares extracted image values rather than searching raw file text, because a substring search matches prose (`restic/restic:0.17.3` appears in three comment sentences in `homelab/backup/restic-cronjob.yaml`) and has no right boundary (`alpine:3.2` would be "owned" by any file naming `alpine:3.20`).
 
@@ -293,8 +293,9 @@ Both manager blocks are validated for patterns that match nothing, `kubernetes` 
 Both are exit 2.
 Exit 1 means a finding; exit 2 means the check could not run.
 
-Floating tags are forbidden in `health`, `hindsight`, `ops` and `backup`.
-`jottacloud-backup` is the single written exemption on the guard's `FLOATING_EXEMPT` list: it is a CronJob whose pods pull `:latest` on every scheduled run, so the schedule already delivers what keel would, which is why it carries no keel annotations and needs none.
+Floating tags are forbidden in `health`, `hindsight`, `ops` and `backup`, and the guard's `FLOATING_EXEMPT` list holds the two written exemptions.
+`jottacloud-backup` is a CronJob whose pods pull `:latest` on every scheduled run, so the schedule already delivers what keel would, which is why it carries no keel annotations and needs none.
+`influxdb-mcp` is the opposite case — the `health` namespace's one keel-managed workload, on a `stable` tag built from inputs in this repository ([homelab-health.md](homelab-health.md#image-policy)).
 
 **`check-renovate-scope-homelab` and `check-renovate-scope-vps` each run in their cluster's `diff-*` and `apply-*` preflight**, on the public half, as of the 2026-08-26 commit that widened Renovate to `homelab/**` and `vps/**`.
 Each chain now reads the same way: a context assertion, a vars-consistency check, **five per-cluster guards** — `check-script-substitution`, `check-job-ttl`, `check-ping-bodies`, `check-script-lint` and `check-renovate-scope`, each running as its own cluster's half — and one guard that has no half, `check-keel-fresh-parity`.
@@ -408,3 +409,6 @@ So decide it by the mechanism rather than by the list:
 
 A resource the diff *does* name is a real change, and the concurrent-branch rule in `AGENTS.md` applies to it: prove which branch deployed it before you accept it.
 Do not go enumerating the class by experiment — the membership moves with every apply, and the rule above does not.
+
+A `restic-init` Job named as a **create** in a `diff-homelab` or `diff-vps` taken more than 24 hours after the last apply is neither drift nor a revert.
+Both clusters set `ttlSecondsAfterFinished: 86400` on that Job, so it is garbage collected a day after it completes and the next diff proposes it again; its script is a no-op when the repository already exists.

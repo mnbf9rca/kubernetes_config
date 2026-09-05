@@ -60,7 +60,28 @@ kind: Deployment
 metadata:
   name: influxdb-mcp
   namespace: health
-  # NO keel annotations — health namespace policy: pinned images, Renovate proposes updates.
+  # THE ONE KEEL-MANAGED WORKLOAD IN THIS NAMESPACE, and the exception is
+  # written down in three other places rather than being silent: the
+  # FLOATING_EXEMPT entry in scripts/check-renovate-scope.py, the named
+  # exception on the `health` namespace in homelab/bootstrap/namespaces.yaml,
+  # and the pinDigests: false path in renovate.json.
+  #
+  # It is a stateless HTTP server with no data to migrate, and the image is
+  # built from inputs in this repository that Renovate proposes and the operator
+  # merges — so the reviewed decision is the build input, and this roll only
+  # delivers it. Everything else in `health` stays pinned.
+  #
+  # A PINNED TAG IS NOT A ROLLBACK TARGET HERE. check-renovate-scope reads a
+  # pinned reference under a complete keel annotation set as the frozen state
+  # and hard-fails apply-homelab, so pointing this at sha-<n> means stripping
+  # these four annotations in the same emergency edit. The rollback is: revert
+  # the build input in a pull request, let the merge promote the image, keel
+  # delivers it.
+  annotations:
+    keel.sh/policy: force
+    keel.sh/match-tag: "true"   # REQUIRED — without this keel silently downgrades to :latest
+    keel.sh/trigger: poll
+    keel.sh/pollSchedule: "@every 6h"
 spec:
   replicas: 1
   selector: { matchLabels: { app: influxdb-mcp } }
@@ -70,7 +91,7 @@ spec:
     spec:
       containers:
         - name: mcp
-          image: ghcr.io/mnbf9rca/influxdb-mcp-server:v0.2.0   # pin: built multi-arch from source; upstream ships no official image
+          image: ghcr.io/mnbf9rca/influxdb-mcp-server:stable   # built from homelab/health/mcp/ by .github/workflows/influxdb-mcp-image.yml, promoted to this tag on merge; keel follows it
           args: [--http, "3000"]
           env:
             - { name: INFLUXDB_URL, value: "http://influxdb.health.svc.cluster.local:8086" }
@@ -79,6 +100,13 @@ spec:
                                               # their calls with this token. Mandatory hardening.
                 secretKeyRef: { name: health-influxdb, key: read-token }
             - { name: INFLUXDB_ORG, value: cynexia }
+            # The guidance the `how-to-use-health-data` tool returns. Read FROM
+            # DISK ON EVERY CALL, not once at startup: a guide edit then needs
+            # no image rebuild, the ConfigMap's content-hash suffix rolls this
+            # Deployment so the mounted copy is never stale, and a wrong path
+            # fails one tool call with a readable error instead of wedging the
+            # server at boot.
+            - { name: GUIDE_PATH, value: "/guide/health-data-guide.md" }
           ports: [{ containerPort: 3000, name: mcp-http }]
           readinessProbe: { tcpSocket: { port: mcp-http }, periodSeconds: 10, timeoutSeconds: 5 }
           # TCP-only ON PURPOSE: the MCP server exposes no health endpoint (upstream ships
@@ -95,6 +123,17 @@ spec:
           resources:
             requests: { cpu: 50m, memory: 128Mi }
             limits: { memory: 512Mi }
+          volumeMounts:
+            - { name: guide, mountPath: /guide, readOnly: true }
+          # The image's own Dockerfile sets no USER, so without this the server
+          # runs as root for no reason: it reads a ConfigMap and talks HTTP.
+          # 1000 is `node` in node:lts-alpine, which owns /app in the image.
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+      volumes:
+        - name: guide
+          configMap: { name: health-data-guide }
 ---
 apiVersion: v1
 kind: Service
