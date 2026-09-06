@@ -62,8 +62,10 @@ spec:
             - $(CLUSTER)
             - -token
             - $(TOKEN)
-            - -gcloud-hosted-grafana-id
-            - $(HOSTED_GRAFANA_ID)
+            # The id is all digits, so it cannot be a stringData value: kustomize
+            # drops the quotes and the API server then rejects a YAML number.
+            # Written as one flag=value arg it is a string whatever it holds.
+            - -gcloud-hosted-grafana-id=${HEALTH_PDC_HOSTED_GRAFANA_ID}
             - -log.level
             - info
             - -ssh-flag=-o PermitRemoteOpen=influxdb.health.svc.cluster.local:8086
@@ -78,8 +80,6 @@ spec:
               valueFrom: { secretKeyRef: { name: grafana-pdc-agent, key: cluster } }
             - name: TOKEN
               valueFrom: { secretKeyRef: { name: grafana-pdc-agent, key: token } }
-            - name: HOSTED_GRAFANA_ID
-              valueFrom: { secretKeyRef: { name: grafana-pdc-agent, key: hosted-grafana-id } }
           securityContext:
             allowPrivilegeEscalation: false
             capabilities: { drop: ["ALL"] }

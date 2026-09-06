@@ -953,13 +953,19 @@ That is the restriction working, not a fault.
 
 ### Credentials
 
-All three live on the 1Password item `op://Homelab/health-pdc`, and reach the pod as a `secretKeyRef` into the `grafana-pdc-agent` Secret:
+All three live on the 1Password item `op://Homelab/health-pdc`. Two reach the pod as a `secretKeyRef` into the `grafana-pdc-agent` Secret; the third rides in the args.
 
-| Secret key | 1Password field | Tier |
+| Reaches the pod as | 1Password field | Tier |
 |---|---|---|
-| `token` | `grafana-pdc-token-secret` | secret — a tunnel into this cluster; disclosure means the honesty box **and** a rotation |
-| `hosted-grafana-id` | `hosted-grafana-id` | identifier |
-| `cluster` | `grafana-pdc-cluster` | identifier |
+| Secret key `token` | `grafana-pdc-token-secret` | secret — a tunnel into this cluster; disclosure means the honesty box **and** a rotation |
+| Secret key `cluster` | `grafana-pdc-cluster` | identifier |
+| the `-gcloud-hosted-grafana-id=` arg | `hosted-grafana-id` | identifier |
+
+The hosted Grafana id is in the args rather than the Secret, and that is forced rather than chosen.
+It is all digits; kustomize drops quotes it does not need, so `hosted-grafana-id: "${VAR}"` renders as `hosted-grafana-id: 12345`, which the API server rejects because `stringData` takes strings only.
+A block scalar and an explicit `!!str` tag are both normalized away by kustomize too, so nothing in the source manifest can prevent it.
+Written as one `flag=value` arg the rendered scalar is a string whatever the id holds.
+The id is a tier-3 identifier and the agent prints it to its own log, so the pod spec is a fine place for it; only the committed repo has to stay clear of it.
 
 `cluster` is the PDC network's cluster string, for example `prod-eu-west-2`, read off the PDC network page in the Grafana Cloud UI.
 The same item also holds `grafana-pdc-token-id`, `grafana-pdc-instance-id` and `grafana-cloud-admin-token`, and this design uses none of the three.
