@@ -375,7 +375,7 @@ Measurement and detail: [uptime-kuma.md](uptime-kuma.md#push-monitors).
 ### The update watcher
 
 `update-watch` (namespace `ops`, 06:45Z daily) makes one unauthenticated GitHub call — `GET /repos/mnbf9rca/kubernetes_config/issues?state=open&per_page=100` — and drives the `homelab-update-watch` uptime-kuma push monitor.
-It exists because the `health` and `ops` namespaces forbid keel — bar `health`'s one named exception, `influxdb-mcp` — so their images are pinned, Renovate proposes the bumps, and until this watcher existed nothing pointed at the waiting pull requests.
+It exists because much of this estate is pinned and keel-free — every workload that writes into persistent data it owns is locked that way, and several more are pinned by choice — so Renovate proposes those bumps, and until this watcher existed nothing pointed at the waiting pull requests.
 Detection for `health` came free on day one.
 
 **DOWN means one of nine things.**
@@ -791,12 +791,12 @@ The guard also settles the scope question that used to sit under it.
 Renovate watches `homelab/**` and `vps/**` as of the same date, so a pinned, keel-free container has to be named by a file in its own cluster's tree that `kubernetes.managerFilePatterns` matches — and the guard fails the apply when it is not.
 What the guard does *not* claim to cover is an image it never sees: one from a remote base, which it reports as advisory because nothing here can edit it, and one embedded inside another resource, such as local-path-provisioner's helper Pod inside a ConfigMap.
 
-Two workloads are written exemptions on that guard's `FLOATING_EXEMPT` list, for opposite reasons.
-`jottacloud-backup` is exempt and **not** because it is keel-managed — it carries no keel annotations at all.
-It is a CronJob, so every scheduled run starts a fresh pod that pulls `:latest`, which already delivers the auto-pull behaviour keel would provide.
-Correct anywhere the estate's own text says otherwise.
-`influxdb-mcp` is exempt because it **is** keel-managed, and it is the `health` namespace's only such workload: a stateless HTTP server on a self-built image, where what gets reviewed is the build input under `homelab/health/mcp/` and the roll only delivers it ([homelab-health.md](homelab-health.md#image-policy)).
-Both entries carry their reason in the guard's own source, which is where to read it before adding a third.
+The guard also carries the update-mode lock, which is **per stateful workload and not per namespace** (operator ruling, 2026-09-06).
+A workload whose image writes into persistent data it owns must be pinned, because an unreviewed roll can migrate or corrupt that data; the twelve such workloads are named, with their reasons, in the guard's `STATEFUL` tuple, and everything else may float with keel or pin for Renovate in any namespace.
+Two long-standing cases are worth knowing because the estate's older text got them wrong.
+`jottacloud-backup` carries no keel annotations at all and is still legal on `:latest`: it is a CronJob, so every scheduled run starts a fresh pod that pulls the tag, which already delivers the auto-pull behaviour keel would provide.
+`influxdb-mcp` **is** keel-managed and needs no exemption for it: a stateless HTTP server on a self-built image, where what gets reviewed is the build input under `homelab/health/mcp/` and the roll only delivers it ([homelab-health.md](homelab-health.md#image-policy)).
+Correct anywhere the estate's own text still says either of those is an exemption from a namespace ban.
 
 ### Named accepted residual: the ingest signal leaks a presence timeline
 

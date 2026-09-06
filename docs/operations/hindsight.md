@@ -38,7 +38,8 @@ That is accepted because every profile belongs to the same operator.
 If that ever stops being true, the escalation is a custom tenant extension keyed per bank, not a Traefik middleware.
 
 **Nothing auto-updates.**
-Images are pinned and the namespace carries no keel annotations; Renovate opens a grouped "hindsight stack" pull request instead.
+Images are pinned and no workload here carries keel annotations; Renovate opens a grouped "hindsight stack" pull request instead.
+All four are on the `STATEFUL` lock in `scripts/check-renovate-scope.py`, each for its own reason — the api and control-plane migrate the store on startup, the postgres pod owns the PGDATA, and `hindsight-pg-dump` writes the dump — so the guard fails an apply that lets any of them float.
 An unattended migration at 3 a.m. against the store holding an agent's memory is the failure this design exists to make impossible, and Hindsight's migrations are **forward-only** — so the pre-upgrade dump is the rollback, and there is no other one.
 
 ## The extraction LLM

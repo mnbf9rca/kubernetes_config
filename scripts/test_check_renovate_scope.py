@@ -15,8 +15,9 @@ The cases below are chosen from the SHAPES THIS ESTATE ACTUALLY CONTAINS, not
 from the shapes that are easy to write. An earlier draft of this suite passed
 19 tests over a classifier that failed on seven real containers, because it
 tested none of: a pinned sidecar inside a keel-managed workload, a `-latest`
-suffix tag, a bare major-version stream, or a floating image in a namespace
-outside NO_FLOAT_NAMESPACES. Those four are the first four classes here.
+suffix tag, a bare major-version stream, or a floating image on a workload
+that is not locked to the pinned mode. Those four are the first four classes
+here.
 """
 import importlib.util
 import os
@@ -128,56 +129,121 @@ class TestClassifyContainer(unittest.TestCase):
         self.assertIn("nothing", why)
 
 
-class TestFloatingBans(unittest.TestCase):
-    def test_a_floating_tag_is_banned_in_each_no_float_namespace(self):
-        # BEHAVIOUR, not a restatement of the constant. An earlier version of
-        # this test asserted NO_FLOAT_NAMESPACES equalled its own literal, which
-        # detects a change without proving the change matters. What matters is
-        # that a floating tag FAILS in those four namespaces and passes in an
-        # ordinary one.
-        for namespace in ("health", "hindsight", "ops", "backup"):
-            failures, _adv = crs.analyse_render(
-                "homelab", _pod("influxdb:latest", namespace=namespace),
-                _PATTERNS_HOMELAB, [], _OWNED_HOMELAB)
-            self.assertEqual(len(failures), 1, namespace)
-            self.assertIn("forbids", failures[0])
+class TestTheStatefulLock(unittest.TestCase):
+    """The lock is per WORKLOAD, never per namespace (operator ruling,
+    2026-09-06). The previous version of this guard banned floating tags in
+    `health`, `hindsight`, `ops` and `backup` and kept a list of exemptions for
+    the stateless workloads caught by that net -- which said nothing at all
+    about a stateful workload living anywhere else."""
+
+    def test_a_floating_tag_on_a_locked_workload_fails(self):
         failures, _adv = crs.analyse_render(
-            "homelab", _pod("influxdb:latest", namespace="downloads"),
+            "homelab", _pod("influxdb:latest", namespace="health",
+                            name="influxdb"),
             _PATTERNS_HOMELAB, [], _OWNED_HOMELAB)
-        self.assertNotIn("forbids", " ".join(failures))
+        self.assertEqual(len(failures), 1)
+        self.assertIn("locked to the pinned mode", failures[0])
+        self.assertIn("on-disk index", failures[0])   # the entry's own reason
 
-    def test_jottacloud_is_exempt_in_the_namespace_it_actually_lives_in(self):
-        # THE UNREACHABLE-CODE BUG THIS TEST EXISTS FOR. The first draft keyed
-        # the entry on `backup`, but the workload's real namespace is
-        # `jottacloud-backup`, so the exemption could never fire anywhere.
-        self.assertTrue(crs.floating_exempt(
-            "jottacloud-backup", "ghcr.io/mnbf9rca/jottacloud-backup:latest"))
+    def test_keel_annotations_on_a_locked_workload_fail_even_when_pinned(self):
+        # The annotations are the standing instruction to roll it unattended;
+        # the next tag edit is what makes them bite.
+        annotations = "".join("    %s: %r\n" % (k, v)
+                              for k, v in sorted(FULL_KEEL.items()))
+        failures, _adv = crs.analyse_render(
+            "homelab", _pod("influxdb:2.9.1", namespace="health",
+                            name="influxdb", annotations=annotations),
+            _PATTERNS_HOMELAB, [], _OWNED_HOMELAB)
+        self.assertEqual(len(failures), 1)
+        self.assertIn("keel annotations on a workload locked", failures[0])
 
-    def test_the_exemption_also_covers_the_namespace_it_might_move_to(self):
-        self.assertTrue(crs.floating_exempt(
-            "backup", "ghcr.io/mnbf9rca/jottacloud-backup:latest"))
+    def test_the_same_image_in_the_same_namespace_is_free_when_unlisted(self):
+        # THE WHOLE POINT OF THE INVERSION. `health` no longer bans anything:
+        # a stateless workload in it may float with a complete keel set.
+        annotations = "".join("    %s: %r\n" % (k, v)
+                              for k, v in sorted(FULL_KEEL.items()))
+        failures, _adv = crs.analyse_render(
+            "homelab", _pod("influxdb:latest", namespace="health",
+                            name="something-stateless",
+                            annotations=annotations),
+            _PATTERNS_HOMELAB, [], _OWNED_HOMELAB)
+        self.assertEqual(failures, [])
 
-    def test_the_exempt_image_is_unmanaged_so_the_exemption_must_be_consulted_there(self):
-        # The exemption is only useful if it is reachable from the arm the
-        # image actually lands on. jottacloud-backup carries NO keel
-        # annotations at all, so it classifies as floating-unmanaged, not as
-        # a floating-in-a-banned-namespace case.
-        mode, _why = crs.classify_container(
-            "ghcr.io/mnbf9rca/jottacloud-backup:latest", {})
-        self.assertEqual(mode, crs.MODE_FLOATING_UNMANAGED)
-        self.assertNotIn("jottacloud-backup", crs.NO_FLOAT_NAMESPACES)
+    def test_the_lock_ignores_the_namespace_and_reads_kind_and_name(self):
+        for namespace, kind, name, locked in (
+                ("health", "Deployment", "influxdb", True),
+                ("downloads", "Deployment", "influxdb", False),   # other ns
+                ("health", "CronJob", "influxdb", False),         # other kind
+                ("health", "Deployment", "influxdb2", False)):    # other name
+            self.assertEqual(
+                bool(crs.stateful_entry(namespace, kind, name)), locked,
+                (namespace, kind, name))
 
-    def test_the_exemption_does_not_cover_anything_else(self):
-        self.assertFalse(crs.floating_exempt("backup", "restic/restic:latest"))
-        self.assertFalse(crs.floating_exempt("health", "influxdb:latest"))
-        self.assertFalse(crs.floating_exempt(
-            "vps", "ghcr.io/mnbf9rca/jottacloud-backup:latest"))
+    def test_restic_is_locked_on_both_clusters_from_one_entry(self):
+        for cluster, patterns in (("homelab", _PATTERNS_HOMELAB),
+                                  ("vps", _PATTERNS_VPS)):
+            source = [("%s/backup/restic-cronjob.yaml" % cluster, cluster,
+                       frozenset({"restic/restic:latest"}))]
+            failures, _adv = crs.analyse_render(
+                cluster, _pod("restic/restic:latest", namespace="backup",
+                              name="restic-backup", kind="CronJob"),
+                patterns, [], source)
+            self.assertEqual(len(failures), 1, cluster)
+            self.assertIn("locked to the pinned mode", failures[0])
 
-    def test_every_exemption_carries_a_written_reason(self):
-        for entry in crs.FLOATING_EXEMPT:
-            self.assertTrue(entry.get("reason", "").strip(), entry)
-            self.assertTrue(entry.get("image", "").strip(), entry)
-            self.assertTrue(entry.get("namespace", "").strip(), entry)
+    def test_a_match_is_recorded_so_a_dead_entry_can_be_named(self):
+        # main() fails a full two-cluster run on any entry that matched
+        # nothing, which is the only thing standing between a mistyped name and
+        # an inert lock that reads like policy. That check is only as good as
+        # this bookkeeping.
+        crs._MATCHED.clear()
+        self.assertIsNotNone(crs.stateful_entry("backup", "Job", "restic-init"))
+        self.assertIn(("backup", "Job", "restic-init"), crs._MATCHED)
+        self.assertIsNone(crs.stateful_entry("backup", "Job", "restic-inti"))
+        self.assertEqual(len(crs._MATCHED), 1)
+
+    def test_every_entry_carries_a_written_reason(self):
+        for entry in crs.STATEFUL:
+            for field in ("namespace", "kind", "name", "reason"):
+                self.assertTrue(entry.get(field, "").strip(), entry)
+            self.assertIn(entry["kind"], crs.POD_PARENTS, entry)
+
+
+class TestTheUnmanagedFloatingArm(unittest.TestCase):
+    """A floating tag with no keel is unmanaged -- unless every run starts a
+    fresh pod, which re-pulls the tag by itself."""
+
+    def test_a_floating_deployment_with_no_keel_fails(self):
+        source = [("homelab/workloads/x.yaml", "homelab",
+                   frozenset({"someone/thing:latest"}))]
+        failures, _adv = crs.analyse_render(
+            "homelab", _pod("someone/thing:latest"), _PATTERNS_HOMELAB, [],
+            source)
+        self.assertEqual(len(failures), 1)
+        self.assertIn("nothing updates it", failures[0])
+
+    def test_a_floating_cronjob_with_no_keel_is_legal(self):
+        # jottacloud-backup: the schedule already delivers what keel would, so
+        # it needs no annotations and no written exemption for them.
+        source = [("homelab/workloads/jottacloud-backup.yaml", "homelab",
+                   frozenset({"ghcr.io/mnbf9rca/jottacloud-backup:latest"}))]
+        failures, _adv = crs.analyse_render(
+            "homelab", _pod("ghcr.io/mnbf9rca/jottacloud-backup:latest",
+                            namespace="jottacloud-backup", kind="CronJob"),
+            _PATTERNS_HOMELAB, [], source)
+        self.assertEqual(failures, [])
+
+    def test_a_floating_cronjob_is_still_caught_when_it_is_locked(self):
+        # The re-pull carve-out is about who delivers the update, not about
+        # whether the update is safe to deliver unreviewed.
+        source = [("homelab/backup/hermes-pull.yaml", "homelab",
+                   frozenset({"kroniak/ssh-client:latest"}))]
+        failures, _adv = crs.analyse_render(
+            "homelab", _pod("kroniak/ssh-client:latest", namespace="backup",
+                            name="hermes-pull", kind="CronJob"),
+            _PATTERNS_HOMELAB, [], source)
+        self.assertEqual(len(failures), 1)
+        self.assertIn("locked to the pinned mode", failures[0])
 
 
 class TestIgnorePaths(unittest.TestCase):
