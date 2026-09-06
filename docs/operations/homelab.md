@@ -55,7 +55,7 @@ Verify keel's permissions with a SelfSubjectAccessReview issued with keel's own 
 | `traefik` | Ingress | Traefik DaemonSet (PSA privileged — hostNetwork) |
 | `keel` | Auto-updates | keel controller |
 | `backup` | Backup | restic init Job + nightly CronJob (PSA privileged — hostPath) |
-| `health` | Personal health data pipeline | influxdb, apple-health-ingester, garmin-grafana, grafana (also public at `grafana.cynexia.com` behind Cloudflare Access), influxdb-mcp (behind Cloudflare Access), cloudflared, backup + freshness CronJobs — see [homelab-health.md](homelab-health.md) |
+| `health` | Personal health data pipeline | influxdb, apple-health-ingester, garmin-grafana, grafana (also public at `grafana.cynexia.com` behind Cloudflare Access), influxdb-mcp (behind Cloudflare Access), pdc-agent (the Grafana Cloud Private Datasource Connect tunnel), cloudflared, backup + freshness CronJobs — see [homelab-health.md](homelab-health.md) |
 | `hindsight` | Memory backend for the Hermes profiles | hindsight API, its PostgreSQL, the nightly `pg_dump` and the 15-minute canary — see [hindsight.md](hindsight.md) |
 | `ops` | Cluster-wide operational jobs | `update-watch` and `keel-fresh` CronJobs — see below |
 | `proxy` | Residential egress for changedetection on the VPS | tinyproxy — see [vps.md](vps.md#residential-egress-through-the-homelab) |

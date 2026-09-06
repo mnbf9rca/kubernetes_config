@@ -933,6 +933,87 @@ One **unconfirmed** hypothesis worth attaching if it recurs: v0.33 added an ext_
 There is no evidence that is what happened.
 Pre-restart logs and the pod description are in the 2026-08-18 session scratchpad for comparison.
 
+## Grafana Cloud over Private Datasource Connect
+
+`homelab/health/pdc-agent.yaml` runs the Grafana Cloud PDC agent, one single-replica Deployment in the `health` namespace.
+It opens one outbound SSH tunnel to Grafana Cloud and holds it there.
+Grafana Cloud sends a datasource query down that tunnel, the agent forwards it to the InfluxDB Service, and the rows come back the same way.
+Nothing listens in the cluster: no Service, no Ingress, no container port, no inbound firewall rule.
+The health data never leaves the cluster except as the result of a query somebody ran.
+
+### The restriction is the security boundary
+
+The agent's args carry `-ssh-flag=-o PermitRemoteOpen=influxdb.health.svc.cluster.local:8086`.
+That tells the ssh client to refuse a remote forward to any other host or port, so a stolen agent credential reaches InfluxDB and nothing else in the cluster.
+Each `args` element reaches ssh as one argv element with its spaces preserved, so the flag needs no quoting beyond being one list entry.
+More hosts, if this ever fronts a second datasource, go space-separated inside that same single value.
+
+A datasource whose URL is anything but exactly `influxdb.health.svc.cluster.local:8086` fails **Save & test** in the cloud UI while the pod log stays clean.
+That is the restriction working, not a fault.
+
+### Credentials
+
+All three live on the 1Password item `op://Homelab/health-pdc`, and reach the pod as a `secretKeyRef` into the `grafana-pdc-agent` Secret:
+
+| Secret key | 1Password field | Tier |
+|---|---|---|
+| `token` | `grafana-pdc-token-secret` | secret — a tunnel into this cluster; disclosure means the honesty box **and** a rotation |
+| `hosted-grafana-id` | `hosted-grafana-id` | identifier |
+| `cluster` | `grafana-pdc-cluster` | identifier |
+
+`cluster` is the PDC network's cluster string, for example `prod-eu-west-2`, read off the PDC network page in the Grafana Cloud UI.
+The same item also holds `grafana-pdc-token-id`, `grafana-pdc-instance-id` and `grafana-cloud-admin-token`, and this design uses none of the three.
+They are named here so the next reader does not have to re-derive which field is the `-cluster` value.
+
+The agent writes an ephemeral SSH key into `$HOME/.ssh/grafana_pdc` on every start and keeps nothing else, so it is stateless: it is on no `STATEFUL` lock, and it runs on a floating tag under the full keel annotation set.
+`homelab/health/pdc-agent.yaml` is listed in the first `packageRule` in `renovate.json` so Renovate proposes no digest pin against that floating tag.
+
+### What watches it
+
+The agent carries **no probes, by policy**.
+It serves no traffic, so readiness gates nothing, and the one failure a liveness probe could see — a dropped tunnel — is one the agent's own reconnect already repairs, so a restart is not the remedy.
+A NoData or Error alert on a query through the tunnel is what watches it instead, and that one alert covers the agent, the tunnel and InfluxDB together.
+Triage: [monitoring.md](monitoring.md).
+
+Start triage at the pod log:
+
+```bash
+kubectl -n health logs deploy/pdc-agent --tail=50
+```
+
+An authentication or permission error means the token or the cluster string is wrong — fix the 1Password field, not the manifest.
+A `Permission denied` on the key path means `HOME` and the `emptyDir` mount path disagree.
+The log prints the cluster string and the hosted Grafana id, which are identifiers rather than secrets.
+If it ever prints the token, add an identifier-only row to `secrets-to-rotate.md`.
+
+### Cloud-side runbook
+
+Do these steps in the Grafana Cloud UI.
+Create the PDC network first if it does not exist: **Connections** > **Private data source connections**.
+Put its token and ids on the `op://Homelab/health-pdc` item before you apply the cluster manifests.
+
+1. Create datasource `InfluxDB-Flux` on the PDC network.
+   Set type `influxdb` and query language **Flux**.
+   Set URL `http://influxdb.health.svc.cluster.local:8086`.
+   Set organization `cynexia` and default bucket `apple_metrics`.
+   Take the token from `op://Homelab/health-influxdb/read-token`.
+2. Create datasource `Garmin-InfluxDB` on the PDC network.
+   Set type `influxdb` and query language **InfluxQL**.
+   Use the same URL.
+   Set user `garmin`, database `GarminStats` and HTTP method **GET**.
+   Take the password from the `op://` path that `.env.tpl` gives for `HEALTH_INFLUX_GARMIN_V1_PASSWORD`.
+3. Click **Save & test** on each datasource.
+   Both must go green.
+4. Render one dashboard panel against either datasource.
+   The panel must show data.
+5. Create one alert rule that evaluates every 5 minutes.
+   Query the `withings` bucket over the last 30 days in Flux, limited to one row.
+   Alert on **NoData** and on **Error**, after 10 minutes.
+   Route it to the stack's default contact point.
+
+Both datasources reproduce the self-hosted ones exactly, so existing queries port unchanged.
+Available buckets: `apple_metrics`, `apple_workouts`, `garmin`, `cloudflare`, `withings`.
+
 ## Monitoring
 
 Four uptime-kuma **push** monitors; tokens in 1Password item `health-healthchecks`.
