@@ -415,6 +415,10 @@ The rules that must not be broken:
   A sentence then owns a line in every diff, so a one-word change shows as a one-line change instead of reflowing the paragraph around it.
   This holds for every `.md` file in the repo, this one included: the whole corpus was reflowed on 2026-08-28, so a hard-wrapped paragraph now reads as a regression.
   The exception is **files that ship to a machine and are read with `cat` or `less`** — apt configuration, systemd units, shell scripts and their comments — which keep the roughly 80-column wrapping they have, because no editor wraps them where they are read. No Markdown file is in that set.
+- **Anything that asks the operator to act follows Simplified Technical English rules.**
+  A review request, a runbook step, a question, a pull request body: one instruction per sentence, at most 20 words, imperative and active, every term defined or already in this file.
+  Explanatory prose, the reasons behind a rule, stays in ordinary clear English.
+  Operator ruling, 2026-09-06: the operator reviews under time pressure and an instruction that takes two readings is a fault.
 - **Documentation, not agent memories.**
   Do not record repo, cluster, or account state in an agent's private memory system — that hides operational knowledge from the operator, from other agents, and from review.
   Anything worth remembering goes in `docs/` (or this file, per the rule above), where it is versioned, diffable and shared.
