@@ -134,7 +134,7 @@ The cap is static - Renovate does not watch karakeep's compose file, so lifting 
 | The pull request touches | Take the dump with |
 |---|---|
 | `homelab/hindsight/**` | `make hindsight-upgrade` |
-| `homelab/health/**` and it moves the InfluxDB or Grafana image | `make health-upgrade` |
+| `homelab/health/**` and it moves the InfluxDB image | `make health-upgrade` |
 | a VPS stateful workload (umami-postgres, karakeep, meilisearch, uptime-kuma) | no dump — the nightly restic sweep is the accepted floor. A PostgreSQL **major** is refused in `renovate.json` and is never a tag edit: it is a dump, a fresh volume and a restore |
 | anything else | no dump |
 

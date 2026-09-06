@@ -71,7 +71,7 @@ metadata:
   # The image is also built from inputs in this repository that Renovate
   # proposes and the operator merges, so the reviewed decision is the build
   # input and this roll only delivers it. The stateful workloads beside it in
-  # `health` — influxdb, grafana, garmin-grafana, influx-backup — stay pinned
+  # `health` — influxdb, garmin-grafana, influx-backup — stay pinned
   # for their own reasons, listed in scripts/check-renovate-scope.py.
   #
   # A PINNED TAG IS NOT A ROLLBACK TARGET HERE. check-renovate-scope reads a

@@ -208,7 +208,7 @@ The VPS block is a deliberate copy-paste of the homelab block rather than a para
 | `create-health-cloudflared-secret` | Recreates the homelab cloudflared tunnel's creds Secret (Cloudflare name `cynexia-health`) via `op document get health-cloudflared` |
 | `route-health-dns` | CNAMEs for every hostname in `homelab/health/cloudflared.yaml` onto the `cynexia-health` tunnel |
 | `health-influx-bucket-bootstrap` | `BUCKET=<name>`. Creates one bucket with infinite retention and mints one read-and-write ingest token on it. Prints that token for pasting into 1Password; touches the shared read token not at all, and applies nothing |
-| `health-upgrade` | Creates a one-off Job from `cronjob/influx-backup`, waits for it, tails the log and **stops** — the pre-upgrade dump of InfluxDB *and* Grafana, and nothing else. The script's sizes and counts arrive on the log's `detail:` line, which the target tails; the one-line heartbeat sent to the `health-influx-backup` monitor carries only the verdict, `buckets=` and `grafana_kib=`. Applies nothing, merges nothing, edits no pin. See [homelab-health.md](homelab-health.md) |
+| `health-upgrade` | Creates a one-off Job from `cronjob/influx-backup`, waits for it, tails the log and **stops** — the pre-upgrade dump of InfluxDB, and nothing else. The script's sizes and counts arrive on the log's `detail:` line, which the target tails; the one-line heartbeat sent to the `health-influx-backup` monitor carries only the verdict and `buckets=`. Applies nothing, merges nothing, edits no pin. See [homelab-health.md](homelab-health.md) |
 
 ### Hindsight namespace
 

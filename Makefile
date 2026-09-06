@@ -58,7 +58,7 @@ REQUIRED_VARS := B2_ACCOUNT_ID B2_ACCOUNT_KEY RESTIC_PASSWORD RESTIC_REPOSITORY 
                  HEALTH_INFLUX_WITHINGS_TOKEN \
                  HEALTH_HAE_AUTH_TOKEN \
                  HEALTH_GARMIN_EMAIL HEALTH_GARMIN_B64_PASSWORD \
-                 HEALTH_GRAFANA_ADMIN_PASSWORD \
+                 HEALTH_PDC_TOKEN HEALTH_PDC_HOSTED_GRAFANA_ID HEALTH_PDC_CLUSTER \
                  HEALTH_CF_API_TOKEN HEALTH_CF_ZONE_TAGS \
                  HINDSIGHT_PG_PASSWORD HINDSIGHT_LLM_API_KEY \
                  HINDSIGHT_DEEPINFRA_API_KEY \
@@ -96,7 +96,7 @@ ENVSUBST_VAR_NAMES := B2_ACCOUNT_ID B2_ACCOUNT_KEY RESTIC_PASSWORD RESTIC_REPOSI
                      HEALTH_INFLUX_WITHINGS_TOKEN \
                      HEALTH_HAE_AUTH_TOKEN \
                      HEALTH_GARMIN_EMAIL HEALTH_GARMIN_B64_PASSWORD \
-                     HEALTH_GRAFANA_ADMIN_PASSWORD \
+                     HEALTH_PDC_TOKEN HEALTH_PDC_HOSTED_GRAFANA_ID HEALTH_PDC_CLUSTER \
                      HEALTH_CF_API_TOKEN HEALTH_CF_ZONE_TAGS \
                      HINDSIGHT_PG_PASSWORD HINDSIGHT_LLM_API_KEY \
                      HINDSIGHT_DEEPINFRA_API_KEY \
@@ -146,7 +146,7 @@ help:
 	@echo "  route-vps-dns     - create/update CNAMEs for every hostname in the cloudflared ConfigMap"
 	@echo ""
 	@echo "Health namespace targets:"
-	@echo "  health-upgrade    - take a verified pre-upgrade dump (InfluxDB + Grafana), then STOP"
+	@echo "  health-upgrade    - take a verified pre-upgrade InfluxDB dump, then STOP"
 	@echo "  create-health-cloudflared-secret - imperatively recreate the health cloudflared creds Secret from 1P"
 	@echo "  route-health-dns  - create/update CNAMEs for every hostname in the health cloudflared ConfigMap"
 	@echo "  health-influx-bucket-bootstrap BUCKET=<name> - create one bucket + mint its ingest token"
@@ -1062,20 +1062,18 @@ hindsight-upgrade: check-context
 # instances. Read that target first; everything structural here is the same, and
 # only the namespace, the CronJob name, the timeout and the banner differ.
 #
-# WHAT IT COVERS, WHICH IS BOTH STATEFUL COMPONENTS. The `influx-backup` CronJob
-# is misnamed by history: it takes the InfluxDB logical export AND the Grafana
-# SQLite dump (grafana-sqlite-backup.py, through a read-only mount of the
-# grafana-data PVC). Issue #54's open question — whether Grafana needed a real
-# logical backup before this target could be honest — was answered by building
-# one, so this target's banner can promise a rollback for both.
+# WHAT IT COVERS, WHICH IS THE ONE STATEFUL COMPONENT LEFT. The `influx-backup`
+# CronJob takes the InfluxDB native backup and the line-protocol export. It also
+# took a Grafana SQLite dump until 2026-09-06, when the self-hosted Grafana was
+# removed; Grafana Cloud now serves the dashboards and Git Sync versions them, so
+# there is no second stateful component here to promise a rollback for.
 #
 # The target performs NO verification of its own. influx-backup.sh asserts its
-# own artifacts — every expected bucket present, every prune glob matching, the
-# Grafana dump over its byte and schema-object floors — and a second, weaker copy
-# of those assertions would only create a place for the two to disagree. Note
-# what that list does NOT include: those are existence checks, so a stale dump
-# satisfies them. Artifact FRESHNESS is the restic gate's 30 h check, a different
-# Job half an hour later.
+# own artifacts — every expected bucket present, every prune glob matching — and
+# a second, weaker copy of those assertions would only create a place for the two
+# to disagree. Note what that list does NOT include: those are existence checks,
+# so a stale dump satisfies them. Artifact FRESHNESS is the restic gate's 30 h
+# check, a different Job half an hour later.
 #
 # WHERE THE 600s COMES FROM. Measured, not guessed. The retained nightly Jobs ran
 # 26s and 25s start-to-completion; a timed run of THIS target on 2026-08-26 took
@@ -1141,13 +1139,12 @@ health-upgrade: check-context
 	  kubectl -n health logs "job/$$job" --tail=25 || true; \
 	  echo ""; \
 	  echo "### Pre-upgrade dump complete: $$job"; \
-	  echo "### It covers BOTH stateful components: the InfluxDB logical export and"; \
-	  echo "### the Grafana SQLite dump. The log above ends with the Grafana dump's"; \
-	  echo "### own size and schema-object count, then influx-backup.sh's own"; \
-	  echo "### 'detail:' line, which carries every artifact size and count"; \
-	  echo "### (lp_files= is one export per bucket). The one-line heartbeat sent to"; \
-	  echo "### the health-influx-backup monitor carries only the verdict, buckets="; \
-	  echo "### and grafana_kib=, so the log above is the fuller record."; \
+	  echo "### It covers the namespace's one stateful component: the InfluxDB native"; \
+	  echo "### backup and the line-protocol export. The log above ends with"; \
+	  echo "### influx-backup.sh's own 'detail:' line, which carries every artifact"; \
+	  echo "### size and count (lp_files= is one export per bucket). The one-line"; \
+	  echo "### heartbeat sent to the health-influx-backup monitor carries only the"; \
+	  echo "### verdict and buckets=, so the log above is the fuller record."; \
 	  echo "###"; \
 	  echo "### Next, by hand. DEPLOY, THEN MERGE - never the other way round:"; \
 	  echo "###   1. gh pr checkout <the Renovate \"health stack\" PR>. Do NOT merge it"; \
@@ -1162,10 +1159,9 @@ health-upgrade: check-context
 	  echo "###      cert-manager webhooks. Anything else is a revert until proven."; \
 	  echo "###   4. make apply-homelab"; \
 	  echo "###   5. kubectl -n health rollout status deploy/influxdb --timeout=600s"; \
-	  echo "###      kubectl -n health rollout status deploy/grafana  --timeout=600s"; \
 	  echo "###   6. Verify ingest: force one freshness run and read its POD LOG -"; \
 	  echo "###      kubectl -n health create job --from=cronjob/ingest-freshness now-$$ts"; \
-	  echo "###   7. Open a Grafana dashboard and confirm it renders against InfluxDB."; \
+	  echo "###   7. Open a Grafana Cloud dashboard and confirm it renders through PDC."; \
 	  echo "###   8. git push --force-with-lease   <- the rebase rewrote this branch."; \
 	  echo "###      Without this, gh pr merge merges the tree you did NOT deploy;"; \
 	  echo "###      --force-with-lease refuses if anyone else pushed to it since."; \
@@ -1176,8 +1172,6 @@ health-upgrade: check-context
 	  echo "###      (or force one: kubectl -n ops create job --from=cronjob/update-watch now-$$ts)"; \
 	  echo "###"; \
 	  echo "### If it goes wrong, the restore runbook is in docs/operations/homelab-health.md."; \
-	  echo "### A Grafana MAJOR migrates grafana.db in place on first start, so its"; \
-	  echo "### rollback is a restore from the dump above, never a tag revert."; \
 	else \
 	  failed=$$(kubectl -n health get "job/$$job" \
 	    -o jsonpath='{.status.conditions[?(@.type=="Failed")].status}' 2>/dev/null || true); \

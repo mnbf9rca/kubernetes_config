@@ -56,7 +56,7 @@ mechanism, including the hazards worth knowing before you change it.
 | [omni-access.md](docs/operations/omni-access.md) | **Start here on a new machine** — bootstrapping omnictl, kubectl and talosctl from nothing |
 | [apply-workflow.md](docs/operations/apply-workflow.md) | The secret pipeline, every Makefile target, and how to add a new secret |
 | [homelab.md](docs/operations/homelab.md) | Homelab cluster: stack, storage, networking, DNS, encryption, gotchas |
-| [homelab-health.md](docs/operations/homelab-health.md) | The `health` namespace — Apple Health and Garmin ingest, InfluxDB, Grafana, MCP |
+| [homelab-health.md](docs/operations/homelab-health.md) | The `health` namespace — Apple Health, Garmin and Withings ingest, InfluxDB, Grafana Cloud over PDC, MCP |
 | [vps.md](docs/operations/vps.md) | VPS cluster: workloads, tunnel, Access, backups |
 | [monitoring.md](docs/operations/monitoring.md) | What is monitored, how, and — importantly — what these checks do **not** catch |
 

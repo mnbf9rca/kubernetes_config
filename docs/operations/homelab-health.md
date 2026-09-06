@@ -1,11 +1,12 @@
 # Health namespace
 
-Personal health-data pipeline in the homelab cluster: Apple Health, Garmin and Withings → InfluxDB → Grafana, plus a Claude MCP connector.
+Personal health-data pipeline in the homelab cluster: Apple Health, Garmin and Withings → InfluxDB → Grafana Cloud, plus a Claude MCP connector.
+Grafana Cloud queries this InfluxDB through the PDC agent; see [Grafana Cloud over Private Datasource Connect](#grafana-cloud-over-private-datasource-connect).
 It was added in Phase 0/1 as its own `health` namespace.
 Manifests live in `homelab/health/`.
 
 The namespace also hosts one workload that is **not** health data: the Cloudflare analytics ingest ([below](#cloudflare-analytics-ingest)).
-It shares this InfluxDB and Grafana rather than standing up a second pair — a deliberate trade of infrastructure telemetry living in the same database as personal health data, taken because a second InfluxDB for ~3,500 rows a day is not worth the operational surface.
+It shares this InfluxDB rather than standing up a second one — a deliberate trade of infrastructure telemetry living in the same database as personal health data, taken because a second InfluxDB for ~3,500 rows a day is not worth the operational surface.
 It stays in its own bucket and its own measurements.
 
 Design docs are in the separate `~/Downloads/git/HealthRecords` repo — `docs/superpowers/specs/2026-07-11-health-platform-vision.md` and `docs/superpowers/specs/2026-07-11-health-records-ingestion-design.md`.
@@ -13,9 +14,9 @@ Phase 2 (facade, records store, multi-person registry) is scoped there, not here
 
 ## Image policy
 
-**The namespace bans nothing; four of its workloads are locked to the pinned mode individually** (operator ruling, 2026-09-06).
-`influxdb`, `grafana`, `garmin-grafana` and `influx-backup` are version- or digest-pinned and keel-free because each writes into persistent data it owns — an on-disk index the engine upgrades in place, a `grafana.db` a major migrates in place, a Garmin token cache the third-party image itself rewrites, and the nightly export that is the restore path for the first two.
-All four are named, with those reasons, in the `STATEFUL` tuple in `scripts/check-renovate-scope.py`, which fails the apply if any of them floats or carries a keel annotation.
+**The namespace bans nothing; three of its workloads are locked to the pinned mode individually** (operator ruling, September 6, 2026).
+`influxdb`, `garmin-grafana` and `influx-backup` are version- or digest-pinned and keel-free because each writes into persistent data it owns — an on-disk index the engine upgrades in place, a Garmin token cache the third-party image itself rewrites, and the nightly export that is the restore path for the first.
+All three are named, with those reasons, in the `STATEFUL` tuple in `scripts/check-renovate-scope.py`, which fails the apply if any of them floats or carries a keel annotation.
 
 Everything else here is pinned by choice rather than by prohibition, which is always allowed: the ingest CronJobs (`cloudflare-analytics`, `withings-ingest`, `ingest-freshness`) run a stdlib runtime image whose logic is a script versioned in this repo, so the image owns none of what they write.
 
@@ -52,7 +53,6 @@ Public `*.cynexia.com` hostnames on this tunnel:
 | `hermes.cynexia.com` | Hermes agent dashboard on the hermes VM (`hermes.cynexia.net:9119`, off-cluster), via Cloudflare Access (karakeep-style email policy) |
 | `hermes-app.cynexia.com` | `hermes-webui` on the same VM (`hermes.cynexia.net:8787`, off-cluster) — the server the Hermex iOS app talks to, via Cloudflare Access (Service Auth + the same email policy) |
 | `proxy.cynexia.com` | Residential egress proxy for changedetection on the VPS — see [vps.md](vps.md#residential-egress-through-the-homelab) |
-| `grafana.cynexia.com` | Grafana, via Cloudflare Access (Access app `grafana`: `service-auth-monitoring` + `allow_cynexia_com`) — the same instance Traefik serves privately at `grafana-health.cynexia.net`, with Grafana's own admin login as the second gate |
 
 `proxy.cynexia.com` is the only **TCP** origin in the ingress block — `tcp://tinyproxy.proxy.svc.cluster.local:8888`, not an HTTP service — and, like `mcp.cynexia.com`, it has an origin that authenticates nobody.
 The whole gate is its Access application, `homelab-proxy`, which carries one app-scoped Service Auth policy and nothing else: deleting or disabling that application publishes an open forward proxy on the operator's home connection rather than closing the path.
@@ -99,9 +99,9 @@ The desktop/TUI gateway flow binds an ephemeral loopback callback listener **on 
 A failed or abandoned dashboard OAuth attempt blocks retries with HTTP 409 `MCP OAuth for '<name>' is already in progress`.
 That stale flow is in-memory only and self-expires after 15 minutes (`_MCP_DASHBOARD_OAUTH_TTL`); `systemctl --user restart hermes-dashboard` on the VM clears it immediately.
 
-Grafana is on this tunnel at `grafana.cynexia.com`, added September 2, 2026, behind the Access app `grafana` with the two reusable policies `service-auth-monitoring` and `allow_cynexia_com`.
-Its private Traefik hostname `grafana-health.cynexia.net` stays and stays valid: the LAN and Tailscale path is unchanged, and the public hostname reaches the same Service.
-Grafana runs its own admin login behind Access, so the origin is not authless — but the Access app fails open like every other one on this tunnel, so verify the edge challenges an unauthenticated client after any Cloudflare rebuild.
+`grafana.cynexia.com` was on this tunnel from September 2, 2026 until September 6, 2026, when the self-hosted Grafana was removed.
+Grafana Cloud serves the dashboards now, so no cluster Service backs that hostname.
+The Cloudflare Access application `grafana` and the DNS record are retired by hand; the tunnel rule and the private Traefik hostname `grafana-health.cynexia.net` are gone.
 
 After changing hostnames in `homelab/health/cloudflared.yaml`, every hostname needs a proxied CNAME to `1a4245a3-5264-420c-9893-b45ff25a0214.cfargotunnel.com`.
 `make route-health-dns` mints them all, but it shells out to `cloudflared tunnel route dns`, which needs an **origin certificate** at `~/.cloudflared/cert.pem`.
@@ -213,7 +213,7 @@ Three choices the target makes, which its comment no longer has room for:
 
 - **Retention is `-r 0`, infinite.** These buckets exist to outlive the source they copy from — Cloudflare's 8-day analytics window is the sharpest case — so expiring the copy would defeat the pipeline.
 - **The ingest token reads as well as writes.** Each job's resume point is `max(_time)` read back out of its own bucket, not a stored cursor, so it reads before it writes. Three of the four ingest tokens need that; the apple ingester is the exception and no flow re-mints it.
-- **The shared read token is not touched.** It reads every bucket in the organization, present and future, so a new bucket is visible to Grafana and the MCP connector with no re-mint.
+- **The shared read token is not touched.** It reads every bucket in the organization, present and future, so a new bucket is visible to Grafana Cloud and the MCP connector with no re-mint.
 
 **A new bucket is three edits, not one.** Create it with the target, add its name to the explicit `for B in ...` list in `homelab/health/scripts/influx-export-lp.sh`, and raise `LP_EXPECTED` in `homelab/health/scripts/influx-backup.sh`. A bucket missing from the export list is silently never exported; a bucket in that list that does not exist fails the nightly job by name, so create it **before** the apply that adds it; and a stale `LP_EXPECTED` shows up as a visibly wrong `buckets=n/m` in the `health-influx-backup` heartbeat and nothing worse. Nothing mechanical enforces this rule — the target's last line prints it at the moment it applies.
 
@@ -231,9 +231,12 @@ influx auth create -o cynexia --read-buckets --read-orgs -d "mcp+grafana read-on
 
 The token it replaced — auth id `114494b86671e000`, the old per-bucket read token — was **deleted on September 4, 2026**, after the new value had been pasted, applied, rolled to the two Deployments and verified. That ordering is the one below, and it is the reason the old auth outlived the new one by a few minutes rather than the other way round.
 
-It has **three** consumers, two of which need a restart when the value changes: `grafana` and `influxdb-mcp` are Deployments and are restarted; `homelab/health/ingest-freshness.yaml` is a CronJob and picks the new value up on its next scheduled run.
+It has **three** consumers, and each takes the new value a different way.
+`influxdb-mcp` is a Deployment and needs a restart.
+`homelab/health/ingest-freshness.yaml` is a CronJob and picks the new value up on its next scheduled run.
+The Grafana Cloud `InfluxDB-Flux` datasource holds its own copy in `secureJsonData.token`, outside this cluster and outside this repository, so a rotation needs a `PUT /api/datasources/uid/health_influx_flux` as well.
 
-If it is ever replaced, the ordering is not a preference: paste over the existing `op://Homelab/health-influxdb/read-token` field's value (never into a second field — a duplicate label makes `op run` ambiguous and breaks every build, diff and apply target), `make apply-homelab`, restart the two Deployments, verify a Grafana panel and one MCP `query-data` call, and **only then** `influx auth delete` the superseded auth. Deleting first locks Grafana, the connector and `ingest-freshness` out until the new Secret has rolled. Replacing the value puts both the `health-influxdb` and `grafana-datasources` Secrets in the next diff, because both render that placeholder; those two are expected and are not reverts.
+If it is ever replaced, the ordering is not a preference: paste over the existing `op://Homelab/health-influxdb/read-token` field's value (never into a second field — a duplicate label makes `op run` ambiguous and breaks every build, diff and apply target), `make apply-homelab`, restart `influxdb-mcp`, update the Grafana Cloud datasource over the API, verify a Cloud panel and one MCP `query-data` call, and **only then** `influx auth delete` the superseded auth. Deleting first locks Grafana Cloud, the connector and `ingest-freshness` out until the new value has rolled. Replacing the value puts the `health-influxdb` Secret in the next diff, because it renders that placeholder; that one is expected and is not a revert.
 
 | Token | 1Password field | Scope |
 |---|---|---|
@@ -271,45 +274,20 @@ Buckets themselves need no record here: `make health-influx-bucket-bootstrap BUC
 ## Backups and restore
 
 The `influx-backup` CronJob runs at 02:30 daily, ahead of the 03:00 restic sweep.
-Despite the name it is the whole namespace's logical backup pass, and it writes three things:
+It writes two things:
 
-- a native `influx backup` (14 generations),
-- a per-bucket, 8-day-windowed line-protocol export (60 generations, gzip), over an **explicit** bucket list: `apple_metrics apple_workouts garmin cloudflare withings`, and
-- a consistent point-in-time copy of Grafana's SQLite database, `grafana/<date>-grafana.db` (14 generations)
+- a native `influx backup` (14 generations), and
+- a per-bucket, 8-day-windowed line-protocol export (60 generations, gzip), over an **explicit** bucket list: `apple_metrics apple_workouts garmin cloudflare withings`
 
 to the `health-dumps` PVC on `local-path`.
+It took a third, a copy of the self-hosted Grafana's SQLite database, until September 6, 2026.
 Because that PVC lives on the node's SSD, the existing hostPath restic→B2 CronJob picks it up for free — no separate off-cluster wiring needed.
 
 The `withings-tokens` PVC is captured like every other `local-path` PVC, and its token file is an entry in the homelab restic gate's expected set.
 A restore is not a recovery path for it: the refresh token rotates every six hours, so a snapshot's copy is dead as soon as a later run refreshes, and the recovery is a `--auth` run.
 The row's real job is to detect that the PVC stopped being captured.
 
-### The Grafana dump
-
-`grafana.db` used to exist in backups only as part of the nightly restic sweep of the live PVC: a file read page by page while Grafana was writing it, so possibly torn, and gated on size alone.
-That is enough to survive losing the node and not enough to roll back a bad Grafana major, which migrates the schema in place on first start — reverting the image tag does not revert the database.
-
-`homelab/health/scripts/grafana-sqlite-backup.py` closes that.
-It runs in the `influx-backup` pod, not in the grafana pod, because grafana's image has neither `sqlite3` nor `python3`; `local-path` is node-local and ReadWriteOnce is a per-*node* constraint, so the backup pod mounts the `grafana-data` PVC **read-only** at `/grafana` alongside the running Grafana.
-The copy is taken with SQLite's online backup API — the same mechanism as the CLI's `.backup`, which takes a read lock, copies whole pages, and restarts itself if a writer commits mid-copy.
-
-Two consequences worth knowing before changing anything:
-
-- **It is Python, not the `sqlite3` CLI.**
-  `alpine/k8s:1.36.0` ships no `sqlite3` binary.
-  A second image in the pod, or an `apk add sqlite` at 02:30, were both rejected — the health namespace pins every image and a nightly backup should not depend on a package CDN.
-  `py3-pip` brings `python3`, Alpine builds `python3` against SQLite, and `Connection.backup()` is the same C API.
-- **It depends on Grafana's `wal = false` default.**
-  A rollback-journal database opens read-only cleanly; a WAL one needs to create a `-shm` and would fail at open.
-  Turning WAL on (`GF_DATABASE_WAL=true`) means the mount in `homelab/health/backups.yaml` must become read-write in the same change, or the dump stops.
-
-Nothing is published unverified.
-The copy is written to a `.tmp-` staging file, reopened, and must return exactly `ok` from `PRAGMA integrity_check`, contain schema objects and clear a byte floor before it is `os.replace`d into position — so a failed run leaves last night's artifact intact rather than truncating it.
-A `.backup` of an empty or truncated source succeeds and yields a structurally valid, current-mtime, *empty* database, which a freshness-and-size gate cannot tell from a good one; the read-back is what catches it.
-
-The size floor is **measured**: the 2026-08-24 seed run published 2,039,808 bytes and 273 schema objects, so `MIN_BYTES` is 204800 — roughly an order of magnitude below it, the same convention as every other floor in the gate.
-The `grafana-dump` row in `homelab/backup/restic-cronjob.yaml` carries the same number; raise the two together.
-Each run reports the current size as `grafana_kib=` in the `health-influx-backup` heartbeat.
+### The line-protocol export
 
 **Adding a bucket means adding it to that list**, or it is silently never exported — the same class of bug as the VPS backup gate's expected-set assertion ([monitoring.md](monitoring.md)), and the reason the list is explicit rather than a wildcard over `influx bucket list`.
 A named bucket that does not exist is now a **named fatal error**: the pipeline `influx bucket list | awk` exits with awk's status, so a failed lookup used to leave the bucket ID empty and sail straight past `set -eu` into an opaque `export-lp` error.
@@ -325,76 +303,12 @@ Use scoped `influx restore --bucket <name>` instead.
 First drill passed 2026-07-26.
 Quarterly drills must also exercise the still-untested disaster-recovery path: `--full` onto a brand-new, never-`setup` instance.
 
-### Restoring Grafana from a dump
+### Grafana Cloud over PDC, not a restore runbook
 
-Restoring means replacing a file Grafana holds open, so **Grafana must be stopped first**.
-Copying over a live `grafana.db` produces a database that is neither the old one nor the new one.
-
-1. **Pick the dump.**
-   The last 14 live on the PVC; anything older comes back from restic.
-
-   ```sh
-   kubectl -n health get pods -l app=grafana                # note the node, if you care
-   kubectl -n health run dumps --rm -it --restart=Never \
-     --image=busybox:1.37 --overrides='
-       {"spec":{"volumes":[{"name":"d","persistentVolumeClaim":{"claimName":"health-dumps"}}],
-        "containers":[{"name":"dumps","image":"busybox:1.37","stdin":true,"tty":true,
-        "command":["sh"],"volumeMounts":[{"name":"d","mountPath":"/dumps"}]}]}}' \
-     -- sh -c 'ls -l /dumps/grafana'
-   ```
-
-   For an older one, restore it out of B2 first — `restic restore <snapshot> --target /restore --include '*_health_health-dumps/grafana/*'` from the backup namespace's job image, per [homelab.md](homelab.md).
-
-2. **Stop Grafana.**
-   `replicas: 0` rather than a delete: the Deployment stays, and nothing reopens the database while the file is being swapped.
-
-   ```sh
-   kubectl -n health scale deployment/grafana --replicas=0
-   kubectl -n health wait --for=delete pod -l app=grafana --timeout=120s
-   ```
-
-3. **Replace `grafana.db`.**
-   With Grafana stopped, its PVC can be mounted by a throwaway pod that also mounts the dumps PVC.
-   Keep the outgoing file — a restore that turns out to be the wrong generation is recoverable only if you did.
-
-   ```sh
-   kubectl -n health run grafana-restore --rm -it --restart=Never \
-     --image=busybox:1.37 --overrides='
-       {"spec":{"volumes":[
-          {"name":"g","persistentVolumeClaim":{"claimName":"grafana-data"}},
-          {"name":"d","persistentVolumeClaim":{"claimName":"health-dumps"}}],
-        "containers":[{"name":"r","image":"busybox:1.37","stdin":true,"tty":true,
-        "command":["sh"],"securityContext":{"runAsUser":472,"runAsGroup":472},
-        "volumeMounts":[{"name":"g","mountPath":"/var/lib/grafana"},
-                        {"name":"d","mountPath":"/dumps","readOnly":true}]}]}}'
-   ```
-
-   Then, inside that pod — substituting the dump you chose:
-
-   ```sh
-   cd /var/lib/grafana
-   mv grafana.db grafana.db.pre-restore
-   rm -f grafana.db-wal grafana.db-shm grafana.db-journal   # stale sidecar files
-   cp /dumps/grafana/2026-08-24-grafana.db grafana.db
-   chown 472:472 grafana.db      # the image runs as uid/gid 472; fsGroup covers the mount, not a new file
-   exit
-   ```
-
-4. **Start Grafana and verify.**
-
-   ```sh
-   kubectl -n health scale deployment/grafana --replicas=1
-   kubectl -n health rollout status deployment/grafana --timeout=180s
-   kubectl -n health logs deploy/grafana | grep -i 'migrat\|error' | head
-   ```
-
-   Then check the things the file actually carries, in the UI at `https://grafana-health.cynexia.net`: **log in** (users and the admin password hash live in this database — the `GF_SECURITY_ADMIN_PASSWORD` env var only resets the admin user at startup), open two or three **dashboards** and confirm panels render, and check **Connections → Data sources**.
-   Data sources are provisioned from the `grafana-datasources` Secret, not from the database, so they should be present regardless — if they are not, the problem is the provisioning mount, not the restore.
-
-5. **Clean up** `grafana.db.pre-restore` once the restored instance has been used for a day or two, not before.
-
-**Before a Grafana major upgrade**, take a dump on demand rather than trusting last night's: the migration runs on first start of the new version and is not reversible.
-That is what `make health-upgrade` is for — see [Upgrading the health stack](#upgrading-the-health-stack) below.
+Grafana Cloud serves every dashboard from September 6, 2026, and Git Sync versions them in `github.com/mnbf9rca/grafana-dashboards`.
+So there is no `grafana.db` to dump and no Grafana restore to run.
+A lost dashboard comes back from that repository, not from this cluster.
+See [Grafana Cloud over Private Datasource Connect](#grafana-cloud-over-private-datasource-connect).
 
 ## Upgrading the health stack
 
@@ -408,12 +322,11 @@ It applies nothing, merges nothing and edits no pin — checking out the Renovat
 The banner it prints is the runbook for the rest, and it is written **deploy-then-merge**: check out the pull request, apply from the branch, confirm the cluster is healthy, and only then merge.
 `master` records what has been deployed, never intent.
 
-**It covers both stateful components.**
-The CronJob is named for InfluxDB by history, but it takes the Grafana SQLite dump as well, through a read-only mount of the `grafana-data` PVC.
-So a health-stack bump has a logical rollback for each.
+**It covers the namespace's one stateful component.**
+InfluxDB is what a health-stack bump can migrate in place, so the native backup and the line-protocol export are the logical rollback for it.
 
 **It verifies nothing of its own.**
-`influx-backup.sh` already asserts its own artifacts — the shipped scripts are non-empty, every expected bucket exists, every prune glob matches something, and the Grafana dump clears its byte and schema-object floors — and it fails the Job if any of that does not hold.
+`influx-backup.sh` already asserts its own artifacts — the shipped scripts are non-empty, every expected bucket exists, and every prune glob matches something — and it fails the Job if any of that does not hold.
 A second, weaker copy of those assertions inside the Makefile would only create a place for the two to disagree, so the target's verdict *is* the Job's exit status.
 
 **Those are existence checks, so they say nothing about age.**
@@ -422,17 +335,13 @@ Artifact freshness is checked thirty minutes later by a different Job — this C
 
 **Where the numbers are — and they moved on August 26, 2026.**
 They used to be in the healthchecks.io ping body only.
-The heartbeat that replaced it is one line and carries only `verdict=`, `buckets=n/m` and `grafana_kib=`, so the exit trap now also prints a `detail:` line to the pod log carrying everything the body did: the native-dump size (`native_kib=`, `native_mib=`), the line-protocol size and file count (`lp_kib=`, `lp_files=`, one export per bucket) and the three prune counts.
+The heartbeat that replaced it is one line and carries only `verdict=` and `buckets=n/m`, so the exit trap now also prints a `detail:` line to the pod log carrying everything the body did: the native-dump size (`native_kib=`, `native_mib=`), the line-protocol size and file count (`lp_kib=`, `lp_files=`, one export per bucket) and the two prune counts.
 `make health-upgrade` tails that log, so the numbers are in front of you rather than in a third party's Events page.
 
 **On failure, the log ends with whatever failed.**
 That is a `FATAL:` line when `influx-backup.sh` or one of the scripts it runs recognises the fault and names it, and the underlying tool's own error — kubectl's, influx's — when it does not.
 Do not expect a particular shape: read the tail.
 The heartbeat carries `failed_step=` whenever the script exited normally, which is every failure except a kill — an out-of-memory kill, a node eviction or the active deadline leaves no exit trap to run and so no push at all, which is what turns the monitor DOWN by silence instead.
-
-**A Grafana major is not a tag revert.**
-Grafana migrates `grafana.db` in place on first start, so rolling back a failed major means restoring the dump this target took, not changing the tag back.
-Read the restore runbook above before you start one.
 
 **A manual dump pushes to `health-influx-backup`.**
 The Job inherits the CronJob's pod spec, push URL included, so the monitor's heartbeat history shows the manual run alongside the nightly ones.
@@ -452,7 +361,7 @@ The one thing it cannot see is a Job someone hand-rolls with a copied pod spec a
 **Other images in this namespace have no independent rollback story** — the apple-health-ingester, garmin-fetch-data, influxdb-mcp and the cloudflared sidecar are all stateless, so they need no dump.
 For the three pinned ones the rollback *is* a tag revert.
 `influxdb-mcp` is the exception in mechanism, not in stakes: it follows the floating `stable` tag, so its rollback is to revert the build input in a pull request and let that pull request's merge promote the older image — pointing the Deployment at a `sha-` tag instead would be a pinned reference under a full keel annotation set, which `check-renovate-scope` reads as the frozen state and hard-fails.
-Only InfluxDB and Grafana hold state here.
+Only InfluxDB holds state here.
 
 ## Cloudflare analytics ingest
 
@@ -516,7 +425,7 @@ If the rewound start is older than Cloudflare's retention, those hours are gone 
 The job then:
 
 1. logs the exact missing range,
-2. writes an `ingest_gap` point (fields `missing_hours`, `gap_end`) timestamped at the gap start, so the hole is visible in Grafana instead of reading as a quiet week, and
+2. writes an `ingest_gap` point (fields `missing_hours`, `gap_end`) timestamped at the gap start, so the hole is visible on a dashboard instead of reading as a quiet week, and
 3. **exits non-zero**, so `homelab-cloudflare-analytics` is pushed DOWN with `verdict=gap`.
 
 It still ingests everything that *is* still available in the same run.
@@ -525,7 +434,7 @@ The alarm fires once: the next run's watermark is current again, which is the in
 `ingest_gap` deliberately uses a field named `missing_hours`, not `count`.
 The watermark query filters on `_field == "count"`, so a gap marker can never advance the watermark and claim the hole was filled.
 
-To surface gaps in Grafana, add an **annotation** query on `ingest_gap` to the Cloudflare dashboard.
+To surface gaps, add an **annotation** query on `ingest_gap` to the Cloudflare dashboard.
 A panel over `http_requests` alone will not show them.
 
 ### Cardinality
@@ -585,7 +494,7 @@ It cannot fail silently.
 CronJob at `7,22,37,52 * * * *` — every 15 minutes — that pulls one Withings account's measure groups into the `withings` bucket.
 
 The scale produces body-composition detail that Apple Health never receives.
-Weight arrives here and in `apple_metrics`, deliberately, and the two are not deduplicated: the buckets stay separate and a Grafana panel picks the one it wants.
+Weight arrives here and in `apple_metrics`, deliberately, and the two are not deduplicated: the buckets stay separate and a dashboard panel picks the one it wants.
 
 ### Shape
 
@@ -598,7 +507,7 @@ Weight arrives here and in `apple_metrics`, deliberately, and the two are not de
 | Deadlines | `startingDeadlineSeconds: 600`, `activeDeadlineSeconds: 600`, `ttlSecondsAfterFinished: 259200` |
 | Monitoring | The `Withings-ingest` uptime-kuma push monitor: `up` on exit 0, `down` otherwise |
 
-Every 15 minutes rather than six-hourly, so a weigh-in reaches Grafana within a quarter of an hour instead of within six.
+Every 15 minutes rather than six-hourly, so a weigh-in reaches a dashboard within a quarter of an hour instead of within six.
 The cadence is safe on both budgets a faster schedule could blow.
 A steady-state run makes four HTTP requests, two of which reach Withings — the token refresh and one `getmeas` — against an account limit of 120 requests a minute.
 And the refresh token rotates on every refresh whatever the interval, so 96 rotations a day exercise the persist-before-use rule rather than threaten it: that rule is what makes rotation routine.
@@ -753,8 +662,8 @@ There was no dual-live window: the data is 460 points, the ingest is idempotent,
 ### Dashboard
 
 Two hand-built dashboards, both deleted and rebuilt for the wide schema on the day it shipped.
-Neither is provisioned from this repository, by design: both live in `grafana.db` like every other dashboard here, so the nightly SQLite dump described under [The Grafana dump](#the-grafana-dump) is what captures them.
-No dashboard JSON is committed.
+Neither is provisioned from this repository, by design: both live in Grafana Cloud, which Git Sync versions in `github.com/mnbf9rca/grafana-dashboards`.
+No dashboard JSON is committed here.
 
 `withings` (uid `withings`) holds weight over time per scale, latest-reading stat tiles for weight, fat ratio, fat mass, muscle mass, hydration, bone mass, heart rate and blood pressure — each over `range(start: 0)`, so a tile is never blank merely because the cuff has not been used inside the dashboard window — a collapsed **Other** row holding height, and an unknown-codes panel.
 That last panel is now `filter(fn: (r) => r._field =~ /^type_[0-9]+$/)`, which deleted the 43-entry `TYPES` literal the old one carried, and empty is its expected state.
@@ -933,6 +842,93 @@ One **unconfirmed** hypothesis worth attaching if it recurs: v0.33 added an ext_
 There is no evidence that is what happened.
 Pre-restart logs and the pod description are in the 2026-08-18 session scratchpad for comparison.
 
+## Grafana Cloud over Private Datasource Connect
+
+`homelab/health/pdc-agent.yaml` runs the Grafana Cloud PDC agent, one single-replica Deployment in the `health` namespace.
+It opens one outbound SSH tunnel to Grafana Cloud and holds it there.
+Grafana Cloud sends a datasource query down that tunnel, the agent forwards it to the InfluxDB Service, and the rows come back the same way.
+Nothing listens in the cluster: no Service, no Ingress, no container port, no inbound firewall rule.
+The health data never leaves the cluster except as the result of a query somebody ran.
+
+### The restriction is the security boundary
+
+The agent's args carry `-ssh-flag=-o PermitRemoteOpen=influxdb.health.svc.cluster.local:8086`.
+That tells the ssh client to refuse a remote forward to any other host or port, so a stolen agent credential reaches InfluxDB and nothing else in the cluster.
+Each `args` element reaches ssh as one argv element with its spaces preserved, so the flag needs no quoting beyond being one list entry.
+More hosts, if this ever fronts a second datasource, go space-separated inside that same single value.
+
+A datasource whose URL is anything but exactly `influxdb.health.svc.cluster.local:8086` fails **Save & test** in the cloud UI while the pod log stays clean.
+That is the restriction working, not a fault.
+
+### Credentials
+
+All three live on the 1Password item `op://Homelab/health-pdc`. Two reach the pod as a `secretKeyRef` into the `grafana-pdc-agent` Secret; the third rides in the args.
+
+| Reaches the pod as | 1Password field | Tier |
+|---|---|---|
+| Secret key `token` | `grafana-pdc-token-secret` | secret — a tunnel into this cluster; disclosure means the honesty box **and** a rotation |
+| Secret key `cluster` | `grafana-pdc-cluster` | identifier |
+| the `-gcloud-hosted-grafana-id=` arg | `hosted-grafana-id` | identifier |
+
+The hosted Grafana id is in the args rather than the Secret, and that is forced rather than chosen.
+It is all digits; kustomize drops quotes it does not need, so `hosted-grafana-id: "${VAR}"` renders as `hosted-grafana-id: 12345`, which the API server rejects because `stringData` takes strings only.
+A block scalar and an explicit `!!str` tag are both normalized away by kustomize too, so nothing in the source manifest can prevent it.
+Written as one `flag=value` arg the rendered scalar is a string whatever the id holds.
+The id is a tier-3 identifier and the agent prints it to its own log, so the pod spec is a fine place for it; only the committed repo has to stay clear of it.
+
+`cluster` is the PDC network's cluster string, for example `prod-eu-west-2`, read off the PDC network page in the Grafana Cloud UI.
+The same item also holds `grafana-pdc-token-id`, `grafana-pdc-instance-id` and `grafana-cloud-admin-token`, and this design uses none of the three.
+They are named here so the next reader does not have to re-derive which field is the `-cluster` value.
+
+The agent writes an ephemeral SSH key into `$HOME/.ssh/grafana_pdc` on every start and keeps nothing else, so it is stateless: it is on no `STATEFUL` lock, and it runs on a floating tag under the full keel annotation set.
+`homelab/health/pdc-agent.yaml` is listed in the first `packageRule` in `renovate.json` so Renovate proposes no digest pin against that floating tag.
+
+### What watches it
+
+The agent carries **no probes, by policy**.
+It serves no traffic, so readiness gates nothing, and the one failure a liveness probe could see — a dropped tunnel — is one the agent's own reconnect already repairs, so a restart is not the remedy.
+A NoData or Error alert on a query through the tunnel is what watches it instead, and that one alert covers the agent, the tunnel and InfluxDB together.
+Triage: [monitoring.md](monitoring.md).
+
+Start triage at the pod log:
+
+```bash
+kubectl -n health logs deploy/pdc-agent --tail=50
+```
+
+An authentication or permission error means the token or the cluster string is wrong — fix the 1Password field, not the manifest.
+A `Permission denied` on the key path means `HOME` and the `emptyDir` mount path disagree.
+The log prints the cluster string and the hosted Grafana id, which are identifiers rather than secrets.
+If it ever prints the token, add an identifier-only row to `secrets-to-rotate.md`.
+
+### Cloud-side runbook
+
+Do these steps in the Grafana Cloud UI.
+Create the PDC network first if it does not exist: **Connections** > **Private data source connections**.
+Put its token and ids on the `op://Homelab/health-pdc` item before you apply the cluster manifests.
+
+1. Create datasource `InfluxDB-Flux` on the PDC network.
+   Set type `influxdb` and query language **Flux**.
+   Set URL `http://influxdb.health.svc.cluster.local:8086`.
+   Set organization `cynexia` and default bucket `apple_metrics`.
+   Take the token from `op://Homelab/health-influxdb/read-token`.
+2. Create datasource `Garmin-InfluxDB` on the PDC network.
+   Set type `influxdb` and query language **InfluxQL**.
+   Use the same URL.
+   Set user `garmin`, database `GarminStats` and HTTP method **GET**.
+   Take the password from the `op://` path that `.env.tpl` gives for `HEALTH_INFLUX_GARMIN_V1_PASSWORD`.
+3. Click **Save & test** on each datasource.
+   Both must go green.
+4. Render one dashboard panel against either datasource.
+   The panel must show data.
+5. Create one alert rule that evaluates every 5 minutes.
+   Query the `withings` bucket over the last 30 days in Flux, limited to one row.
+   Alert on **NoData** and on **Error**, after 10 minutes.
+   Route it to the stack's default contact point.
+
+Both datasources reproduce the self-hosted ones exactly, so existing queries port unchanged.
+Available buckets: `apple_metrics`, `apple_workouts`, `garmin`, `cloudflare`, `withings`.
+
 ## Monitoring
 
 Four uptime-kuma **push** monitors; tokens in 1Password item `health-healthchecks`.
@@ -953,7 +949,7 @@ Roster and per-monitor settings: [uptime-kuma.md](uptime-kuma.md#push-monitors).
 - `influx-backup` pushes `up` or `down` from an EXIT trap, so a failure is DOWN within a minute and is distinguishable from a never-scheduled run.
   It did not always: the report used to be the script's last statement under `set -eu`, so a failing prune, a missing ConfigMap key or a dead influxdb pod produced *exactly nothing* until the silence bound expired some 30 hours later.
   The accepted cost of the conversion is that a transient fault — an influxdb pod mid-restart when `kubectl exec` lands — now alerts instead of self-healing into silence.
-  The heartbeat carries `verdict=`, `buckets=n/m` and `grafana_kib=`; the pod log's `detail:` line carries every size and prune count.
+  The heartbeat carries `verdict=` and `buckets=n/m`; the pod log's `detail:` line carries every size and prune count.
   `ttlSecondsAfterFinished` is 48h so the Job's own logs outlive a weekend.
 - `ingest-freshness` (every 6h) pushes `up` **only when BOTH buckets hold InfluxDB data less than 24h old**, and pushes nothing at all otherwise — so a real ingest gap surfaces as an absent heartbeat instead of being masked by an unrelated cron firing on schedule.
   It **always exits 0 on purpose**: the signal is the absent push, not a failed Job.
@@ -1005,5 +1001,5 @@ The refresh token lives a year and every successful run renews it.
 - Garmin points can't carry a `person` tag (upstream limitation of the v1-compat write path); Apple points get a hardcoded `person=rob` static tag instead of a real multi-person model.
   The Phase 2 facade / person-registry design is expected to absorb this.
 - Cloudflare Access service-token in front of the tunnel hostnames (the bearer token plus the Access app's email policy suffices for now; also the path to true end-to-end `Data MCP` monitoring — see [uptime-kuma.md](uptime-kuma.md)).
-- Grafana alert rules (Phase 3, pending data accumulation).
+- More Grafana Cloud alert rules (Phase 3, pending data accumulation).
 - PSA hardening from `baseline` to `restricted`.

@@ -1,0 +1,95 @@
+---
+# Grafana Cloud Private Datasource Connect agent.
+#
+# One outbound SSH tunnel from this pod to Grafana Cloud, held open. Grafana
+# Cloud sends a datasource query down it, this agent forwards the query to the
+# InfluxDB Service, and the rows come back the same way. NOTHING LISTENS HERE:
+# no Service, no Ingress, no containerPort, no inbound firewall rule. The health
+# data never leaves the cluster except as the result of a query.
+#
+# THE TUNNEL IS RESTRICTED TO ONE HOST AND THAT IS THE SECURITY BOUNDARY.
+# `-ssh-flag=-o PermitRemoteOpen=influxdb.health.svc.cluster.local:8086` tells
+# the ssh client to refuse a remote forward to anything else, so a stolen agent
+# credential reaches InfluxDB and no other service in the cluster. Each `args`
+# element reaches ssh as one argv element with spaces preserved, so the flag
+# needs no quoting beyond being one list entry; more hosts, if ever needed, go
+# space-separated inside that same one value.
+#
+# UPDATE MODE: FLOATING TAG PLUS KEEL. The agent holds no state — it writes an
+# ephemeral SSH key into its home directory on every start and nothing else — so
+# it is on no stateful lock and may choose either mode. Floating plus keel is
+# the choice. `match-tag: "true"` is REQUIRED: without it keel silently
+# downgrades the tag to :latest. Never add a version pin while these
+# annotations are here — check-renovate-scope reads a pinned reference under a
+# complete keel set as the frozen state and hard-fails apply-homelab.
+#
+# `homelab/health/pdc-agent.yaml` is listed in the first packageRule in
+# renovate.json so Renovate does not propose a digest pin on this floating tag.
+#
+# NO PROBES, BY POLICY. The pod serves no traffic, so readiness gates nothing,
+# and the one failure a liveness probe could see — a dropped tunnel — is one the
+# agent's own reconnect already handles, so a restart is not the remedy. The
+# failure that matters is detected in Grafana Cloud instead: a NoData or Error
+# alert on a query through this tunnel covers the agent, the tunnel and InfluxDB
+# at once. See docs/operations/monitoring.md.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pdc-agent
+  namespace: health
+  annotations:
+    keel.sh/policy: force
+    keel.sh/match-tag: "true"   # REQUIRED — without this keel silently downgrades to :latest
+    keel.sh/trigger: poll
+    keel.sh/pollSchedule: "@every 6h"
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: pdc-agent } }
+  template:
+    metadata:
+      labels: { app: pdc-agent }
+    spec:
+      securityContext:
+        runAsUser: 30000
+        runAsGroup: 30000
+        fsGroup: 30000
+        runAsNonRoot: true
+      containers:
+        - name: pdc-agent
+          image: grafana/pdc-agent:latest
+          args:
+            - -cluster
+            - $(CLUSTER)
+            - -token
+            - $(TOKEN)
+            # The id is all digits, so it cannot be a stringData value: kustomize
+            # drops the quotes and the API server then rejects a YAML number.
+            # Written as one flag=value arg it is a string whatever it holds.
+            - -gcloud-hosted-grafana-id=${HEALTH_PDC_HOSTED_GRAFANA_ID}
+            - -log.level
+            - info
+            - -ssh-flag=-o PermitRemoteOpen=influxdb.health.svc.cluster.local:8086
+          env:
+            # HOME is set explicitly rather than inherited from the image's
+            # passwd entry. The agent generates its SSH key at
+            # $HOME/.ssh/grafana_pdc on every start via os.UserHomeDir(), which
+            # on Linux reads $HOME, so naming it here makes the writable path
+            # deterministic and independent of what the image ships.
+            - { name: HOME, value: /home/pdc }
+            - name: CLUSTER
+              valueFrom: { secretKeyRef: { name: grafana-pdc-agent, key: cluster } }
+            - name: TOKEN
+              valueFrom: { secretKeyRef: { name: grafana-pdc-agent, key: token } }
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: ["ALL"] }
+          resources:
+            # Upstream asks for 1 CPU and 1Gi, sized for a busy multi-datasource
+            # tenant. This tunnel fronts one InfluxDB.
+            requests: { cpu: 20m, memory: 64Mi }
+            limits: { memory: 256Mi }
+          volumeMounts:
+            - { name: home, mountPath: /home/pdc }
+      volumes:
+        - name: home
+          emptyDir: {}

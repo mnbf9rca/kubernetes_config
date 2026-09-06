@@ -5,7 +5,7 @@
 # GraphQL query wider than 1 day. This CronJob copies that window into the
 # health namespace's InfluxDB (bucket `cloudflare`, infinite retention) before it
 # expires, so the traffic record outlives Cloudflare's retention and is queryable
-# in the existing Grafana.
+# from Grafana Cloud through the PDC agent.
 #
 # The script itself is homelab/health/scripts/cloudflare-analytics-ingest.py,
 # mounted at /app/ingest.py by the configMapGenerator in this directory's

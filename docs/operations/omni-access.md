@@ -14,7 +14,7 @@ They live in 1Password, and every command below reads them at run time with `op 
 Vault names in `op://` references are **case-insensitive** — `op://Homelab/…` and `op://homelab/…` both resolve, which is why `.envrc` and this file historically differed.
 Docs use `Homelab` consistently; don't "fix" a lowercase reference you find elsewhere on the assumption that it's broken.
 
-> The Omni identity is **not** the Google identity used for Grafana in the `health` namespace.
+> The Omni identity is **not** the Google identity used for Grafana Cloud.
 > They are separate accounts with separate sign-in flows.
 > Signing in with the Google account when Omni asks for its identity will not produce a working config.
 
@@ -120,7 +120,7 @@ Full detail: [apply-workflow.md](apply-workflow.md).
 |---|---|---|
 | `dial tcp 127.0.0.1:8080: connection refused` | No omniconfig, or the `default` context is selected | `omnictl config contexts`; run the bootstrap sequence, or `omnictl config context cynexia` |
 | `Could not authenticate: open ~/.talos/keys/<ctx>-<user>.pgp` | Stale/absent SideroV1 key for that context+identity | Remove the stale talosctl context (`talosctl config remove <ctx> -y`, switching current context first if needed), refetch with `omnictl talosconfig --cluster homelab`, run any talosctl command and complete the browser sign-in. kubectl auth (Omni OIDC) is separate and unaffected. |
-| Browser sign-in loops or authenticates the wrong account | Signed in with the Google/Grafana identity instead of the Omni identity | Sign out of Omni in the browser, redo the flow with `op://Homelab/omni/email` |
+| Browser sign-in loops or authenticates the wrong account | Signed in with the Google identity instead of the Omni identity | Sign out of Omni in the browser, redo the flow with `op://Homelab/omni/email` |
 | `omnictl config add` succeeded but commands still hit 127.0.0.1 | `add` does not switch contexts | `omnictl config context cynexia` |
 | `node not found, cannot resolve its management address` | talosctl addressed a node by IP | Address by node name (`kubectl get nodes -o name`) |
 | kubectl works, talosctl doesn't (or vice versa) | The two auth paths are independent — OIDC for kubectl, SideroV1 PGP for talosctl | Fix only the broken one; they share nothing but the omniconfig |
