@@ -116,6 +116,14 @@ HEALTH_GARMIN_B64_PASSWORD=op://Homelab/health-garmin/b64-password
 # health namespace — Grafana admin password
 HEALTH_GRAFANA_ADMIN_PASSWORD=op://Homelab/health-grafana/admin-password
 
+# Grafana Cloud Private Datasource Connect (homelab/health/pdc-agent.yaml).
+# grafana-pdc-token-secret is the only secret of the three; the other two
+# identify the Grafana Cloud account and are resolved here rather than
+# committed, for the same reason a Cloudflare zone ID is.
+HEALTH_PDC_TOKEN=op://Homelab/health-pdc/grafana-pdc-token-secret
+HEALTH_PDC_HOSTED_GRAFANA_ID=op://Homelab/health-pdc/hosted-grafana-id
+HEALTH_PDC_CLUSTER=op://Homelab/health-pdc/grafana-pdc-cluster
+
 # hindsight namespace — the self-hosted memory backend for the Hermes profiles.
 #
 # pg-password must be generated URL-SAFE (alphanumeric): it is interpolated into
