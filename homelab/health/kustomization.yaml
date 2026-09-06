@@ -17,6 +17,7 @@ resources:
   - ingest-freshness.yaml
   - cloudflare-analytics.yaml
   - withings-ingest.yaml
+  - pdc-agent.yaml
 
 # Scripts that run in this namespace live as real files under scripts/ and reach
 # the cluster through a generator, never as an inline YAML string: a real file

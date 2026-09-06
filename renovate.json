@@ -51,6 +51,7 @@
         "homelab/workloads/**",
         "homelab/bootstrap/keel/**",
         "homelab/health/influxdb-mcp.yaml",
+        "homelab/health/pdc-agent.yaml",
         "vps/workloads/**",
         "vps/bootstrap/keel/**",
         "vps/bootstrap/cloudflared/**"
