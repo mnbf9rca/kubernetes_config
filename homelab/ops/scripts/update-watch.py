@@ -3,9 +3,9 @@
 
 WHY THIS EXISTS
 ---------------
-Every image in the `health` namespace is version- or digest-pinned and keel is
-forbidden there, so updates arrive as Renovate pull requests and nothing was
-pointing at them. This job counts the open `renovate[bot]` pull requests on this
+Much of this estate is version- or digest-pinned and keel-free -- every workload
+that writes into persistent data it owns is locked that way -- so those updates
+arrive as Renovate pull requests and nothing was pointing at them. This job counts the open `renovate[bot]` pull requests on this
 repo once a day and drives one monitor: UP while updates simply wait, DOWN when
 one has waited long enough that an update session was plainly skipped, DOWN when
 Renovate itself has gone quiet or is visibly broken, DOWN (through silence) when
@@ -13,8 +13,8 @@ this job stops running.
 
 SINCE 2026-08-28 IT ALSO READS ONE THING OUT OF THE DASHBOARD'S BODY: the
 repository problem Renovate writes when a package lookup fails. An image
-Renovate cannot look up gets no pull request, and every image the update engine
-is forbidden to touch is pinned, so a failed lookup freezes it silently --
+Renovate cannot look up gets no pull request, and every image keel does not
+touch is pinned, so a failed lookup freezes it silently --
 `make check-renovate-scope` still reports it watched, because that guard proves
 the file is in scope and never that the lookup succeeded. Only a COUNT of failed
 lookups reaches the heartbeat: the warning block names the packages, and a

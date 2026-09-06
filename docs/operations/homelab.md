@@ -14,7 +14,7 @@ Kubectl context: `cynexia-homelab`.
 | cert-manager | Let's Encrypt, Route53 DNS-01 solver, single wildcard `*.cynexia.net` cert |
 | local-path-provisioner | Backed by the node's SSD user volume (`/var/mnt/ssd`) |
 | NFS CSI driver | Static PV/PVCs against the Proxmox host's ZFS pool |
-| keel | Image auto-updates from floating tags — **except** the `ops`, `hindsight` and `backup` namespaces, which forbid keel outright, `health`, which forbids it bar one named exception (`influxdb-mcp`, see [homelab-health.md](homelab-health.md#image-policy)), and keel itself, which is digest-pinned (see [keel](#keel) below) |
+| keel | Image auto-updates from floating tags — **except** the workloads locked to the pinned mode because they write into persistent data they own (the `STATEFUL` tuple in `scripts/check-renovate-scope.py`), the workloads pinned by choice, and keel itself, which is digest-pinned (see [keel](#keel) below) |
 | restic | Nightly CronJob (03:00 UTC) → Backblaze B2 `b2:homelab-restic-d5e15f22`, 7 daily / 4 weekly / 6 monthly. Pings healthchecks.io on start and exit code — see [monitoring.md](monitoring.md#the-restic-ping-wrapper) |
 | jottacloud-backup | Own namespace; rclone Jottacloud → NFS, then kopia → B2 `cloud-files-backup`; reports to the `jottacloud-backup` uptime-kuma push monitor |
 
@@ -88,7 +88,8 @@ Three things about this namespace are deliberate and should survive a refactor:
 - **It is not `health` and not `backup`.**
   Its scope is the whole repo, so a health-namespace object alerting about other namespaces would misstate ownership; and `backup` runs at PSA privileged for restic's hostPaths, which an outbound-HTTPS poller has no business inheriting.
   `ops` is PSA baseline, the cluster default, and needs no ServiceAccount and no RBAC.
-- **No keel here.**
+- **No keel here, by choice rather than by prohibition.**
+  Neither job writes persistent data it owns, so neither is on the `STATEFUL` lock; pinning is simply always allowed.
   Every image is version-pinned and Renovate watches this tree, so neither job's own pin is an unwatched image.
   Since 2026-08-26 that is gated: `check-renovate-scope-homelab` runs in the `diff-homelab`/`apply-homelab` preflight, so losing the scope fails the next apply.
 - **Removal is one commit,** with a long list in it.

@@ -46,5 +46,7 @@ metadata:
   # homelab pod holding a VPS kubeconfig would be a credential crossing a
   # cluster boundary to save one file.
   #
-  # NO keel in this namespace: the image is version-pinned and Renovate watches
-  # vps/** so bumps arrive as pull requests.
+  # Pinned and keel-free by choice, not by prohibition: keel-fresh writes no
+  # persistent data it owns, so it is on no lock (see the STATEFUL tuple in
+  # scripts/check-renovate-scope.py), and pinning is always allowed. Renovate
+  # watches vps/** so bumps arrive as pull requests.

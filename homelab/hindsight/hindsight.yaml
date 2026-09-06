@@ -2,14 +2,18 @@
 # VM 103. One file, every resource declaring its own namespace explicitly, per
 # the repo's one-file-per-service rule.
 #
-# NO keel ANNOTATIONS ANYWHERE IN THIS NAMESPACE, and that is not an oversight.
-# This is a stateful store that runs Alembic migrations on startup and holds an
-# agent's memory; `keel.sh/policy: force` on it is how you get an unattended
-# schema migration at 3 a.m. with no dump taken first. Every image is
-# version-pinned, Renovate proposes the bumps, and the upgrade runs the dump-first
-# runbook — `make hindsight-upgrade`, then merge, diff, apply. AGENTS.md names
-# `hindsight` alongside `health` as an explicit exception to the keel rule, so a
-# future agent following that rule literally cannot re-add keel here.
+# NO keel ANNOTATIONS ON ANY WORKLOAD IN THIS FILE, and that is not an
+# oversight. Every one of them is a stateful workload: the api and control-plane
+# run forward-only Alembic migrations on startup against an agent's memory, the
+# postgres pod owns the PGDATA, and hindsight-pg-dump writes the dump that is
+# the only rollback. `keel.sh/policy: force` on any of them is how you get an
+# unattended schema migration at 3 a.m. with no dump taken first. Every image is
+# version-pinned, Renovate proposes the bumps, and the upgrade runs the
+# dump-first runbook — `make hindsight-upgrade`, then merge, diff, apply. All
+# four are named, with those reasons, in the STATEFUL tuple in
+# scripts/check-renovate-scope.py, which fails the apply if keel annotations or
+# a floating tag appear on any of them. The lock is on these workloads, not on
+# the namespace (operator ruling, 2026-09-06).
 #
 # Runbook, restore procedure and key rotation: docs/operations/hindsight.md
 ---

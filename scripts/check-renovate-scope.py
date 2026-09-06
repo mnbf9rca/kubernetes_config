@@ -21,9 +21,12 @@ Every way of getting that wrong fails quietly:
     nothing at all, forever. Renovate opens no pull request, `update-watch`
     counts zero, and the check stays green over an estate that has stopped
     receiving updates - the watcher's own failure mode, wearing its colours.
-  * A FLOATING tag inside `health`, `hindsight`, `ops` or `backup` is an
-    unattended update to a stateful store, a scheduled job or a backup runner.
-    Those namespaces forbid keel precisely so that cannot happen.
+  * A FLOATING tag on a workload that writes into persistent data IT OWNS -
+    a database, an app that migrates its own schema on startup, a backup runner
+    that writes a repository - is an unattended migration of that data, and a
+    tag revert is not a rollback. The STATEFUL list below names those workloads
+    and locks them to the pinned mode. The lock is per WORKLOAD; the namespace
+    it happens to live in is irrelevant (operator ruling, 2026-09-06).
 
 WHY THE RENDER AND NOT THE SOURCE TREE
 --------------------------------------
@@ -129,65 +132,98 @@ KEEL_ANNOTATIONS = frozenset({
     "keel.sh/pollSchedule",
 })
 
-# Namespaces that forbid a floating tag, expressed as the render sees them.
-# WHAT THE PROHIBITION IS FOR: these namespaces hold stateful or third-party
-# images that must not roll unreviewed, because a roll can migrate data or
-# change behaviour nobody read - a forward-only schema migration on startup, a
-# scheduled job whose output nothing re-verifies, a backup runner. The reason is
-# the image's provenance and its effect on data, not the namespace's name.
-# FLOATING_EXEMPT below is the other side of that line: it is for stateless
-# images this repository builds itself from reviewed inputs, where the reviewed
-# decision is the build input and the roll only delivers it.
-NO_FLOAT_NAMESPACES = frozenset({"health", "hindsight", "ops", "backup"})
-
-# The written exemptions to the floating ban. AN ENTRY BELONGS HERE ONLY IF THE
-# IMAGE IS STATELESS AND THIS REPOSITORY BUILDS IT FROM REVIEWED INPUTS: nothing
-# to migrate when it rolls, and a human already read the change that produced
-# the image. An unattended third-party update is the thing the ban exists to
-# stop, and no entry here may be one. An entry is a deliberate act and must
-# carry a namespace, an image and a reason; the test suite asserts all three are
-# non-empty. Consulted on BOTH floating arms below, not just inside
-# the NO_FLOAT_NAMESPACES branch - keyed to a namespace the workload does not
-# live in, or reachable from only one arm, an exemption is dead code that looks
-# like policy.
-FLOATING_EXEMPT = (
-    {
-        "namespace": "jottacloud-backup",
-        "image": "ghcr.io/mnbf9rca/jottacloud-backup",
-        "reason": (
-            "A CronJob, not a long-running Deployment. Every scheduled run "
-            "starts a fresh pod that pulls :latest, so the schedule ALREADY "
-            "delivers the auto-pull behaviour keel would provide - which is "
-            "why this workload carries no keel annotations at all and does not "
-            "need any. It is also the operator's own image, built by their own "
-            "CI, so pulling its :latest is a deployment rather than an "
-            "unattended third-party update."),
-    },
-    {
-        "namespace": "backup",
-        "image": "ghcr.io/mnbf9rca/jottacloud-backup",
-        "reason": (
-            "The same workload, listed a second time against the namespace it "
-            "would land in if it is ever folded in with restic, so that move "
-            "cannot turn this guard red for a reason nobody wrote down."),
-    },
-    {
-        "namespace": "health",
-        "image": "ghcr.io/mnbf9rca/influxdb-mcp-server",
-        "reason": (
-            "The one keel-managed workload in a namespace that otherwise "
-            "forbids floating tags. It is a stateless HTTP server with no "
-            "data to migrate - nothing to dump before a roll and nothing a "
-            "roll can migrate in place - and the image is SELF-BUILT here, "
-            "from inputs under homelab/health/mcp/ that Renovate proposes and "
-            "the operator merges. So the reviewed decision is the build input "
-            "and the roll only delivers it, which is the opposite of the "
-            "unattended third-party update the no-keel rule exists to stop. "
-            "The guard's is_floating_tag accepts `stable` and treats `0.2` as "
-            "pinned, so moving to a two-part version tag would need this "
-            "exemption removed and the keel annotations with it."),
-    },
+# WORKLOADS WHOSE UPDATE MODE IS LOCKED TO "PINNED, RENOVATE PROPOSES THE BUMP".
+#
+# THE RULE (operator ruling, 2026-09-06): the lock is a property of the
+# WORKLOAD, never of its namespace. A workload whose image writes into
+# persistent data IT OWNS - a database, an app that migrates its own schema on
+# startup, a backup runner that writes a repository, a dashboard server with an
+# on-disk db - must be version-pinned and updated through Renovate, because an
+# unreviewed roll can migrate or corrupt that data and a tag revert is not a
+# rollback. Every other workload, stateless and in any namespace, may choose
+# either mode: a floating tag with the complete keel annotation set, or a pinned
+# tag Renovate proposes bumps for.
+#
+# An entry here is a deliberate act: it needs a namespace, a kind, a name and a
+# written reason, and the test suite asserts all four are non-empty. A listed
+# workload fails this check if ANY of its containers floats, or if it carries any
+# keel annotation at all.
+#
+# Not listed means "may float", not "is stateless": the list records where the
+# roll must be reviewed. The near misses are written down below it rather than
+# left for the next reader to re-derive.
+STATEFUL = (
+    {"namespace": "health", "kind": "Deployment", "name": "influxdb",
+     "reason": "The time-series store. The engine upgrades its own on-disk "
+               "index and WAL layout on first start of a new version, and no "
+               "tag revert undoes that."},
+    {"namespace": "health", "kind": "Deployment", "name": "grafana",
+     "reason": "grafana.db is migrated IN PLACE on the first start of a new "
+               "major, so a tag revert is not a rollback. The dump "
+               "`make health-upgrade` takes is the only one."},
+    {"namespace": "health", "kind": "Deployment", "name": "garmin-grafana",
+     "reason": "Owns the garmin-tokens PVC. The third-party image itself "
+               "rewrites that token cache, and losing it costs an interactive "
+               "2FA re-login that fires an MFA SMS at the operator."},
+    {"namespace": "health", "kind": "CronJob", "name": "influx-backup",
+     "reason": "Writes the nightly line-protocol export and the Grafana sqlite "
+               "copy that ARE the restore path for the two workloads above."},
+    {"namespace": "hindsight", "kind": "Deployment", "name": "hindsight",
+     "reason": "Runs forward-only Alembic migrations against the memory store "
+               "on startup. The pre-upgrade dump `make hindsight-upgrade` takes "
+               "is the only rollback, so the roll must not be unattended."},
+    {"namespace": "hindsight", "kind": "Deployment", "name": "hindsight-postgres",
+     "reason": "A PostgreSQL data directory. A major roll rewrites PGDATA into "
+               "a layout the previous binary will not start against, and the "
+               "pgvector extension version lives in the catalogue rather than "
+               "in the image."},
+    {"namespace": "hindsight", "kind": "CronJob", "name": "hindsight-pg-dump",
+     "reason": "Writes the dump that is the rollback for the two above. A "
+               "silently changed dump format is discovered at restore time."},
+    {"namespace": "backup", "kind": "CronJob", "name": "restic-backup",
+     "reason": "Writes the restic repository. A repository-format upgrade is "
+               "one-way: an older restic cannot read a repository a newer one "
+               "has touched."},
+    {"namespace": "backup", "kind": "Job", "name": "restic-init",
+     "reason": "Initialises that same repository, at whatever format version "
+               "the image carries. Both clusters."},
+    {"namespace": "backup", "kind": "CronJob", "name": "hermes-pull",
+     "reason": "Owns the mirror PVC holding the Hermes VM's application state, "
+               "which the 03:00 restic sweep is the only copy of."},
+    {"namespace": "vps", "kind": "Deployment", "name": "umami-postgres",
+     "reason": "A PostgreSQL data directory, plus the pg-dump sidecar that "
+               "writes its dump. Same shape as hindsight-postgres."},
+    {"namespace": "vps", "kind": "Deployment", "name": "meilisearch",
+     "reason": "Upgrades its on-disk index format between versions; going back "
+               "needs a dump and a re-import, not a tag revert."},
 )
+
+# CONSIDERED AND DELIBERATELY NOT LISTED, so the next reader does not re-derive
+# these one at a time:
+#
+#   * The keel-managed VPS apps - freshrss, karakeep, n8n, uptime-kuma,
+#     changedetection, umami. Each does migrate its own store on upgrade, and
+#     each is nevertheless left floating on purpose: the quiesced sqlite
+#     snapshot sidecars and the nightly restic sweep give a consistent copy of
+#     last night's state, and upstream's own forward migrations are the
+#     supported path. Pinning one is a decision, not a correction - it means
+#     adding it here and pinning its tag in the same commit.
+#   * `jottacloud-backup`. A CronJob on `:latest` with no keel annotations,
+#     which is legal below because every scheduled run starts a fresh pod that
+#     pulls the tag - the schedule already delivers what keel would. It writes
+#     no repository whose format it owns: it uploads plain files through rclone.
+#   * `influxdb-mcp`. A stateless HTTP server this repository builds itself
+#     from reviewed inputs under homelab/health/mcp/, so it floats with keel and
+#     needs no exemption from anything. It used to need a written one only
+#     because the old rule keyed on its namespace.
+#   * `cloudflare-analytics`, `withings-ingest`, `apple-health-ingester`,
+#     `ingest-freshness`, `update-watch`, `hindsight-canary`, `keel-fresh`.
+#     These write points into InfluxDB, a token file, or a two-integer state
+#     file, but the logic doing the writing is a script versioned in THIS repo
+#     and mounted from a ConfigMap; the image is a stdlib runtime that owns none
+#     of it. They stay pinned, which is always allowed, but nothing is locked.
+#     `garmin-grafana` is listed above precisely because it is the other shape:
+#     a third-party image that owns its own token cache.
 
 # Tags that move on their own. THREE shapes, because this estate has all three:
 #
@@ -218,6 +254,14 @@ MODE_PINNED = "pinned"                      # pinned tag, no keel - must be in s
 MODE_FROZEN = "frozen"                      # pinned tag WITH keel - always a failure
 MODE_INCOMPLETE_KEEL = "incomplete-keel"    # a partial keel set - always a failure
 MODE_FLOATING_UNMANAGED = "floating-unmanaged"  # floating tag, no keel - nothing updates it
+
+# Kinds whose every run starts a fresh pod, so a floating tag is RE-PULLED on
+# each schedule tick without keel or anything else arranging it. That is why
+# `jottacloud-backup` is legal on `:latest` with no keel annotations: the
+# schedule already delivers what keel would. A long-running Deployment gets no
+# such thing - it sits on the image it was admitted with until something rolls
+# it - so a floating tag there with no keel is genuinely unmanaged.
+RE_PULLS = frozenset({"CronJob", "Job"})
 
 # Workload kinds that carry containers this check cares about. A Pod is included
 # because a bare Pod would otherwise be invisible.
@@ -302,13 +346,27 @@ def classify_container(reference, annotations, workload_floats=None):
         "nothing pins it either")
 
 
-def floating_exempt(namespace, reference):
-    """True if this floating image is a written exemption in this namespace."""
-    repo = image_repo(reference)
-    for entry in FLOATING_EXEMPT:
-        if entry["namespace"] == namespace and entry["image"] == repo:
-            return True
-    return False
+# Every entry that has matched a real workload since the last reset. An entry
+# keyed on a name no workload has is inert code that reads like policy - which
+# is exactly what the exemption list this replaced did for its first draft, and
+# what `dead_patterns` guards against on the Renovate side. main() names any
+# entry that matched nothing, on a full two-cluster run.
+_MATCHED = set()
+
+
+def stateful_entry(namespace, kind, name):
+    """The STATEFUL entry for this workload, or None.
+
+    Matched on namespace/kind/name rather than on the image, because the lock
+    is about what the WORKLOAD does to its data. `restic-backup` is the same
+    entry on both clusters and wants one line, not two.
+    """
+    for entry in STATEFUL:
+        key = (entry["namespace"], entry["kind"], entry["name"])
+        if key == (namespace, kind, name):
+            _MATCHED.add(key)
+            return entry
+    return None
 
 
 def path_ignored(rel, ignore_paths):
@@ -655,6 +713,16 @@ def analyse_render(cluster, text, patterns, ignore_paths, source_files):
         # track? If it does, a pinned container in this workload is a sidecar
         # beside a keel-tracked image, not a frozen pin.
         floats = any(not is_pinned(reference) for _name, reference in containers)
+        # The update-mode lock, judged once per workload. keel annotations on a
+        # locked workload are a failure even where nothing floats yet: the
+        # annotations are the standing instruction to roll it unattended, and
+        # the next tag edit is what makes them bite.
+        locked = stateful_entry(namespace, kind, name)
+        if locked and KEEL_ANNOTATIONS & set(annotations):
+            failures.append(
+                "%s %s/%s: keel annotations on a workload locked to the pinned "
+                "mode, because %s Drop them and let Renovate propose the bump."
+                % (kind, namespace, name, locked["reason"]))
         for container, reference in containers:
             where = "%s %s/%s (%s) [%s]" % (kind, namespace, name, container,
                                             reference)
@@ -673,6 +741,10 @@ def analyse_render(cluster, text, patterns, ignore_paths, source_files):
                       if owner_cluster == cluster and reference in images]
 
             if mode in (MODE_FROZEN, MODE_INCOMPLETE_KEEL):
+                if locked:
+                    # The workload-level message above already named the lock
+                    # and the right remedy; "or float the tag" is not it.
+                    continue
                 if owners:
                     failures.append("%s: %s" % (where, why))
                 else:
@@ -688,21 +760,12 @@ def analyse_render(cluster, text, patterns, ignore_paths, source_files):
                     advisories.append(
                         "%s: a floating tag from a remote base. Advisory."
                         % where)
-                elif floating_exempt(namespace, reference):
-                    # A WRITTEN exemption, consulted BEFORE both failure arms.
-                    # It has to be: jottacloud-backup carries no keel
-                    # annotations, so it lands on the unmanaged arm, and its
-                    # namespace is not in NO_FLOAT_NAMESPACES - an exemption
-                    # consulted only inside that branch is unreachable code
-                    # that reads like policy.
-                    pass
-                elif namespace in NO_FLOAT_NAMESPACES:
+                elif locked:
                     failures.append(
-                        "%s: a floating tag in namespace `%s`, which forbids "
-                        "unattended updates. Pin it and let Renovate propose the "
-                        "bump, or add a written exemption to FLOATING_EXEMPT."
-                        % (where, namespace))
-                elif mode == MODE_FLOATING_UNMANAGED:
+                        "%s: a floating tag on a workload locked to the pinned "
+                        "mode, because %s Pin it and let Renovate propose the "
+                        "bump." % (where, locked["reason"]))
+                elif mode == MODE_FLOATING_UNMANAGED and kind not in RE_PULLS:
                     failures.append("%s: %s" % (where, why))
                 continue
 
@@ -757,6 +820,7 @@ def main(argv):
             return 1
 
         failures, advisories = [], []
+        _MATCHED.clear()
         for cluster in which:
             cluster_failures, cluster_advisories = analyse(
                 cluster, patterns, ignore_paths, source_files)
@@ -766,6 +830,21 @@ def main(argv):
         print("ERROR: %s" % exc, file=sys.stderr)
         return 2
 
+    # Only meaningful over BOTH renders: `restic-init` is a homelab-and-vps
+    # entry, and a single-cluster run legitimately never reaches half the list.
+    if list(which) == list(CLUSTERS):
+        dead_entries = [e for e in STATEFUL
+                        if (e["namespace"], e["kind"], e["name"]) not in _MATCHED]
+        if dead_entries:
+            print("STATEFUL entries that match no workload in either render:\n")
+            for entry in dead_entries:
+                print("  %(kind)s %(namespace)s/%(name)s" % entry)
+            print("\nAn entry keyed on a namespace, kind or name nothing has is "
+                  "inert: it reads like\na lock and enforces nothing. Fix the "
+                  "key, or delete the entry in the same commit\nthat removed "
+                  "the workload it named.")
+            return 1
+
     for line in sorted(advisories):
         print("advisory: %s" % line)
 
@@ -774,8 +853,9 @@ def main(argv):
         for line in sorted(failures):
             print("  %s" % line)
         print("\nThe rule: FLOATING TAG MEANS KEEL, PINNED TAG MEANS RENOVATE, "
-              "NEVER BOTH.\nSee AGENTS.md and "
-              "docs/operations/apply-workflow.md.")
+              "NEVER BOTH -\nand a workload on the STATEFUL list in this script "
+              "is locked to the pinned mode,\nwhatever namespace it lives in. "
+              "See AGENTS.md and\ndocs/operations/apply-workflow.md.")
         return 1
 
     print("OK: [%s] every container is in exactly one update mode; %d advisory "

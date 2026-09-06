@@ -28,8 +28,10 @@
 # Python 3 standard library only — no pip install at runtime, so the job depends
 # on nothing but the two APIs it talks to.
 #
-# NO KEEL in this namespace (see docs/operations/homelab-health.md): the image is
-# version-pinned and Renovate proposes bumps.
+# NO KEEL HERE, by choice rather than by prohibition (see
+# docs/operations/homelab-health.md): the image is version-pinned and Renovate
+# proposes bumps. The ingest logic is a script versioned in this repo, so
+# nothing about this job is locked — pinning is simply always allowed.
 #
 # NO PROBES. This is scheduled work, so the instrument is the uptime-kuma push
 # monitor's dead-man's-switch plus activeDeadlineSeconds, not a probe. See

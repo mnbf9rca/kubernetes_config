@@ -60,16 +60,19 @@ kind: Deployment
 metadata:
   name: influxdb-mcp
   namespace: health
-  # THE ONE KEEL-MANAGED WORKLOAD IN THIS NAMESPACE, and the exception is
-  # written down in three other places rather than being silent: the
-  # FLOATING_EXEMPT entry in scripts/check-renovate-scope.py, the named
-  # exception on the `health` namespace in homelab/bootstrap/namespaces.yaml,
-  # and the pinDigests: false path in renovate.json.
+  # KEEL-MANAGED, AND IT NEEDS NO EXEMPTION FROM ANYTHING. The update-mode lock
+  # is per stateful workload, not per namespace (operator ruling, 2026-09-06),
+  # and this workload holds no persistent data: it is a stateless HTTP server
+  # with nothing to migrate, so it is on no lock and may float. The one place
+  # that still needs to know it floats is the pinDigests: false path in
+  # renovate.json, which stops Renovate proposing a digest pin under these
+  # annotations.
   #
-  # It is a stateless HTTP server with no data to migrate, and the image is
-  # built from inputs in this repository that Renovate proposes and the operator
-  # merges — so the reviewed decision is the build input, and this roll only
-  # delivers it. Everything else in `health` stays pinned.
+  # The image is also built from inputs in this repository that Renovate
+  # proposes and the operator merges, so the reviewed decision is the build
+  # input and this roll only delivers it. The stateful workloads beside it in
+  # `health` — influxdb, grafana, garmin-grafana, influx-backup — stay pinned
+  # for their own reasons, listed in scripts/check-renovate-scope.py.
   #
   # A PINNED TAG IS NOT A ROLLBACK TARGET HERE. check-renovate-scope reads a
   # pinned reference under a complete keel annotation set as the frozen state

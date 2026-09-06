@@ -55,12 +55,12 @@ kubernetes_config/
 │   ├── bootstrap/            # platform: namespaces (with PSA labels), local-path, NFS CSI, cert-manager, traefik, keel
 │   ├── workloads/            # application workloads (one file per service, --- separated, no ns override)
 │   ├── secrets/              # Secret manifests with ${VAR} envsubst placeholders
-│   ├── health/               # health-data pipeline (no keel; pinned images)
+│   ├── health/               # health-data pipeline (the stateful workloads are pinned; see the STATEFUL lock)
 │   │   ├── scripts/          # job scripts as real files + their tests; mounted via configMapGenerator
 │   │   └── mcp/              # build inputs for the InfluxDB MCP image (Dockerfile, pinned package, lockfile, --import hook)
 │   ├── ops/                  # cluster-wide operational jobs (the daily Renovate update watcher)
 │   │   └── scripts/          # same pattern: real files + tests, via configMapGenerator
-│   ├── hindsight/            # Hindsight memory backend for the Hermes profiles (no keel; pinned images)
+│   ├── hindsight/            # Hindsight memory backend for the Hermes profiles (pinned; alembic migrates on startup)
 │   │   └── scripts/          # nightly pg_dump + the 15-minute canary; mounted via configMapGenerator
 │   └── backup/               # restic init Job + nightly CronJob (hostPath /var/mnt/ssd/local-path-provisioner)
 ├── vps/                      # Hetzner Talos cluster, same sub-layout (bootstrap/secrets/workloads/backup/ops/talos)
@@ -225,14 +225,18 @@ The rules that must not be broken:
 ## When Editing
 
 - Keep the one-file-per-service pattern; keep all of a service's resources in that file.
-- Every new Deployment must include the full keel annotation set above — **except** in the `health`, `ops`, `hindsight` and `backup` namespaces, which explicitly forbid keel, and **except keel itself**, which is digest-pinned on both clusters so the update engine cannot update itself (`homelab/bootstrap/keel/keel.yaml`, `vps/bootstrap/keel/keel.yaml`).
-  **What that prohibition is for**: those four namespaces hold stateful or third-party images that must not roll unreviewed, because a roll can migrate data or change behaviour nobody read — a forward-only migration on startup, a scheduled job whose output nothing re-verifies, a backup runner.
-  The reason is the image's provenance and its effect on data, not the namespace's name, so an image that is **stateless and built by this repository from reviewed inputs** is on the other side of the line: the reviewed decision is the build input and the roll only delivers it.
-  `influxdb-mcp` in `health` is the one such exemption today, written down in `scripts/check-renovate-scope.py`'s `FLOATING_EXEMPT` list and named in the namespace comment; adding a second means meeting both halves of that test and writing it in the same two places.
+- **The update-mode lock is per stateful workload, not per namespace** (operator ruling, 2026-09-06).
+  A workload whose image writes into persistent data **it owns** — a database, an app that migrates its own schema on startup, a backup runner that writes a repository, a dashboard server with an on-disk db — must be version-pinned and updated through Renovate, because an unreviewed roll can migrate or corrupt that data and a tag revert is not a rollback.
+  Those workloads are listed by namespace, kind and name, each with its reason, in `scripts/check-renovate-scope.py`'s `STATEFUL` tuple, and the guard fails any of them that floats or carries a keel annotation.
+  `hindsight` runs forward-only Alembic migrations on startup, a Grafana major migrates `grafana.db` in place, and restic's repository format upgrade is one-way: those are the reasons, and the namespace they happen to sit in is not one of them.
+  **Every other workload may choose either mode, whatever namespace it lives in**: a floating tag with the full keel annotation set above, or a pinned tag Renovate proposes bumps for.
+  So a new Deployment either carries the complete set or is pinned — and **keel itself** is neither, being digest-pinned on both clusters so the update engine cannot update itself (`homelab/bootstrap/keel/keel.yaml`, `vps/bootstrap/keel/keel.yaml`).
+  Adding a workload to `STATEFUL` means pinning its tag in the same commit; leaving one off means saying why in the comment block under the list, which already records the near misses.
+  The guard also fails a full two-cluster run on an entry that matches no workload, so a mistyped namespace, kind or name cannot sit there reading like a lock and enforcing nothing — which is what the exemption list it replaced did for its first draft.
   The rule that decides which mode a workload is in: **floating tag means keel; pinned tag means Renovate; never both.**
   `match-tag: "true"` on a pinned tag only refreshes the digest, so a semver pin carrying keel annotations is frozen while looking covered.
 - **Every pinned image in both clusters is inside Renovate's scope, and keeping it that way is a standing obligation.**
-  `renovate.json` scopes Renovate to `homelab/**` and `vps/**` as of 2026-08-26, so every version- or digest-pinned image in either tree — `health`, `ops`, `hindsight`, `backup`, keel itself, traefik and the VPS workloads alike — gets its bump as a pull request (`docs/operations/homelab-health.md`, `docs/operations/homelab.md`, `docs/operations/hindsight.md`).
+  `renovate.json` scopes Renovate to `homelab/**` and `vps/**` as of 2026-08-26, so every version- or digest-pinned image in either tree — the locked stateful workloads, keel itself, traefik and the pinned VPS workloads alike — gets its bump as a pull request (`docs/operations/homelab-health.md`, `docs/operations/homelab.md`, `docs/operations/hindsight.md`).
   Two kinds of image sit outside that, and the guard treats them differently.
   An image from a **remote base** is named by no file here, so nothing can edit the reference — it moves only when the base's own ref moves.
   `check-renovate-scope` prints those as advisories.
@@ -363,7 +367,8 @@ The rules that must not be broken:
 - **Every container is in exactly one update mode, and `make check-renovate-scope` proves it.**
   The guard renders each cluster and judges one container at a time: a complete keel annotation set on a floating tag is legal; the same set on a **pinned** tag is the frozen state (`match-tag` only refreshes the digest) and fails; an **incomplete** set fails on any tag, because a missing `match-tag` silently downgrades a semver tag to `:latest`.
   A pinned, keel-free image must be named by a repo file **in the same cluster's tree** that is inside `kubernetes.managerFilePatterns` and outside `ignorePaths` — a `packageRule` alone does **not** widen scope, and the per-cluster confinement is load-bearing, because both trees name many of the same images and a repo-wide lookup would let a watched homelab file vouch for an unwatched VPS container. keel annotations are a **workload** property: a pinned sidecar beside a floating app image is Renovate's, not frozen, so only a workload with nothing floating in it can be frozen.
-  Floating tags are forbidden in the `health`, `hindsight`, `ops` and `backup` namespaces; `jottacloud-backup` is the one written exemption on that guard's `FLOATING_EXEMPT` list, because it is a CronJob whose pods pull `:latest` on every scheduled run and so needs no keel.
+  A workload named in the guard's `STATEFUL` tuple is locked to the pinned mode and fails on a floating tag or any keel annotation, whatever its namespace; nothing else is banned from floating.
+  A floating tag with no keel is unmanaged and fails — **except** on a `CronJob` or `Job`, where every run starts a fresh pod that re-pulls the tag, which is why `jottacloud-backup` is legal on `:latest` with no annotations and needs no written exemption.
   Images from remote bases are advisory.
 - For new `hostPath`/`hostNetwork` workloads: elevate their namespace to PSA `privileged` in the cluster's `bootstrap/namespaces.yaml`.
   The cluster-wide enforce level is `baseline`.
@@ -410,6 +415,10 @@ The rules that must not be broken:
   A sentence then owns a line in every diff, so a one-word change shows as a one-line change instead of reflowing the paragraph around it.
   This holds for every `.md` file in the repo, this one included: the whole corpus was reflowed on 2026-08-28, so a hard-wrapped paragraph now reads as a regression.
   The exception is **files that ship to a machine and are read with `cat` or `less`** — apt configuration, systemd units, shell scripts and their comments — which keep the roughly 80-column wrapping they have, because no editor wraps them where they are read. No Markdown file is in that set.
+- **Anything that asks the operator to act follows Simplified Technical English rules.**
+  A review request, a runbook step, a question, a pull request body: one instruction per sentence, at most 20 words, imperative and active, every term defined or already in this file.
+  Explanatory prose, the reasons behind a rule, stays in ordinary clear English.
+  Operator ruling, 2026-09-06: the operator reviews under time pressure and an instruction that takes two readings is a fault.
 - **Documentation, not agent memories.**
   Do not record repo, cluster, or account state in an agent's private memory system — that hides operational knowledge from the operator, from other agents, and from review.
   Anything worth remembering goes in `docs/` (or this file, per the rule above), where it is versioned, diffable and shared.

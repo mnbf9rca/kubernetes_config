@@ -13,13 +13,15 @@ Phase 2 (facade, records store, multi-person registry) is scoped there, not here
 
 ## Image policy
 
-**No keel in this namespace, with one named exception.**
-This is a data pipeline; auto-upgrading it is not wanted.
-Every image is version- or digest-pinned and Renovate proposes bumps instead.
+**The namespace bans nothing; four of its workloads are locked to the pinned mode individually** (operator ruling, 2026-09-06).
+`influxdb`, `grafana`, `garmin-grafana` and `influx-backup` are version- or digest-pinned and keel-free because each writes into persistent data it owns — an on-disk index the engine upgrades in place, a `grafana.db` a major migrates in place, a Garmin token cache the third-party image itself rewrites, and the nightly export that is the restore path for the first two.
+All four are named, with those reasons, in the `STATEFUL` tuple in `scripts/check-renovate-scope.py`, which fails the apply if any of them floats or carries a keel annotation.
 
-The exception is `influxdb-mcp`, which runs the floating tag `stable` on an image built from this repository's own inputs and carries the full keel annotation set.
-It is a stateless HTTP server with no data to migrate, and the reviewed decision is the build input rather than the roll — Renovate proposes a change to `homelab/health/mcp/`, its pull request builds and signs the image, the merge promotes that same image, and keel delivers it within six hours.
-The exemption is written down in three places rather than left silent: `FLOATING_EXEMPT` in `scripts/check-renovate-scope.py`, the `health` namespace comment in `homelab/bootstrap/namespaces.yaml`, and the `pinDigests: false` path in `renovate.json`.
+Everything else here is pinned by choice rather than by prohibition, which is always allowed: the ingest CronJobs (`cloudflare-analytics`, `withings-ingest`, `ingest-freshness`) run a stdlib runtime image whose logic is a script versioned in this repo, so the image owns none of what they write.
+
+`influxdb-mcp` floats on `stable` with the full keel annotation set and needs no exemption from anything, because it holds no persistent data.
+The image is built from this repository's own inputs, so the reviewed decision is the build input rather than the roll — Renovate proposes a change to `homelab/health/mcp/`, its pull request builds and signs the image, the merge promotes that same image, and keel delivers it within six hours.
+The one other place that still has to know it floats is the `pinDigests: false` path in `renovate.json`, which stops Renovate proposing a digest pin under those annotations.
 
 Renovate is scoped to `homelab/**` and `vps/**`, with `pinDigests` on at the top level (see `renovate.json`); a `homelab/health/**` packageRule groups this namespace's bumps as `health stack` and keeps them off automerge.
 The one rule that does automerge is `influxdb-mcp build inputs`, over `homelab/health/mcp/**`, because that pull request's own build is the whole test and its merge is the whole deploy — see [Where the image comes from, and the guidance tool](#where-the-image-comes-from-and-the-guidance-tool).

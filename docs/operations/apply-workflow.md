@@ -293,9 +293,12 @@ Both manager blocks are validated for patterns that match nothing, `kubernetes` 
 Both are exit 2.
 Exit 1 means a finding; exit 2 means the check could not run.
 
-Floating tags are forbidden in `health`, `hindsight`, `ops` and `backup`, and the guard's `FLOATING_EXEMPT` list holds the two written exemptions.
-`jottacloud-backup` is a CronJob whose pods pull `:latest` on every scheduled run, so the schedule already delivers what keel would, which is why it carries no keel annotations and needs none.
-`influxdb-mcp` is the opposite case — the `health` namespace's one keel-managed workload, on a `stable` tag built from inputs in this repository ([homelab-health.md](homelab-health.md#image-policy)).
+**The update-mode lock is per stateful workload, not per namespace** (operator ruling, 2026-09-06).
+A workload whose image writes into persistent data it owns — a database, an app that migrates its own schema on startup, a backup runner that writes a repository, a dashboard server with an on-disk db — must be pinned, because an unreviewed roll can migrate or corrupt that data and a tag revert is not a rollback.
+Those workloads are named by namespace, kind and name, each with its reason, in the guard's `STATEFUL` tuple, and the guard fails any of them that floats or carries a keel annotation.
+Everything else may float with the full keel set or pin for Renovate, in any namespace; the near misses — the keel-managed VPS apps, `jottacloud-backup`, `influxdb-mcp`, the ingest CronJobs — are written down under the list rather than left to be re-derived.
+A floating tag with no keel annotations is unmanaged and fails, **except** on a `CronJob` or `Job`, where every run starts a fresh pod that re-pulls the tag: that is why `jottacloud-backup` is legal on `:latest` with no annotations.
+A full two-cluster run also fails on a `STATEFUL` entry that matches no workload, for the same reason `dead_patterns` fails on a `managerFilePatterns` entry that matches no file: an entry keyed on a name nothing has enforces nothing while reading like policy.
 
 **`check-renovate-scope-homelab` and `check-renovate-scope-vps` each run in their cluster's `diff-*` and `apply-*` preflight**, on the public half, as of the 2026-08-26 commit that widened Renovate to `homelab/**` and `vps/**`.
 Each chain now reads the same way: a context assertion, a vars-consistency check, **five per-cluster guards** — `check-script-substitution`, `check-job-ttl`, `check-ping-bodies`, `check-script-lint` and `check-renovate-scope`, each running as its own cluster's half — and one guard that has no half, `check-keel-fresh-parity`.
@@ -316,7 +319,7 @@ What it allows through is a short, stated list — the two copy notes, the image
 Its own header carries the list and the reasoning.
 
 Arming it needed that widening first, and the order is worth keeping in mind if the scope ever narrows again.
-The guard cannot pass against a `renovate.json` that watches only `homelab/health`, `homelab/ops` and `homelab/hindsight`: every pinned, keel-free container outside those three genuinely receives nothing, which is the estate's true state rather than a bug in the guard.
+The guard cannot pass against a `renovate.json` that watches only `homelab/health`, `homelab/ops` and `homelab/hindsight`: every pinned, keel-free container outside those three trees genuinely receives nothing, which is the estate's true state rather than a bug in the guard.
 Wiring a guard into a preflight it does not pass makes an apply impossible and teaches the next person to route around the gate.
 Widen scope, prove a clean run against both renders, then arm — never the reverse.
 

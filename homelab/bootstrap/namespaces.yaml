@@ -43,14 +43,15 @@ kind: Namespace
 metadata:
   name: health
   # PSA baseline (cluster default). Nothing in health uses hostPath/hostNetwork.
-  # NO keel in this namespace, with ONE named exception. Images here are
-  # digest/version-pinned because they are stateful or third-party and must not
-  # roll unreviewed: a roll can migrate data or change behaviour nobody read.
-  # The exception is influxdb-mcp, which runs the floating tag `stable` on an
-  # image this repository builds from its own homelab/health/mcp/ inputs. It is
-  # stateless, and the reviewed decision is the build input rather than the
-  # roll, which is the other side of that same line. The exemption is written
-  # down in scripts/check-renovate-scope.py's FLOATING_EXEMPT list.
+  # THIS NAMESPACE BANS NOTHING (operator ruling, 2026-09-06). The update-mode
+  # lock is a property of the workload, not of the namespace it sits in.
+  # influxdb, grafana, garmin-grafana and influx-backup are pinned and keel-free
+  # because each writes into persistent data it owns - an on-disk index, a
+  # grafana.db migrated in place, a token cache, the nightly export that is the
+  # restore path - and they are named, with those reasons, in the STATEFUL
+  # tuple in scripts/check-renovate-scope.py. influxdb-mcp floats on `stable`
+  # with the full keel annotation set, needing no exemption from anything: it is
+  # a stateless HTTP server built here from homelab/health/mcp/ inputs.
 ---
 apiVersion: v1
 kind: Namespace
@@ -67,7 +68,9 @@ metadata:
   # ownership — and deliberately NOT in `backup`, which runs at PSA privileged
   # for restic's hostPaths that these jobs have no business inheriting.
   #
-  # NO keel in this namespace: every image is version-pinned and Renovate
+  # Both are pinned and keel-free by choice rather than by prohibition: neither
+  # writes persistent data it owns, so neither is on the STATEFUL lock in
+  # scripts/check-renovate-scope.py, and pinning is always allowed. Renovate
   # watches this tree, so bumps arrive as pull requests.
 ---
 apiVersion: v1
@@ -76,9 +79,12 @@ metadata:
   name: hindsight
   # PSA baseline (cluster default). Nothing in hindsight uses hostPath or
   # hostNetwork, so no elevation and no labels.
-  # NO keel in this namespace either: every image is version-pinned. It is a
-  # stateful store that runs Alembic migrations on startup and holds an agent's
-  # memory, so an unattended auto-update is exactly the failure to design out.
+  # Every workload here is on the STATEFUL lock in
+  # scripts/check-renovate-scope.py, and each earns its place individually: the
+  # api and control-plane run forward-only Alembic migrations on startup against
+  # an agent's memory, the postgres pod owns the PGDATA, and hindsight-pg-dump
+  # writes the dump that is the only rollback. An unattended auto-update is
+  # exactly the failure to design out.
   # Renovate proposes the bumps; `make hindsight-upgrade` takes the dump first.
 ---
 apiVersion: v1
@@ -89,10 +95,9 @@ metadata:
   # no hostNetwork, no ServiceAccount and no RBAC - only a ClusterIP the
   # health-namespace cloudflared pod can dial, and ordinary outbound egress.
   #
-  # keel DOES run here, unlike health, ops, hindsight and backup: this is a
-  # workload namespace, its one image floats and carries the full annotation
-  # set, so its updates arrive on keel's poll and nothing here needs a hand
-  # update.
+  # keel runs here: tinyproxy holds no persistent data, so it is on no lock, and
+  # its one image floats carrying the full annotation set. Updates arrive on
+  # keel's poll and nothing here needs a hand update.
 ---
 # NOTE: cert-manager and local-path-storage namespaces are created by their
 # respective upstream manifests, so they're omitted here (kustomize rejects

@@ -21,7 +21,7 @@ The nightly `influx-backup` CronJob runs `alpine/k8s:1.36.0`, which has no
 `sqlite3` executable: upstream's Dockerfile installs only curl, ca-certificates,
 bash, git, py3-pip, jq, yq and gettext. The two alternatives were a second image
 in the pod, or `apk add sqlite` at run time as the VPS quiesce sidecars do. Both
-were rejected: the health namespace pins every image and forbids keel, and a
+were rejected: every image in this pod is pinned deliberately, and a
 nightly `apk add` makes the backup depend on a package CDN at 02:30. `py3-pip`
 pulls in `python3`, Alpine builds `python3` against `sqlite-dev` with no split
 subpackage, so `import sqlite3` is already present in the image the job runs -
