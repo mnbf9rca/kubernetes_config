@@ -22,7 +22,7 @@ A `match-tag: "true"` annotation on a semver pin refreshes the digest only, so a
 They then wait for the next session, which the operator starts by asking for it every four to six weeks and which the `estate-update` dead-man check nags at 45 days — so a pull request opened continuously would only age on the dashboard until that session came round anyway.
 The window limits branch creation alone: an already-open pull request still rebases and automerges outside it, and the three-day `minimumReleaseAge` wait is unchanged.
 The one group that keeps opening pull requests at any time is **influxdb-mcp build inputs**, because it is also the one group that automerges, and it automerges because its merge deploys nothing that needs an apply.
-An unattended apply was considered and declined: `health` and `hindsight` hold state that an unwatched rollout can damage — a Grafana major migrates `grafana.db` in place and hindsight runs forward-only Alembic migrations against an agent's memory — so every other bump keeps its human-started session.
+An unattended apply was considered and declined: `health` and `hindsight` hold state that an unwatched rollout can damage — InfluxDB upgrades its on-disk index in place and hindsight runs forward-only Alembic migrations against an agent's memory — so every other bump keeps its human-started session.
 
 **One image in this estate is built here, and its update has no apply step.**
 `ghcr.io/mnbf9rca/influxdb-mcp-server` is built from `homelab/health/mcp/` by this repository's one workflow, and the Deployment follows its floating `stable` tag under keel.
@@ -40,7 +40,7 @@ An advisory in the FreshRSS `security` category that names a component this esta
 That is the whole of the estate's vulnerability signal: Renovate emits none for container images, and no scanner runs here.
 Cloudflare Access is the primary boundary, which is what makes a cadence-based answer proportionate — but only if an advisory actually shortens the cadence.
 
-Components to match an advisory against: Talos, Kubernetes, cert-manager, Traefik, cloudflared, keel, InfluxDB, Grafana, PostgreSQL, restic, and every image under `homelab/health/`, `homelab/hindsight/`, `homelab/ops/` and `*/backup/`.
+Components to match an advisory against: Talos, Kubernetes, cert-manager, Traefik, cloudflared, keel, InfluxDB, the Grafana PDC agent, PostgreSQL, restic, and every image under `homelab/health/`, `homelab/hindsight/`, `homelab/ops/` and `*/backup/`.
 
 ## The version ledger
 

@@ -113,9 +113,6 @@ HEALTH_HAE_AUTH_TOKEN=op://Homelab/health-hae/auth-token
 HEALTH_GARMIN_EMAIL=op://Homelab/health-garmin/email
 HEALTH_GARMIN_B64_PASSWORD=op://Homelab/health-garmin/b64-password
 
-# health namespace — Grafana admin password
-HEALTH_GRAFANA_ADMIN_PASSWORD=op://Homelab/health-grafana/admin-password
-
 # Grafana Cloud Private Datasource Connect (homelab/health/pdc-agent.yaml).
 # grafana-pdc-token-secret is the only secret of the three; the other two
 # identify the Grafana Cloud account and are resolved here rather than

@@ -157,17 +157,13 @@ STATEFUL = (
      "reason": "The time-series store. The engine upgrades its own on-disk "
                "index and WAL layout on first start of a new version, and no "
                "tag revert undoes that."},
-    {"namespace": "health", "kind": "Deployment", "name": "grafana",
-     "reason": "grafana.db is migrated IN PLACE on the first start of a new "
-               "major, so a tag revert is not a rollback. The dump "
-               "`make health-upgrade` takes is the only one."},
     {"namespace": "health", "kind": "Deployment", "name": "garmin-grafana",
      "reason": "Owns the garmin-tokens PVC. The third-party image itself "
                "rewrites that token cache, and losing it costs an interactive "
                "2FA re-login that fires an MFA SMS at the operator."},
     {"namespace": "health", "kind": "CronJob", "name": "influx-backup",
-     "reason": "Writes the nightly line-protocol export and the Grafana sqlite "
-               "copy that ARE the restore path for the two workloads above."},
+     "reason": "Writes the nightly native backup and line-protocol export that "
+               "ARE the restore path for influxdb above."},
     {"namespace": "hindsight", "kind": "Deployment", "name": "hindsight",
      "reason": "Runs forward-only Alembic migrations against the memory store "
                "on startup. The pre-upgrade dump `make hindsight-upgrade` takes "

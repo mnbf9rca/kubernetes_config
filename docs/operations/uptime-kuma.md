@@ -102,16 +102,17 @@ Take the inventory query at the top of this file before and after, and `diff` th
 An Access-protected hostname answers an unauthenticated request with a 302 to the Cloudflare login page.
 At the default `maxredirects: 10`, the monitor follows it, gets 200 from Cloudflare's login app, and reports UP while the tunnel, pod and node are all dead.
 
-Two mitigations are in place: every Access-protected monitor sets `maxredirects: 0`, and the five monitors whose Access app demands a credential also send service-token headers, so the request reaches the origin (`proxy.cynexia.com` is the deliberate exception — see below).
+Two mitigations are in place: every Access-protected monitor sets `maxredirects: 0`, and the monitors whose Access app demands a credential also send service-token headers, so the request reaches the origin (`proxy.cynexia.com` is the deliberate exception — see below).
 
-The `Uptime` service token authenticates against the `service-auth-monitoring` Access policy, which is attached to exactly five apps: `Umami analytics`, `changedetection`, `grafana`, `hermes` and `n8n`.
+The `Uptime` service token authenticates against the `service-auth-monitoring` Access policy, which is attached to exactly four apps: `Umami analytics`, `changedetection`, `hermes` and `n8n`.
+A fifth, `grafana`, was retired on September 6, 2026 with the self-hosted Grafana.
 The token was created on August 25, 2026 and expires on **August 24, 2031**.
-On expiry all five monitors fail at once with a 302.
-Five simultaneous reds therefore mean expired or wrong headers, not an outage — check the headers first.
+On expiry all four monitors fail at once with a 302.
+Four simultaneous reds therefore mean expired or wrong headers, not an outage — check the headers first.
 
 A **second** service token exists and is deliberately separate: `vps-proxy-access`, created September 2, 2026, expiring **September 1, 2031**.
 It is attached to the app-scoped `service-auth-homelab-proxy` policy on the `homelab-proxy` application, which gates `proxy.cynexia.com`, and to nothing else.
-Reusing `Uptime` here would have widened five monitors' credential to cover an open proxy.
+Reusing `Uptime` here would have widened four monitors' credential to cover an open proxy.
 When it expires, the residential egress proxy breaks and every proxied changedetection watch errors — no monitor turns red, because the `proxy.cynexia.com` monitor asserts the Access challenge, which a dead token does not change, and that monitor sends no headers at all, so the paste instruction below does not apply to it.
 
 Paste the headers as JSON in the monitor's **Headers** box:
@@ -208,16 +209,11 @@ Homelab cloudflared tunnel (Cloudflare name `cynexia-health`):
 | `hae.cynexia.com` | `https://hae.cynexia.com/` | none | `["401"]` |
 | `hermes API` | `https://hermes.cynexia.com/api/health` | `hermes`: `service-auth-monitoring`, `allow_cynexia_com` | `["200-299"]` — see below |
 | `proxy.cynexia.com` | `https://proxy.cynexia.com/` | `homelab-proxy`: `service-auth-homelab-proxy` — send no headers | exactly `["403"]` — see below |
-| `grafana.cynexia.com` | `https://grafana.cynexia.com/api/health` | `grafana`: `service-auth-monitoring`, `allow_cynexia_com` | `["200-299"]` — see below |
 
-`hermes API` and `grafana.cynexia.com` carry the service-token headers; `Data MCP`, `hae.cynexia.com` and `proxy.cynexia.com` must not.
-The `grafana.cynexia.com` hostname was published on September 2, 2026 and its monitor is created by hand from this row, so it is the one entry here that postdates the August 25, 2026 `kuma.db` reading above.
+`hermes API` carries the service-token headers; `Data MCP`, `hae.cynexia.com` and `proxy.cynexia.com` must not.
 
-**Point the Grafana monitor at `/api/health`, not at `/`.**
-Grafana answers an unauthenticated `GET /` with a `302` to its own `/login`, and Access answers an unauthenticated request to any path with a `302` to the Cloudflare login.
-A monitor that accepts `302` on `/` therefore reports UP whether the origin is healthy or the service token is wrong, which is the Access trap wearing the origin's clothes.
-`/api/health` returns `200` with no credential at the origin — verified September 2, 2026 from inside the cluster — so with the headers attached a `200` proves the tunnel and the pod, and a `302` means the headers are wrong, missing or expired.
-It is also Grafana's in-pod probe target, which is what every other row here mirrors.
+A `grafana.cynexia.com` row sat here from September 2, 2026 until September 6, 2026, when the self-hosted Grafana was removed.
+Delete that monitor by hand: nothing in this repository creates or deletes a kuma monitor, so a removed hostname leaves a monitor that turns red on the next check.
 
 Not Access-protected, and unrelated to either cluster's tunnels:
 
@@ -286,7 +282,7 @@ A service token plus a Service Auth policy would close that gap.
 That option stays declined, but one of its three original reasons no longer holds.
 Two still do: `hae.cynexia.com` proves tunnel and cloudflared end to end, and the pod has in-cluster TCP probes.
 The third — that a service token means a standing secret in uptime-kuma's config — was overtaken on August 25, 2026, when the `Uptime` token was introduced for four VPS apps.
-The estate now holds such a secret deliberately: the arrangement it replaced granted nine apps to every VPS pod and logged nothing, whereas the token opens five apps and logs every use, and `uptime.cynexia.com` now sits behind `allow_cynexia_com` so the UI that renders the secret is no longer public.
+The estate now holds such a secret deliberately: the arrangement it replaced granted nine apps to every VPS pod and logged nothing, whereas the token opens four apps and logs every use, and `uptime.cynexia.com` now sits behind `allow_cynexia_com` so the UI that renders the secret is no longer public.
 Adding the same arrangement to `mcp.cynexia.com` is a live option, not a closed one.
 
 **The `Data MCP` monitor still must not get a token**, whatever is decided about the tunnel-route gap.
@@ -341,7 +337,7 @@ Read it per row rather than assuming up-on-success everywhere.
 |---|---|---|---|
 | `homelab-keel-fresh` | `op://Homelab/keel-fresh/kuma-push-token` | 86400s, 1 retry at 21600s | `keel-fresh` CronJob in `ops`, from an EXIT trap: `up` on exit 0, `down` on any failure. Never silent on a failure it can observe |
 | `vps-keel-fresh` | `op://VPS/keel-fresh/kuma-push-token` | 86400s, 1 retry at 21600s | `keel-fresh` CronJob in the VPS `ops` namespace, from an EXIT trap: `up` on exit 0, `down` on any failure. The same contract as the row above, from the cluster this uptime-kuma runs on |
-| `health-influx-backup` | `op://Homelab/health-healthchecks/backup-kuma-push-token` | 86400s, 1 retry at 21600s | `influx-backup` CronJob in `health`, from an EXIT trap: `up` on exit 0, `down` otherwise. `msg` carries `verdict=`, `buckets=n/m` and `grafana_kib=`, plus `failed_step=` and `error=` on a failure |
+| `health-influx-backup` | `op://Homelab/health-healthchecks/backup-kuma-push-token` | 86400s, 1 retry at 21600s | `influx-backup` CronJob in `health`, from an EXIT trap: `up` on exit 0, `down` otherwise. `msg` carries `verdict=` and `buckets=n/m`, plus `failed_step=` and `error=` on a failure |
 | `homelab-cloudflare-analytics` | `op://Homelab/health-healthchecks/cloudflare-kuma-push-token` | 3600s, 1 retry at 7200s | `cloudflare-analytics` CronJob in `health`, Python: `up` on rc 0, `down` otherwise, the unrecoverable-gap path included. `msg` carries `verdict=` from `ok\|incomplete\|gap\|failed`, `chunks=n/m`, `rows=` and `series=` |
 | `Withings-ingest` | `op://Homelab/health-healthchecks/withings-kuma-push-token` | 1800s, 1 retry at 900s | `withings-ingest` CronJob in `health`, Python: `up` on rc 0, `down` otherwise. `msg` carries `verdict=` from `ok\|failed`, `groups=` and `points=`, plus `failure=` from a five-member enum, plus `exception=` after it on an unhandled error |
 | `health-garmin-and-apple-ingest` | `op://Homelab/health-healthchecks/ingest-kuma-push-token` | 86400s, 1 retry at 43200s | `ingest-freshness` CronJob in `health`, **success only**: `up` when BOTH buckets are under 24h, and **nothing at all** when either is stale or the query failed. One monitor for two buckets because one process checks both. `msg` carries `apple_age_h=` and `garmin_age_h=` on every push — the last message before the silence is what names which path was ageing |
@@ -392,21 +388,21 @@ Re-check the three bullets above after any bump.
 ## Reviewing who used the token
 
 `service-auth-monitoring` is a `non_identity` policy, so unlike a bypass it writes an entry for every request it admits.
-That log is the only inventory of the five apps' machine callers, and the only channel that would show a second party presenting the `Uptime` token.
+That log is the only inventory of the four apps' machine callers, and the only channel that would show a second party presenting the `Uptime` token.
 
-Read it through the Cloudflare API, filtered to the five apps by their `aud` values:
+Read it through the Cloudflare API, filtered to the four apps by their `aud` values:
 
 ```
 GET /accounts/{account_id}/access/logs/access_requests?limit=1000&since=<ISO8601>
 ```
 
 Review it about a week after any change to the token or the policy, and again when investigating an unexplained 302.
-Expect only the five monitors.
+Expect only the four monitors.
 Anything else is either a caller nobody documented or a leaked credential; treat an unfamiliar source as the latter until you can name it.
 
 To enable changedetection's password, see the note in the monitor list above.
 After August 25, 2026 the `Uptime` token is the only wall in front of `watch.cynexia.com` — changedetection has no origin login of its own, so anyone holding the token reaches the application in full.
-Umami, n8n, hermes and grafana each keep their own origin login behind Access.
+Umami, n8n and hermes each keep their own origin login behind Access.
 
 ## The self-monitor (layer 4)
 
