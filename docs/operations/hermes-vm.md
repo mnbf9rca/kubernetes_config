@@ -129,6 +129,7 @@ systemctl --user restart hermes-gateway
 ```
 
 This is the same mechanism `HINDSIGHT_API_KEY` already uses on all three homes.
+`HERMES_APP_ALIVE_PUSH_TOKEN` is declared by the default profile alone, which is what [step 5 of Creating a profile](#5-secrets-if-the-profile-needs-any) requires of every entry in every profile's map.
 
 **The variable name is load-bearing and must not be "tidied".**
 The cron subprocess sanitiser in `tools/environments/local.py` (`_sanitize_subprocess_env`) strips by **name**: every provider-registry name, anything matching `AUXILIARY_*` or `GATEWAY_RELAY_*`, and a fixed always-strip list.
@@ -436,8 +437,64 @@ The per-agent mailbox credential belongs in `hermes`, because that is the only v
 ```
 
 Then set `secrets.onepassword.env` to the map of environment-variable name to `op://vault/item/field` reference the profile needs, as [step 4 of the install](#4-inject-the-token-into-the-default-profile) does for the default profile.
-An email profile's map is one entry: `EMAIL_PASSWORD` against `op://hermes/purelymail-<name>/password` from step 4.
 The **operator** adds `OP_SERVICE_ACCOUNT_TOKEN` to the profile's own `.env` by hand; that value goes nowhere else, and no agent handles it.
+
+**Give every variable in that map a name no other profile uses.**
+Prefix each name with the profile's own name, and use the prefixed name in every `${...}` placeholder that consumes it.
+Every profile on this VM carries its prefix as of September 6, 2026: `DEFAULT_`, `EMH_`, `HAL_` and `WEB_WATCHER_`.
+The prefix is the **profile** name, not the mailbox name — the default profile reads `kairos@cynexia.io` and its prefix is still `DEFAULT_`.
+
+`hermes-webui` serves all four profiles from one process, which is what makes a shared name dangerous.
+`_interpolate_env_vars` in `tools/mcp_tool.py` resolves a `${VAR}` placeholder through `agent.secret_scope.get_secret`, which reads the secret scope installed on the current context and — with `gateway.multiplex_profiles` off, as it is here — falls back to the process environment on a miss.
+Either of those can be holding another profile's value for a name that more than one profile declares, and nothing in the resolution reports the mismatch.
+A name only one profile declares cannot resolve to the wrong account: it resolves correctly or it stays a literal placeholder, which fails loudly at the first call.
+This is a workaround for a hermes-agent defect, filed upstream as [hermes-agent issue 2](https://github.com/mnbf9rca/hermes-agent/issues/2); the prefixes stay until that is fixed.
+
+**A name several profiles share is only safe when every profile points it at the same item.**
+`HERMES_DASHBOARD_SESSION_TOKEN`, `HINDSIGHT_API_KEY` and `API_SERVER_KEY` are shared on purpose and must not be prefixed: each resolves to one `op://` reference estate-wide, so resolving it through another profile's scope returns the same value.
+The rule bites on a name that means a *different* secret in each profile, which is what a per-mailbox credential is.
+
+**The 2026-09-06 incident is what this rule is for.**
+`emh` and the default profile (mailbox `kairos`) both declared `EMAIL_PASSWORD`, pointing at different Purelymail items, and the `mcp-email-server` that `hermes-webui` spawned for `emh` was started with the `kairos` password.
+Every authenticated IMAP and SMTP call from an `emh` WebUI chat then failed as `provider_failure`, while account discovery kept succeeding, because discovery needs no login.
+The per-profile gateways were never affected: each serves one profile, so its scope and its environment agree.
+
+**The `EMAIL_*` names are read verbatim and cannot be prefixed.**
+The email platform adapter and the gateway config reader look these up by fixed name through `os.getenv`, and no configuration key remaps any of them:
+
+```
+EMAIL_ADDRESS          EMAIL_IMAP_HOST   EMAIL_SMTP_HOST   EMAIL_ALLOWED_USERS       EMAIL_HOME_ADDRESS
+EMAIL_PASSWORD         EMAIL_IMAP_PORT   EMAIL_SMTP_PORT   EMAIL_ALLOW_ALL_USERS     EMAIL_HOME_ADDRESS_NAME
+EMAIL_POLL_INTERVAL    EMAIL_AUTHSERV_ID EMAIL_TRUST_FROM_HEADER                     EMAIL_HOME_ADDRESS_THREAD_ID
+```
+
+Sources: `plugins/platforms/email/adapter.py` and `gateway/config.py` in the installed hermes-agent checkout.
+**Only `EMAIL_PASSWORD` is affected by the prefix rule**, because it is the only one of them that comes from the 1Password map; the rest are non-secret settings the profile's `.env` carries, and `.env` is per-profile and never shared.
+So a profile running `platforms.email` keeps a verbatim `EMAIL_PASSWORD` entry **as well as** its prefixed one, both against the same `op://` reference.
+That is safe, because the adapter runs only in the profile's own gateway, where the scope and the environment agree, and never in `hermes-webui`.
+
+**The pattern a new email profile copies**, with `<PREFIX>` the profile name upper-cased and `<name>` the mailbox:
+
+```yaml
+secrets:
+  onepassword:
+    env:
+      <PREFIX>_MAIL_USERNAME: op://hermes/purelymail-<name>/username
+      <PREFIX>_EMAIL_PASSWORD: op://hermes/purelymail-<name>/password
+      EMAIL_PASSWORD: op://hermes/purelymail-<name>/password    # verbatim, for the platform adapter
+mcp_servers:
+  mail:
+    env:
+      MCP_EMAIL_SERVER_EMAIL_ADDRESS: ${<PREFIX>_MAIL_USERNAME}
+      MCP_EMAIL_SERVER_PASSWORD: ${<PREFIX>_EMAIL_PASSWORD}
+```
+
+The four deployed profiles also carry a `<PREFIX>_MAIL_PASSWORD` entry against the same password reference.
+Nothing consumes it — it is the renamed remains of the pre-fix `MAIL_PASSWORD` — so a new profile does not need it.
+`web_watcher` carries the prefixed names with no `mcp_servers` block at all, for uniformity: it runs the email platform but no mail MCP server.
+
+**A restart is what applies any of this**, because the 1Password provider resolves the map at start.
+Restart the profile's own gateway first, then `hermes-dashboard`, then `hermes-webui`, and read `1Password: applied N secrets` in each journal — `N` must equal the number of entries in the map the unit loaded.
 
 ### 6. The email platform, if wanted
 
@@ -733,6 +790,7 @@ Nothing mounts it into a container: the label is why the third volume entry abov
 On August 31, 2026 something resolved the `${EMAIL_PASSWORD}` placeholder behind `mcp_servers.mail.env.MCP_EMAIL_SERVER_PASSWORD` in the `emh` profile's `config.yaml` into the literal password on disk.
 The cause was not pinned down; `hermes config set` was tested and exonerated, which leaves the WebUI's profile-settings save and the `emh` agent itself as the suspects.
 The credential was rotated and the placeholder restored the same day.
+That placeholder reads `${EMH_EMAIL_PASSWORD}` since September 6, 2026 — see [step 5 of Creating a profile](#5-secrets-if-the-profile-needs-any).
 After any configuration change made outside the CLI, `grep -c '\${' <profile home>/config.yaml` and confirm the placeholders are still placeholders.
 
 **`TERMINAL_DOCKER_VOLUMES` must be single-quoted in a profile's `.env`, or the WebUI cannot read it.**
