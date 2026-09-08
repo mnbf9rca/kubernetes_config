@@ -11,10 +11,123 @@ The canonical copy of every file named here is in `hermes-vm/`.
 The VM holds installed copies.
 Edit the repository, then reinstall.
 
-**Only three things run on a schedule here, and only one of them is systemd's.**
+**Only three things this repository owns run on a schedule here, and only one of them is systemd's.**
 `unattended-upgrades` patches Debian security-only overnight and reboots at 04:45 UTC; the `hermes-app-alive` **cron job inside the default gateway** pushes a liveness verdict at 05:45 UTC; and `hermes-sandbox-refresh`, a cron job in the same place, replaces stale docker sandbox containers at 05:15 UTC on Sundays.
 Nothing under `hermes-vm/` is scheduled by systemd any more — the `systemd/` directory and its two units were deleted on August 27, 2026.
 Application updates never run on a schedule at all.
+The `hal` profile also carries four agent-authored systemd timers that this repository does not own — see [Topology: what runs where](#topology-what-runs-where).
+
+## Topology: what runs where
+
+Verified live on September 8, 2026.
+Upstream describes the software; this section describes this VM.
+For the software, read hermes-agent's [Architecture](https://hermes-agent.nousresearch.com/docs/developer-guide/architecture), [Gateway Internals](https://hermes-agent.nousresearch.com/docs/developer-guide/gateway-internals) and [Running Many Gateways at Once](https://hermes-agent.nousresearch.com/docs/user-guide/multi-profile-gateways), and hermes-webui's [ARCHITECTURE.md](https://github.com/nesquena/hermes-webui/blob/master/ARCHITECTURE.md).
+
+Three words carry the whole picture.
+A **profile** is one agent identity — its own persona, secrets, mailbox, memories and sessions — kept in a directory of its own.
+A **gateway** is one long-running process that serves exactly one profile and connects it to the outside world.
+An **MCP server** is a small helper program a Hermes process starts and talks to over a pipe, to give the agent tools it does not have built in.
+
+There are five profiles and only four gateways: `safer_web_reader` has no gateway, because nothing messages it ([safer-web-reader.md](safer-web-reader.md)).
+
+### The processes
+
+```
+  operator's browser       Hermex iOS app        Telegram       Purelymail IMAP
+          |                       |                  |                |
+  hermes.cynexia.com     hermes-app.cynexia.com      |                |
+          |        both behind Cloudflare Access     |                |
+          +-----------+-----------+                  |                |
+                      |                              |                |
+      cloudflared, which runs in the HOMELAB CLUSTER (`health`         |
+      namespace) and NOT on this VM; its origins are the ports below   |
+                      |                              |                |
+          :9119 <-----+-----> :8787                  |                |
+==== VM 103 hermes.cynexia.net == the six units this page tracks, under lingering ==
+          |                 |                        |                |
+ +--------v--------+ +------v-------------+ +--------v----------------v--------+
+ | hermes-dashboard| | hermes-webui       | | hermes-gateway   profile: default |
+ | profile: default| | ALL FIVE profiles  | |  Telegram + email adapters,       |
+ | admin panel     | | one process, :8787 | |  the two cron jobs,               |
+ |  |              | | server.py imports  | |  api_server on :8642 (LAN only)   |
+ |  +- mcp-email-  | | hermes-agent and   | |  +- mcp-email-server              |
+ |     server      | | calls the model    | +-----------------------------------+
+ +-----------------+ | itself             | | hermes-gateway-emh  profile: emh  |
+                     |  |                 | |  email; +- mcp-email-server       |
+                     |  +- MCP servers,   | +-----------------------------------+
+                     |     started lazily | | hermes-gateway-hal  profile: hal  |
+                     +--------------------+ |  email, Home Assistant            |
+                                            |  +- mcp-email-server              |
+                                            +-----------------------------------+
+                                            | hermes-gateway-web_watcher        |
+                                            |  profile: web_watcher; email only |
+                                            +-----------------------------------+
+  All six run from ONE venv, ~/.hermes/hermes-agent/venv, and all six are in the
+  host `docker` group, so each starts its own terminal sandboxes the same way.
+          |                          |                        |
+          v                          v                        v
+   1Password, once per         chatgpt.com/backend-api      docker daemon:
+   process at start, for       /codex, for every            hermes-<hex> containers
+   `secrets.onepassword.env`   model call                   labelled hermes-profile=
+```
+
+The three ports also answer directly on the LAN, because this VM runs no host firewall: `http://hermes.cynexia.net:8787` reaches the WebUI with only its own password in the way, and 9119 and 8642 are the same shape ([Facts about this VM](#facts-about-this-vm)).
+Cloudflare Access gates the two published hostnames and nothing else.
+
+Four more `hermes` user units exist and are outside that picture: the `hal-ha-observer-*.timer` set, agent-authored for the `hal` profile's Home Assistant collection, running scripts out of `hal`'s own workspace rather than through its gateway.
+No unit list on this page names them, so the daily check neither counts nor exercises them.
+
+### The state tree
+
+```
+~/.hermes/                       the DEFAULT profile's home, and the shared root
+  hermes-agent/                  the one checkout and venv every process runs from
+  config.yaml  .env  auth.json   default profile: settings, environment, provider tokens
+  shared/nous_auth.json          provider tokens, shared by every profile on purpose
+  scripts/                       the two cron job scripts
+  webui/attachments/             WebUI chat uploads: ONE directory for all profiles
+  sandboxes/docker/<task-id>/home   each sandbox's writable /root
+  workspace/                     the default profile's sandbox /workspace
+  profiles/
+    emh/               config.yaml  .env  auth.json  workspace/  logs/  state.db  ...
+    hal/               the same three files, the same shape
+    web_watcher/       the same
+    safer_web_reader/  the same, and no gateway unit
+```
+
+### The three roles
+
+A **gateway** is the always-on half of a profile: it holds the connections that arrive unprompted.
+It runs the platform adapters (a Telegram bot connection, an email adapter polling IMAP), it runs that profile's cron jobs, and it starts that profile's MCP servers as child processes.
+The default profile's gateway is the one that runs the daily alive check and the weekly sandbox refresh ([step 5](#5-create-the-daily-checks-cron-job), [step 6](#6-install-the-sandbox-refresh-job)).
+
+The **dashboard** is an administration panel for the default profile: configuration, credentials, sessions, logs and cron.
+It is reached at `https://hermes.cynexia.com`, and it starts a mail MCP server of its own.
+
+The **WebUI is a second runtime, not a front end for a gateway.**
+This is the piece that surprises people.
+`hermes-webui` is a separate program from a separate repository, but it runs out of the agent's own venv, imports hermes-agent, and calls `run_agent` inside its own process.
+So a chat in the browser makes its own model calls and starts its own MCP servers, and the gateway for that profile is not involved at all.
+It serves every profile from that one process, switching `HERMES_HOME` per request, which is why there is one unit and one port rather than five.
+Restarting `hermes-gateway-<profile>` therefore changes nothing about a browser conversation — the fact recorded under [Facts about this VM](#facts-about-this-vm) about MCP tool discovery is a consequence of exactly this.
+
+### What is shared and what is per profile
+
+Shared: the checkout and venv, the host, the docker daemon and its sandboxes, the WebUI attachments directory, and the provider credentials.
+Per profile: `config.yaml`, `.env`, `auth.json`, workspace, logs, sessions, memories, skills and cron store.
+The rule for reading any path is that a profile is just a different `HERMES_HOME`, which is the contract set out in [homelab.md](homelab.md#hermes-vm-configuration-layout-and-secrets).
+
+Two consequences have already cost time, and both come from sharing.
+
+**Secret names collide inside the WebUI.**
+One process serves five profiles, so a `${VAR}` placeholder that more than one profile declares can resolve to another profile's value.
+On September 6, 2026 an `emh` WebUI chat was handed the default profile's mailbox password.
+The fix — a per-profile prefix on every name — is [step 5 of Creating a profile](#5-secrets-if-the-profile-needs-any), and the defect is [hermes-agent issue 2](https://github.com/mnbf9rca/hermes-agent/issues/2).
+
+**Profiles invalidate each other's model login.**
+Every profile's `config.yaml` sets `model.provider: openai-codex`, but only `~/.hermes/auth.json` holds the grant: each profile's own `auth.json` is empty of providers and falls back to the root file.
+That provider rotates its refresh token on every refresh, so two processes refreshing the same grant leave one of them holding a revoked token (`_write_through_provider_state_to_global_root` in `agent/credential_pool.py` explains it, and its write-back is best effort).
+The failure reads `refresh_token_reused` in `~/.hermes/auth.json`, and re-authenticating is the only repair.
 
 ## Lingering is a precondition
 
