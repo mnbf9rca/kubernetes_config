@@ -43,15 +43,8 @@ kind: Namespace
 metadata:
   name: health
   # PSA baseline (cluster default). Nothing in health uses hostPath/hostNetwork.
-  # THIS NAMESPACE BANS NOTHING (operator ruling, 2026-09-06). The update-mode
-  # lock is a property of the workload, not of the namespace it sits in.
-  # influxdb, garmin-grafana and influx-backup are pinned and keel-free because
-  # each writes into persistent data it owns - an on-disk index, a token cache,
-  # the nightly export that is the restore path - and they are named, with those
-  # reasons, in the STATEFUL tuple in scripts/check-renovate-scope.py. The
-  # pdc-agent holds no state, so it floats with keel. influxdb-mcp floats on `stable`
-  # with the full keel annotation set, needing no exemption from anything: it is
-  # a stateless HTTP server built here from homelab/health/mcp/ inputs.
+  # Controllers float with keel; CronJobs pull floating tags on each run.
+  # Only influx-backup's alpine/k8s toolbox remains pinned for Renovate.
 ---
 apiVersion: v1
 kind: Namespace
@@ -59,7 +52,7 @@ metadata:
   name: ops
   # PSA baseline (cluster default). Two workloads, both outbound-only and
   # neither needing hostPath, hostNetwork, a ServiceAccount or any RBAC:
-  #   update-watch  — polls the GitHub REST API for open Renovate pull requests
+  #   update-watch  — checks the Renovate dashboard for lookup failures
   #   keel-fresh    — reads keel's in-cluster /metrics for its poll counter and
   #                   tracked-image gauge, and pushes an uptime-kuma monitor
   #
@@ -68,10 +61,7 @@ metadata:
   # ownership — and deliberately NOT in `backup`, which runs at PSA privileged
   # for restic's hostPaths that these jobs have no business inheriting.
   #
-  # Both are pinned and keel-free by choice rather than by prohibition: neither
-  # writes persistent data it owns, so neither is on the STATEFUL lock in
-  # scripts/check-renovate-scope.py, and pinning is always allowed. Renovate
-  # watches this tree, so bumps arrive as pull requests.
+  # Both CronJobs pull floating runtime images with imagePullPolicy Always.
 ---
 apiVersion: v1
 kind: Namespace
@@ -79,13 +69,8 @@ metadata:
   name: hindsight
   # PSA baseline (cluster default). Nothing in hindsight uses hostPath or
   # hostNetwork, so no elevation and no labels.
-  # Every workload here is on the STATEFUL lock in
-  # scripts/check-renovate-scope.py, and each earns its place individually: the
-  # api and control-plane run forward-only Alembic migrations on startup against
-  # an agent's memory, the postgres pod owns the PGDATA, and hindsight-pg-dump
-  # writes the dump that is the only rollback. An unattended auto-update is
-  # exactly the failure to design out.
-  # Renovate proposes the bumps; `make hindsight-upgrade` takes the dump first.
+  # Controllers float with keel; PostgreSQL stays on its pg17 major channel.
+  # The nightly dump is the accepted recovery path for schema migrations.
 ---
 apiVersion: v1
 kind: Namespace

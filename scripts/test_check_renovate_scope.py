@@ -15,11 +15,10 @@ The cases below are chosen from the SHAPES THIS ESTATE ACTUALLY CONTAINS, not
 from the shapes that are easy to write. An earlier draft of this suite passed
 19 tests over a classifier that failed on seven real containers, because it
 tested none of: a pinned sidecar inside a keel-managed workload, a `-latest`
-suffix tag, a bare major-version stream, or a floating image on a workload
-that is not locked to the pinned mode. Those four are the first four classes
-here.
+suffix tag, a major-version stream, or a floating image on a scheduled job.
 """
 import importlib.util
+import json
 import os
 import unittest
 
@@ -64,15 +63,22 @@ class TestIsPinned(unittest.TestCase):
         self.assertTrue(crs.is_floating_tag("postgresql-latest"))
 
     def test_a_bare_major_version_stream_is_floating(self):
-        # uptime-kuma publishes `2`, which moves on every 2.x release.
-        self.assertFalse(crs.is_pinned("louislam/uptime-kuma:2"))
-        self.assertFalse(crs.is_pinned("louislam/uptime-kuma:v2"))
+        for tag in ("2", "v2", "v3", "v1", "pg17", "16-alpine", "17-alpine",
+                    "3-alpine", "latest", "stable", "release"):
+            with self.subTest(tag=tag):
+                reference = "registry.local:5000/thing:" + tag
+                self.assertFalse(crs.is_pinned(reference))
+                self.assertEqual(crs.classify_container(reference, FULL_KEEL),
+                                 (crs.MODE_KEEL, ""))
+                self.assertTrue(crs.is_pinned(reference + "@sha256:" + "a" * 64))
 
     def test_a_dotted_version_is_still_a_pin(self):
         # The boundary of the stream rule. Calling any of these floating would
         # hand a Renovate-managed pin to keel.
-        for reference in ("alpine:3.20", "traefik:v3.3", "postgres:16-alpine",
-                          "influxdb:2.9.1", "pgvector/pgvector:0.8.1-pg17"):
+        for reference in ("alpine:3.20", "traefik:v3.3", "postgres:16.4-alpine",
+                          "influxdb:2.9.1", "pgvector/pgvector:0.8.1-pg17",
+                          "traefik:v3.3.0", "alpine:3.20.1",
+                          "thing:v1.2.3-rc1"):
             self.assertTrue(crs.is_pinned(reference), reference)
 
 
@@ -129,84 +135,42 @@ class TestClassifyContainer(unittest.TestCase):
         self.assertIn("nothing", why)
 
 
-class TestTheStatefulLock(unittest.TestCase):
-    """The lock is per WORKLOAD, never per namespace (operator ruling,
-    2026-09-06). The previous version of this guard banned floating tags in
-    `health`, `hindsight`, `ops` and `backup` and kept a list of exemptions for
-    the stateless workloads caught by that net -- which said nothing at all
-    about a stateful workload living anywhere else."""
-
-    def test_a_floating_tag_on_a_locked_workload_fails(self):
-        failures, _adv = crs.analyse_render(
-            "homelab", _pod("influxdb:latest", namespace="health",
-                            name="influxdb"),
-            _PATTERNS_HOMELAB, [], _OWNED_HOMELAB)
-        self.assertEqual(len(failures), 1)
-        self.assertIn("locked to the pinned mode", failures[0])
-        self.assertIn("on-disk index", failures[0])   # the entry's own reason
-
-    def test_keel_annotations_on_a_locked_workload_fail_even_when_pinned(self):
-        # The annotations are the standing instruction to roll it unattended;
-        # the next tag edit is what makes them bite.
+class TestFloatingUpdateModes(unittest.TestCase):
+    def test_stateful_controllers_and_keel_may_float_with_full_annotations(self):
         annotations = "".join("    %s: %r\n" % (k, v)
                               for k, v in sorted(FULL_KEEL.items()))
-        failures, _adv = crs.analyse_render(
-            "homelab", _pod("influxdb:2.9.1", namespace="health",
-                            name="influxdb", annotations=annotations),
-            _PATTERNS_HOMELAB, [], _OWNED_HOMELAB)
-        self.assertEqual(len(failures), 1)
-        self.assertIn("keel annotations on a workload locked", failures[0])
+        for namespace, name, reference in (
+                ("health", "influxdb", "influxdb:2"),
+                ("health", "garmin-grafana", "someone/garmin:latest"),
+                ("hindsight", "hindsight", "someone/hindsight:latest"),
+                ("hindsight", "hindsight-postgres", "pgvector/pgvector:pg17"),
+                ("vps", "umami-postgres", "postgres:16-alpine"),
+                ("vps", "meilisearch", "getmeili/meilisearch:v1"),
+                ("kube-system", "keel", "ghcr.io/keel-hq/keel:latest")):
+            with self.subTest(name=name):
+                source = [("homelab/workloads/x.yaml", "homelab",
+                           frozenset({reference}))]
+                self.assertEqual(crs.analyse_render(
+                    "homelab", _pod(reference, namespace=namespace, name=name,
+                                    annotations=annotations),
+                    _PATTERNS_HOMELAB, [], source), ([], []))
 
-    def test_the_same_image_in_the_same_namespace_is_free_when_unlisted(self):
-        # THE WHOLE POINT OF THE INVERSION. `health` no longer bans anything:
-        # a stateless workload in it may float with a complete keel set.
-        annotations = "".join("    %s: %r\n" % (k, v)
-                              for k, v in sorted(FULL_KEEL.items()))
-        failures, _adv = crs.analyse_render(
-            "homelab", _pod("influxdb:latest", namespace="health",
-                            name="something-stateless",
-                            annotations=annotations),
-            _PATTERNS_HOMELAB, [], _OWNED_HOMELAB)
-        self.assertEqual(failures, [])
-
-    def test_the_lock_ignores_the_namespace_and_reads_kind_and_name(self):
-        for namespace, kind, name, locked in (
-                ("health", "Deployment", "influxdb", True),
-                ("downloads", "Deployment", "influxdb", False),   # other ns
-                ("health", "CronJob", "influxdb", False),         # other kind
-                ("health", "Deployment", "influxdb2", False)):    # other name
-            self.assertEqual(
-                bool(crs.stateful_entry(namespace, kind, name)), locked,
-                (namespace, kind, name))
-
-    def test_restic_is_locked_on_both_clusters_from_one_entry(self):
+    def test_backup_jobs_may_float_without_keel_on_both_clusters(self):
         for cluster, patterns in (("homelab", _PATTERNS_HOMELAB),
                                   ("vps", _PATTERNS_VPS)):
-            source = [("%s/backup/restic-cronjob.yaml" % cluster, cluster,
-                       frozenset({"restic/restic:latest"}))]
-            failures, _adv = crs.analyse_render(
-                cluster, _pod("restic/restic:latest", namespace="backup",
-                              name="restic-backup", kind="CronJob"),
-                patterns, [], source)
-            self.assertEqual(len(failures), 1, cluster)
-            self.assertIn("locked to the pinned mode", failures[0])
-
-    def test_a_match_is_recorded_so_a_dead_entry_can_be_named(self):
-        # main() fails a full two-cluster run on any entry that matched
-        # nothing, which is the only thing standing between a mistyped name and
-        # an inert lock that reads like policy. That check is only as good as
-        # this bookkeeping.
-        crs._MATCHED.clear()
-        self.assertIsNotNone(crs.stateful_entry("backup", "Job", "restic-init"))
-        self.assertIn(("backup", "Job", "restic-init"), crs._MATCHED)
-        self.assertIsNone(crs.stateful_entry("backup", "Job", "restic-inti"))
-        self.assertEqual(len(crs._MATCHED), 1)
-
-    def test_every_entry_carries_a_written_reason(self):
-        for entry in crs.STATEFUL:
-            for field in ("namespace", "kind", "name", "reason"):
-                self.assertTrue(entry.get(field, "").strip(), entry)
-            self.assertIn(entry["kind"], crs.POD_PARENTS, entry)
+            for namespace, kind, name, reference in (
+                    ("backup", "CronJob", "restic-backup", "restic/restic:latest"),
+                    ("backup", "Job", "restic-init", "restic/restic:latest"),
+                    ("health", "CronJob", "influx-backup", "alpine:latest"),
+                    ("hindsight", "CronJob", "hindsight-pg-dump",
+                     "postgres:17-alpine")):
+                with self.subTest(cluster=cluster, name=name):
+                    source = [("%s/backup/x.yaml" % cluster, cluster,
+                               frozenset({reference}))]
+                    self.assertEqual(crs.analyse_render(
+                        cluster, _pod(reference, namespace=namespace,
+                                      name=name, kind=kind), patterns, [], source),
+                        ([], []))
 
 
 class TestTheUnmanagedFloatingArm(unittest.TestCase):
@@ -214,13 +178,18 @@ class TestTheUnmanagedFloatingArm(unittest.TestCase):
     fresh pod, which re-pulls the tag by itself."""
 
     def test_a_floating_deployment_with_no_keel_fails(self):
-        source = [("homelab/workloads/x.yaml", "homelab",
-                   frozenset({"someone/thing:latest"}))]
-        failures, _adv = crs.analyse_render(
-            "homelab", _pod("someone/thing:latest"), _PATTERNS_HOMELAB, [],
-            source)
-        self.assertEqual(len(failures), 1)
-        self.assertIn("nothing updates it", failures[0])
+        for kind in ("Deployment", "DaemonSet", "StatefulSet"):
+            for tag in ("latest", "2", "v3", "pg17", "16-alpine", "17-alpine",
+                        "3-alpine"):
+                with self.subTest(kind=kind, tag=tag):
+                    reference = "someone/thing:" + tag
+                    source = [("homelab/workloads/x.yaml", "homelab",
+                               frozenset({reference}))]
+                    failures, _adv = crs.analyse_render(
+                        "homelab", _pod(reference, kind=kind),
+                        _PATTERNS_HOMELAB, [], source)
+                    self.assertEqual(len(failures), 1)
+                    self.assertIn("nothing updates it", failures[0])
 
     def test_a_floating_cronjob_with_no_keel_is_legal(self):
         # jottacloud-backup: the schedule already delivers what keel would, so
@@ -233,17 +202,14 @@ class TestTheUnmanagedFloatingArm(unittest.TestCase):
             _PATTERNS_HOMELAB, [], source)
         self.assertEqual(failures, [])
 
-    def test_a_floating_cronjob_is_still_caught_when_it_is_locked(self):
-        # The re-pull carve-out is about who delivers the update, not about
-        # whether the update is safe to deliver unreviewed.
+    def test_hermes_pull_may_float_without_keel(self):
         source = [("homelab/backup/hermes-pull.yaml", "homelab",
                    frozenset({"kroniak/ssh-client:latest"}))]
         failures, _adv = crs.analyse_render(
             "homelab", _pod("kroniak/ssh-client:latest", namespace="backup",
                             name="hermes-pull", kind="CronJob"),
             _PATTERNS_HOMELAB, [], source)
-        self.assertEqual(len(failures), 1)
-        self.assertIn("locked to the pinned mode", failures[0])
+        self.assertEqual(failures, [])
 
 
 class TestIgnorePaths(unittest.TestCase):
@@ -556,6 +522,7 @@ class TestEnabledManagers(unittest.TestCase):
         self.assertEqual(len(patterns), 1)
         self.assertEqual(kustomize, [])
         self.assertEqual(ignore, [])
+
 
 
 if __name__ == "__main__":

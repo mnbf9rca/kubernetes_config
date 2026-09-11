@@ -16,7 +16,6 @@ Read [What this does not catch](#what-this-does-not-catch) before you trust a gr
 | A sidecar shows `RESTARTS: 0` but its snapshot is missing | Expected; they log rather than exit. Read the sidecar's stderr — [Why the sidecars have no probes](#why-the-sidecars-have-no-probes) |
 | The Grafana Cloud NoData alert on the health datasources fires | The PDC agent, its tunnel or InfluxDB failed, and the alert does not say which. Start at `kubectl -n health logs deploy/pdc-agent`, then the InfluxDB pod — [homelab-health.md](homelab-health.md#grafana-cloud-over-private-datasource-connect) |
 | `hindsight-canary` is DOWN | Read `verdict=`: `retain-failed` is the API, the database or the tenant key; `recall-miss` is the retrieval side. An agent is losing memories right now — [hindsight.md](hindsight.md) |
-| `hermes-update` is red | Nobody pinged it, the only way it goes red: the runbook reports on success and sends nothing on failure. Either no update session ran inside the period, or one ran and stopped before its report step. **Read the mtime of `~/.hermes/hermes-update.pre-run` before its contents** — the runbook's preconditions truncate that file at the start of every session, so a record older than the alarm period is the last *successful* session's and describes that run, not a stalled one. Only in a record written since the alarm do the keys say how far the session got: no `target_sha` means it stopped in change analysis, a `webui_target_sha` means the update itself ran — [the runbook](hermes-vm-updates.md#report) |
 | `hermes-app-alive` is DOWN | Read `verdict=`: `units-down` is the user manager or lingering, `import-failed` is the shared venv, `webui-unreachable` is the WebUI itself. No beat at all means the VM, the timer or the Access bypass — [Reading a DOWN `hermes-app-alive`](hermes-vm.md#reading-a-down-hermes-app-alive) |
 | Proxied changedetection watches error while unproxied ones are fine | The residential egress chain, not the internet. One pod down, or the Access service token gone — the failure table and the per-pod recovery are in [vps.md](vps.md#residential-egress-through-the-homelab) |
 | `disk_pct` is climbing on homelab restic | `local-path` has no quota, so this is the node SSD every workload shares — [the gates](#the-backup-verification-gates) |
@@ -106,7 +105,7 @@ Defaults, unless a service's entry below says otherwise:
 | withings-ingest | none | Scheduled work. `withings-ingest` plus `activeDeadlineSeconds: 600` is the instrument |
 | update-watch | none | Scheduled work. `homelab-update-watch` plus `activeDeadlineSeconds: 300` is the instrument |
 | keel-fresh | none | Scheduled work. The `homelab-keel-fresh` kuma push monitor plus `activeDeadlineSeconds: 300` is the instrument |
-| hindsight api | liveness `/health/live`, readiness and startup `/health` (:8888) | Split on purpose, the same way n8n's is. `/health` is database-gated, so a broken postgres drains traffic; `/health/live` is in-process and never touches the database, so a slow or recovering postgres cannot crashloop the single replica. `/health/live` needs image ≥ 0.9.1 — keep the pin at or above it |
+| hindsight api | liveness `/health/live`, readiness and startup `/health` (:8888) | Split on purpose, the same way n8n's is. `/health` is database-gated, so a broken postgres drains traffic; `/health/live` is in-process and never touches the database, so a slow or recovering postgres cannot crashloop the single replica. `/health/live` requires image ≥ 0.9.1 |
 | hindsight control-plane | readiness `/` (:9999) | No liveness: a wedged admin UI is an inconvenience, not an outage, and restarting a single-replica pod over it buys risk for nothing |
 | postgres (hindsight) | readiness plain `pg_isready`; liveness and startup as `sh -c 'pg_isready -q …; test $? -lt 2'` | Copied verbatim from umami-postgres above, and for the same reasons |
 | hindsight-pg-dump, hindsight-canary | none | Scheduled work. `hindsight-pg-dump` and `hindsight-canary` plus their `activeDeadlineSeconds` are the instruments |
@@ -278,9 +277,9 @@ The four single-DB services still take the newest match, because their glob is o
 
 ## healthchecks.io checks
 
-**Five checks live here, and everything else pushes to uptime-kuma.**
+**Four checks remain part of this repo's reporting policy, and routine jobs otherwise push to uptime-kuma.**
 The account is capped at 20 checks and six of them are pinged from outside this repo, so a check on healthchecks.io has to earn its slot.
-These five do: the two restic checks because their multi-line ping bodies *are* the triage runbook and a one-line push message cannot carry them; `vps-uptime-kuma-alive` because it watches kuma and cannot live inside it; `estate-update`, because it is pinged by hand from a laptop at the close of a session, with no job and no cluster behind it; and `hermes-update`, for the same reason and from the same laptop, on a longer period.
+The two restic checks keep their multi-line triage bodies; `vps-uptime-kuma-alive` watches kuma from outside it; `estate-update` records operator sessions.
 Every other job in this estate drives a **push monitor** — inventory in [uptime-kuma.md](uptime-kuma.md#push-monitors).
 Migrated August 26, 2026.
 
@@ -290,15 +289,9 @@ Migrated August 26, 2026.
 | `vps-restic` | `op://VPS/b2-restic/healthcheck-uuid` | 1d / 2h | restic CronJob, `/start` and exit code |
 | `vps-uptime-kuma-alive` | `op://VPS/uptime-kuma/healthcheck-uuid` | 5m / 15m | An uptime-kuma monitor — [uptime-kuma.md](uptime-kuma.md#the-self-monitor-layer-4) |
 | `estate-update` | `op://Homelab/estate-update/healthcheck-uuid` | 45d / 7d | Pinged by hand at the end of each update session. No job pings it |
-| `hermes-update` | `op://Homelab/hermes-update/healthcheck-uuid` | 10d / 4d | Pinged by hand from the operator's laptop, on success only, at the end of an update session. No job pings it, and there is no `/start` — [the runbook's report step](hermes-vm-updates.md#report) |
 
-**`hermes-update` and `estate-update` are both laptop-pinged, and `hermes-update` earns its separate slot on one distinct signal:** it catches the hermes step being skipped or failing inside a session that still pinged `estate-update`.
-One check over both would go green on a session that updated the clusters and never touched the VM.
-
-The 10-day period against a roughly weekly cadence, with 4 days of grace, allows one skipped week before it alarms.
-It is pinged from the laptop rather than the VM because the UUID lives at `op://Homelab/hermes-update/healthcheck-uuid`, and the VM's 1Password service account can see only the `hermes` vault — the same constraint that puts `estate-update` on the laptop.
-
-`hermes-update` is also the only row here that no manifest in this repository creates: the check and its 1Password field are made by hand, as step 8 of [the VM install](hermes-vm.md#installing-or-reinstalling).
+Delete the orphaned `hermes-update` monitor by hand in healthchecks.io when ready.
+This documentation change leaves the actual monitor untouched.
 
 **Two of the jobs this repo pings send `/start` and an exit code** — the two restic CronJobs, and since the migration they are the only ones that do.
 Nothing replaced that pattern for everyone else, because the kuma push API has nothing to replace it with: a push is a heartbeat carrying a status, so there is no start signal to send.
@@ -358,11 +351,10 @@ Two things that scan does not do: it does not run in `diff-*`, so a clean diff i
 Only a forced run settles that — and for a push monitor the run itself settles it, because kuma answers an unknown token with a 404 that `curl -f` and busybox `wget` both treat as a failure, so a silent runner is proof the heartbeat landed.
 The read-only healthchecks.io API key is `op://Homelab/healthchecks.io/read-only-api-key`; if that path 404s, the item is still spelled `healtchecks.io`.
 
-**The account-level nag is set to Daily, and it now covers four checks rather than thirteen.** healthchecks.io notifies on status *flips*, so a check that is already down raises nothing further; the supported fix is the account-wide report (Profile → reports, Hourly or Daily).
+**The account-level nag is set to Daily.** healthchecks.io notifies on status *flips*, so a check that is already down raises nothing further; the supported fix is the account-wide report (Profile → reports, Hourly or Daily).
 **Decision, taken August 26, 2026: Daily**, recorded on the operator's confirmation, since the Management API does not expose the report frequency and nothing here can check it.
-It was deferred while `homelab-update-watch` went red on any open pull request, because a nag over a permanently red check trains the operator to ignore it.
-That reason is gone twice over: the 45-day threshold removed the permanent red, and `homelab-update-watch` is no longer on this account at all.
-What the nag reaches now is the two restic checks, `vps-uptime-kuma-alive`, `estate-update` and `hermes-update` — none of which has a normally-red steady state, so a daily reminder is signal.
+The four supported checks are the two restic checks, `vps-uptime-kuma-alive` and `estate-update`.
+None has a normally-red steady state, so a daily reminder is signal.
 **It does not reach the push monitors**: kuma's own notifications are configured per monitor inside kuma, and it has no equivalent digest.
 A push monitor that goes DOWN alerts once on the flip and then stays quiet.
 
@@ -375,12 +367,11 @@ Measurement and detail: [uptime-kuma.md](uptime-kuma.md#push-monitors).
 ### The update watcher
 
 `update-watch` (namespace `ops`, 06:45Z daily) makes one unauthenticated GitHub call — `GET /repos/mnbf9rca/kubernetes_config/issues?state=open&per_page=100` — and drives the `homelab-update-watch` uptime-kuma push monitor.
-It exists because much of this estate is pinned and keel-free — every workload that writes into persistent data it owns is locked that way, and several more are pinned by choice — so Renovate proposes those bumps, and until this watcher existed nothing pointed at the waiting pull requests.
-Detection for `health` came free on day one.
+It detects dependency lookup failures reported on Renovate's Dependency Dashboard and reports a missing dashboard.
+PR counts, PR ages, dashboard age and other bot issues do not affect the signal.
 
-**DOWN means one of nine things.**
-Five arrive as a `down` push and name themselves in the heartbeat's `verdict=` field.
-The other four turn the monitor DOWN through **silence** past its interval plus retry: the job did not run, it ran and hung, its push token is well-formed but wrong, or GitHub has for a day been either unreachable or answering with something this script refuses to parse — every `nothing` verdict in the table below, sustained.
+Two verdicts push `down`: `renovate-lookup-failed` and `dashboard-missing`.
+A missing run, hung job, failed push or sustained indeterminate read instead turns the monitor DOWN through silence.
 
 **Every verdict the watcher can emit, and what each one pushes.**
 `up` is green, `down` is red, and an indeterminate verdict pushes **nothing at all**, which records no state change and cannot postpone, suppress or trigger an alert.
@@ -388,17 +379,13 @@ That third column replaced healthchecks.io's `/log` ping on August 26, 2026 and 
 
 | `verdict=` | Pushes | Means |
 |---|---|---|
-| `ok` | `up` | The Dependency Dashboard is fresh and no Renovate pull request is open |
-| `updates-waiting` | `up` | Open Renovate pull requests, none older than `pr_age_red_days=`. **Green on purpose** — see below |
-| `updates-pending` | `down` | A Renovate pull request has been open longer than `pr_age_red_days=`, so an update session was plainly skipped |
-| `renovate-stale` | `down` | The Dependency Dashboard has not moved in `renovate_alive_max_days=`. Renovate itself has gone quiet |
-| `dashboard-missing` | `down` | Renovate's Dependency Dashboard is gone or closed, so Renovate is probably uninstalled |
-| `renovate-config-error` | `down` | Renovate opened a configuration-error issue and has stopped proposing pull requests |
+| `ok` | `up` | The bot's Dependency Dashboard body is readable and contains no recognised lookup-failure marker |
+| `dashboard-missing` | `down` | The complete issue listing contains no non-PR issue titled `Dependency Dashboard` from `renovate[bot]` |
 | `renovate-lookup-failed` | `down` | The Dependency Dashboard reports a failed package lookup, so `lookup_failures=` dependencies get no pull request at all, freezing every pinned image that references them — see below |
 | `rate-limited` | nothing | GitHub's unauthenticated quota is exhausted for this IP |
 | `secondary-limit` | nothing | A GitHub secondary rate limit |
 | `repo-unreachable` | nothing | HTTP 404 — the repo was renamed, deleted or made private |
-| `api-error` | nothing | Anything else unreadable: a 5xx, a timeout, a paginated response, an HTTP 200 carrying a JSON object, or a Dependency Dashboard whose timestamp did not parse |
+| `api-error` | nothing | An unreadable response, including a 5xx, timeout, pagination, invalid JSON, non-array JSON, or missing/non-string dashboard body |
 
 `push_status()` and `ping_suffix()` in `update-watch.py` are the same decision in two vocabularies, and the suite asserts they agree; if they ever disagree the signal's meaning has quietly forked.
 
@@ -407,10 +394,12 @@ That is why every message carries `run_epoch=`, an integer Unix timestamp: a `ru
 Telling the four silence causes apart means reading the pod log.
 The monitor has one bit; DOWN means "go and look".
 
-**`next=` is the third token of every message and names what to do about that verdict** — the `gh pr list` command for `updates-pending`, the Mend job log and a `managerFilePatterns` check for `renovate-stale`, the `gh issue list` command for `renovate-config-error`, the dashboard's repository problems and the Mend run log for `renovate-lookup-failed`, the app-installations page for `dashboard-missing`, the pod-log command for the indeterminate verdicts, and `none` for both green verdicts (`updates-waiting`'s line says so explicitly, so a green message is not mistaken for one whose `next=` went missing).
+**`next=` follows `verdict=` and `run_epoch=` and gives fixed advice for that verdict.**
+Lookup failures point to the dashboard and Mend run log; a missing dashboard points to app installations; `ok` says `none`.
 Each string is a fixed literal in the script's `NEXT_ACTIONS` map, keyed by verdict, so the alert is self-contained and nothing derived at run time is formatted into it.
 It sits third — behind only `verdict=` and `run_epoch=` — rather than last, because kuma stores one line and cuts it at 200 characters: under a multi-line body last was where the eye landed, but under a one-line message last is the first thing lost.
-Read `next=` together with `run_epoch=`: a stale message's advice is about the last run that completed, not about the silence that raised the alert.
+Read `next=` together with `run_epoch=`.
+A stale message describes the last completed run, not the silence that raised the alert.
 The counters that follow it — and everything the cut drops — are printed to the pod log in full on every run.
 
 **There is no start signal, and one must not be invented.**
@@ -419,40 +408,25 @@ Under healthchecks.io, a watcher that sent `/start` and then hit a single transi
 A start signal would have bought only a duration graph for a job already bounded by `activeDeadlineSeconds: 300`, and silence past the monitor's interval already covers "did not run".
 
 **Indeterminate runs push nothing and change nothing.**
-A rate limit, a 404, a 5xx, a timeout, a paginated response, an HTTP 200 carrying a JSON *object*, and a Dependency Dashboard whose `updated_at` will not parse are all "I could not look", never "zero pull requests" and never "Renovate is alive".
+A rate limit, HTTP error, timeout, paginated response, invalid JSON, non-array JSON or unreadable dashboard body is indeterminate.
+A missing or invalid timestamp does not affect the verdict because the watcher no longer reads ages.
 Pushing `up` would report a successful read that did not happen and pushing `down` would turn every transient GitHub 503 into an alert, so the run sends nothing and logs `indeterminate verdict <v>: pushing nothing`.
 If the outage persists no `up` push arrives either and the monitor goes DOWN on its own once its interval plus retry expires.
 Verified live on August 26, 2026 by pointing a one-off Job at a repository that does not exist: `verdict=repo-unreachable`, nothing pushed, monitor unchanged.
 
-**Why a `down` here when `ingest-freshness` was refused one.**
-That refusal rested on tolerance: a stale bucket self-heals and was routinely, legitimately stale.
-Neither half transfers.
-An update never self-heals — it waits until a human merges and applies — so there is no tolerance to trade away once it has waited past `pr_age_red_days=`, and red on *that* condition is the whole requirement.
-The tolerance an available update does have is the session cadence itself, and that is exactly what the 45-day threshold spends before going red.
-
 **One alert, then silence.**
-Notifications come from status *flips*, so a repeated `down` push against an already-DOWN monitor sends nothing further: one notification on the day an update appears, then quiet until it is merged and the next run flips the monitor UP.
+Notifications come from status *flips*, so repeated `down` pushes send no further notification until a successful run restores UP.
 Manufacturing a re-flip by pushing up-then-down stays rejected outright: it writes a false "everything is fine" event into the monitor's own history.
-
-**An open pull request is UP.**
-The estate updates in a session every 4 to 6 weeks, so a pending Renovate pull request is this design working, not a fault.
-`verdict=updates-waiting` is the green form and `verdict=updates-pending` is the red one; the boundary is `pr_age_red_days=` in the heartbeat, 45 days at the time of writing — a session and a half.
-Read the value the heartbeat carries, not this number.
-The rule this replaced went red on any open pull request, which under session cadence made red the steady state, and an alarm that is normally red is not an alarm.
-
-**Renovate's own liveness is a `down` verdict on this same monitor**, `verdict=renovate-stale`.
-It fires when the Dependency Dashboard's `updated_at` (a stable API field; this signal reads none of the body) exceeds `renovate_alive_max_days=` in the heartbeat, and it is evaluated **above** the pull-request rules, so a dead Renovate with a young pull request still open cannot read as the green `updates-waiting`.
-A missing dashboard and a configuration error keep their own, more specific verdicts — both are already red and both name their own `next=`.
-A dashboard whose timestamp does not parse is `api-error`, which pushes **nothing at all** and so changes nothing: an unreadable field is never evidence that Renovate is alive.
 
 **A failed package lookup is its own `down` verdict**, `verdict=renovate-lookup-failed`, added August 28, 2026.
 Renovate records a failed datasource lookup on the Dependency Dashboard in two places.
 The `## Repository Problems` section at the top carries a one-line `⚠️ WARN: Package lookup failures` summary and a link to the run log, and names nothing.
 The dependency-lookup warning block further down — `> [!WARNING] Renovate failed to look up the following dependencies:` — names the packages and the files affected.
 The job matches either, because neither is unconditional.
-The case that prompted this sat there unread for weeks and was still open when this shipped: `Failed to look up docker package ghcr.io/keel-hq/keel: no-result`, against two digest-pinned images that only Renovate can move.
+The case that prompted this in August 2026 was `Failed to look up docker package ghcr.io/keel-hq/keel: no-result`, against two images then pinned to Renovate.
 An image Renovate cannot look up gets no pull request, so a failed lookup freezes it while every guard stays green — `make check-renovate-scope` proves the file is in scope, never that the lookup succeeded.
-**What to do when it fires:** open the Dependency Dashboard issue and read the dependency-lookup warning block, which names the packages and the files affected, then fix the lookup.
+Open the Dependency Dashboard and read the dependency-lookup warning block.
+Read the Mend run log for the failing lookup's cause.
 **The one case seen here was diagnosed on August 28, 2026 from two Mend run logs**, and three plausible causes are ruled out.
 Not repo configuration; not registry authentication, because sibling `ghcr.io` packages token-fetch and pull manifests normally seconds later in the same runs that fail on `ghcr.io/keel-hq/keel`; and not runner memory, because the second run completed at 1.8GB of the runner's 3.0GB cap and failed identically.
 What both logs show is that the keel lookup fails **before the `ghcr.io` host queue is created** and issues **no HTTP request at all**.
@@ -462,49 +436,19 @@ That is a known, acknowledged upstream bug: Renovate's docker `getTags()` caches
 There is no repo-side cache-bust (the key derives from registry plus package name, so nothing this repo can edit reaches it — a `hostRules` entry in `renovate.json` least of all) and Mend documents no cache-eviction procedure.
 A new instance of this verdict still starts at the run log.
 This diagnosis belongs to one package, and the same one-line dashboard warning covers failures with nothing in common.
-The heartbeat carries `lookup_failures=`, a count and nothing else: a package name is remote text and rule 4 keeps it out of the message.
+The heartbeat carries `lookup_failures=`, a count and nothing else: package names are remote text and stay out of the message.
 The pod log carries the full lines on every run, and that is where the names are.
 The count heads the counter group rather than trailing it, because this verdict's `next=` is 103 characters, which with `verdict=` and `run_epoch=` leaves 40 characters — past the second counter it would be cut from the one message it exists for.
 `lookup_failures=0` means the section is there but its item lines did not parse — what a Renovate reword looks like — and the verdict fires anyway, because the section itself is the evidence; a zero also arises from a body carrying only the `Package lookup failures` summary bullet and no per-package lines, which is the likelier route when `suppressNotifications` hides the warning blockquote.
-It is evaluated above the pull-request rules and below staleness: a dependency that cannot be looked up proposes nothing, so the pull-request count is an undercount by exactly the frozen images, while a Renovate that has stopped running at all is the larger fact and its dashboard is as stale as the rest of it.
-A body this job could not read is not a lookup failure and never becomes one — it reads the body only when the issue list came back, so nothing here weakens the indeterminate contract above.
+A missing or non-string dashboard body produces `api-error` and pushes nothing.
 
-**Both threshold fields are the first things the 200-character cut takes, by design.**
-`pr_age_red_days=` and `renovate_alive_max_days=` are emitted last because they are literals in `update-watch.py` and identical between runs, so an alert that loses them costs the reader one look at the source.
-What must never be cut is `run_epoch=`, which is emitted first for that reason.
-Both halves are asserted, not merely intended: `test_run_epoch_and_next_survive_the_cut_for_every_verdict` holds the protected end, and `test_the_thresholds_are_the_tokens_the_cut_takes_first` holds the sacrificed one — it proves the thresholds really are emitted last and that what survives is a whole-token *prefix*, so nothing is ever dropped from the middle.
-
-**The liveness threshold is the unarmed floor, 14 days, and it is due a re-arming.**
-The rule is twice the maximum `dash_age_days` this job has emitted across its last 30 heartbeats, floored at
-14. Read August 26, 2026: the job had shipped two days earlier and had logged six pings in total, fewer than the 14 the rule needs, so there was no observed maximum to double.
-    Those six were healthchecks.io pings whose bodies could not be read — the only API key in the vault is read-only and `/api/v3/checks/<uuid>/pings/` refuses it.
-    The history now accumulates in the `homelab-update-watch` kuma monitor, where each heartbeat's message is readable in the UI.
-    Re-read it after a month of data and re-arm `RENOVATE_ALIVE_MAX_DAYS` in `homelab/ops/scripts/update-watch.py`: a threshold tighter than the quiet periods is DOWN every fortnight, and one looser than a month lets Renovate die unnoticed.
-
-**Why this is not a second signal.**
-It was one, in the design that preceded this.
-The argument was that an alerting backend notifies on status *flips*, so a liveness signal folded into a permanently-red one could never fire — and under the old rule, red on any open pull request, `homelab-update-watch` was permanently red.
-The 45-day threshold removes the permanent red, so the one monitor flips on a Renovate death exactly as a second one would have.
-Decided August 26, 2026, when the constraint was a healthchecks.io account capped at 20 checks; the argument survives the move to a push monitor unchanged.
-The residual: while the monitor is already DOWN for `updates-pending`, a Renovate death changes `verdict=` in the heartbeat but raises no second alert.
-Read `verdict=` before assuming you know why a DOWN monitor is DOWN.
-
-**The watcher counts OPEN pull requests, so anything held on the Dependency Dashboard is invisible to it.**
-Renovate lists an update as a dashboard checkbox rather than opening a pull request whenever a rule says to.
-**The list is `renovate.json`, not this page:** every rule there setting `dependencyDashboardApproval` holds its matches on the dashboard, which today means all majors, `kroniak/ssh-client` digest bumps and `thisisarpanghosh/garmin-fetch-data`.
-Read the config rather than trusting an enumeration here, which has drifted once already.
-Such an update waits for a human tick indefinitely while this watcher reports `ok` with zero open pull requests, and `renovate-stale` does not catch it either: Renovate is alive and touching the dashboard the whole time.
-**Read the Dependency Dashboard, not just the pull-request list, at the start of every update session.**
-Counting dashboard-held items instead would mean taking an *inventory* out of the dashboard's markdown, which `update-watch.py` still refuses — the issue's `updated_at` is a stable API field, its body is not, and a reworded body would undercount silently while the count was reported as authoritative.
-The repository-problems marker the watcher does read is the opposite shape and is the whole of the exception: it can only fail to *fire*, so a reword loses one red verdict and can turn nothing green, because no other verdict consults the body at all.
+**The heartbeat remains one line, with `verdict=` first and a 200-character limit.**
+`run_epoch=` and the complete fixed `next=` action precede `lookup_failures=` and `http=`, when those facts exist.
+The tests protect that ordering and whole-token truncation.
+No PR counts, age fields or thresholds are emitted.
 
 **`estate-update` is the session's own dead-man's-switch**, at roughly 45 days with a 7-day grace, pinged by hand at the end of each session.
-It exists because a pull request's age is not a reliable proxy for a skipped session.
-`renovate.json` sets `recreateWhen: "always"`, which is *meant* to recreate a closed pull request — **never verified live here** (see below), so treat what follows as what the config says, not as observed fact.
-If it does recreate, the replacement is a new pull request with a new `created_at`, so closing one **without merging it** restarts its clock at zero.
-(Merging closes a pull request too, but there is no recreation and no clock left to restart — the update is done.)
-An untouched pull request does keep its age, so `updates-pending` still fires on a genuinely stalled one — but a close, or a stream of churning updates, hides a skipped session from any age-based threshold.
-This check cannot be fooled that way, because nothing but a human ever pings it.
+Only an operator pings this check; repository activity cannot reset it.
 Ping it with:
 
     curl -fsS -m 15 -o /dev/null --data-binary 'summary=estate-update session complete' \
@@ -521,33 +465,8 @@ Nothing here could ever have pinged it: the CronJob is handed a kuma push URL an
 The orphan has been deleted, and no `vps-keel-fresh` healthchecks.io check was ever created — the VPS copy of that job drives a kuma push monitor of the same name, which costs no slot here.
 Later the same day nine more routine heartbeats moved to push monitors, leaving this repository with **four** checks.
 The nine retired checks are **not deleted yet**: they are left in place and un-pinged so that a red check at healthchecks.io beside a green monitor in kuma is the migration visibly working, and the operator deletes each one after seeing that pair.
-Until they go the account holds 19 of 20; once they go it holds **10**, and **11** once `hermes-update` is created during the hermes VM install.
+The August 26 census projected 10 checks after those nine deletions; it is not a current account count.
 New scheduled work takes a push monitor, per the policy in [Layers 3 and 4](#layers-3-and-4-uptime-kuma) — that is what keeps this from happening again.
-
-**The quarterly liveness drill, narrowed.**
-`renovate-stale` now covers the *idle-Renovate* case this drill was invented for, so what is left of it is the residual: a Renovate that keeps updating its dashboard while proposing nothing — `managerFilePatterns` that stopped matching, a registry lookup failing silently.
-Once a quarter, bump a pin backwards and confirm a pull request appears within a cycle.
-`make check-renovate-scope` closes the commonest variant, a pinned image no file in scope names.
-If the drill ever fails for a reason that guard cannot see, the first thing to build is a registry canary.
-
-**Never close a Renovate pull request** — the operating rule from the design spec, and it still stands.
-`renovate.json` sets `recreateWhen: "always"`, so a closed pull request is *supposed* to be recreated rather than left on the dashboard's Closed/Ignored list where Renovate's default would strand it.
-**That recreation has never been verified live against a real closed pull request**, and the verification is a rollout step nobody has done.
-Until it passes, a close risks the worst outcome this page has: if `recreateWhen` is not doing what the config says, the update goes to Closed/Ignored and never comes back — a green check over an update that is silently gone.
-That risk, not tidiness, is why the prohibition exists.
-Merging is not closing in this sense and is unaffected.
-
-**Once that verification passes, closing becomes a snooze of up to 45 days.**
-The mechanism: recreation produces a *new* pull request with a new `created_at`, and the watcher judges age on `created_at`, so closing an aged pull request without merging it restarts that clock at zero and can drop the verdict from `updates-pending` back to the green `updates-waiting` for up to another `pr_age_red_days=`.
-
-**"Can", not "will": `oldest_pr_days` is the maximum over every open pull request.**
-Closing one aged pull request while another aged one is still open leaves the monitor DOWN on the survivor.
-Do not read a still-DOWN monitor as "the close did not take" and close more — read `oldest_pr` in the pod log, which names the pull request the verdict is now about.
-It is emitted after the counters the 200-character heartbeat message is guaranteed to carry, so on a long `next=` it may not be in the alert.
-
-**And nothing on this monitor will tell you a close happened at all.**
-An operator who closes a pull request to tidy up silences the watcher for a month and a half without meaning to.
-That is precisely why `estate-update` exists on its own 45-day period, pinged only by a human at the end of a session: no amount of pull-request churn can reset it, so it is what still catches the skipped session underneath a silenced watcher.
 
 ### Ping bodies and heartbeat messages
 
@@ -589,8 +508,8 @@ After that they split three ways:
 
 - **`influx-backup` and `hermes-pull`** each have one variable-length token, `error=`, holding a `fatal` message.
   It goes last, so a long one costs the counters nothing.
-- **`update-watch`** has one too, `next=`, at 89 to 111 characters — but it is the *action*, so it is deliberately protected in third place and the two fixed-width threshold literals are what the cut takes instead.
-  They are constants in the source and identical between runs, so losing them costs one look at `update-watch.py`; losing the action would cost the alert its point.
+- **`update-watch`** protects the fixed `next=` action after `verdict=` and `run_epoch=`.
+  The optional lookup-failure count and HTTP status follow; any truncation drops whole tokens from the tail.
 - **`ingest-freshness`, both hindsight jobs, `cloudflare-analytics` and both `keel-fresh` jobs** emit nothing of variable length at all, so the question does not arise for them.
 
 Read that as one rule with three outcomes rather than three rules.
@@ -611,10 +530,11 @@ Do not treat any of those as a target — re-run the guard for today's figure.
 What must never happen is a *file* losing its last sink call, or dropping out of the scan — that is "I could not look" reported as "I looked and everything is fine", and `REQUIRED_TARGETS` in the guard exists to catch the second half of it.
 
 Healthchecks.io bodies die with their ping-log entry, `Check.prune()` removing the objects then the ping rows — 100 entries per check on Hobbyist, 1000 on Business.
-With only the five checks in the table above left there, that window is long. kuma keeps heartbeats per monitor on its own retention setting, in the VPS database that the nightly restic sweep backs up.
+The four checks in the table above retain that history at healthchecks.io.
+kuma keeps heartbeats per monitor on its own retention setting, in the VPS database that the nightly restic sweep backs up.
 
 One healthchecks.io quirk survives and still constrains what may be written: `has_confirmation_link` is set from the body on every action, driving a UI nag, so no body may contain the substring `confirm`.
-That now applies only to the restic bodies and the hand-written `estate-update` and `hermes-update` pings, but the estate keeps one spelling — say "check" instead — and `update-watch`'s test suite still asserts it.
+That applies to the restic bodies and hand-written `estate-update` pings; `update-watch`'s test suite keeps the same spelling rule.
 
 #### Reading a restic failure body
 
@@ -640,9 +560,9 @@ Recurring rc=3 on such files can be silenced with `--exclude='*.sqlite-journal'`
 ### Checks in the account that this repo does not ping
 
 The Management API returned 19 checks when it was last counted, on 2026-08-26.
-Four of those are in the table above (`hermes-update`, its fifth row, was created later, at VM install, and did not exist at that count).
+Four of those are in the table above.
 Nine are the retired checks this repo no longer pings, which stay until the operator deletes them by hand and are named in the migration paragraph above, and six belong to the operator — `adsb.cynexia.net`, `pve3.cynexia.net`, `fs.cynexia.net`, `tailscale unattended upgrades`, `Home Assistant`, `upsd.cynexia.net` — pinged from Proxmox hosts, Home Assistant and host cron, and deliberately outside this repo.
-Once the nine go the count is 10, and 11 with `hermes-update`.
+That census projected 10 checks after the nine deletions; no current account count is asserted here.
 Re-count with the command below rather than trusting the arithmetic here; the point of this section is that "not in the table" can still be told from "does not exist".
 
 ```bash
@@ -716,16 +636,12 @@ Every branch in *this* script is determinate — its only peer is a ClusterIP, s
 **The message is short, deliberately.** kuma stores one line per heartbeat, so the alert carries `verdict=`, `polls_delta=` and `images=n/floor` and nothing else.
 The rest — the metric names, the stored state, the resolved endpoint — is in the pod log.
 
-**The image floor is a literal and it does not track reality on its own.**
-It is set to the steady-state tracked-image count with margin: today, **7 against the 8 homelab's own script records**, one container clear, and 7 against the 9 measured on the VPS, two clear.
-The homelab floor has moved three times as the keel-managed set grew — 4 against 5 until September 2, 2026, when tinyproxy added a sixth image, then 5 against 6 until September 4, 2026, when `influxdb-mcp` added a seventh, then 6 against 7 until September 6, 2026, when `pdc-agent` added an eighth.
-Each move re-derived the count from `kustomize build homelab` rather than from the previous sentence, which is the only way this number stays honest.
-The margins differ because the VPS floor was fixed before its count was measured and left alone once the measurement came in higher than expected — a floor with more headroom than the rule asks for is not worth moving.
-Reconciling either number against a list of keel-annotated workloads is off by however many distinct sidecar images those workloads carry, and off again where two workloads share an image: the gauge counts **images**, and keel tracks every container in an annotated workload.
-The VPS is where both effects show — 9 images across 13 containers in 9 Deployments, because four workloads carry an `alpine` quiesce sidecar and `homelab-proxy` runs the same `cloudflared` image as `cloudflared` does.
-A workload on an image the gauge already tracks does not raise either floor; a workload that adds a new image does, and the floor is re-derived at that point.
-Removing several without taking that estate below its floor does not lower it.
-Revisit them whenever the keel-managed set changes materially — a floor that has drifted below reality is a check that has stopped checking.
+**The image floors are exact counts: `IMAGE_FLOOR=17` on homelab and `IMAGE_FLOOR=12` on VPS.**
+They count distinct floating image references across every container, including sidecars and initContainers, in keel-annotated workloads.
+A shared image counts once even when several workloads use it.
+These values come from the new manifest inventory and have **not yet been verified against live keel metrics after apply**.
+Recompute both floors when the keel-managed image set changes.
+Compare each floor with its cluster's live `poll_trigger_tracked_images` after apply.
 
 **A day-apart comparison needs a day.**
 Two runs minutes apart legitimately produce `polls-stalled`, because keel polls every six hours and the counter genuinely has not moved.
@@ -750,17 +666,17 @@ Probes fix hung request paths, not silently stopped background work — often th
 | **VPS etcd member count** | Nothing checks it. After the August 28, 2026 expansion the cluster runs three control planes, and a node that dies and stays dead silently returns it to the fault tolerance it had before — two members, then one. Every workload keeps serving and no check flips. Noticed only by a human running `talosctl -n ubuntu-16gb-fsn1-2 etcd members` |
 | **cloudflared node spread** | The Deployment reports `2/2` whether the two replicas sit on two nodes or on one. Required anti-affinity prevents the scheduler from co-locating them, so the realistic path is a node staying down long enough that only one replica is effectively serving — which reads as fully healthy from outside. Nothing asserts the spread |
 | **a stalled cloudflared rollout** | keel runs `policy: force` on `cloudflare/cloudflared:latest` here. With `maxUnavailable: 0` and required anti-affinity, a keel-triggered rollout while any node is unavailable has nowhere to place the surge pod and stalls with a `Pending` pod past `progressDeadlineSeconds`. The old pods keep serving, so nothing is externally visible and the tunnel silently stops taking updates |
-| **hermes-webui (hermes VM)** | `hermes-app-alive` checks it, but **once a day at 05:45 UTC**, from inside the VM — as a `no_agent` cron job inside `hermes-gateway`, so a beat arriving at all is also proof that the **default gateway executes**, which nothing used to check. That check curls the WebUI's own `/health` on `127.0.0.1:8787` and deep-imports `run_agent` from the shared venv — the only cheap assertion that catches the documented silent failure, where a venv missing `dotenv`, `httpx` or `openai` leaves the unit `active` and `/health` answering `status: ok` while every chat turn returns `AIAgent not available`. What that costs: **detection latency is up to about a day**, plus the monitor's 24-hour heartbeat and 6-hour retry before a missing beat alarms. **Accepted by the operator on August 26, 2026 — "homelab not NASA."** The 15-minute external chat-turn monitor the spec called for was deleted as overengineering, along with the published hostname, the Access app, the dedicated service token and the probe profile it needed. So **no chat turn is monitored at all**: the daily check makes none by design, and the only one anybody makes is the update runbook's verification step, which runs when a person runs it — so a fault that lets the WebUI import, serve `/health` and keep its units up while failing every chat turn surfaces at the next update session, roughly a week later. A fault confined to the `emh`, `hal` or `default` profile *state* — as opposed to the shared venv — stays invisible. Two older consequences still hold. The unit sets `StartLimitIntervalSec=60`/`StartLimitBurst=5` rather than the gateways' `StartLimitIntervalSec=0`, so a start that keeps failing parks in `failed` where `systemctl --user is-failed` reports it, instead of looping invisibly every 5s. And a future **HTTP** monitor on `hermes-app.cynexia.com` must carry the service-token headers and `maxredirects: 0` — see the Cloudflare Access trap in [uptime-kuma.md](uptime-kuma.md). **Nothing rolls back automatically, and that is the design:** the update path is a runbook a person follows with the session open ([hermes-vm-updates.md](hermes-vm-updates.md)), and its rollback is a judged decision rather than a trigger. What detects a bad update is therefore the person running it, not a check |
-| **the hermes VM's terminal sandboxes** | All four profiles run their terminal tool in docker containers on a tag-pinned image (2026-08-29; `safer_web_reader` joined on 2026-08-31 through the managed scope). The weekly `hermes-sandbox-refresh` cron job pulls the tag and replaces idle stale containers, but **nothing watches the job itself** — it pushes to no monitor, by design. Its failure mode is silence: the containers just keep running whatever image they were created from. Detection is the update runbook's precondition on the job's own run record ([Preconditions](hermes-vm-updates.md#preconditions)), so latency is the update cadence against a 14-day threshold, same shape as the apt-stamp row below. Accepted: a stale sandbox userland is neither lockout nor data loss — the containment boundary is the host kernel, which `unattended-upgrades` patches nightly — [hermes-vm.md](hermes-vm.md#the-docker-terminal-sandboxes) |
-| **the hermes VM's OS updates** | `unattended-upgrades` runs on a schedule and nothing watches it directly. The cover is indirect and deliberate: the update runbook's preconditions stop the session when `/var/lib/apt/periodic/unattended-upgrades-stamp` is missing or over 14 days old ([Preconditions](hermes-vm-updates.md#preconditions)). That check fires only when somebody runs it, so at a roughly weekly cadence a dead apt timer surfaces within about a week of crossing the threshold — the detection latency is the cadence, and it is accepted against a 14-day threshold. The stamp is weaker still than it looks: `unattended-upgrade` writes it on a run that found nothing to do just as readily as on one that installed everything, so it proves the timer fired and not that anything was patched. Accepted: the 04:45 reboot window and the daily `hermes-app-alive` check bound the damage, the latter by proving the VM came back — [hermes-vm.md](hermes-vm.md#unattended-upgrades) |
+| **hermes-webui (hermes VM)** | `hermes-app-alive` checks it, but **once a day at 05:45 UTC**, from inside the VM — as a `no_agent` cron job inside `hermes-gateway`, so a beat arriving at all is also proof that the **default gateway executes**, which nothing used to check. That check curls the WebUI's own `/health` on `127.0.0.1:8787` and deep-imports `run_agent` from the shared venv — the only cheap assertion that catches the documented silent failure, where a venv missing `dotenv`, `httpx` or `openai` leaves the unit `active` and `/health` answering `status: ok` while every chat turn returns `AIAgent not available`. What that costs: **detection latency is up to about a day**, plus the monitor's 24-hour heartbeat and 6-hour retry before a missing beat alarms. **Accepted by the operator on August 26, 2026 — "homelab not NASA."** The 15-minute external chat-turn monitor the spec called for was deleted as overengineering, along with the published hostname, the Access app, the dedicated service token and the probe profile it needed. So **no chat turn is monitored at all**: the daily check makes none by design; a fault that lets the WebUI import, serve `/health` and keep its units up while failing every chat turn has no scheduled detector. A fault confined to the `emh`, `hal` or `default` profile *state* — as opposed to the shared venv — stays invisible. Two older consequences still hold. The unit sets `StartLimitIntervalSec=60`/`StartLimitBurst=5` rather than the gateways' `StartLimitIntervalSec=0`, so a start that keeps failing parks in `failed` where `systemctl --user is-failed` reports it, instead of looping invisibly every 5s. And a future **HTTP** monitor on `hermes-app.cynexia.com` must carry the service-token headers and `maxredirects: 0` — see the Cloudflare Access trap in [uptime-kuma.md](uptime-kuma.md). Hermes updates use the WebUI's **Update Now** button; there is no associated verification, chat-turn or containment procedure. The existing daily alive check remains |
+| **the hermes VM's terminal sandboxes** | All four profiles run their terminal tool in docker containers on a tag-pinned image (2026-08-29; `safer_web_reader` joined on 2026-08-31 through the managed scope). The weekly `hermes-sandbox-refresh` cron job pulls the tag and replaces idle stale containers, but **nothing watches the job itself** — it pushes to no monitor, by design. Its failure mode is silence: the containers just keep running whatever image they were created from. There is no update-session check of the job's run record. Accepted: a stale sandbox userland is neither lockout nor data loss — the containment boundary is the host kernel, which `unattended-upgrades` patches nightly — [hermes-vm.md](hermes-vm.md#the-docker-terminal-sandboxes) |
+| **the hermes VM's OS updates** | `unattended-upgrades` runs on a schedule and nothing watches it directly. There is no update-session freshness check of `/var/lib/apt/periodic/unattended-upgrades-stamp`: `unattended-upgrade` writes it on a run that found nothing to do just as readily as on one that installed everything, so it proves the timer fired and not that anything was patched. Accepted: the 04:45 reboot window and the daily `hermes-app-alive` check bound the damage, the latter by proving the VM came back — [hermes-vm.md](hermes-vm.md#unattended-upgrades) |
 | **hindsight extraction** | Retain hands the content to an external LLM for extraction. A provider outage or a revoked key fails the retain task — the server retries three times and then logs, and nothing else notices. Recall is unaffected, because the full image runs embeddings and reranking locally, so a dead LLM account degrades to read-only memory rather than no memory. The canary proves the retain *pipeline* accepts writes; it does not judge whether what was extracted is any good |
 | **hindsight memory content** | Poisoning cannot be prevented — writing memories is the product. What limits it is that only Hermes holds the tenant key and only the operator holds the control-plane access key; what recovers from it is seven days of nightly dumps plus the control plane's per-memory delete |
 | **the hindsight dump** | The gate proves the dump exists, is fresh, is above a size floor and contains at least one `CREATE TABLE`. It does not prove the dump *restores*. The periodic restore drill in [hindsight.md](hindsight.md) is the only thing that does |
 | **the homelab gate** | It proves the SSD is mounted and the tree is the right *shape*: right number of PVC directories, right order of magnitude, the listed files present and non-trivial. It says nothing about *content*. Every homelab PVC is copied live, with no quiesce step: a sqlite database mid-write is captured torn, `sonarr.db` at 14 MiB of corruption passes the size floor exactly as 14 MiB of working database does, and a PVC that stopped being written to weeks ago looks identical to one written a minute ago. The hindsight dump is the one exception: it is verified at the shape level before it is published. Only the two influx dumps, the hindsight dump and the hermes zip are age-checked. A retained orphan directory from a recreated PVC can satisfy an expected-set entry the live PVC no longer can — the resolved paths are printed so it is visible, but nothing fails on it. The rest surfaces at restore time |
 | **cloudflare-analytics** | It proves the hours it fetched were fetched. It cannot prove Cloudflare's own numbers are right, and it does not alert on *content* — a hostname that stops receiving traffic entirely, or a spike, produces a perfectly green heartbeat. That is Phase 3 (Grafana Cloud alert rules), deliberately deferred until a baseline exists |
-| **update-watch (Renovate silence)** | Renovate is installed, has opened no error issue, and is proposing nothing. Since August 26, 2026 the *idle* form is a determinate verdict on this same monitor: a Dependency Dashboard that has not moved in `renovate_alive_max_days=` is `verdict=renovate-stale`, pushed `down`. What is left uncovered is a Renovate that keeps touching its dashboard while proposing nothing — a `managerFilePatterns` that stopped matching. A registry lookup failing silently was on that list until August 28, 2026 and no longer is: `verdict=renovate-lookup-failed` reads the dashboard's repository-problems block and pushes `down` on it. What that leaves is a lookup that fails without Renovate saying so, and a reworded problems block, which loses the verdict and nothing else. `make check-renovate-scope` closes the commonest remaining variant, a pinned image no in-scope file names; the rest is the narrowed quarterly drill above |
-| **update-watch (held on the dashboard)** | The watcher counts OPEN pull requests, and an update held by any `dependencyDashboardApproval` rule in `renovate.json` — today all majors, `kroniak/ssh-client` digests and `thisisarpanghosh/garmin-fetch-data`, but read the config, not this cell — is a dashboard checkbox, not a pull request. It can wait for a human tick indefinitely while the monitor reads `ok`, and `renovate-stale` will not fire because Renovate is alive and updating the dashboard throughout. The cover is procedural: read the Dependency Dashboard at the start of every update session |
-| **update-watch (merged but not applied)** | It watches the **repository**, not the cluster. Merging a Renovate pull request closes it, so the next run reports zero and the monitor goes UP while the cluster still runs the old image. Merge and apply are one runbook operation for that reason; the independent noticer is drift in `make diff-homelab` |
+| **update-watch (Renovate silence)** | A readable dashboard without recognised lookup-failure markers reports `ok` even if Renovate stopped running; unreported or reworded lookup failures can therefore escape detection, while `make check-renovate-scope` proves only structural image coverage |
+| **update-watch (pending updates)** | Open PRs and dashboard-held updates are outside this signal; their existence or age never changes its verdict |
+| **update-watch (merged but not applied)** | The watcher reads repository lookup warnings, not deployed image versions; a successful dashboard read does not prove that a change reached either cluster |
 | **the residential egress chain** | Nothing detects a broken chain — tinyproxy in the homelab `proxy` namespace, the `cynexia-health` tunnel, the Cloudflare Access application, or the `homelab-proxy` client on the VPS — before a proxied changedetection watch errors. The spec accepts that: the watch error is the detector, and recovery is the rollout restart named in [vps.md](vps.md#residential-egress-through-the-homelab). The `proxy.cynexia.com` monitor asserts the Access challenge only, so it stays green through every fault below it |
 
 The three VPS expansion gaps above stay accepted gaps rather than becoming checks.
@@ -782,21 +698,12 @@ Until then a periodic manual restore drill is the only real proof, and the only 
 
 ### Frozen while looking covered: the update-mode rule
 
-**Floating tag means keel; pinned tag means Renovate; never both.**
-`keel.sh/match-tag: "true"` on a pinned tag only refreshes the digest, so a semver pin carrying keel annotations is frozen while looking covered.
-`traefik:v3.3` and `meilisearch:v1.41.0` were both in that state until August 26, 2026.
-`make check-renovate-scope` now refuses the combination outright, on both clusters, one container at a time, and both per-cluster halves run in their cluster's `diff-*` and `apply-*` preflight.
-
-The guard also settles the scope question that used to sit under it.
-Renovate watches `homelab/**` and `vps/**` as of the same date, so a pinned, keel-free container has to be named by a file in its own cluster's tree that `kubernetes.managerFilePatterns` matches — and the guard fails the apply when it is not.
-What the guard does *not* claim to cover is an image it never sees: one from a remote base, which it reports as advisory because nothing here can edit it, and one embedded inside another resource, such as local-path-provisioner's helper Pod inside a ConfigMap.
-
-The guard also carries the update-mode lock, which is **per stateful workload and not per namespace** (operator ruling, 2026-09-06).
-A workload whose image writes into persistent data it owns must be pinned, because an unreviewed roll can migrate or corrupt that data; the twelve such workloads are named, with their reasons, in the guard's `STATEFUL` tuple, and everything else may float with keel or pin for Renovate in any namespace.
-Two long-standing cases are worth knowing because the estate's older text got them wrong.
-`jottacloud-backup` carries no keel annotations at all and is still legal on `:latest`: it is a CronJob, so every scheduled run starts a fresh pod that pulls the tag, which already delivers the auto-pull behaviour keel would provide.
-`influxdb-mcp` **is** keel-managed and needs no exemption for it: a stateless HTTP server on a self-built image, where what gets reviewed is the build input under `homelab/health/mcp/` and the roll only delivers it ([homelab-health.md](homelab-health.md#image-policy)).
-Correct anywhere the estate's own text still says either of those is an exemption from a namespace ban.
+**Workloads float with keel unless no floating tag exists.**
+Floating Deployments, DaemonSets and StatefulSets carry the complete keel annotation set.
+Scheduled workloads use floating runtimes with `imagePullPolicy: Always` and no keel annotations, except images without a floating tag.
+`make check-renovate-scope` checks floating workload annotations and requires every locally pinned image to be inside Renovate's scope.
+There is no stateful-workload lock.
+Remote-base bundles keep their separate update paths, and images embedded inside ConfigMaps remain outside the container scanner.
 
 ### Named accepted residual: the ingest signal leaks a presence timeline
 

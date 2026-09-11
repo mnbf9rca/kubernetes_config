@@ -88,27 +88,12 @@ IMAGES_METRIC=poll_trigger_tracked_images
 # handles that, and the %d truncation to whole seconds is deliberate.
 START_METRIC=process_start_time_seconds
 
-# The literal floor for tracked images. It must be derived from the count that
-# is true after every de-keeling already applied here, and it must keep a
-# container of headroom: the point of a floor is that losing one workload's
-# annotations does not alarm while losing the WATCH does.
-#
-# The arithmetic, from poll_trigger_tracked_images: keel tracks 8 images on
-# homelab - emby, nzbhydra2, radarr, sabnzbd, sonarr and tinyproxy, one image
-# each, plus influxdb-mcp and pdc-agent in the health namespace, both stateless
-# and so on no update-mode lock. keel's own annotations were removed, so it no
-# longer appears in its own tracked set, and traefik was de-keeled. So the
-# steady-state count is 8 and the floor is 7, one below. Setting it to 8 would
-# leave ZERO margin, which is the failure this constant exists to avoid: the
-# healthy heartbeat reads `images=8/7`, and `images=8/8` would be the state to
-# fix by lowering the floor rather than by celebrating it.
-#
-# jottacloud-backup is NOT in that set: it carries no keel annotations at all
-# and keel's own metrics do not name it. Do not count it.
-#
-# Raise it deliberately when the estate grows; a floor that drifts below reality
-# is a check that has stopped checking.
-IMAGE_FLOOR=7
+# The literal floor for tracked images. Derived from the rendered homelab
+# inventory on 2026-09-11: 17 distinct image references across every container
+# of every keel-annotated Deployment, DaemonSet and StatefulSet.
+# Shared sidecar images count once; Jobs and CronJobs do not count.
+# The floor equals this inventory; verify the same live gauge after apply.
+IMAGE_FLOOR=17
 
 STATE_DIR=/state
 STATE_FILE=$STATE_DIR/last

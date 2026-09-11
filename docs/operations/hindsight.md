@@ -13,7 +13,7 @@ The manifests are `homelab/hindsight/`; the secrets are `homelab/secrets/hindsig
 |---|---|---|
 | API, with the worker in-process | `deploy/hindsight`, container `api`, port 8888 | The **full** image, not `-slim`: it bundles the embedding and reranking models, so recall never leaves the cluster |
 | Control plane (admin UI) | the same Pod, container `control-plane`, port 9999 | Optional by design. It talks to the API over `localhost`, so the hop never crosses the pod network |
-| PostgreSQL with pgvector | `deploy/hindsight-postgres`, port 5432 | Version-pinned. Its data directory is on a `local-path` PVC |
+| PostgreSQL with pgvector | `deploy/hindsight-postgres`, port 5432 | Manifest selects `pgvector/pgvector:pg17`; data is on a `local-path` PVC |
 | Nightly dump | `cronjob/hindsight-pg-dump`, 02:15 UTC | The recovery artifact |
 | Canary | `cronjob/hindsight-canary`, hourly | The only thing that notices a broken write path |
 
@@ -37,10 +37,13 @@ But one tenant key spans every bank.
 That is accepted because every profile belongs to the same operator.
 If that ever stops being true, the escalation is a custom tenant extension keyed per bank, not a Traefik middleware.
 
-**Nothing auto-updates.**
-Images are pinned and no workload here carries keel annotations; Renovate opens a grouped "hindsight stack" pull request instead.
-All four are on the `STATEFUL` lock in `scripts/check-renovate-scope.py`, each for its own reason — the api and control-plane migrate the store on startup, the postgres pod owns the PGDATA, and `hindsight-pg-dump` writes the dump — so the guard fails an apply that lets any of them float.
-An unattended migration at 3 a.m. against the store holding an agent's memory is the failure this design exists to make impossible, and Hindsight's migrations are **forward-only** — so the pre-upgrade dump is the rollback, and there is no other one.
+**Updates follow floating channels.**
+The API and control-plane manifests select `latest`; PostgreSQL selects `pgvector/pgvector:pg17`.
+Both Deployments carry the full keel annotation set and use `imagePullPolicy: Always`.
+The dump CronJob selects `postgres:17-alpine`, and the canary selects `curlimages/curl:latest`.
+Both CronJobs pull on every run and carry no keel annotations.
+Hindsight migrations are forward-only.
+The accepted recovery point is the nightly logical dump captured by restic; restoring it loses later memories.
 
 ## The extraction LLM
 
@@ -99,79 +102,58 @@ Every run adds one memory, so the canary bank grows without bound at 24 a day �
 
 ## Upgrading
 
+Keel follows the configured image channels without a separate update session.
+The existing `make hindsight-upgrade` target remains available for an optional additional recovery dump.
+
 ```sh
 make hindsight-upgrade
 ```
 
-That is the whole automated half.
-It asserts the context and the CronJob, refuses if a dump is already running, creates a Job from the dump CronJob, waits up to 15 minutes, and prints what to do next.
-It never edits a pin, never merges and never applies — chaining into `make apply-homelab` would apply every pending change in the tree, unreviewed.
+It asserts the context and CronJob, refuses overlapping dumps, creates a dump Job, and waits up to 15 minutes.
+It edits no image reference and applies or merges nothing.
+Its printed manual deployment guidance does not govern routine floating-image updates.
 
-The Job's completion **is** the verification.
-The dump script publishes an artifact only after asserting a `CREATE TABLE` count of at least one and a byte-size floor, because `pg_dump` exits 0 against an empty database, so the exit code alone is a lie.
-The target adds no second, weaker copy of that assertion.
+The Job's completion is the dump verification.
+The dump script checks for at least one `CREATE TABLE` statement and a byte-size floor before publishing.
+The target adds no second copy of those assertions.
 
-Then, by hand.
-**Deploy before you merge** — `master` records what is running, so the apply comes first and the merge records it:
+### pgvector catalog maintenance
 
-1. `gh pr checkout <n>` for the Renovate "hindsight stack" pull request, then `git rebase origin/master`.
-   If another branch is already deployed and unmerged, carry its changes too: an apply reconciles the whole tree and would revert them.
-2. `make diff-homelab` — **read it in full**, and confirm only the image lines moved.
-   A changed resource this branch never touched is a revert until you prove otherwise.
-3. `make apply-homelab`.
-4. `kubectl -n hindsight rollout status deploy/hindsight --timeout=600s`.
-5. **If the `pgvector/pgvector` image moved, update the extension to match it.**
-   The image ships the pgvector shared library and its SQL scripts, but the `vector` extension inside the database keeps the version it was created with.
-   Hindsight creates it with a bare `CREATE EXTENSION vector` and never updates it, and upstream pins no version at all — their compose files use an unpinned `pgvector/pgvector:pg<major>` tag.
-   So nothing moves the catalog version except this step:
+An image update replaces pgvector's shared library and SQL scripts, but does not update the database's extension catalog.
+Hindsight creates `vector` with a bare `CREATE EXTENSION vector` and never updates it.
+Inspect the installed extension's SQL upgrade scripts before updating the catalog.
+Update the extension and compare its catalog version with the image's default version:
 
-   ```sh
-   kubectl -n hindsight exec deploy/hindsight-postgres -c postgres -- \
-     psql -U hindsight -d hindsight -tAc "ALTER EXTENSION vector UPDATE;"
-   kubectl -n hindsight exec deploy/hindsight-postgres -c postgres -- \
-     psql -U hindsight -d hindsight -tAc \
-     "SELECT e.extversion, a.default_version FROM pg_extension e JOIN pg_available_extensions a ON a.name=e.extname WHERE e.extname='vector';"
-   ```
+```sh
+kubectl -n hindsight exec deploy/hindsight-postgres -c postgres -- \
+  psql -U hindsight -d hindsight -tAc "ALTER EXTENSION vector UPDATE;"
+kubectl -n hindsight exec deploy/hindsight-postgres -c postgres -- \
+  psql -U hindsight -d hindsight -tAc \
+  "SELECT e.extversion, a.default_version FROM pg_extension e JOIN pg_available_extensions a ON a.name=e.extname WHERE e.extname='vector';"
+```
 
-   The two values must match when it finishes.
-
-   **This is about keeping the catalog honest, not about applying fixes.**
-   pgvector's fixes live in the shared library, so they arrive with the image and are active as soon as the pod restarts — the HNSW vacuuming corruption fix in 0.8.3 among them.
-   Every upgrade script from `vector--0.8.0--0.8.1.sql` to `vector--0.8.5--0.8.6.sql` is 153 bytes holding only the psql guard line, so across that range the `ALTER` executes nothing and relabels `extversion`.
-   Run it anyway, every time, because `vector--0.8.6--0.8.7.sql` is 11,833 bytes: releases do eventually add SQL objects, and a label left several versions behind turns the next real upgrade into a gap somebody has to research before they dare run it.
-   Done on August 28, 2026 to close a 0.8.1 to 0.8.6 gap.
-6. Watch the startup probe settle, then run `hermes memory status` on VM 103.
-7. **Prove one Hermes memory write still lands.**
-   The canary proves the *server*; it says nothing about the agent's client, which is a different library talking to the same API.
-   On VM 103, take one chat turn against the default gateway — the command is in [the update runbook's Verify step](hermes-vm-updates.md#verify) — then read that gateway's journal for the write behind it:
-
-   ```sh
-   journalctl --user -u hermes-gateway --since '10 min ago' | grep -i hindsight
-   ```
-
-   A `401`, a timeout or a schema complaint here, with the canary green, points at the client rather than the server.
-   The write is on a background path the chat response does not wait for, so a 200 from the chat turn proves nothing on its own.
-8. `git push --force-with-lease`.
-   The rebase in step 1 rewrote the branch, so the pull request head must be updated before you merge — otherwise `gh pr merge` merges the tree you did not deploy, and the carried work never reaches `master`.
-   Renovate may reset or recreate a branch you force-pushed; that is its normal behaviour and costs nothing here, because the merge lands first.
-9. Only now: `gh pr merge <n> --squash --delete-branch`, then `git checkout master && git pull`.
+The two values must match when it finishes.
+pgvector's fixes live in the shared library, so they arrive with the image and are active as soon as the pod restarts — the HNSW vacuuming corruption fix in 0.8.3 among them.
+Every upgrade script from `vector--0.8.0--0.8.1.sql` to `vector--0.8.5--0.8.6.sql` is 153 bytes holding only the psql guard line, so across that range the `ALTER` executes nothing and relabels `extversion`.
+The `vector--0.8.6--0.8.7.sql` script is 11,833 bytes and contains SQL changes.
+The August 28, 2026 maintenance closed a 0.8.1-to-0.8.6 catalog gap.
+Keel does not perform this database operation.
 
 **Server and client move independently, and the skew is accepted.**
 The VM's `hindsight-client` is never pinned by this estate — see [The client on the hermes VM](#the-client-on-the-hermes-vm) — so a server bump moves the server alone, and the client moves only when hermes-agent's own pin moves.
 
-Keep the API and control-plane images on the **same** version tag: Renovate groups them, and a skewed pair is a combination nobody has tested.
-Keep the API pin at or above **0.9.1** forever — the liveness probe uses `/health/live`, which does not exist below it.
-That probe is the whole of the reason.
-This line also claimed 0.5.0+ made the canary's sentinel deduplicate; that was wrong, nothing deduplicates it, and the floor never rested on it.
+The API and control plane both select `latest`; publication and polling can temporarily produce version skew.
+The API's `/health/live` liveness probe requires version 0.9.1 or later.
+The canary's sentinel is not deduplicated; its behaviour is not a reason to retain a version pin.
 
-**PostgreSQL major versions are not a tag edit.**
-Renovate refuses them for this tree, because a grouped pull request quietly carrying one would be a data-loss trap that `make hindsight-upgrade` could not catch: the dump would succeed, and the new major would refuse the old data directory.
-A major is a dump, a fresh volume and a restore, planned deliberately.
+**PostgreSQL major changes require a dump and restore onto a fresh volume.**
+The `pg17` server channel and `17-alpine` dump client keep automatic updates within PostgreSQL 17.
 
 ### If the upgrade goes wrong
 
-The dump is the rollback.
-Restore it (below) and pin the image back to the previous tag in the same commit.
+The nightly dump is the accepted rollback point.
+Restore it using [Restoring](#restoring).
+Select the known-good image version and remove that workload's keel annotations during recovery.
 
 ## The client on the hermes VM
 
@@ -190,12 +172,14 @@ Four facts support that:
 3. **The plugin's version check is a floor, not an equality.**
    It refuses a client below its minimum and accepts anything at or above it, so a client older than the server is a supported configuration rather than an accident.
 4. **The server is the side that must stay current, and it does.**
-   The homelab deployment is under Renovate, keeps its API and control-plane images on the same tag, and holds the 0.9.1 floor.
+   The homelab manifests select `latest` for the API and control plane under keel.
+   The liveness endpoint requires API version 0.9.1 or later.
    Client-to-server skew is therefore bounded by the server moving forward, and it is accepted.
 
 **What would overturn this.**
 Any one of the four failing: the upstream pin moving for a stated compatibility reason rather than an aging one; a release removing or renaming a path the installed client calls; the authentication scheme changing; or the plugin raising its floor above the client the agent installs.
-The change-analysis step of [the update runbook](hermes-vm-updates.md#change-analysis) reads the `pyproject.toml` diff on every run, which is where a pin move shows up first.
+Hermes updates use the WebUI's **Update Now** button, including its upstream-selected client dependency.
+There is no estate updater that independently changes the client version.
 
 **Bumping upstream's pin is the operator's, by hand.**
 The pull request goes to NousResearch under the operator's name, so no agent opens it.
@@ -439,7 +423,7 @@ The roster is in [uptime-kuma.md](uptime-kuma.md#push-monitors) and the reasonin
 It used to: the deleted update wrapper on VM 103 read its `version` field to choose a `hindsight-client` to install.
 That went with the wrapper, and the client is no longer pinned from here at all — see [The client on the hermes VM](#the-client-on-the-hermes-vm).
 The remaining callers are the Deployment's own liveness probe and the canary, both in-cluster, which is why the endpoint is unauthenticated.
-Keep the API pin at or above 0.9.1 for the probe's sake, not the VM's.
+The liveness probe requires API version 0.9.1 or later; the VM does not require an equal client version.
 
 An uptime-kuma **HTTP** monitor could not do the canary's job: kuma runs on the VPS, which has no route to any `*.cynexia.net` address.
 A **push** monitor reverses the direction — the canary pod calls outward to `uptime.cynexia.com` through the Access bypass — which is why the reporting side could move to kuma while the probing side could not.
@@ -467,7 +451,12 @@ From August 23 to August 27, 2026 the `default` profile's memory writes all retu
 
 Nothing detected it, and that gap is the part worth keeping: the canary authenticates with the cluster's own copy of the tenant key and passed throughout, a chat turn returns 200 because the write is on a background path the response does not wait for, and `/health` checks database connectivity rather than auth validity.
 **A profile that has retained nothing looks identical to a healthy one from every check in this estate.**
-Only the journal grep would have caught it, and that is now a step of [the update runbook's Verify](hermes-vm-updates.md#verify).
+A gateway journal search would have caught it; the WebUI update flow adds no estate-specific memory-write verification.
+Inspect the affected gateway's journal when client writes fail despite a healthy canary:
+
+```sh
+journalctl --user -u hermes-gateway --since '10 min ago' | grep -i hindsight
+```
 
 If a 401 appears again, restart that profile's gateway first — a reference the running process never read is the cheapest explanation.
 If it survives the restart, work the key the profile presents against the key the server accepts: [Rotating the tenant API key](#rotating-the-tenant-api-key), then [Trap 3](#trap-3-the-dashboard-gui-writes-secrets-to-disk-in-cleartext), because a key the GUI wrote into `config.json` shadows the 1Password-backed variable until it is removed.
@@ -483,7 +472,15 @@ Nothing else in the estate references hindsight, which was a design goal.
 1. Point Hermes back: `hermes config set memory.provider <previous>`, and restore the built-in memory tool by removing the `memory.memory_enabled` and `memory.user_profile_enabled` false flags from each profile's `config.yaml`.
 2. Optionally export the banks from the control plane, if the memories are worth keeping in a portable format.
 3. Take a final dump and let that night's restic run capture it.
-4. Delete, in one commit: `- hindsight` from `homelab/kustomization.yaml`; the `homelab/hindsight/` tree; `homelab/secrets/hindsight.yaml` and its line in `homelab/secrets/kustomization.yaml`; the namespace block in `homelab/bootstrap/namespaces.yaml`; the keel-exception clause naming `hindsight` in `AGENTS.md`; the two `REQUIRED_TARGETS` lines in `scripts/check-ping-bodies.py`; every `HINDSIGHT_*` variable from `.env.tpl` and from **both** Makefile lists (eight of them as of August 2026 — grep rather than counting from here); the `hindsight-upgrade` target and its help line; the hindsight pattern and package rules in `renovate.json`; and the gate entries plus the monitoring.md and uptime-kuma.md rows.
+4. Remove the following configuration in one commit.
+   Delete `- hindsight` from `homelab/kustomization.yaml` and delete the `homelab/hindsight/` tree.
+   Delete `homelab/secrets/hindsight.yaml` and its entry in `homelab/secrets/kustomization.yaml`.
+   Remove the namespace block from `homelab/bootstrap/namespaces.yaml`.
+   Remove both Hindsight `REQUIRED_TARGETS` entries from `scripts/check-ping-bodies.py`.
+   Find every `HINDSIGHT_*` variable in `.env.tpl` and both Makefile lists.
+   Remove those variables, the `hindsight-upgrade` target, and its help line.
+   Remove any remaining Hindsight-specific Renovate rules.
+   Remove the Hindsight backup gate entries and its rows in `monitoring.md` and `uptime-kuma.md`.
 5. `make apply-homelab`, then `kubectl delete namespace hindsight`.
 6. Delete both uptime-kuma push monitors and both Route53 records.
 7. `local-path` uses `reclaimPolicy: Retain`, so the PV directories survive on the node.

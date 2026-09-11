@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Assert every container is in exactly one update mode, and the right one.
+"""Assert pinned images are in Renovate scope and floating controllers use keel.
 
 WHY THIS EXISTS
 ---------------
@@ -21,12 +21,6 @@ Every way of getting that wrong fails quietly:
     nothing at all, forever. Renovate opens no pull request, `update-watch`
     counts zero, and the check stays green over an estate that has stopped
     receiving updates - the watcher's own failure mode, wearing its colours.
-  * A FLOATING tag on a workload that writes into persistent data IT OWNS -
-    a database, an app that migrates its own schema on startup, a backup runner
-    that writes a repository - is an unattended migration of that data, and a
-    tag revert is not a rollback. The STATEFUL list below names those workloads
-    and locks them to the pinned mode. The lock is per WORKLOAD; the namespace
-    it happens to live in is irrelevant (operator ruling, 2026-09-06).
 
 WHY THE RENDER AND NOT THE SOURCE TREE
 --------------------------------------
@@ -132,108 +126,8 @@ KEEL_ANNOTATIONS = frozenset({
     "keel.sh/pollSchedule",
 })
 
-# WORKLOADS WHOSE UPDATE MODE IS LOCKED TO "PINNED, RENOVATE PROPOSES THE BUMP".
-#
-# THE RULE (operator ruling, 2026-09-06): the lock is a property of the
-# WORKLOAD, never of its namespace. A workload whose image writes into
-# persistent data IT OWNS - a database, an app that migrates its own schema on
-# startup, a backup runner that writes a repository, a dashboard server with an
-# on-disk db - must be version-pinned and updated through Renovate, because an
-# unreviewed roll can migrate or corrupt that data and a tag revert is not a
-# rollback. Every other workload, stateless and in any namespace, may choose
-# either mode: a floating tag with the complete keel annotation set, or a pinned
-# tag Renovate proposes bumps for.
-#
-# An entry here is a deliberate act: it needs a namespace, a kind, a name and a
-# written reason, and the test suite asserts all four are non-empty. A listed
-# workload fails this check if ANY of its containers floats, or if it carries any
-# keel annotation at all.
-#
-# Not listed means "may float", not "is stateless": the list records where the
-# roll must be reviewed. The near misses are written down below it rather than
-# left for the next reader to re-derive.
-STATEFUL = (
-    {"namespace": "health", "kind": "Deployment", "name": "influxdb",
-     "reason": "The time-series store. The engine upgrades its own on-disk "
-               "index and WAL layout on first start of a new version, and no "
-               "tag revert undoes that."},
-    {"namespace": "health", "kind": "Deployment", "name": "garmin-grafana",
-     "reason": "Owns the garmin-tokens PVC. The third-party image itself "
-               "rewrites that token cache, and losing it costs an interactive "
-               "2FA re-login that fires an MFA SMS at the operator."},
-    {"namespace": "health", "kind": "CronJob", "name": "influx-backup",
-     "reason": "Writes the nightly native backup and line-protocol export that "
-               "ARE the restore path for influxdb above."},
-    {"namespace": "hindsight", "kind": "Deployment", "name": "hindsight",
-     "reason": "Runs forward-only Alembic migrations against the memory store "
-               "on startup. The pre-upgrade dump `make hindsight-upgrade` takes "
-               "is the only rollback, so the roll must not be unattended."},
-    {"namespace": "hindsight", "kind": "Deployment", "name": "hindsight-postgres",
-     "reason": "A PostgreSQL data directory. A major roll rewrites PGDATA into "
-               "a layout the previous binary will not start against, and the "
-               "pgvector extension version lives in the catalogue rather than "
-               "in the image."},
-    {"namespace": "hindsight", "kind": "CronJob", "name": "hindsight-pg-dump",
-     "reason": "Writes the dump that is the rollback for the two above. A "
-               "silently changed dump format is discovered at restore time."},
-    {"namespace": "backup", "kind": "CronJob", "name": "restic-backup",
-     "reason": "Writes the restic repository. A repository-format upgrade is "
-               "one-way: an older restic cannot read a repository a newer one "
-               "has touched."},
-    {"namespace": "backup", "kind": "Job", "name": "restic-init",
-     "reason": "Initialises that same repository, at whatever format version "
-               "the image carries. Both clusters."},
-    {"namespace": "backup", "kind": "CronJob", "name": "hermes-pull",
-     "reason": "Owns the mirror PVC holding the Hermes VM's application state, "
-               "which the 03:00 restic sweep is the only copy of."},
-    {"namespace": "vps", "kind": "Deployment", "name": "umami-postgres",
-     "reason": "A PostgreSQL data directory, plus the pg-dump sidecar that "
-               "writes its dump. Same shape as hindsight-postgres."},
-    {"namespace": "vps", "kind": "Deployment", "name": "meilisearch",
-     "reason": "Upgrades its on-disk index format between versions; going back "
-               "needs a dump and a re-import, not a tag revert."},
-)
-
-# CONSIDERED AND DELIBERATELY NOT LISTED, so the next reader does not re-derive
-# these one at a time:
-#
-#   * The keel-managed VPS apps - freshrss, karakeep, n8n, uptime-kuma,
-#     changedetection, umami. Each does migrate its own store on upgrade, and
-#     each is nevertheless left floating on purpose: the quiesced sqlite
-#     snapshot sidecars and the nightly restic sweep give a consistent copy of
-#     last night's state, and upstream's own forward migrations are the
-#     supported path. Pinning one is a decision, not a correction - it means
-#     adding it here and pinning its tag in the same commit.
-#   * `jottacloud-backup`. A CronJob on `:latest` with no keel annotations,
-#     which is legal below because every scheduled run starts a fresh pod that
-#     pulls the tag - the schedule already delivers what keel would. It writes
-#     no repository whose format it owns: it uploads plain files through rclone.
-#   * `influxdb-mcp`. A stateless HTTP server this repository builds itself
-#     from reviewed inputs under homelab/health/mcp/, so it floats with keel and
-#     needs no exemption from anything. It used to need a written one only
-#     because the old rule keyed on its namespace.
-#   * `cloudflare-analytics`, `withings-ingest`, `apple-health-ingester`,
-#     `ingest-freshness`, `update-watch`, `hindsight-canary`, `keel-fresh`.
-#     These write points into InfluxDB, a token file, or a two-integer state
-#     file, but the logic doing the writing is a script versioned in THIS repo
-#     and mounted from a ConfigMap; the image is a stdlib runtime that owns none
-#     of it. They stay pinned, which is always allowed, but nothing is locked.
-#     `garmin-grafana` is listed above precisely because it is the other shape:
-#     a third-party image that owns its own token cache.
-
-# Tags that move on their own. THREE shapes, because this estate has all three:
-#
-#   * the well-known channel names below;
-#   * a `-latest` suffix - `ghcr.io/umami-software/umami:postgresql-latest` is
-#     umami's per-database build and keel tracks it, correctly;
-#   * a bare MAJOR version stream - `louislam/uptime-kuma:2` moves on every 2.x
-#     release, and `v2` is the same thing spelled differently.
-#
-# A DOTTED tag is not a stream by this rule. `alpine:3.20`, `traefik:v3.3`,
-# `postgres:16-alpine` and `pgvector/pgvector:0.8.1-pg17` are pins that Renovate
-# bumps, and calling any of them floating would hand a reviewed bump to keel.
 FLOATING_TAGS = frozenset({"latest", "main", "master", "edge", "stable", "release"})
-FLOATING_STREAM = re.compile(r"^v?\d+$")
+FLOATING_STREAM = re.compile(r"(?:v|pg)?[0-9]+(?:-alpine)?")
 
 
 def is_floating_tag(tag):
@@ -242,7 +136,7 @@ def is_floating_tag(tag):
         return True
     if tag.endswith("-latest") or tag.startswith("latest-"):
         return True
-    return bool(FLOATING_STREAM.match(tag))
+    return bool(FLOATING_STREAM.fullmatch(tag))
 
 # The four modes a container can be in.
 MODE_KEEL = "keel"                          # floating tag, complete keel set - legal
@@ -340,29 +234,6 @@ def classify_container(reference, annotations, workload_floats=None):
     return MODE_FLOATING_UNMANAGED, (
         "a floating tag with no keel annotations, so nothing updates it and "
         "nothing pins it either")
-
-
-# Every entry that has matched a real workload since the last reset. An entry
-# keyed on a name no workload has is inert code that reads like policy - which
-# is exactly what the exemption list this replaced did for its first draft, and
-# what `dead_patterns` guards against on the Renovate side. main() names any
-# entry that matched nothing, on a full two-cluster run.
-_MATCHED = set()
-
-
-def stateful_entry(namespace, kind, name):
-    """The STATEFUL entry for this workload, or None.
-
-    Matched on namespace/kind/name rather than on the image, because the lock
-    is about what the WORKLOAD does to its data. `restic-backup` is the same
-    entry on both clusters and wants one line, not two.
-    """
-    for entry in STATEFUL:
-        key = (entry["namespace"], entry["kind"], entry["name"])
-        if key == (namespace, kind, name):
-            _MATCHED.add(key)
-            return entry
-    return None
 
 
 def path_ignored(rel, ignore_paths):
@@ -709,16 +580,6 @@ def analyse_render(cluster, text, patterns, ignore_paths, source_files):
         # track? If it does, a pinned container in this workload is a sidecar
         # beside a keel-tracked image, not a frozen pin.
         floats = any(not is_pinned(reference) for _name, reference in containers)
-        # The update-mode lock, judged once per workload. keel annotations on a
-        # locked workload are a failure even where nothing floats yet: the
-        # annotations are the standing instruction to roll it unattended, and
-        # the next tag edit is what makes them bite.
-        locked = stateful_entry(namespace, kind, name)
-        if locked and KEEL_ANNOTATIONS & set(annotations):
-            failures.append(
-                "%s %s/%s: keel annotations on a workload locked to the pinned "
-                "mode, because %s Drop them and let Renovate propose the bump."
-                % (kind, namespace, name, locked["reason"]))
         for container, reference in containers:
             where = "%s %s/%s (%s) [%s]" % (kind, namespace, name, container,
                                             reference)
@@ -737,10 +598,6 @@ def analyse_render(cluster, text, patterns, ignore_paths, source_files):
                       if owner_cluster == cluster and reference in images]
 
             if mode in (MODE_FROZEN, MODE_INCOMPLETE_KEEL):
-                if locked:
-                    # The workload-level message above already named the lock
-                    # and the right remedy; "or float the tag" is not it.
-                    continue
                 if owners:
                     failures.append("%s: %s" % (where, why))
                 else:
@@ -756,11 +613,6 @@ def analyse_render(cluster, text, patterns, ignore_paths, source_files):
                     advisories.append(
                         "%s: a floating tag from a remote base. Advisory."
                         % where)
-                elif locked:
-                    failures.append(
-                        "%s: a floating tag on a workload locked to the pinned "
-                        "mode, because %s Pin it and let Renovate propose the "
-                        "bump." % (where, locked["reason"]))
                 elif mode == MODE_FLOATING_UNMANAGED and kind not in RE_PULLS:
                     failures.append("%s: %s" % (where, why))
                 continue
@@ -816,7 +668,6 @@ def main(argv):
             return 1
 
         failures, advisories = [], []
-        _MATCHED.clear()
         for cluster in which:
             cluster_failures, cluster_advisories = analyse(
                 cluster, patterns, ignore_paths, source_files)
@@ -826,21 +677,6 @@ def main(argv):
         print("ERROR: %s" % exc, file=sys.stderr)
         return 2
 
-    # Only meaningful over BOTH renders: `restic-init` is a homelab-and-vps
-    # entry, and a single-cluster run legitimately never reaches half the list.
-    if list(which) == list(CLUSTERS):
-        dead_entries = [e for e in STATEFUL
-                        if (e["namespace"], e["kind"], e["name"]) not in _MATCHED]
-        if dead_entries:
-            print("STATEFUL entries that match no workload in either render:\n")
-            for entry in dead_entries:
-                print("  %(kind)s %(namespace)s/%(name)s" % entry)
-            print("\nAn entry keyed on a namespace, kind or name nothing has is "
-                  "inert: it reads like\na lock and enforces nothing. Fix the "
-                  "key, or delete the entry in the same commit\nthat removed "
-                  "the workload it named.")
-            return 1
-
     for line in sorted(advisories):
         print("advisory: %s" % line)
 
@@ -849,8 +685,7 @@ def main(argv):
         for line in sorted(failures):
             print("  %s" % line)
         print("\nThe rule: FLOATING TAG MEANS KEEL, PINNED TAG MEANS RENOVATE, "
-              "NEVER BOTH -\nand a workload on the STATEFUL list in this script "
-              "is locked to the pinned mode,\nwhatever namespace it lives in. "
+              "NEVER BOTH.\nJobs and CronJobs may float without keel. "
               "See AGENTS.md and\ndocs/operations/apply-workflow.md.")
         return 1
 

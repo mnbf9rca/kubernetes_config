@@ -12,6 +12,11 @@ kind: Deployment
 metadata:
   name: garmin-grafana
   namespace: health
+  annotations:
+    keel.sh/policy: force
+    keel.sh/match-tag: "true"
+    keel.sh/trigger: poll
+    keel.sh/pollSchedule: "@every 6h"
 spec:
   # Requires the garmin-tokens PVC to hold a valid token cache (one-time
   # interactive 2FA login, plan Task 11 Step 3 — done 2026-07-26, ~annual).
@@ -27,11 +32,8 @@ spec:
       securityContext: { fsGroup: 1000 }   # image runs as appuser 1000:1000
       containers:
         - name: garmin-fetch
-          # Digest-pinned main-branch build (2026-05-19): v0.5.0 crashes on
-          # TAG_MEASUREMENTS_WITH_USER_EMAIL (client.profile AttributeError);
-          # fixed upstream post-release (display_name). Move to the next
-          # tagged release when Renovate proposes it.
-          image: thisisarpanghosh/garmin-fetch-data@sha256:8b7955d3459a42c4cbc2cb7a1b201daed1f77ac959e9063c55b055ad12aecdf2
+          image: thisisarpanghosh/garmin-fetch-data:latest
+          imagePullPolicy: Always
           env:
             - { name: INFLUXDB_VERSION, value: "1" }
             - { name: INFLUXDB_HOST, value: influxdb.health.svc.cluster.local }

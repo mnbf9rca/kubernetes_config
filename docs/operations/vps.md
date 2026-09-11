@@ -17,7 +17,7 @@ Manifests live in `vps/`.
 | Domain | `*.cynexia.com` (Cloudflare-hosted zone). Homelab's `cynexia.net` is separate and unrelated |
 | Namespaces | `vps` for all workloads (PSA `baseline`), plus `backup` (PSA `privileged`, hostPath), `keel`, and `ops` (PSA `baseline`, one CronJob — see below) |
 | Secrets | 1Password `VPS` vault, referenced via `VPS_*` / workload-specific vars in `.env.tpl` |
-| Image updates | keel runs here (`vps/bootstrap/keel/`) and workloads carry the standard keel annotation set, except keel itself, which is digest-pinned and Renovate-bumped (see below) |
+| Image updates | Floating controllers, including keel itself, carry the full keel annotation set; scheduled runtimes pull their tags per run |
 | Apply | `make apply-vps`, gated by `check-vps-context` |
 
 The Talos user-volume patch (`vps/talos/machineconfig-patches/400-vps-user-volume-data.yaml`) selects the Cloud Volume by **size bracket** (70–100 GB), because the boot disk and the Cloud Volume both report `transport=virtio` and can't be distinguished by transport alone.
@@ -29,12 +29,20 @@ Boot disks arrive in the same state — see "Adding a control-plane node" at the
 
 ### Image updates and keel
 
-keel is digest-pinned and carries no keel annotations of its own.
-A self-updating controller holding cluster-wide read **and write** across every workload kind — its ClusterRole grants `get, delete, watch, list, update` on Deployments, DaemonSets, StatefulSets, ReplicaSets, ReplicationControllers, Pods, Jobs and CronJobs — is the one component where an unattended upstream tag change is a security event rather than a convenience, so its bump belongs in a reviewed pull request rather than a six-hour poll.
+The manifests select `ghcr.io/keel-hq/keel:latest` with the full keel annotation set for self-updates every six hours.
+The four SQLite snapshot sidecars select `alpine:latest`.
+Umami's PostgreSQL container and dump sidecar select `postgres:16-alpine`, keeping automatic updates within PostgreSQL 16.
+Each moved runtime uses `imagePullPolicy: Always`.
 
-Renovate has reached this cluster since 2026-08-26, when `renovate.json` gained a `/^vps/.+\.ya?ml$/` pattern alongside the homelab one, so keel's bump here arrives as a pull request like every other pinned image in `vps/`.
-`check-renovate-scope-vps` runs in the `diff-vps`/`apply-vps` preflight and fails the apply if that scope is ever lost.
-`vps/bootstrap/keel/**` sits on the `pinDigests: false` packageRule: the image is already pinned by tag and digest by hand, so there is nothing for Renovate to add.
+Meilisearch selects `getmeili/meilisearch:v1` with `MEILI_UPGRADE_DB=true` permanently enabled.
+The accepted application recovery point is the nightly backup containing the consistency snapshots.
+Restoration can lose changes since that backup.
+
+`check-renovate-scope-vps` checks floating controller annotations and Renovate coverage for any remaining pins.
+Renovate excludes floating runtime images from digest pinning.
+The local-path-provisioner image remains part of its pinned remote bundle.
+Renovate continues proposing its `?ref=` base update; it does not edit the upstream image field directly.
+Review that bundle during the Kubernetes step of `/update-estate`.
 
 Its RBAC was trimmed on August 26, 2026 (PR #68): no `secrets` rule, no `pods/portforward`.
 Verify keel's permissions with a SelfSubjectAccessReview issued with keel's own ServiceAccount token from inside the cluster — `kubectl auth can-i --as=` is meaningless through the Omni proxy, which ignores impersonation and answers as the caller.
@@ -112,7 +120,8 @@ Run it after adding a hostname, and after any full cluster rebuild.
 `vps/ops/` is the mirror of `homelab/ops/`, and holds one CronJob: **`keel-fresh`**, at 07:45Z daily.
 It makes one request to keel's own `/metrics` — a single ClusterIP endpoint, `keel.keel.svc.cluster.local:9300`, reached across the namespace boundary from `ops` — and pushes the `vps-keel-fresh` uptime-kuma monitor.
 It is the only thing that would notice this cluster's keel had stopped polling registries; keel's own probes hit `/healthz`, which stays green while the poll goroutine is dead.
-Verdict enum, the image floor and why there is no `/start`: [monitoring.md](monitoring.md#the-keel-dead-mans-switch).
+The configured `IMAGE_FLOOR` is 12, derived from the rendered floating controller images.
+Verdict enum and why there is no `/start`: [monitoring.md](monitoring.md#the-keel-dead-mans-switch).
 
 It has no hostname and no database, which is why it is not a row in the table above.
 It holds no ServiceAccount and no RBAC; its only peers are that ClusterIP and `uptime.cynexia.com`.
@@ -287,7 +296,7 @@ That hostPath exists on the storage node only, so the job carries a `nodeSelecto
 
 That flag is load-bearing: `restic forget` groups by host+paths by default, and every CronJob pod has a unique hostname, so each nightly snapshot formed a group of one and the policy kept all of them.
 Verified on homelab 2026-08-20 — 137 snapshots in 137 groups across 131 hostnames, nothing ever pruned since the backup system was built.
-The image is pinned to `restic/restic:0.17.3` (was `:latest` — an unpinned backup tool is a silent-change surface on the one job you cannot re-run).
+The backup CronJob and init Job select `restic/restic:latest` with `imagePullPolicy: Always` and no keel annotations.
 
 Consistency sidecars run alongside the app containers: sqlite quiesce for n8n / freshrss / karakeep / uptime-kuma, and `pg_dumpall` for umami's dedicated postgres.
 Each refreshes a `*.restic` snapshot every 12h.

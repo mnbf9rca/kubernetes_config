@@ -12,14 +12,13 @@ Cluster-specific detail, runbooks and procedures live under `docs/`, referenced 
 | `docs/operations/omni-access.md` | **Start here on a new machine.** Bootstrapping omnictl/kubectl/talosctl from zero, where omniconfig and SideroV1 keys land, Omni/talosctl troubleshooting |
 | `docs/operations/apply-workflow.md` | Secret pipeline end to end, full Makefile target reference, Talos config patches, Tailscale bootstrap, why `apply` always says `configured` |
 | `docs/operations/homelab.md` | Homelab cluster: platform stack, namespaces/workloads, NFS and storage, node network, DNS/Route53, encryption at rest, operational gotchas |
-| `docs/operations/homelab-health.md` | The `health` namespace: ingest pipeline, image-pin rationale, InfluxDB bootstrap, backups/restore, Garmin re-auth, monitoring, probe rationale |
+| `docs/operations/homelab-health.md` | The `health` namespace: ingest pipeline, image update modes, InfluxDB bootstrap, backups/restore, Garmin re-auth, monitoring, probe rationale |
 | `docs/operations/vps.md` | VPS cluster: shape, workloads, Cloudflare tunnel/Access, DB decisions, backups |
 | `docs/operations/monitoring.md` | How failures get noticed: the triage table, probe policy and inventory, CronJob deadlines, the backup verification gates, the five healthchecks.io checks that remain, the twelve uptime-kuma push monitors, the disclosure rules for both, and what none of it catches |
 | `docs/operations/uptime-kuma.md` | Layer 3/4 runbook: creating uptime-kuma monitors by hand, per-monitor HTTP settings, the Cloudflare Access trap, the push monitors driven from inside the clusters (and the one driven from the hermes VM) and the bypass they need, the self-monitor |
 | `docs/operations/hindsight.md` | The `hindsight` namespace: the self-hosted memory backend for the Hermes profiles — topology, auth, the extraction LLM and its provider, the canary, upgrade and restore runbooks, the restore drill, key rotation, and the removal path |
-| `docs/operations/estate-updates.md` | How the estate gets patched: the two update modes, the Talos/Kubernetes version ledger, the advisory feeds and the out-of-band rule, the hand-managed kustomize pins, and the Omni etcd-backup mechanism. The Hermes VM step is `docs/operations/hermes-vm-updates.md`; the session that does the work is the `/update-estate` skill |
+| `docs/operations/estate-updates.md` | How the estate gets patched: floating workloads, the pinned-image exception, the Talos/Kubernetes version ledger, remote-base bumps and Omni etcd backups; the interactive session is the `/update-estate` skill |
 | `docs/operations/hermes-vm.md` | The Hermes VM itself: lingering, triaging a DOWN `hermes-app-alive`, installing the kept components, `unattended-upgrades` with its automatic reboot, what the daily check does not watch, the trade the in-gateway cron job makes, the docker terminal sandboxes with their managed scope and per-profile mounts, the runbook for creating a profile, and the VM's own facts |
-| `docs/operations/hermes-vm-updates.md` | The update runbook for the Hermes application stack, run by an agent or the operator roughly weekly: preconditions, change analysis, the detached update, verification, the report ping, and manual rollback. Steps and latent hazards only — everything observable at failure time is left to the agent running it |
 | `docs/operations/safer-web-reader.md` | The quarantined web-reader profile and its completion broker: the four-tool surface, the envelope contract, the deployed configuration baseline, and its verification record |
 
 Design documents and implementation plans are local-only under the gitignored `docs/superpowers/` tree (`specs/2026-04-11-talos-homelab-rebuild-design.md`, `plans/2026-04-11-talos-homelab-rebuild.md`).
@@ -45,7 +44,7 @@ kubernetes_config/
 ├── .envrc                    # direnv entrypoint (loads 1Password-backed vars)
 ├── .env.tpl                  # op-template with VAR=op://... lines (committed; no real secret values)
 ├── Makefile                  # build/diff/apply per cluster + secret and bootstrap helpers
-├── renovate.json             # scoped to homelab/** and vps/** (pinDigests, off on the keel-managed trees)
+├── renovate.json             # scoped to both clusters; floating channels excluded, alpine/k8s pinned
 ├── secrets-to-rotate.md      # honesty box for disclosed secret values (identifiers only)
 ├── docs/                     # operational documentation (docs/superpowers/ is gitignored)
 ├── .github/workflows/        # the repo's one workflow: builds the InfluxDB MCP image
@@ -55,12 +54,12 @@ kubernetes_config/
 │   ├── bootstrap/            # platform: namespaces (with PSA labels), local-path, NFS CSI, cert-manager, traefik, keel
 │   ├── workloads/            # application workloads (one file per service, --- separated, no ns override)
 │   ├── secrets/              # Secret manifests with ${VAR} envsubst placeholders
-│   ├── health/               # health-data pipeline (the stateful workloads are pinned; see the STATEFUL lock)
+│   ├── health/               # health-data pipeline (floating except the alpine/k8s backup toolbox)
 │   │   ├── scripts/          # job scripts as real files + their tests; mounted via configMapGenerator
 │   │   └── mcp/              # build inputs for the InfluxDB MCP image (Dockerfile, pinned package, lockfile, --import hook)
 │   ├── ops/                  # cluster-wide operational jobs (the daily Renovate update watcher)
 │   │   └── scripts/          # same pattern: real files + tests, via configMapGenerator
-│   ├── hindsight/            # Hindsight memory backend for the Hermes profiles (pinned; alembic migrates on startup)
+│   ├── hindsight/            # Hindsight memory backend for the Hermes profiles (floating; alembic migrates on startup)
 │   │   └── scripts/          # nightly pg_dump + the 15-minute canary; mounted via configMapGenerator
 │   └── backup/               # restic init Job + nightly CronJob (hostPath /var/mnt/ssd/local-path-provisioner)
 ├── vps/                      # Hetzner Talos cluster, same sub-layout (bootstrap/secrets/workloads/backup/ops/talos)
@@ -138,23 +137,11 @@ The rules that must not be broken:
 - **Agent work happens in an isolated git worktree, never in the main checkout** (`.claude/worktrees/` or equivalent; operator ruling, 2026-08-27).
   Several agents and sessions share that checkout at once, so its current branch is not yours to assume: run `git branch --show-current`, confirm it, and only then commit.
   A guidance edit that day landed on another agent's branch because the shared checkout had been switched mid-flight.
-- **The main session is a strict orchestrator.**
-  The operator's session — the main Claude Code context — coordinates and does not do the work.
-  Every task, however small, is dispatched to a subagent or a Workflow: reading a document, setting up a worktree's `direnv allow` and lint baseline, running a command, writing a file, drafting a memo.
-  The main session only classifies the task, dispatches it, relays the result in plain words, asks the operator the decisions and holds the approval gates.
-  Work done in the main session pollutes the coordinating context, slows the loop and duplicates what the agents were dispatched for.
-  Operator ruling, 2026-09-02, after the main session ran a worktree setup and a lint baseline itself while three research agents were already running.
 - **Deploy, then merge.**
   A PR branch is applied to the cluster and verified healthy **before** the PR merges: `master` records what has been successfully deployed, never intent.
   Apply from the branch checkout (the preflight guards still run), confirm the workload is healthy, then the operator merges.
   Never merge-then-apply.
-  **This covers a change to a procedure someone follows** — a runbook, a skill, a gate, guidance that governs a task — including one with nothing to apply to a cluster.
-  For those, the apply is *running the thing on a real session*: work the runbook end to end, follow the guidance through the task it governs, exercise the skill.
-  Reading a procedure proves only that it parses; running it is what finds the step that names a file that moved, the assertion that cannot be satisfied from the tool available, the count that is wrong.
-  A prose change that has only been read is intent, and `master` does not record intent.
-  Merge it when the session that exercised it is finished, so the corrections it turned up land on the same branch rather than in a follow-up PR.
-  A change that governs no procedure — a records update, a corrected reference, wording — merges on review.
-  It follows that a session driven by a runbook merges only what that runbook prescribes: everything the session invents — a runbook correction, a guard, a rule — goes on the findings branch, which merges once, after the operator has reviewed it, and the test is "did the runbook ask me to make it?", not "is it good?".
+  Documentation changes merge on review.
 - **A branch held open across a session is rebased onto a freshly fetched `origin/master` before every commit to it, not only before an apply.**
   A branch that lacks a commit presents its absence as a deletion, so a stale branch is a revert of everything merged since it was cut — documentation-only branches included, because merging one still rewrites the files it is behind on.
   The rebase-before-apply rule does not cover this: a branch that never reaches a cluster still reaches `master`.
@@ -225,18 +212,14 @@ The rules that must not be broken:
 ## When Editing
 
 - Keep the one-file-per-service pattern; keep all of a service's resources in that file.
-- **The update-mode lock is per stateful workload, not per namespace** (operator ruling, 2026-09-06).
-  A workload whose image writes into persistent data **it owns** — a database, an app that migrates its own schema on startup, a backup runner that writes a repository, a dashboard server with an on-disk db — must be version-pinned and updated through Renovate, because an unreviewed roll can migrate or corrupt that data and a tag revert is not a rollback.
-  Those workloads are listed by namespace, kind and name, each with its reason, in `scripts/check-renovate-scope.py`'s `STATEFUL` tuple, and the guard fails any of them that floats or carries a keel annotation.
-  `hindsight` runs forward-only Alembic migrations on startup, a Grafana major migrates `grafana.db` in place, and restic's repository format upgrade is one-way: those are the reasons, and the namespace they happen to sit in is not one of them.
-  **Every other workload may choose either mode, whatever namespace it lives in**: a floating tag with the full keel annotation set above, or a pinned tag Renovate proposes bumps for.
-  So a new Deployment either carries the complete set or is pinned — and **keel itself** is neither, being digest-pinned on both clusters so the update engine cannot update itself (`homelab/bootstrap/keel/keel.yaml`, `vps/bootstrap/keel/keel.yaml`).
-  Adding a workload to `STATEFUL` means pinning its tag in the same commit; leaving one off means saying why in the comment block under the list, which already records the near misses.
-  The guard also fails a full two-cluster run on an entry that matches no workload, so a mistyped namespace, kind or name cannot sit there reading like a lock and enforcing nothing — which is what the exemption list it replaced did for its first draft.
-  The rule that decides which mode a workload is in: **floating tag means keel; pinned tag means Renovate; never both.**
-  `match-tag: "true"` on a pinned tag only refreshes the digest, so a semver pin carrying keel annotations is frozen while looking covered.
+- **Every workload on both clusters floats unless no floating channel exists.**
+  Use the full keel annotation set on floating Deployments, DaemonSets and StatefulSets, including keel itself on `latest`.
+  Numeric streams such as `2`, `v3`, `pg17`, `16-alpine`, `17-alpine` and `3-alpine` are floating channels.
+  Set `imagePullPolicy: Always` on floating Jobs and CronJobs; omit keel annotations from them.
+  The only repo-owned runtime image pin is `alpine/k8s`, which has no floating channel and receives Renovate proposals.
+  Talos, Kubernetes and homelab remote-base bundles remain interactive updates a few times a year through `/update-estate`.
 - **Every pinned image in both clusters is inside Renovate's scope, and keeping it that way is a standing obligation.**
-  `renovate.json` scopes Renovate to `homelab/**` and `vps/**` as of 2026-08-26, so every version- or digest-pinned image in either tree — the locked stateful workloads, keel itself, traefik and the pinned VPS workloads alike — gets its bump as a pull request (`docs/operations/homelab-health.md`, `docs/operations/homelab.md`, `docs/operations/hindsight.md`).
+  `renovate.json` scopes the Kubernetes manager to `homelab/**` and `vps/**`; `alpine/k8s` receives version and digest proposals.
   Two kinds of image sit outside that, and the guard treats them differently.
   An image from a **remote base** is named by no file here, so nothing can edit the reference — it moves only when the base's own ref moves.
   `check-renovate-scope` prints those as advisories.
@@ -245,22 +228,18 @@ The rules that must not be broken:
   Everything else hard-fails, so a new pinned image that nothing is configured to watch cannot reach a cluster.
   **In scope is not the same as watched, and `check-renovate-scope` only proves the first.**
   The guard's claim is structural — this image is named by a file inside `kubernetes.managerFilePatterns` and outside `ignorePaths` — and that claim stays true while the lookup behind it fails.
-  Both keel images are the case in hand: correctly scoped, digest-pinned so that only Renovate can move them, and reported on the dependency dashboard on 2026-08-28 as `Failed to look up docker package ghcr.io/keel-hq/keel: no-result`.
+  Both keel images were the case on 2026-08-28: correctly scoped and then digest-pinned, but reported as `Failed to look up docker package ghcr.io/keel-hq/keel: no-result` on the dependency dashboard.
   Nothing could have proposed a keel advisory, and every guard was green.
   Finding such a failure is no longer a manual read: since August 28, 2026 the daily `update-watch` job parses the **dependency-lookup warning block** on the Renovate dependency dashboard issue and pushes `verdict=renovate-lookup-failed`.
   The residual is acting on it — the alert carries a count, never the package names, so open that block when it fires, and never read a passing `check-renovate-scope` as evidence that a bump would arrive.
-  A deliberate hold is the second way an in-scope image stops being watched: an `allowedVersions` cap or an `enabled: false` rule in `renovate.json` withholds the pull request by design, and only a hand edit lifts it.
-  `hindsight` is the sharpest case: it runs Alembic migrations on startup against the store holding an agent's memory, and those migrations are forward-only, so the pre-upgrade dump is the only rollback.
-  `make hindsight-upgrade` takes it.
-  `health` is the same shape in miniature — a Grafana major migrates `grafana.db` in place on first start, so a tag revert is not a rollback there either; `make health-upgrade` takes that dump, and it covers the InfluxDB export in the same Job.
+  The guard does not evaluate package-rule enablement or prove that a lookup succeeds.
 - **`pinDigests` is on at the top level and off on the keel-managed trees, and that split is load-bearing.**
   `pinDigest` is an updateType that fires on any Docker dependency without a digest, **floating tags included**, so top-level `pinDigests` over the widened scope would have Renovate propose "Pin Docker digests" against the images keel owns.
   Merging one recreates the pinned-tag-with-keel-annotations state this whole arrangement abolishes, and leaves keel rewriting the live digest every six hours against a repo holding a different one — so `make diff-homelab` reports a changed Deployment forever.
-  The first `packageRule` turns it back off for `homelab/workloads/**`, `vps/workloads/**`, `vps/bootstrap/cloudflared/**` and both keel trees.
-  **Adding a keel-annotated workload outside those paths means extending that rule in the same commit.**
-  The rule matches whole **file paths**, not containers, so it also suppresses digest pinning for the pinned, keel-free containers that happen to share those files — the four `alpine:3.20` quiesce sidecars and both `postgres:16-alpine` containers.
-  They still get version bumps, so nothing is broken; they arrive without a digest.
-  That is the accepted cost of a path-scoped rule, not an oversight.
+  The first `packageRule` turns it off for `homelab/**/*.yaml` and `vps/**/*.yaml`; the `alpine/k8s` rule restores digest pinning.
+  Extend that rule when adding a floating workload outside those paths.
+  A Kubernetes-only `matchCurrentValue` rule disables Renovate updates for floating channels, including PostgreSQL major streams.
+  MCP build inputs retain automerge after their checks and stability wait; no monthly schedule remains.
 - **New machinery earns its place or it does not ship.**
   A resource, a probe, a check or a verification step is justified only if it (a) serves the application, (b) protects against lockout or data loss, or (c) feeds detection machinery that already exists.
   Everything else is ceremony — cut it while you write it.
@@ -306,16 +285,13 @@ The rules that must not be broken:
   Every runner prints the full detail to the pod log, where triage starts.
   Either one travels with the alert to every notification transport its destination has configured, a list nobody has enumerated on either side.
   Policy, the accepted residuals and that open item: `docs/operations/monitoring.md`.
-- **Updating the hermes VM is a runbook, not a script, and it is deliberately not scheduled.**
-  `hermes update` sometimes carries a step that needs judgement — a migration prompt, a stash of local edits — and a script cannot exercise judgement, so the procedure lives as prose an agent or the operator follows with the session open, roughly weekly: `docs/operations/hermes-vm-updates.md`.
+- **Update Hermes only with the web UI's Update Now button.**
   Everything else about the VM — lingering, the daily liveness check, the install, `unattended-upgrades` — is in `docs/operations/hermes-vm.md`.
-  The wrapper that used to automate updates, with its two test harnesses, its systemd unit and its root-owned entry point, was deleted on 2026-08-27.
-  Building it back is a design change and needs the operator, not a tidy-up.
   **Nothing under `hermes-vm/` is scheduled by systemd any more**: the `systemd/` directory was deleted on 2026-08-27, and both scheduled scripts — the daily liveness check and, since 2026-08-29, the weekly docker-sandbox refresh — run as hermes `no_agent` cron jobs inside the default gateway.
-  The liveness check is read-only; the sandbox refresh pulls the pinned terminal image and removes idle stale containers, a mechanical judgement-free job, and neither is a precedent for scheduling `hermes update` itself.
+  The liveness check is read-only; the sandbox refresh pulls the pinned terminal image and removes idle stale containers.
   **Nothing mechanical guards runbook prose**, which is why its disclosure rules are written into the steps they govern rather than referenced.
   The files that remain under `hermes-vm/` are not rendered by kustomize, so `make check-script-lint` cannot see them — `make check-vm-scripts` is their guard, and it is `shellcheck -s sh` over every `*.sh` under `hermes-vm/scripts/` (the daily alive check; since 2026-08-29 the weekly docker-sandbox refresh; and since 2026-08-31 `hermes-profile-docker-setup.sh`, which is run by hand per new profile and is on no schedule) plus `scripts/check-ping-bodies.py hermes-vm`.
-  It runs in **no** preflight, and the one workflow this repository has covers `homelab/health/mcp/` alone, so nothing runs it automatically: it is step 1 of the install procedure in `docs/operations/hermes-vm.md`, and the update runbook never calls it.
+  It runs in **no** preflight, and the one workflow this repository has covers `homelab/health/mcp/` alone, so nothing runs it automatically: it is step 1 of the install procedure in `docs/operations/hermes-vm.md`.
   Run it by hand after touching anything under `hermes-vm/`, and before copying any of it to the VM.
 - **A new InfluxDB bucket in the `health` namespace means three edits, not one:** create it (a `make health-influx-*-bootstrap` target), add it to the explicit `for B in ...` list in `homelab/health/scripts/influx-export-lp.sh`, **and** raise `LP_EXPECTED` in `homelab/health/scripts/influx-backup.sh`, which is the denominator of the `buckets=n/m` the heartbeat carries.
   A bucket missing from the export list is silently never exported; a bucket in that list that does not exist fails the nightly job by name; and a stale `LP_EXPECTED` shows up as a visibly wrong `buckets=` and nothing worse.
@@ -364,12 +340,14 @@ The rules that must not be broken:
   `shellcheck` is now a required tool (`make check-tools`); `brew install shellcheck`.
   Findings from upstream bases are advisory and do not fail the check.
   Rationale and the extraction rules: `docs/operations/apply-workflow.md`.
-- **Every container is in exactly one update mode, and `make check-renovate-scope` proves it.**
-  The guard renders each cluster and judges one container at a time: a complete keel annotation set on a floating tag is legal; the same set on a **pinned** tag is the frozen state (`match-tag` only refreshes the digest) and fails; an **incomplete** set fails on any tag, because a missing `match-tag` silently downgrades a semver tag to `:latest`.
-  A pinned, keel-free image must be named by a repo file **in the same cluster's tree** that is inside `kubernetes.managerFilePatterns` and outside `ignorePaths` — a `packageRule` alone does **not** widen scope, and the per-cluster confinement is load-bearing, because both trees name many of the same images and a repo-wide lookup would let a watched homelab file vouch for an unwatched VPS container. keel annotations are a **workload** property: a pinned sidecar beside a floating app image is Renovate's, not frozen, so only a workload with nothing floating in it can be frozen.
-  A workload named in the guard's `STATEFUL` tuple is locked to the pinned mode and fails on a floating tag or any keel annotation, whatever its namespace; nothing else is banned from floating.
+- **`make check-renovate-scope` checks image update modes and pinned-image scope from each cluster's render.**
+  An incomplete keel annotation set fails on any tag; a complete set on an entirely pinned workload fails as frozen.
+  A pinned image must be named by a repo file **in the same cluster's tree** inside `kubernetes.managerFilePatterns` and outside `ignorePaths`.
+  A `packageRule` alone does **not** widen scope.
+  A pinned sidecar beside a floating image is checked for Renovate scope, because keel annotations belong to the workload.
   A floating tag with no keel is unmanaged and fails — **except** on a `CronJob` or `Job`, where every run starts a fresh pod that re-pulls the tag, which is why `jottacloud-backup` is legal on `:latest` with no annotations and needs no written exemption.
   Images from remote bases are advisory.
+  The guard checks annotation names, not their values, and does not check `imagePullPolicy` or package-rule enablement.
 - For new `hostPath`/`hostNetwork` workloads: elevate their namespace to PSA `privileged` in the cluster's `bootstrap/namespaces.yaml`.
   The cluster-wide enforce level is `baseline`.
 - A new secret placeholder takes the four edits listed under **Apply Workflow** above; use the `VPS_*` lists in the `Makefile` for VPS vars.

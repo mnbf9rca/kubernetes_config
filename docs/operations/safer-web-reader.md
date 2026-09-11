@@ -6,7 +6,7 @@ It exists because release notes, changelogs and arbitrary pages can carry instru
 
 The containment is not a filter and not a prompt.
 It is that the profile has almost no tools: four, none of which can touch a file, a shell, the LAN or another task.
-Everything else about the VM is in [hermes-vm.md](hermes-vm.md), and the update procedure is [hermes-vm-updates.md](hermes-vm-updates.md).
+Everything else about the VM, including the WebUI's Update Now button, is in [hermes-vm.md](hermes-vm.md).
 
 ## What is running
 
@@ -237,7 +237,7 @@ Disabling the kanban toolset also deletes the upstream worker-lifecycle prompt, 
 The tool names and the envelope shape are hard-coded in that prose.
 Nothing enforces parity between the two files, so renaming a tool or changing the envelope means editing both in the same commit; a divergence shows up at the next hand-edit, or as a failed run in the verification battery.
 
-### One failure mode fails open, and two things catch it
+### A failure mode and its in-process check
 
 If a future Hermes lets the dispatcher's force-append survive `disabled_toolsets` — or ships a toolset on the `_RECENTLY_SHIPPED_TOOLSETS` path, which widens explicitly saved platform lists and which this profile has no opt-out from — the reader silently regains a kanban surface while every task still completes.
 
@@ -246,12 +246,11 @@ The refusal is deliberately not a `kanban_` prefix test, because the routes that
 A list the guard cannot trust — symbol missing, list empty, or list not naming the tool that is executing — is a soft fail: one log line and carry on, because the guard is defence in depth and an upstream rename must not take completion down with it.
 A trustworthy list showing an unexpected tool is a hard refusal, so the operator sees it the first time a task runs.
 
-**Out of process**, the four-tool list above is diffed after every Hermes update *and* after any restore.
-The restore half is not redundant: `hermes backup` carries `plugins/` and the profile config, `hermes import` performs no version or compatibility check, so a restore can reinstate a `disabled_toolsets` value that is stale against a newer Hermes and reach the same state by a route no update triggers.
-That obligation lives in the Verify step of [hermes-vm-updates.md](hermes-vm-updates.md#verify), which is read weekly.
+There is no routine out-of-process containment check attached to application updates.
+An update or restore can change the effective tool surface; the in-process check remains, with the soft-failure limitation above.
 
 Everything else about the broker fails closed and reads the same way.
-It depends on six underscore-prefixed helpers in `tools/kanban_tools.py`, one private module global, and three public-looking functions, none of which carries an upstream stability promise on a host that updates roughly weekly.
+It depends on six underscore-prefixed helpers in `tools/kanban_tools.py`, one private module global, and three public-looking functions, none of which carries an upstream stability promise.
 A rename, a moved helper, a changed signature, a split `web` toolset or a change to plugin discovery all produce the same symptom: the task ends `blocked` with the cause in the per-task worker log at `~/.hermes/kanban/boards/safer_web_reader/logs/<task>.log`, or through `hermes kanban --board safer_web_reader log <task>`.
 A plugin load failure logs one warning line carrying the exception text and no traceback, so re-run the dispatch with `HERMES_PLUGINS_DEBUG=1` in the environment when that one line is not enough.
 

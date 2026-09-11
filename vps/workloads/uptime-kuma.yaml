@@ -91,7 +91,8 @@ spec:
           volumeMounts:
             - { name: data, mountPath: /app/data }
         - name: sqlite-snapshot
-          image: alpine:3.24
+          image: alpine:latest
+          imagePullPolicy: Always
           # The script is vps/workloads/scripts/sqlite-snapshot.sh, mounted at
           # /scripts by the configMapGenerator in this directory's
           # kustomization.yaml. It is SHARED with the other single-database

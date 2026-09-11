@@ -14,30 +14,43 @@ Phase 2 (facade, records store, multi-person registry) is scoped there, not here
 
 ## Image policy
 
-**The namespace bans nothing; three of its workloads are locked to the pinned mode individually** (operator ruling, September 6, 2026).
-`influxdb`, `garmin-grafana` and `influx-backup` are version- or digest-pinned and keel-free because each writes into persistent data it owns — an on-disk index the engine upgrades in place, a Garmin token cache the third-party image itself rewrites, and the nightly export that is the restore path for the first.
-All three are named, with those reasons, in the `STATEFUL` tuple in `scripts/check-renovate-scope.py`, which fails the apply if any of them floats or carries a keel annotation.
+The manifests use floating images, except the backup container's `alpine/k8s` image, which has no suitable floating tag.
+The Deployments carry the full keel annotation set.
+The nightly InfluxDB backup and line-protocol export are the accepted recovery points for automatic updates.
+Restoration can lose changes since the selected backup.
 
-Everything else here is pinned by choice rather than by prohibition, which is always allowed: the ingest CronJobs (`cloudflare-analytics`, `withings-ingest`, `ingest-freshness`) run a stdlib runtime image whose logic is a script versioned in this repo, so the image owns none of what they write.
+| Workload/container | Configured image |
+|---|---|
+| InfluxDB | `influxdb:2` |
+| Apple Health ingester | `irvinlim/apple-health-ingester:latest` |
+| Garmin fetcher | `thisisarpanghosh/garmin-fetch-data:latest` |
+| Health tunnel | `cloudflare/cloudflared:latest` |
+| PDC agent | `grafana/pdc-agent:latest` |
+| InfluxDB MCP | `ghcr.io/mnbf9rca/influxdb-mcp-server:stable` |
+| Cloudflare analytics and Withings CronJobs | `python:latest` |
+| Freshness CronJob | `curlimages/curl:latest` |
+| Backup init container | `busybox:latest` |
+| Backup container | `alpine/k8s:1.36.2`, with its existing digest |
 
-`influxdb-mcp` floats on `stable` with the full keel annotation set and needs no exemption from anything, because it holds no persistent data.
-The image is built from this repository's own inputs, so the reviewed decision is the build input rather than the roll — Renovate proposes a change to `homelab/health/mcp/`, its pull request builds and signs the image, the merge promotes that same image, and keel delivers it within six hours.
-The one other place that still has to know it floats is the `pinDigests: false` path in `renovate.json`, which stops Renovate proposing a digest pin under those annotations.
+Every moved runtime uses `imagePullPolicy: Always`, including CronJob and init containers.
+CronJobs need no keel annotations because each run pulls its image.
 
-Renovate is scoped to `homelab/**` and `vps/**`, with `pinDigests` on at the top level (see `renovate.json`); a `homelab/health/**` packageRule groups this namespace's bumps as `health stack` and keeps them off automerge.
-The one rule that does automerge is `influxdb-mcp build inputs`, over `homelab/health/mcp/**`, because that pull request's own build is the whole test and its merge is the whole deploy — see [Where the image comes from, and the guidance tool](#where-the-image-comes-from-and-the-guidance-tool).
+The MCP image is built from this repository's own inputs.
+Renovate proposes changes to `homelab/health/mcp/`; the pull request builds and signs the image, and the merge promotes it to `stable`.
+Keel delivers that image within its six-hour poll interval.
+The `influxdb-mcp build inputs` group retains automerge after its checks and stability wait.
+Renovate watches the remaining `alpine/k8s` pin and excludes floating runtime images from digest pinning.
 
 `namespaces.yaml` marks `health` as Pod Security Admission (PSA) `baseline` (nothing here needs hostPath/hostNetwork), but every workload already trips `restricted`-level PSA warnings — a hardening pass to `restricted` is a queued follow-up.
 
-### Pins that carry a reason
+### Runtime choices
 
-- **`garmin-grafana` is digest-pinned to a main-branch build** (`thisisarpanghosh/garmin-fetch-data@sha256:8b7955d3...`), not a tagged release.
-  Release `v0.5.0` crashes with an `AttributeError` on `client.profile` when `TAG_MEASUREMENTS_WITH_USER_EMAIL` is set — fixed upstream post-release but not in a tagged build.
-  A `renovate.json` `packageRule` puts this image on **`dependencyDashboardApproval`**: there is no way to encode "this specific release is bad", so an unapproved rule would propose bumping straight to the broken `v0.5.0` build.
-  Dashboard-only rather than disabled, so an upstream fix still surfaces.
-  The exit path is manual — when upstream publishes a release newer than `v0.5.0`, approve the bump from the dashboard and re-pin the manifest as `tag@digest`.
+The Garmin `latest` channel includes the main-branch fix for the `client.profile` failure in release `v0.5.0`.
+
 - **`apple-health-ingester` memory limit is 1Gi**, not the original 256Mi: large Health Auto Export batch exports OOMKilled it at 256Mi.
-- **`influx-backup` runs on `alpine/k8s:1.36.0`**, version-matched to the cluster's server minor — not `bitnami/kubectl`, which no longer publishes plain version tags on Docker Hub (moved to the frozen, unauthenticated `bitnamilegacy/*`, and that image has neither `wget` nor `curl`, one of which the heartbeat push needs).
+- **`influx-backup` keeps `alpine/k8s:1.36.2` and its digest.**
+  There is no suitable floating tag for this runtime.
+  The image supplies kubectl, a shell and the heartbeat tools; Renovate proposes its updates.
 
 ## Ingress
 
@@ -79,7 +92,8 @@ Its own Access app, `hermes-app`, deliberately does **not** reuse the `hermes` a
 - `options_preflight_bypass` is on, because an unadorned CORS preflight carries no token headers and Service Auth would reject it at the edge.
 
 That gate is load-bearing in a way the dashboard's is not: hermes-webui serves `/share`, `/share/*`, `/api/share/*` and `/static/*` with no authentication of its own, so "the WebUI's password is the second gate" holds for the app but not for every path.
-The VM-side half — the unit, the update and rollback runbooks, and the security posture — is in [homelab.md](homelab.md#hermes-webui-on-the-vm).
+The VM-side unit and security posture are in [homelab.md](homelab.md#hermes-webui-on-the-vm).
+Updates use the WebUI's **Update Now** button; recovery is in [Rollback](hermes-vm.md#rollback).
 
 Both hostnames' Access apps **fail open** if the app is deleted; after any Cloudflare rebuild, verify the edge challenges an unauthenticated client before trusting either.
 
@@ -312,15 +326,16 @@ See [Grafana Cloud over Private Datasource Connect](#grafana-cloud-over-private-
 
 ## Upgrading the health stack
 
-Renovate proposes the image bumps; `make health-upgrade` takes the rollback before you apply them.
-Run it from the `cynexia-homelab` context:
+Keel follows the configured floating Deployment images.
+Nightly backups are accepted for recovery; an extra dump is optional rather than a prerequisite for each update.
+
+Run `make health-upgrade` from the `cynexia-homelab` context when an additional recovery dump is needed.
 
     make health-upgrade
 
-It creates a one-off Job from `cronjob/influx-backup`, waits for it, tails the log, then stops.
-It applies nothing, merges nothing and edits no pin — checking out the Renovate pull request, rebasing it, reading the diff, applying, verifying, merging and deciding to roll back all stay manual.
-The banner it prints is the runbook for the rest, and it is written **deploy-then-merge**: check out the pull request, apply from the branch, confirm the cluster is healthy, and only then merge.
-`master` records what has been deployed, never intent.
+The existing target creates a one-off Job from `cronjob/influx-backup`, waits for it, and tails the log.
+It applies and merges nothing.
+Its printed manual deployment guidance does not govern routine floating-image updates.
 
 **It covers the namespace's one stateful component.**
 InfluxDB is what a health-stack bump can migrate in place, so the native backup and the line-protocol export are the logical rollback for it.
@@ -358,10 +373,14 @@ It never reports a dump it did not watch finish.
 `kubectl create job --from=cronjob/influx-backup` sets that owner and a `cronjob.kubernetes.io/instantiate: manual` annotation, so a by-hand dump is as visible to the guard as a nightly one and you can name it anything.
 The one thing it cannot see is a Job someone hand-rolls with a copied pod spec and no owner reference, which no procedure here produces.
 
-**Other images in this namespace have no independent rollback story** — the apple-health-ingester, garmin-fetch-data, influxdb-mcp and the cloudflared sidecar are all stateless, so they need no dump.
-For the three pinned ones the rollback *is* a tag revert.
-`influxdb-mcp` is the exception in mechanism, not in stakes: it follows the floating `stable` tag, so its rollback is to revert the build input in a pull request and let that pull request's merge promote the older image — pointing the Deployment at a `sha-` tag instead would be a pinned reference under a full keel annotation set, which `check-renovate-scope` reads as the frozen state and hard-fails.
-Only InfluxDB holds state here.
+Select a known-good image version for rollback.
+Remove that workload's keel annotations during recovery.
+A tag change cannot restore InfluxDB data or a lost Garmin token cache.
+Use the InfluxDB restore procedure or Garmin re-authentication procedure as appropriate.
+
+`influxdb-mcp` follows `stable`.
+Revert its build input through a pull request to promote the previous image again.
+A temporary pinned image needs its keel annotations removed.
 
 ## Cloudflare analytics ingest
 
@@ -503,7 +522,7 @@ Weight arrives here and in `apple_metrics`, deliberately, and the two are not de
 | Endpoint | `POST https://wbsapi.withings.net/measure`, `action=getmeas`, `category=1` |
 | Bucket | `withings`, **infinite** retention |
 | Measurement | `withings_measure_group`, one point per measure group; tags `person`, `grpid`, `deviceid` and `model`; one float field per measure, named by the rule below. No string field |
-| Image | `python:3.14-alpine3.22`, digest-pinned to the same reference `cloudflare-analytics` carries. No keel; Renovate proposes bumps under the "health stack" group |
+| Image | `python:latest`, matching `cloudflare-analytics`, with `imagePullPolicy: Always`; no keel annotations on the CronJob |
 | Deadlines | `startingDeadlineSeconds: 600`, `activeDeadlineSeconds: 600`, `ttlSecondsAfterFinished: 259200` |
 | Monitoring | The `Withings-ingest` uptime-kuma push monitor: `up` on exit 0, `down` otherwise |
 
@@ -734,7 +753,7 @@ There is no `make` target for this: it needs a browser, a 30-second code window 
 
    ```bash
    kubectl -n health run withings-auth --rm -it --restart=Never \
-     --image=python:3.14-alpine3.22@sha256:6b91e66ab2a880ce9ca5a1b91c70f45963ff71ff68268df056336e1a657d5efd \
+     --image=python:latest --image-pull-policy=Always \
      --overrides='{
        "spec": {
          "securityContext": {
@@ -743,7 +762,8 @@ There is no `make` target for this: it needs a browser, a 30-second code window 
          },
          "containers": [{
            "name": "withings-auth",
-           "image": "python:3.14-alpine3.22@sha256:6b91e66ab2a880ce9ca5a1b91c70f45963ff71ff68268df056336e1a657d5efd",
+           "image": "python:latest",
+           "imagePullPolicy": "Always",
            "command": ["python3", "/app/ingest.py", "--auth"],
            "stdin": true, "stdinOnce": true, "tty": true,
            "env": [
@@ -880,8 +900,9 @@ The id is a tier-3 identifier and the agent prints it to its own log, so the pod
 The same item also holds `grafana-pdc-token-id`, `grafana-pdc-instance-id` and `grafana-cloud-admin-token`, and this design uses none of the three.
 They are named here so the next reader does not have to re-derive which field is the `-cluster` value.
 
-The agent writes an ephemeral SSH key into `$HOME/.ssh/grafana_pdc` on every start and keeps nothing else, so it is stateless: it is on no `STATEFUL` lock, and it runs on a floating tag under the full keel annotation set.
-`homelab/health/pdc-agent.yaml` is listed in the first `packageRule` in `renovate.json` so Renovate proposes no digest pin against that floating tag.
+The agent writes an ephemeral SSH key into `$HOME/.ssh/grafana_pdc` on every start and keeps nothing else.
+Its manifest uses `grafana/pdc-agent:latest` under the full keel annotation set.
+The floating-runtime rules in `renovate.json` prevent Renovate from proposing a digest pin against that tag.
 
 ### What watches it
 

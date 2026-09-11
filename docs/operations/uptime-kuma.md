@@ -233,6 +233,7 @@ A 200 proves edge, tunnel, cloudflared and the dashboard process end to end.
 The homelab cloudflared tunnel also publishes `hermes-app.cynexia.com` (hermes-webui, for the Hermex iOS app).
 **That hostname still has no monitor, by decision.**
 What changed on August 26, 2026 is that the service behind it is now checked from *inside* the VM instead, once a day, by the `hermes-app-alive` push monitor below.
+Hermes updates use the WebUI's **Update Now** button; the existing daily alive check remains independent of updates.
 
 **Do not "improve" that push monitor into a GET against this hostname.**
 An HTTP monitor is the wrong instrument here for two independent reasons.
@@ -311,7 +312,7 @@ It is also why the bypass is load-bearing rather than a convenience: without it 
 The one exception to "from inside a cluster", `hermes-app-alive`, is described below the table — and it needs the same bypass, from further away.
 
 **Some monitors deliberately receive nothing on some runs, so silence is not always a fault.**
-`health-garmin-and-apple-ingest` pushes only when both its buckets are fresh, and `homelab-update-watch` pushes nothing when it could not read GitHub.
+`health-garmin-and-apple-ingest` pushes only when both its buckets are fresh, and `homelab-update-watch` pushes nothing on API errors or an unreadable dashboard body.
 Both stand in for healthchecks.io's `/log` ping, which recorded an event and changed no state; kuma has two states and no third kind, so "record nothing" becomes "send nothing".
 So a monitor that has not moved in a while may be working exactly as designed, and its **silence bound is the interval plus retry** in the table below — not any per-run signal.
 Read the last message it did receive, and the pod log, before treating a gap as an incident.
@@ -344,9 +345,13 @@ Read it per row rather than assuming up-on-success everywhere.
 | `homelab-hermes-pull` | `op://Homelab/hermes-backup/kuma-push-token` | 86400s, 1 retry at 7200s | `hermes-pull` CronJob in `backup`, from an EXIT trap: `up` on exit 0, `down` otherwise. `msg` carries `verdict=`, `zip_kib=` and `sha256_match=yes\|no` |
 | `hindsight-pg-dump` | `op://Homelab/hindsight/kuma-push-token` | 86400s, 1 retry at 7200s | `hindsight-pg-dump` CronJob in `hindsight`, from an EXIT trap: `up` on exit 0, `down` otherwise. `msg` carries `verdict=`, `dump_kib=`, `tables=` and `kept=` |
 | `hindsight-canary` | `op://Homelab/hindsight/canary-kuma-push-token` | 3600s, 1 retry at 1800s | `hindsight-canary` CronJob in `hindsight`, from an EXIT trap: `up` when retain and recall both pass, `down` when either fails. `msg` carries `verdict=` from that script's enum plus both HTTP statuses |
-| `homelab-update-watch` | `op://Homelab/update-watch/kuma-push-token` | 86400s, 1 retry at 21600s | `update-watch` CronJob in `ops`, Python: `up` on a green verdict, `down` on a determinate red, and **nothing at all** on an indeterminate one. `msg` carries `verdict=`, `next=` and the counters |
+| `homelab-update-watch` | `op://Homelab/update-watch/kuma-push-token` | 86400s, 1 retry at 21600s | `update-watch` CronJob in `ops`: `down` for lookup failures or a missing dashboard, `up` for a readable dashboard without lookup-failure markers, and **nothing** for indeterminate reads; the one-line `msg` starts with `verdict=`, then `run_epoch=`, fixed `next=` advice and any lookup-failure count |
 | `jottacloud-backup` | `op://Homelab/jottacloud-backup/kuma-push-token` | 21600s, 1 retry at 7200s | The `jottacloud-backup-scheduled` CronJob's own image, on success only. This repo does not build that image and does not control the request — see the note below |
 | `hermes-app-alive` | `op://hermes/hermes-app-alive/kuma-push-token` | 86400s, 1 retry at 21600s | A `no_agent` cron job inside `hermes-gateway` on the hermes VM at 05:45 UTC, `up` on exit 0 and `down` on failure, from an EXIT trap |
+
+The keel image floors are exactly **17 for homelab** and **12 for VPS**, counting distinct floating images across all containers in keel-annotated workloads.
+These manifest-derived floors have **not yet been verified against live keel metrics after apply**.
+PR counts, PR ages and dashboard age do not affect `homelab-update-watch`; its API-error silence behavior is unchanged.
 
 Each migrated row's interval and retry mirror the period and grace of the healthchecks.io check it replaced, so nothing got quieter or noisier in the move (August 26, 2026).
 `Withings-ingest` replaced nothing: it was created on September 2, 2026 for new scheduled work.

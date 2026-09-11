@@ -172,7 +172,7 @@ Use it only for secrets that genuinely can't be single-line; everything else flo
 | `check-script-substitution` | Asserts no `configMapGenerator` script names an envsubst-allowlisted variable, across both cluster trees. `check-script-substitution-homelab` scopes the *scan* to one tree — both allowlists still apply — and runs in the `diff-homelab`/`apply-homelab` preflight |
 | `check-ping-bodies` | Asserts no healthchecks.io ping body and no uptime-kuma heartbeat message is built from a command's output, across both cluster trees — it recognises a sink by function name, never by destination host. `check-ping-bodies-homelab` scopes the scan to one tree and runs in the `diff-homelab`/`apply-homelab` preflight. Read its `OK:` line's sink-call count per file, not in aggregate |
 | `check-script-lint` | Lints every script the clusters run, from the **rendered** stream rather than the source tree, plus the repo's Python. `check-script-lint-homelab` scopes the render to one cluster and runs in the `diff-homelab`/`apply-homelab` preflight. See below |
-| `check-renovate-scope` | Asserts every container is in exactly one update mode — floating means keel, pinned means Renovate, never both — from the render, one container at a time, across both clusters. `check-renovate-scope-homelab` scopes it to one cluster and runs in the `diff-homelab`/`apply-homelab` preflight as the fifth per-cluster guard and the third render-based one. See below |
+| `check-renovate-scope` | Checks pinned-image scope and floating-workload keel annotation names from both renders; Jobs and CronJobs may float without keel. `check-renovate-scope-homelab` scopes it to one cluster and runs in the `diff-homelab`/`apply-homelab` preflight as the fifth per-cluster guard and the third render-based one. See below |
 | `check-keel-fresh-parity` | Asserts the two `ops/keel-fresh` copies — runner script and CronJob manifest — differ only inside a stated allowlist. **The one guard with no per-cluster half**, because it compares the two trees against each other; it runs whole on both halves of all four chains. See below |
 | `require-vars` | Re-enters under `op run` and asserts every `REQUIRED_VARS` entry is set and not still an `op://` reference |
 | `build-homelab` | `kustomize build homelab/ \| envsubst` to stdout under `op run`. **PREVIEW ONLY — secret values are masked.** No cluster contact. Never redirect this to a file and apply it |
@@ -253,11 +253,15 @@ The Python phase is repo-wide whichever cluster is named: it needs no render and
 
 ### `check-renovate-scope`: one container, one update mode
 
-Two mechanisms update this estate and each is silent when it stops. keel bumps floating tags on a timer; Renovate proposes bumps for pinned ones.
-The rule is **floating tag means keel, pinned tag means Renovate, never both** — and every way of getting a container's mode wrong fails quietly.
-A pinned tag carrying keel annotations is frozen while looking covered, because `keel.sh/match-tag` on a pin only refreshes the digest.
+Every workload on both clusters floats unless no floating channel exists.
+Floating Deployments, DaemonSets and StatefulSets carry the full keel annotation set, including keel itself on `latest`.
+Floating Jobs and CronJobs use `imagePullPolicy: Always` without keel annotations.
+The only repo-owned runtime image pin is the `alpine/k8s` backup toolbox, which has no floating channel and receives Renovate version and digest proposals.
+Talos, Kubernetes and homelab remote-base bundles remain interactive updates a few times a year through `/update-estate`.
+
+An entirely pinned workload carrying keel annotations is frozen while looking covered, because `keel.sh/match-tag` on a pin only refreshes the digest.
 An incomplete keel annotation set is worse than none, because without `match-tag` keel silently downgrades a semver tag to `:latest`.
-A pinned tag with no keel annotations and outside Renovate's scope receives nothing at all, while `homelab-update-watch` counts zero open pull requests and stays UP over it.
+A pinned tag outside Renovate's scope receives no proposals; `homelab-update-watch` checks dashboard lookup failures, not scope coverage.
 
 The version this replaced could see none of that.
 It asked whether a *file* mentioned `keel.sh/policy` anywhere and whether a *file* pinned any image, so a file holding one keel-managed Deployment and one pinned CronJob passed on the Deployment's annotations and the CronJob was never examined.
@@ -265,16 +269,19 @@ Namespaces are a render property too: `kustomization.yaml` can set one, and a di
 
 So the guard renders each cluster with its own `kustomize build` — an identical render to the one `check-script-lint` produces, not a shared one — and judges **one container at a time**.
 
-Three decisions in it are load-bearing.
+The following decisions determine its verdicts.
 
-**keel annotations are a workload property, not a container property.** keel reads the workload's annotations and applies them to the images it can track, which are the floating ones.
-A Deployment whose app image floats and whose quiesce sidecar is `alpine:3.20` is correct and intended: keel bumps the app, Renovate bumps the sidecar.
-Smearing the workload's annotations across every container would read four such sidecars on the VPS cluster as frozen.
+**keel annotations are a workload property, not a container property.**
+keel reads the workload's annotations and applies them to the images it can track, which are the floating ones.
+The guard permits a pinned sidecar beside a floating app if that pin is inside Renovate's scope.
+Before the switch to floating sidecars, applying the workload's annotations to each pin incorrectly classified four VPS sidecars as frozen.
 The frozen verdict therefore needs the whole workload — keel annotations present *and* nothing floating anywhere in it, so the annotations can only be about a pin.
 
-**A bare major version stream is floating, not a pin.**
-`louislam/uptime-kuma:2` moves on every 2.x release and `v2` is the same thing spelled differently, as is a `-latest` suffix such as `ghcr.io/umami-software/umami:postgresql-latest`.
-A *dotted* tag — `alpine:3.20`, `traefik:v3.3`, `postgres:16-alpine`, `pgvector/pgvector:0.8.1-pg17` — is a pin that Renovate bumps, and calling any of those floating would hand a reviewed bump to keel.
+**Major-version and PostgreSQL streams are floating.**
+The guard recognises `2`, `v3`, `pg17`, `16-alpine`, `17-alpine` and `3-alpine` alongside `latest`, `stable` and `release`.
+It also recognises `main`, `master`, `edge`, `-latest` suffixes such as `postgresql-latest`, and `latest-` prefixes.
+Dotted versions such as `alpine:3.20`, `traefik:v3.3.0`, `postgres:16.4-alpine` and `pgvector/pgvector:0.8.1-pg17` remain pins.
+A digest pins the image even when its tag names a floating channel.
 
 **Remote-base images are advisory, in every mode.**
 An image named by no file in the cluster's own tree came from a remote base — cert-manager, the CSI drivers, local-path-provisioner — so nothing here can edit the reference; it moves only when the base's own ref moves.
@@ -283,22 +290,26 @@ Failing an apply on somebody else's manifest produces a gate people route around
 Ownership is therefore established *before* any verdict, not only before the scope one: a remote base that ever shipped keel annotations on a pinned tag would otherwise hard-fail an apply over a manifest this repo cannot edit.
 
 **The ownership lookup is confined to the cluster being analysed**, and that confinement is load-bearing.
-Both trees name `restic/restic:0.19.1` and the same keel digest, so a repo-wide lookup lets a watched homelab file vouch for a VPS container nothing watches.
+Both trees previously named the same pinned restic and keel images, so a repo-wide lookup let a watched homelab file vouch for a VPS container nothing watched.
 Simulated with scope widened to `homelab/**` alone, a repo-wide lookup dropped the VPS render from nine findings to six — `restic-backup`, `restic-init` and `keel` all fell silent while `vps/backup/*.yaml` and `vps/bootstrap/keel/keel.yaml` were still genuinely unwatched.
-The lookup also compares extracted image values rather than searching raw file text, because a substring search matches prose (`restic/restic:0.17.3` appears in three comment sentences in `homelab/backup/restic-cronjob.yaml`) and has no right boundary (`alpine:3.2` would be "owned" by any file naming `alpine:3.20`).
+The lookup also compares extracted image values rather than searching raw file text, because a substring search matches prose and has no right boundary (`alpine:3.2` would be "owned" by any file naming `alpine:3.20`).
 
-Scope is still a file question, because `managerFilePatterns` matches paths: for each pinned, keel-free image the guard locates the repo file(s) naming it and requires one of them to be matched by a `kubernetes.managerFilePatterns` entry and not excluded by `ignorePaths`.
+Scope is still a file question, because `managerFilePatterns` matches paths: for each pin the guard locates the repo file(s) naming it and requires one of them to be matched by a `kubernetes.managerFilePatterns` entry and not excluded by `ignorePaths`.
+This is structural coverage; the guard does not evaluate package-rule enablement or verify registry lookups.
 Both manager blocks are validated for patterns that match nothing, `kubernetes` and `kustomize`, because a typo in either is the same silent-scope failure.
 `enabledManagers` is validated too: it is a whitelist, so a `kustomize` block added without adding `kustomize` to that list is inert configuration that reads like coverage, and dropping `kubernetes` from it makes every scope verdict vacuous.
-Both are exit 2.
+Invalid manager configuration is exit 2; a valid pattern matching no scanned file is exit 1.
 Exit 1 means a finding; exit 2 means the check could not run.
 
-**The update-mode lock is per stateful workload, not per namespace** (operator ruling, 2026-09-06).
-A workload whose image writes into persistent data it owns — a database, an app that migrates its own schema on startup, a backup runner that writes a repository, a dashboard server with an on-disk db — must be pinned, because an unreviewed roll can migrate or corrupt that data and a tag revert is not a rollback.
-Those workloads are named by namespace, kind and name, each with its reason, in the guard's `STATEFUL` tuple, and the guard fails any of them that floats or carries a keel annotation.
-Everything else may float with the full keel set or pin for Renovate, in any namespace; the near misses — the keel-managed VPS apps, `jottacloud-backup`, `influxdb-mcp`, the ingest CronJobs — are written down under the list rather than left to be re-derived.
-A floating tag with no keel annotations is unmanaged and fails, **except** on a `CronJob` or `Job`, where every run starts a fresh pod that re-pulls the tag: that is why `jottacloud-backup` is legal on `:latest` with no annotations.
-A full two-cluster run also fails on a `STATEFUL` entry that matches no workload, for the same reason `dead_patterns` fails on a `managerFilePatterns` entry that matches no file: an entry keyed on a name nothing has enforces nothing while reading like policy.
+**Floating controllers need all four keel annotation names.**
+An incomplete set fails on any tag; an entirely pinned workload with keel annotations fails as frozen.
+A floating tag without keel fails on Deployments, DaemonSets, StatefulSets, ReplicaSets and bare Pods.
+Jobs and CronJobs may float without keel, regardless of their namespace or workload name.
+The guard checks annotation names, not their values, and does not check `imagePullPolicy`.
+
+Renovate disables updates for the selected floating channels with a Kubernetes-only `matchCurrentValue` rule, preserving PostgreSQL major streams.
+Digest pinning is off for `homelab/**/*.yaml` and `vps/**/*.yaml`, with an override for `alpine/k8s`.
+MCP build inputs retain automerge after their checks and stability wait; no monthly schedule remains.
 
 **`check-renovate-scope-homelab` and `check-renovate-scope-vps` each run in their cluster's `diff-*` and `apply-*` preflight**, on the public half, as of the 2026-08-26 commit that widened Renovate to `homelab/**` and `vps/**`.
 Each chain now reads the same way: a context assertion, a vars-consistency check, **five per-cluster guards** — `check-script-substitution`, `check-job-ttl`, `check-ping-bodies`, `check-script-lint` and `check-renovate-scope`, each running as its own cluster's half — and one guard that has no half, `check-keel-fresh-parity`.
@@ -318,8 +329,10 @@ The coupling is the kind that gets routed around under time pressure; the answer
 What it allows through is a short, stated list — the two copy notes, the image floor, the schedule, the monitor name, the runner-script and manifest paths, the `nodeSelector`, the 1Password vault path and the token variable — and everything else must match byte for byte.
 Its own header carries the list and the reasoning.
 
-Arming it needed that widening first, and the order is worth keeping in mind if the scope ever narrows again.
-The guard cannot pass against a `renovate.json` that watches only `homelab/health`, `homelab/ops` and `homelab/hindsight`: every pinned, keel-free container outside those three trees genuinely receives nothing, which is the estate's true state rather than a bug in the guard.
+The current `IMAGE_FLOOR` values are 17 for homelab and 12 for VPS, counting deduplicated images across keel-annotated workloads.
+
+Arming the update-mode guard originally needed wider scope because pinned images then existed outside the three watched homelab trees.
+Any future repo-owned pin outside Renovate's scope still fails the guard.
 Wiring a guard into a preflight it does not pass makes an apply impossible and teaches the next person to route around the gate.
 Widen scope, prove a clean run against both renders, then arm — never the reverse.
 

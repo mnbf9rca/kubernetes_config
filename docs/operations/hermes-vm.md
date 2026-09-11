@@ -5,7 +5,8 @@ It is not a Kubernetes cluster, so none of this repository's cluster machinery r
 What it has instead lives in `hermes-vm/`: a daily liveness check, a weekly docker-sandbox refresh, a hand-run helper that finishes a new profile's docker setup, the managed-scope Hermes config and the `unattended-upgrades` configuration.
 
 This page covers that machinery — how to read it, how to install it — and the VM facts that keep being rediscovered.
-Updating the application stack is a separate procedure: [hermes-vm-updates.md](hermes-vm-updates.md).
+The operator updates the application with the WebUI's **Update Now** button.
+There is no update timer or update-estate step.
 
 The canonical copy of every file named here is in `hermes-vm/`.
 The VM holds installed copies.
@@ -16,6 +17,34 @@ Edit the repository, then reinstall.
 Nothing under `hermes-vm/` is scheduled by systemd any more — the `systemd/` directory and its two units were deleted on August 27, 2026.
 Application updates never run on a schedule at all.
 The `hal` profile also carries four agent-authored systemd timers that this repository does not own — see [Topology: what runs where](#topology-what-runs-where).
+
+## Application updates
+
+Press **Update Now** in the WebUI.
+Application updates use the upstream UI, without a repository update runbook or an additional verification procedure.
+
+### Repair record: September 11, 2026
+
+The stale marker was preserved as `~/.hermes/fleet_restart_pending.saved-20260911T135304Z`.
+The incompatible Superpowers manifests were moved from `~/.hermes/plugins/superpowers` to `~/.hermes-disabled-plugins/superpowers-20260911T135304Z`.
+No plugin files were deleted.
+Credential checks found no Teams or Google Chat credentials in any profile, managed configuration, running service environment or Google credential files.
+The native CLI disabled `platforms/teams` and `platforms/google_chat` in all five profiles.
+The remaining user plugin, `safer-reader-broker`, passed `hermes plugins doctor --ci` with runtime discovery, parsing, import and registration clean.
+All four gateways were restarted; all six user units were active and the WebUI `/health` returned HTTP 200.
+
+### Attachments stopgap removal condition
+
+The `default`, `emh` and `hal` sandboxes retain the read-only `/home/hermes/.hermes/webui/attachments` mount until the installed WebUI fixes [#6939](https://github.com/nesquena/hermes-webui/issues/6939), proposed in [#7022](https://github.com/nesquena/hermes-webui/pull/7022).
+The removal condition is that uploads use the profile's own `cache/documents/webui-attachments/<session>/` directory and work through its existing mount.
+Remove the shared mount from those profiles, the sandbox table below, and `hermes-vm/scripts/hermes-profile-docker-setup.sh` when that condition holds.
+Keep every other profile mount.
+Restart the affected gateways and WebUI after removing the shared mount.
+
+## Rollback
+
+The updater takes a pre-update snapshot under `~/.hermes/backups/`.
+Restore that snapshot to roll back; changes made after it are lost.
 
 ## Topology: what runs where
 
@@ -158,7 +187,7 @@ The monitor's heartbeat is 24 hours with one retry at 6 hours, so **a missing he
 | `verdict=` | What it means | First thing to do |
 |---|---|---|
 | `units-down` | Not every hermes user unit is active. `units=<active>/<expected>` carries both counts, and the expected one is derived from the `UNITS` list in the script, so it follows the list rather than a number written down here | `systemctl --user status` each unit in that list. If none are up, check `loginctl show-user hermes -p Linger` first |
-| `import-failed` | The shared venv cannot import `run_agent`. **This is the silent failure the whole design exists for**: every unit is still active and `/health` still answers `status: ok`, while the iOS app answers `AIAgent not available` | Read [homelab.md, "Do not give it a venv of its own"](homelab.md#hermes-webui-on-the-vm), then follow [the update runbook's rollback](hermes-vm-updates.md#rollback). The Python traceback in the journal names which import failed |
+| `import-failed` | The shared venv cannot import `run_agent`. **This is the silent failure the whole design exists for**: every unit is still active and `/health` still answers `status: ok`, while the iOS app answers `AIAgent not available` | Read [homelab.md, "Do not give it a venv of its own"](homelab.md#hermes-webui-on-the-vm), then use [Rollback](#rollback). The Python traceback in the journal names which import failed |
 | `webui-unreachable` | The WebUI's own `/health` did not answer 2xx. `webui_http=` carries the status; `000` means no connection | `journalctl --user -u hermes-webui`. Note the unit's `StartLimitIntervalSec=60`/`StartLimitBurst=5` parking behaviour — a repeatedly failing start parks in `failed` rather than looping invisibly |
 | **No beat at all** | The VM is off, the user manager is not running, lingering was lost, `hermes-gateway` is down, the cron job was deleted from the agent's store, the push token stopped being injected, or the Cloudflare Access bypass on `/api/push/*` was removed | `journalctl --user -u hermes-gateway` carries the run and its stderr — every one of those fails loudly there. Then `hermes cron list`, then the bypass. **A bypass regression turns every push monitor in the estate red at once, which is the tell** |
 
@@ -187,7 +216,7 @@ make check-vm-scripts
 ```
 
 This is the **only** thing that ever lints these files: it runs in no preflight, the repository's one workflow builds the InfluxDB MCP image from `homelab/health/mcp/` and covers nothing under `hermes-vm/`, and nothing runs it on a schedule.
-This procedure is its only caller; the update runbook never invokes it.
+Run this guard before installing repository-owned VM scripts.
 It covers all three scripts under `hermes-vm/scripts/` — `hermes-app-alive.sh` from step 2, `hermes-sandbox-refresh.sh` from step 6, and `hermes-profile-docker-setup.sh` from [step 7](#7-pin-the-docker-terminal-backend).
 
 ### 2. Install the daily check's script
@@ -336,7 +365,7 @@ Both of those fail in the same direction — a false *busy* — so the job skips
 
 **Nothing watches this job, by design.**
 It pushes to no monitor: a stale sandbox image is neither lockout nor data loss, and the containment boundary is the host kernel rather than the sandbox userland.
-Its own death is caught by the update runbook's precondition on its last run ([Preconditions](hermes-vm-updates.md#preconditions)), at that runbook's cadence.
+Nothing monitors the refresh job's own execution; failures remain visible in its run history.
 
 ### 7. Pin the docker terminal backend
 
@@ -359,22 +388,13 @@ A profile created tomorrow therefore runs its terminal tool in a container witho
 
 **The repository copy is the only durable record.**
 The nightly `hermes backup` zip covers `~/.hermes` and nothing under `/etc`, and `hermes update` never touches `/etc` either, so this file survives a rebuild only by being copied back from `hermes-vm/etc/hermes/config.yaml`.
-It follows the same pattern as the apt configuration in [step 9](#9-install-unattended-upgrades): repository is the source, the VM holds an installed copy.
+It follows the same pattern as the apt configuration in [step 8](#8-install-unattended-upgrades): repository is the source, the VM holds an installed copy.
 
 **`terminal.docker_volumes` is deliberately not pinned**, because it names per-profile paths and because only some profiles get the shared attachments mount.
 The helper writes those for one profile, and [Creating a profile](#creating-a-profile) is where it is used; the three entries it writes are in [The docker terminal sandboxes](#the-docker-terminal-sandboxes).
 
-### 8. Create the `hermes-update` check
 
-Create a healthchecks.io check named `hermes-update` by hand in the UI — period **10 days**, grace **4 days** — and store its ping UUID at `op://Homelab/hermes-update/healthcheck-uuid`, typed `[text]`.
-Nothing in this estate creates that check, that item or that field, and the update runbook's [Report step](hermes-vm-updates.md#report) reads the reference directly, so an absent field fails the `op read` at the end of an otherwise successful update.
-
-**The vault is `Homelab`, not `hermes`.**
-Nothing on the VM ever needs this reference: the ping is sent from the operator's laptop, whose credential reads either vault, so it sits beside `estate-update` in `Homelab` rather than with the VM's own secrets.
-The cadence allows one skipped week against a roughly weekly runbook before it alarms.
-A ping UUID is a tier-2 spam-target identifier rather than a secret, which is why the field is `[text]` — but it belongs in 1Password and never in this repository.
-
-### 9. Install `unattended-upgrades`
+### 8. Install `unattended-upgrades`
 
 Four files, and **two of them do not install where they live in the repository**:
 
@@ -392,7 +412,7 @@ Copy them one at a time, or the schedule stays at Debian's default and nothing s
 sudo systemctl daemon-reload
 ```
 
-### 10. Verify the install
+### 9. Verify the install
 
 Check each of these once.
 Every one of them fails silently if it is wrong.
@@ -424,7 +444,7 @@ Every one of them fails silently if it is wrong.
 
 4. **The stamp file refreshes after a real run.**
    Note its mtime, force a run, and confirm the mtime moved.
-   If it does not, the update runbook's stamp-age precondition starts stopping sessions a fortnight later with nothing else wrong:
+   A stale stamp can indicate that the timer did not run:
 
    ```sh
    stat -c '%y' /var/lib/apt/periodic/unattended-upgrades-stamp
@@ -434,7 +454,7 @@ Every one of them fails silently if it is wrong.
 
    **Never reach for `unattended-upgrade --dry-run` to check on the stamp, because a dry run writes it.**
    Verified August 27, 2026: a dry run completes through the same `write_stamp_file()` as a real one.
-   The diagnostic an operator reaches for when the stamp looks stale is therefore the one thing that makes it look fresh, and it hides a dead timer from the update runbook's 14-day precondition for another fortnight.
+   A dry run can make a dead timer's stamp look current.
 
    **The check also resists being run twice in a day**, which is not a fault.
    `apt.systemd.daily` guards its `unattended-upgrade` call with a **day-granular** interval — midnight today against midnight of the stamp's day — so once the stamp carries today's date a forced run is skipped and the mtime stays put.
@@ -666,7 +686,7 @@ systemctl --user enable --now hermes-gateway-<name>
 
 **A new gateway unit is a new thing to watch, and nothing notices that on its own.**
 Add its name to the `UNITS` list in `hermes-vm/scripts/hermes-app-alive.sh`, then re-run `make check-vm-scripts` and reinstall the script ([step 2](#2-install-the-daily-checks-script)) — the expected count is derived from that list, so a unit missing from it is a gateway whose death the daily check reports as healthy.
-The [update runbook](hermes-vm-updates.md) enumerates the units it restarts, so a new gateway belongs in that list too, or `hermes update` leaves it running the old code.
+Keep the daily liveness check's unit inventory current when adding a gateway.
 
 A kanban or WebUI-only worker needs no unit at all: its work runs inside a gateway that already exists.
 
@@ -727,11 +747,11 @@ If `systemctl list-timers` shows the upgrade starting late, look at the refresh 
 
 There is no `-success` file and nothing creates one.
 `unattended-upgrade` writes `/var/lib/apt/periodic/unattended-upgrades-stamp` for itself in `write_stamp_file()`, and it writes it on a run that found **nothing to do** just as readily as on one that installed everything.
-It writes it on a `--dry-run` too, so a dry run is never a way to inspect the stamp — see step 10 of the install.
+It writes it on a `--dry-run` too, so a dry run is never a way to inspect the stamp — see step 9 of the install.
 The other files in that directory belong to `apt.systemd.daily` and are not this.
 
 So the stamp proves the timer fired, not that anything was patched.
-The alarm built on it is the update runbook's 14-day stamp-age precondition, which stops a session rather than reporting on its own, so **detection latency is the runbook's cadence — about a week — against a 14-day threshold**.
+There is no stamp-age alarm after removal of the application update runbook.
 That is accepted.
 The VM has no MTA, so `unattended-upgrades` mail would be a silent failure; the journal is the record.
 
@@ -743,7 +763,7 @@ The VM has no MTA, so `unattended-upgrades` mail would be a silent failure; the 
   The `hermes` uptime-kuma monitor still catches a VM that is off or unreachable, faster, through the dashboard on `hermes.cynexia.com`.
 - **No chat turn is monitored at all.**
   The daily check makes none, by design.
-  The only chat turn this estate performs is the update runbook's verification step, and update sessions are unscheduled, so a fault that lets the agent import, serve `/health` and keep its units up while failing every chat turn is caught at the next session.
+  A fault that preserves imports, health responses and active units but breaks chat is noticed during normal use.
 - **The daily import runs in a fresh interpreter, not the WebUI's process.**
   So a venv repaired without restarting `hermes-webui` reports `verdict=ok` while the live process still cannot serve — the very failure that check exists to catch.
   After any venv repair, restart the unit.
@@ -762,26 +782,21 @@ The VM has no MTA, so `unattended-upgrades` mail would be a silent failure; the 
 - **Memory writes.**
   Nothing here detects a Hindsight write that fails: the write is on a background path a chat response does not wait for, so a profile can retain nothing while every check on this page passes.
   That is not hypothetical — from August 23 to August 27, 2026 the `default` profile's writes all returned `401 Invalid API key` and no check in this estate noticed ([hindsight.md](hindsight.md#monitoring)).
-  The journal grep that would have caught it is a step of [the update runbook's Verify](hermes-vm-updates.md#verify).
+  The journal remains available for diagnosis, but no application-update procedure checks it.
 
-  **Read that grep as a failure detector only, because a healthy retain is silent.**
-  The provider logs `Hindsight retain succeeded` at DEBUG, which this gateway does not emit, while a failure is a WARNING carrying the full traceback.
-  So an empty grep after a turn means "no failure", never "a write landed" — and an empty grep after *no* turn means nothing at all.
-  Retention is per turn (`retain_every_n_turns` defaults to 1) and `auto_retain` defaults to on, so one chat turn is enough to produce the WARNING if the write path is broken.
-  That asymmetry is what made the August 2026 401s findable at all.
 - **A dead apt timer.**
-  The 14-day gate that catches it is a precondition of the update runbook, so it surfaces at the next update session rather than on its own.
+  No dedicated timer-age alarm detects it.
 - **Its own cron job going missing.**
   The job is agent state rather than a file this repository installs, so a rebuild, a restore or a hand edit can drop it.
   Nothing notices until the monitor's heartbeat lapses about 30 hours later, and the report then reads as "no beat at all" — indistinguishable from a VM that is off.
   `hermes cron list` is the only positive proof it is still there.
 - **The docker sandboxes, and the image they are running.**
   The check runs on the host and says nothing about the containers any profile's terminal works inside, including whether their image is still the one the pinned tag now resolves to.
-  `hermes-sandbox-refresh` is what moves them, it pushes to no monitor, and the thing that notices it has stopped is the update runbook's precondition on its last run ([Preconditions](hermes-vm-updates.md#preconditions)).
-  So detection latency for a stale sandbox image is the update cadence, about a week, and that is accepted: a stale sandbox userland is neither lockout nor data loss, and the containment boundary is the host kernel, which `unattended-upgrades` patches nightly.
+  `hermes-sandbox-refresh` moves them but pushes to no monitor; its run history is the diagnostic record.
+  Detection latency for a stale sandbox image is unbounded; the host kernel remains the containment boundary and receives nightly security updates.
   A check on the age of the running image was considered and rejected — a healthy refresh job against a quiet upstream reads identically to a dead one.
 - **The refresh job going missing.**
-  Same shape as the daily check's own job, and the same store, but with no heartbeat behind it at all: nothing lapses, so the only detection is the same update-runbook precondition, reading the job's last run.
+  The job uses the same store as the daily check, but has no heartbeat; losing it causes no alert.
   `hermes cron list` remains the only positive proof the job exists.
 
 ## What moving the check inside hermes traded
@@ -892,7 +907,7 @@ The identity mounts exist because the WebUI hands the agent **host** paths as te
 hermes-webui saves a chat upload to `~/.hermes/webui/attachments/<session>/` — one directory shared by every profile, not scoped per profile — and pastes that host path into the prompt, so before this mount a sandboxed agent could not read anything a person uploaded.
 That is upstream issue [#6939](https://github.com/nesquena/hermes-webui/issues/6939), confirmed by the maintainer, and open pull request [#7022](https://github.com/nesquena/hermes-webui/pull/7022) moves uploads into the profile's own `cache/documents/webui-attachments/<session>/`, which hermes already mounts.
 The mount's cost is that every profile's uploads are readable from every sandbox that has it, which is why `safer_web_reader` does not, so it comes out as soon as a hermes-webui update carries the fix.
-Removing it is a step of [the update runbook](hermes-vm-updates.md#the-webui-attachments-mount-comes-out-when-6939-lands).
+Use the [attachments stopgap removal condition](#attachments-stopgap-removal-condition) above.
 
 **The WebUI's "workspace" is a label, not a mount.**
 Each profile has a file-browser root recorded in `{profile home}/webui_state/last_workspace.txt` and `workspaces.json` — `~/.hermes/webui/` for the default profile.

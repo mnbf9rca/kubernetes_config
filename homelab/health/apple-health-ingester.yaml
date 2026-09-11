@@ -4,6 +4,11 @@ kind: Deployment
 metadata:
   name: apple-health-ingester
   namespace: health
+  annotations:
+    keel.sh/policy: force
+    keel.sh/match-tag: "true"
+    keel.sh/trigger: poll
+    keel.sh/pollSchedule: "@every 6h"
 spec:
   replicas: 1
   selector: { matchLabels: { app: apple-health-ingester } }
@@ -13,7 +18,8 @@ spec:
     spec:
       containers:
         - name: ingester
-          image: irvinlim/apple-health-ingester:v0.5.0@sha256:f0072cade435b7f47bc3dbb8425288ec961cc5cd91a5473d799aabc2bc319bce
+          image: irvinlim/apple-health-ingester:latest
+          imagePullPolicy: Always
           # Config is CLI-flags-only (no env support upstream). Secrets are injected
           # via $(VAR) expansion from env — k8s substitutes them into args.
           env:

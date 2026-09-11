@@ -1,15 +1,11 @@
 ---
-# Daily Renovate-update watcher.
+# Daily Renovate lookup-failure watcher.
 #
-# Counts the open `renovate[bot]` pull requests on this repo with ONE
-# unauthenticated GitHub REST call and drives the `homelab-update-watch`
-# uptime-kuma PUSH monitor: UP while updates simply wait, DOWN when one has
-# waited long enough that an update session was plainly skipped, DOWN when
-# Renovate itself has gone quiet or is visibly broken, DOWN through silence when
-# this job stops running. A run that could not read GitHub pushes NOTHING, which
-# is what stops "I could not look" reading as "everything is fine".
-# Without it, a pinned namespace's updates sit in GitHub with nothing pointing
-# at them — which is exactly what happened to `health`.
+# Reads the Dependency Dashboard with one unauthenticated GitHub REST call and
+# drives the `homelab-update-watch` uptime-kuma PUSH monitor. Lookup failures or
+# a missing dashboard push DOWN; a readable dashboard without lookup failures
+# pushes UP. PR counts and dashboard age do not affect the signal. An unreadable
+# response pushes NOTHING, so persistent failures alert through silence.
 #
 # The script is homelab/ops/scripts/update-watch.py, mounted at /scripts by the
 # configMapGenerator in this directory's kustomization.yaml. It is a real file,
@@ -31,20 +27,13 @@
 # needs in exchange for a tier-1 secret with an expiry nothing here tracks, whose
 # own failure mode (401 forever) looks like a GitHub outage.
 #
-# NO KEEL HERE, by choice rather than by prohibition: the image is
-# version-pinned and Renovate watches this tree (renovate.json), so this pin is
-# proposed by pull request and applied through the normal diff/apply flow — the
-# watcher is not the estate's one unwatched pin. Renovate's scope has been homelab/** and vps/** since
-# 2026-08-26, when it was widened from the three pinned namespaces (health, ops,
-# hindsight) to both cluster trees. That widening did not change anything stated
-# here: this tree was inside the old scope and is inside the new one.
+# NO KEEL HERE. Each scheduled run pulls the floating runtime image afresh.
 #
 # NO PROBES. This is scheduled work, so the instrument is the push monitor's
 # dead-man's-switch plus activeDeadlineSeconds, not a probe. There is no start
 # signal and none may be invented — the push API has no such concept, so
 # activeDeadlineSeconds is the whole of the hang bound and the monitor's interval
-# plus retry is the silence bound. See docs/operations/monitoring.md and the
-# script's own rule 2.
+# plus retry is the silence bound. See docs/operations/monitoring.md.
 apiVersion: batch/v1
 kind: CronJob
 metadata:
@@ -85,9 +74,8 @@ spec:
             seccompProfile: { type: RuntimeDefault }
           containers:
             - name: watch
-              # Renovate watches this tree (renovate.json); this pin is
-              # proposed by PR and applied with the normal diff/apply flow.
-              image: python:3.14-alpine3.22@sha256:6b91e66ab2a880ce9ca5a1b91c70f45963ff71ff68268df056336e1a657d5efd
+              image: python:3-alpine
+              imagePullPolicy: Always
               command: ["python3", "/scripts/update-watch.py"]
               env:
                 # PYTHONDONTWRITEBYTECODE keeps the read-only root filesystem
