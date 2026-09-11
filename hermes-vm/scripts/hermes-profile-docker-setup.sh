@@ -27,8 +27,7 @@
 # hermes already mounts. When a hermes-webui update carries that fix, drop the
 # attachments entry from every profile that has it and from this script - the
 # cost of keeping it is that each profile's uploads are visible in every
-# sandbox. The removal is a step of the update runbook, docs/operations/
-# hermes-vm-updates.md.
+# sandbox. The removal condition is in docs/operations/hermes-vm.md.
 #
 # Canonical copy: hermes-vm/scripts/hermes-profile-docker-setup.sh in
 # github.com/mnbf9rca/kubernetes_config. Installed on the VM at

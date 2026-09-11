@@ -154,12 +154,8 @@ PY_VALUE_ALLOWLIST = frozenset({
     # homelab/ops/scripts/update-watch.py. Every name below is bound at the
     # emit site to `int(...)` of a value the script derived, or to a member of
     # that script's VERDICTS enum. Nothing GitHub sent can reach any of them —
-    # a pull-request title is unvalidated remote text and is deliberately never
-    # emitted (the pull-request NUMBER is, and int() guarantees it is a number).
+    # remote titles are unvalidated text and are deliberately never emitted.
     "verdict",          # a member of VERDICTS, a fixed enum in the source
-    "prs_open",         # int(): count of open renovate[bot] pull requests
-    "oldest_pr",        # int(): a repo-local pull-request number
-    "oldest_pr_days",   # int(): whole days since the oldest PR was created
     "dash_age_days",    # int(): whole days since the Dependency Dashboard moved
     "config_issues",    # int(): count of renovate[bot] config-error issues
     # int(): how many failed package lookups the Dependency Dashboard reports.

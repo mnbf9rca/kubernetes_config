@@ -43,35 +43,8 @@ Restart the affected gateways and WebUI after removing the shared mount.
 
 ## Rollback
 
-A code rollback cannot undo forward-only configuration or `state.db` migrations.
-State recovery requires a pre-update snapshot and discards changes made after that snapshot.
-Use the two repositories' reflogs to select the previous revisions.
-Preserve local changes before replacing either checkout.
-Replace each placeholder with the selected previous value.
-Run these commands on the VM:
-
-```sh
-V=~/.hermes/hermes-agent/venv/bin
-git -C ~/.hermes/hermes-agent checkout -B <agent_branch> <agent_sha> &&
-$V/pip install -e '/home/hermes/.hermes/hermes-agent[all]' &&
-$V/pip freeze --local | grep -E '^[A-Za-z0-9_.-]+==' > /tmp/constraints.txt &&
-test -s /tmp/constraints.txt &&
-git -C ~/hermes-webui checkout -f -B master <webui_sha> &&
-$V/pip install -r ~/hermes-webui/requirements.txt -c /tmp/constraints.txt &&
-$V/pip install 'hindsight-client==<client_version>' &&
-rm /tmp/constraints.txt &&
-systemctl --user restart hermes-gateway hermes-gateway-emh hermes-gateway-hal \
-  hermes-gateway-web_watcher hermes-dashboard hermes-webui
-```
-
-Inspect each repository's stash before restoring any local work.
-Do not assume the updater restored a stash.
-Restore state only when losing changes after the selected snapshot is acceptable:
-
-```sh
-ls -1t ~/.hermes/backups/pre-update-*.zip | head -n1
-/home/hermes/.local/bin/hermes import --force ~/.hermes/backups/pre-update-<stamp>.zip
-```
+The updater takes a pre-update snapshot under `~/.hermes/backups/`.
+Restore that snapshot to roll back; changes made after it are lost.
 
 ## Topology: what runs where
 

@@ -82,10 +82,6 @@ Unattended-Upgrade::Remove-Unused-Kernel-Packages "true";
 Unattended-Upgrade::Remove-New-Unused-Dependencies "true";
 
 // The VM has no MTA, so mail would be a silent failure. The journal is the
-// record, and the alarm is the weekly update runbook's stamp-age precondition
-// (`docs/operations/hermes-vm-updates.md`), which stops the session when the
-// /var/lib/apt/periodic/unattended-upgrades-stamp file that
-// `unattended-upgrade` writes for itself in write_stamp_file() is more than 14
-// days old. Detection latency is therefore the runbook's cadence, about a
-// week, which is accepted against a 14-day threshold.
+// record; no scheduled stamp-age alarm watches unattended upgrades.
+// See docs/operations/hermes-vm.md for the monitoring limits.
 Unattended-Upgrade::SyslogEnable "true";

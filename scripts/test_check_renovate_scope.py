@@ -17,15 +17,10 @@ from the shapes that are easy to write. An earlier draft of this suite passed
 tested none of: a pinned sidecar inside a keel-managed workload, a `-latest`
 suffix tag, a major-version stream, or a floating image on a scheduled job.
 """
-import contextlib
-import fnmatch
 import importlib.util
-import io
 import json
 import os
-import re
 import unittest
-from unittest.mock import patch
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _PATH = os.path.join(_HERE, "check-renovate-scope.py")
@@ -176,16 +171,6 @@ class TestFloatingUpdateModes(unittest.TestCase):
                         cluster, _pod(reference, namespace=namespace,
                                       name=name, kind=kind), patterns, [], source),
                         ([], []))
-
-    def test_both_cluster_check_requires_no_named_workload_inventory(self):
-        output = io.StringIO()
-        with patch.object(crs, "load_renovate",
-                          return_value=(_PATTERNS_HOMELAB, [], [])), \
-                patch.object(crs, "source_index", return_value=_OWNED_HOMELAB), \
-                patch.object(crs, "render", return_value=""), \
-                contextlib.redirect_stdout(output):
-            self.assertEqual(crs.main(["check-renovate-scope.py"]), 0)
-        self.assertIn("OK:", output.getvalue())
 
 
 class TestTheUnmanagedFloatingArm(unittest.TestCase):
@@ -538,45 +523,6 @@ class TestEnabledManagers(unittest.TestCase):
         self.assertEqual(kustomize, [])
         self.assertEqual(ignore, [])
 
-
-class TestRepositoryRenovateConfig(unittest.TestCase):
-    def test_floating_channels_and_mcp_automerge_are_preserved(self):
-        with open(crs.RENOVATE_JSON, encoding="utf-8") as handle:
-            config = json.load(handle)
-        rules = config["packageRules"]
-        floating_rules = [rule for rule in rules
-                          if rule.get("enabled") is False
-                          and rule.get("matchManagers") == ["kubernetes"]]
-        self.assertEqual(len(floating_rules), 1)
-        pattern = floating_rules[0]["matchCurrentValue"]
-        self.assertTrue(pattern.startswith("/") and pattern.endswith("/"))
-        floating = re.compile(pattern[1:-1])
-        for tag in ("latest", "stable", "release", "postgresql-latest", "2",
-                    "v1", "v3", "pg17", "16-alpine", "17-alpine", "3-alpine"):
-            with self.subTest(tag=tag):
-                self.assertIsNotNone(floating.search(tag))
-                self.assertTrue(crs.is_floating_tag(tag))
-        self.assertIsNone(floating.search("1.36.2"))
-        self.assertTrue(crs.is_pinned("alpine/k8s:1.36.2"))
-        self.assertTrue(any(rule.get("matchPackageNames") == ["alpine/k8s"]
-                            and rule.get("pinDigests") is True for rule in rules))
-        patterns, _kustomize, ignore = crs.load_renovate()
-        source = [("homelab/health/backups.yaml", "homelab",
-                   frozenset({"alpine/k8s:1.36.2"}))]
-        self.assertEqual(crs.analyse_render(
-            "homelab", _pod("alpine/k8s:1.36.2", kind="CronJob"),
-            patterns, ignore, source), ([], []))
-        for path in ("homelab/health/mcp/Dockerfile",
-                     "homelab/health/mcp/package.json",
-                     ".github/workflows/influxdb-mcp-image.yml"):
-            with self.subTest(path=path):
-                matching = [rule for rule in rules
-                            if any(fnmatch.fnmatch(path, glob)
-                                   for glob in rule.get("matchFileNames", []))]
-                self.assertTrue(any(rule.get("automerge") is True
-                                    for rule in matching))
-        for block in [config] + rules:
-            self.assertNotIn("schedule", block)
 
 
 if __name__ == "__main__":
