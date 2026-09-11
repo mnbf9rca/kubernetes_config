@@ -16,7 +16,7 @@ metadata:
   name: keel
 rules:
   - apiGroups: [""]
-    resources: [namespaces]
+    resources: [namespaces, nodes]
     verbs: [get, watch, list]
   - apiGroups: ["", extensions, apps, batch]
     resources: [pods, replicasets, replicationcontrollers, statefulsets, deployments, daemonsets, jobs, cronjobs]
