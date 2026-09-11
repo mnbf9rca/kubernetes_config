@@ -188,10 +188,17 @@ systemctl --user is-active hermes-gateway hermes-gateway-emh hermes-gateway-hal 
   hermes-gateway-web_watcher hermes-dashboard hermes-webui
 cd /home/hermes && ~/.hermes/hermes-agent/venv/bin/python -c 'import run_agent'
 curl -sS -m 10 -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8787/health
-# One chat turn on the default profile. The key reaches curl through a config file on stdin,
+# One chat turn on the default profile. API_SERVER_KEY comes from the 1Password secrets
+# provider, so ~/.hermes/.env holds a reference and no literal; `hermes secrets onepassword
+# status` prints the reference below, and the service-account token that reads it is one of
+# the few literals that file still holds. Export that token first: hermes loads it for its
+# own processes, and a non-interactive ssh shell does not inherit it, so a bare `op read`
+# fails with "No accounts configured". The key reaches curl through a config file on stdin,
 # never argv; never echo it. Pass is non-empty choices[0].message.content.
-KEY=$(sed -n 's/^API_SERVER_KEY=//p' ~/.hermes/.env | head -1)
-case "$KEY" in ''|*[!A-Za-z0-9_-]*) echo 'no usable literal key - STOP'; false ;; esac &&
+OP_SERVICE_ACCOUNT_TOKEN=$(sed -n 's/^OP_SERVICE_ACCOUNT_TOKEN=//p' ~/.hermes/.env | head -1)
+export OP_SERVICE_ACCOUNT_TOKEN
+KEY=$(op read 'op://hermes/hermes-dashboard/API_SERVER_KEY')
+case "$KEY" in '') echo 'no key from the secrets provider - STOP'; false ;; esac &&
 printf 'header = "Authorization: Bearer %s"\n' "$KEY" | curl -sS -m 60 -K - \
   -H 'Content-Type: application/json' \
   -d '{"model":"default","messages":[{"role":"user","content":"Reply with one sentence."}]}' \
@@ -204,6 +211,15 @@ journalctl --user -u hermes-gateway --since '10 min ago' | grep '1Password: appl
 ```
 
 The `applied N secrets` line is fail-open: after a restart, a drop from its previous value means the secrets provider failed silently.
+
+**A warning about a pending fleet restart reports a file, not the running code.**
+`hermes` prints it on every command while `~/.hermes/fleet_restart_pending` exists.
+The warning names two remedies, and only one of them removes the file.
+`hermes update` runs the outstanding restart and clears the marker when the tree is already up to date.
+`hermes gateway restart` and `systemctl --user restart` restart the gateways and leave the marker, so the warning outlives the restart that answered it.
+After the units are up, run `hermes update` again.
+Then confirm with `ls ~/.hermes/fleet_restart_pending` that the file is gone.
+Read that second run's output: it is a catch-up while the tree is up to date, and a real update if upstream has moved on.
 
 **[VM]** After the update — and after any `hermes import` that touches the `safer_web_reader` profile — dispatch one task on that board and diff the reader's live worker tool list against the four recorded in [safer-web-reader.md](safer-web-reader.md#the-tool-surface-which-is-the-whole-of-the-containment), because a widened list there is a silent containment loss that every task completing normally will hide.
 

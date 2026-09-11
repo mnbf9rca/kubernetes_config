@@ -30,6 +30,7 @@ The live checks the design keeps for the VM -- error-to-model, no partial
 write, in-run recovery -- are verification item 4 and are not repeated here.
 """
 
+import contextlib
 import importlib.util
 import json
 import os
@@ -78,7 +79,7 @@ def _load_broker_against_stubs():
 
     kanban_tools = types.ModuleType("tools.kanban_tools")
     for symbol in (
-        "_connect",
+        "_board",
         "_default_task_id",
         "_enforce_worker_task_ownership",
         "_reject_delegated_child_mutation",
@@ -459,7 +460,7 @@ class TestPostWriteFailures(unittest.TestCase):
     """
 
     PATCHED = (
-        "_connect",
+        "_board",
         "_default_task_id",
         "_enforce_worker_task_ownership",
         "_reject_delegated_child_mutation",
@@ -478,7 +479,7 @@ class TestPostWriteFailures(unittest.TestCase):
         self._saved = {name: getattr(broker, name) for name in self.PATCHED}
         self.conn = _ClosingConn()
         self.kb = _FakeKb()
-        broker._connect = lambda board=None: (self.kb, self.conn)
+        broker._board = self._fake_board
         broker._default_task_id = lambda arg: "t_fixture"
         broker._enforce_worker_task_ownership = lambda tid: None
         broker._reject_delegated_child_mutation = lambda tool: None
@@ -490,8 +491,27 @@ class TestPostWriteFailures(unittest.TestCase):
             setattr(broker, name, value)
         stub_model_tools._last_resolved_tool_names = []
 
+    @contextlib.contextmanager
+    def _fake_board(self, board=None, quiet_close=False):
+        """Upstream's `_board` shape, including what `quiet_close` swallows.
+
+        The swallow is copied rather than simplified: it is what carries the
+        post-write property since the plugin stopped closing the connection
+        itself, so a fake that closed cleanly would test nothing.
+        """
+        try:
+            yield self.kb, self.conn
+        finally:
+            try:
+                self.conn.close()
+            except Exception:
+                if not quiet_close:
+                    raise
+
     def test_a_failing_close_does_not_replace_the_success_return(self):
-        with self.assertLogs(broker.logger, level="ERROR"):
+        # Silent since the swallow moved into `_board(quiet_close=True)`: the
+        # plugin no longer sees the close failure, so it cannot log it either.
+        with self.assertNoLogs(broker.logger):
             result = json.loads(broker.handle_complete({"envelope": self.ENVELOPE}))
         self.assertTrue(self.conn.closed)
         self.assertTrue(result.get("ok"))
@@ -500,7 +520,7 @@ class TestPostWriteFailures(unittest.TestCase):
         self.assertNotIn("error", result)
 
     def test_the_write_still_happened_exactly_once(self):
-        with self.assertLogs(broker.logger, level="ERROR"):
+        with self.assertNoLogs(broker.logger):
             broker.handle_complete({"envelope": self.ENVELOPE})
         self.assertEqual(len(self.kb.complete_calls), 1)
         task_id, kwargs = self.kb.complete_calls[0]
@@ -509,7 +529,7 @@ class TestPostWriteFailures(unittest.TestCase):
         self.assertEqual(kwargs["result"], self.ENVELOPE)
 
     def test_a_failing_close_does_not_replace_the_read_result(self):
-        with self.assertLogs(broker.logger, level="ERROR"):
+        with self.assertNoLogs(broker.logger):
             result = json.loads(broker.handle_task({}))
         self.assertTrue(self.conn.closed)
         self.assertEqual(result.get("title"), "A title")
@@ -533,15 +553,15 @@ class TestPostWriteFailures(unittest.TestCase):
 
     def test_complete_task_returning_false_is_an_error_naming_the_task(self):
         self.kb.complete_result = False
-        with self.assertLogs(broker.logger, level="ERROR"):
+        with self.assertNoLogs(broker.logger):
             result = json.loads(broker.handle_complete({"envelope": self.ENVELOPE}))
         self.assertIn("t_fixture", result["error"])
 
     def test_a_connect_failure_says_nothing_was_written(self):
-        def _boom(board=None):
+        def _boom(board=None, quiet_close=False):
             raise RuntimeError("no such board file")
 
-        broker._connect = _boom
+        broker._board = _boom
         with self.assertLogs(broker.logger, level="ERROR"):
             result = json.loads(broker.handle_complete({"envelope": self.ENVELOPE}))
         self.assertIn("nothing was written", result["error"])
