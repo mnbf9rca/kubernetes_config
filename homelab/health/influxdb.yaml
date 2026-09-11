@@ -12,6 +12,11 @@ kind: Deployment
 metadata:
   name: influxdb
   namespace: health
+  annotations:
+    keel.sh/policy: force
+    keel.sh/match-tag: "true"
+    keel.sh/trigger: poll
+    keel.sh/pollSchedule: "@every 6h"
 spec:
   replicas: 1
   strategy: { type: Recreate }
@@ -22,7 +27,8 @@ spec:
     spec:
       containers:
         - name: influxdb
-          image: influxdb:2.9.1
+          image: influxdb:2
+          imagePullPolicy: Always
           env:
             - { name: DOCKER_INFLUXDB_INIT_MODE, value: setup }
             - { name: DOCKER_INFLUXDB_INIT_USERNAME, value: rob }

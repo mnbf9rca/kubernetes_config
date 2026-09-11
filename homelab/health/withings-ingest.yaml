@@ -29,12 +29,6 @@
 # refreshes, so a restore yields a usable token only for a loss falling between
 # the 03:00 snapshot and the next successful run.
 #
-# NO KEEL HERE, by choice rather than by prohibition (see
-# docs/operations/homelab-health.md): the image is pinned and Renovate proposes
-# bumps under the "health stack" group. The token file this job owns is written
-# by the script in this repo, not by the stdlib python image, so this workload
-# is on no lock — pinning is simply always allowed.
-#
 # NO PROBES. Scheduled work: the instrument is the uptime-kuma push monitor's
 # dead-man's-switch plus activeDeadlineSeconds. See
 # docs/operations/monitoring.md.
@@ -114,7 +108,8 @@ spec:
             seccompProfile: { type: RuntimeDefault }
           containers:
             - name: ingest
-              image: python:3.14-alpine3.22@sha256:6b91e66ab2a880ce9ca5a1b91c70f45963ff71ff68268df056336e1a657d5efd
+              image: python:latest
+              imagePullPolicy: Always
               command: ["python3", "/app/ingest.py"]
               securityContext:
                 allowPrivilegeEscalation: false

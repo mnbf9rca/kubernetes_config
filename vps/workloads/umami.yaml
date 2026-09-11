@@ -39,6 +39,11 @@ kind: Deployment
 metadata:
   name: umami-postgres
   namespace: vps
+  annotations:
+    keel.sh/policy: force
+    keel.sh/match-tag: "true"
+    keel.sh/trigger: poll
+    keel.sh/pollSchedule: "@every 6h"
 spec:
   replicas: 1
   strategy:
@@ -54,6 +59,7 @@ spec:
       containers:
         - name: postgres
           image: postgres:16-alpine
+          imagePullPolicy: Always
           env:
             - { name: POSTGRES_DB, value: umami }
             - { name: POSTGRES_USER, value: umami }
@@ -107,6 +113,7 @@ spec:
             failureThreshold: 6
         - name: pg-dump-sidecar
           image: postgres:16-alpine
+          imagePullPolicy: Always
           # The script is vps/workloads/scripts/pg-dump-snapshot.sh, mounted at
           # /scripts by the configMapGenerator in this directory's
           # kustomization.yaml. Its `set -e is deliberately absent` reasoning,

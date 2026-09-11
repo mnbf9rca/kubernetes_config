@@ -1,44 +1,15 @@
 #!/usr/bin/env python3
-"""Unit tests for update-watch.py.
+"""Offline tests for the Renovate lookup watcher and its push contract.
 
-Stdlib `unittest` only, for the same reason as the health namespace's suite:
-this repo has no Python toolchain, and the script is deliberately stdlib-only so
-it runs on a bare `python:3.13-alpine3.22` image with no pip step. A test suite
-that needed installing would not get run.
-
-    python3 homelab/ops/scripts/test_update_watch.py
-
-What these lock down is the script's one piece of genuine logic -- the
-three-way outcome classification and the issue partition -- because a bug in
-either is INVISIBLE AT RUNTIME. A classifier that always reports "zero pull
-requests" holds the monitor permanently UP over an unread repo, which looks
-exactly like a healthy estate.
-
-  * `classify` must never turn a non-answer into an answer: 403, 429, 404, 5xx,
-    a transport failure, a paginated response and an HTTP 200 carrying a JSON
-    object are all indeterminate.
-  * `partition` must identify the Dependency Dashboard POSITIVELY by title. The
-    regression this guards is a "Fix Renovate Configuration" issue being read as
-    the dashboard -- confident green while Renovate is halted.
-  * `decide` must return red for an update that has waited past
-    `PR_AGE_RED_DAYS`, a Dependency Dashboard that has not moved in
-    `RENOVATE_ALIVE_MAX_DAYS`, a missing dashboard and a configuration error --
-    and must ignore human issues and human pull requests. A young pull request
-    is GREEN, which is the point of the relaxed threshold.
-  * `count_lookup_failures` must find the dashboard's repository-problems
-    section without letting a package name reach the heartbeat, and must return
-    None rather than zero for a body it did not read -- an unread body is never
-    evidence that every lookup succeeded.
-
-No network and no push: these exercise return values only and never call the
-`hc_emit`/`hc_summary` sinks, so no test-local name can teach the ping-body
-guard that a name is safe to emit.
+    python3 -B homelab/ops/scripts/test_update_watch.py
 """
 import importlib.util
+import json
 import os
 import unittest
 import urllib.parse
 from datetime import datetime, timedelta, timezone
+from unittest.mock import patch
 
 # The script is a kubectl-mounted file with a hyphen in its name, so it cannot
 # be imported by name.
@@ -72,7 +43,8 @@ def bot_pr(number, days_ago=1):
 
 def dashboard(days_ago=6):
     return {"number": 2, "title": "Dependency Dashboard",
-            "user": {"login": "renovate[bot]"}, "updated_at": stamp(days_ago)}
+            "user": {"login": "renovate[bot]"}, "updated_at": stamp(days_ago),
+            "body": ""}
 
 
 def config_error():
@@ -172,84 +144,109 @@ class TestClassify(unittest.TestCase):
             self.assertEqual(uw.ping_suffix(verdict), "log", verdict)
 
     def test_determinate_verdicts_are_zero_or_fail(self):
-        for verdict in (uw.V_OK, uw.V_UPDATES_WAITING):
+        for verdict in (uw.V_OK,):
             self.assertEqual(uw.ping_suffix(verdict), "0", verdict)
-        for verdict in (uw.V_UPDATES_PENDING, uw.V_DASHBOARD_MISSING,
-                        uw.V_CONFIG_ERROR, uw.V_LOOKUP_FAILED):
+        for verdict in (uw.V_DASHBOARD_MISSING, uw.V_LOOKUP_FAILED):
             self.assertEqual(uw.ping_suffix(verdict), "fail", verdict)
 
 
-class TestPartition(unittest.TestCase):
-    """Rule 3: the dashboard is identified positively, by title."""
+class TestDashboardSelection(unittest.TestCase):
 
-    def test_pull_requests_dashboard_and_config_issues_are_separated(self):
-        items = [bot_pr(57), dashboard(), config_error(), human_issue(),
-                 human_pr()]
-        prs, dash, config = uw.partition(items)
-        self.assertEqual([pr["number"] for pr in prs], [57])
-        self.assertEqual(dash["title"], "Dependency Dashboard")
-        self.assertEqual([issue["number"] for issue in config], [99])
+    def test_only_the_bot_dashboard_is_selected(self):
+        expected = dashboard()
+        impostor = human_issue()
+        impostor["title"] = uw.DASHBOARD_TITLE
+        pull_request = bot_pr(57)
+        pull_request["title"] = uw.DASHBOARD_TITLE
+        items = [impostor, pull_request, config_error(), expected, human_pr()]
+        self.assertEqual(uw.find_dashboard(items), expected)
 
-    def test_a_config_error_issue_is_not_mistaken_for_the_dashboard(self):
-        # THE REGRESSION THIS SUITE EXISTS FOR. "The renovate[bot] issue that is
-        # not a pull request" would read this as a healthy dashboard and report
-        # green while Renovate has stopped proposing anything at all.
-        prs, dash, config = uw.partition([config_error()])
-        self.assertEqual(prs, [])
-        self.assertIsNone(dash)
-        self.assertEqual(len(config), 1)
-
-    def test_human_activity_is_ignored_entirely(self):
-        prs, dash, config = uw.partition([human_issue(), human_pr()])
-        self.assertEqual((prs, dash, config), ([], None, []))
+    def test_a_config_error_issue_is_not_the_dashboard(self):
+        self.assertIsNone(uw.find_dashboard([config_error()]))
 
     def test_malformed_items_do_not_raise(self):
-        prs, dash, config = uw.partition(["not a dict", {}, {"user": None}])
-        self.assertEqual((prs, dash, config), ([], None, []))
+        self.assertIsNone(uw.find_dashboard(
+            ["not a dict", {}, {"user": None}]))
 
 
-class TestDecide(unittest.TestCase):
+class TestMain(unittest.TestCase):
 
-    def decide(self, items):
-        return uw.decide(*uw.partition(items), now=NOW)
+    def run_main(self, items=None, response=None):
+        if response is None:
+            response = (200, {}, json.dumps(items))
+        with patch.dict(os.environ, {"GH_REPO": "owner/repo"}, clear=True), \
+                patch.object(uw, "fetch", return_value=response) as fetch, \
+                patch.object(uw, "log"):
+            result = uw.main()
+        fetch.assert_called_once_with("owner/repo")
+        return result
 
-    def test_clean_repo_is_green(self):
-        verdict, facts = self.decide([dashboard(), human_issue()])
-        self.assertEqual(verdict, uw.V_OK)
-        self.assertEqual(facts["prs_open"], 0)
-        self.assertEqual(facts["dash_age_days"], 6)
+    def test_dashboard_age_and_open_pull_requests_do_not_change_the_signal(self):
+        for timestamp in ("2000-01-01T00:00:00Z", "not-a-timestamp", None):
+            with self.subTest(timestamp=timestamp):
+                issue = dashboard()
+                issue["updated_at"] = timestamp
+                pull_request = bot_pr(57, days_ago=1000)
+                verdict, facts, count = self.run_main([issue, pull_request])
+                self.assertEqual(verdict, uw.V_OK)
+                self.assertEqual(facts, {})
+                self.assertEqual(count, 2)
 
-    def test_open_pull_requests_are_green_with_the_oldest_named(self):
-        # Renamed: an open pull request is the NORMAL state under session
-        # cadence. The facts it carries are unchanged and still asserted.
-        items = [dashboard(), bot_pr(57, days_ago=11), bot_pr(61, days_ago=2)]
-        verdict, facts = self.decide(items)
-        self.assertEqual(verdict, uw.V_UPDATES_WAITING)
-        self.assertEqual(facts["prs_open"], 2)
-        self.assertEqual(facts["oldest_pr"], 57)
-        self.assertEqual(facts["oldest_pr_days"], 11)
-
-    def test_missing_dashboard_is_red(self):
-        verdict, facts = self.decide([])
+    def test_a_missing_dashboard_is_red_even_with_a_config_issue(self):
+        verdict, facts, _ = self.run_main([bot_pr(57), config_error()])
         self.assertEqual(verdict, uw.V_DASHBOARD_MISSING)
-        self.assertNotIn("dash_age_days", facts)
+        self.assertEqual(facts, {})
+        self.assertEqual(uw.push_status(verdict), "down")
 
-    def test_config_error_outranks_a_pending_update(self):
-        # A halted Renovate makes the pull-request count untrustworthy, so the
-        # verdict names the cause that explains the rest.
-        verdict, facts = self.decide([dashboard(), bot_pr(57), config_error()])
-        self.assertEqual(verdict, uw.V_CONFIG_ERROR)
-        self.assertEqual(facts["config_issues"], 1)
+    def test_only_lookup_failures_are_reported_from_a_read_dashboard(self):
+        issue = dashboard_with_lookup_failure()
+        issue["updated_at"] = "2000-01-01T00:00:00Z"
+        verdict, facts, _ = self.run_main([issue, config_error(), bot_pr(57)])
+        self.assertEqual(verdict, uw.V_LOOKUP_FAILED)
+        self.assertEqual(facts, {"lookup_failures": 1})
+        self.assertEqual(uw.push_status(verdict), "down")
 
-    def test_every_verdict_decide_can_return_is_in_the_enum(self):
-        for items in ([], [dashboard()], [dashboard(), bot_pr(1)],
-                      [config_error()], [dashboard_with_lookup_failure()]):
-            verdict, _ = self.decide(items)
-            self.assertIn(verdict, uw.VERDICTS)
+    def test_an_unread_dashboard_body_is_indeterminate(self):
+        for body in (None, 42, ["not", "a", "string"]):
+            with self.subTest(body=body):
+                issue = dashboard()
+                issue["body"] = body
+                verdict, facts, _ = self.run_main([issue])
+                self.assertEqual(verdict, uw.V_API_ERROR)
+                self.assertEqual(facts, {})
+                self.assertIsNone(uw.push_status(verdict))
+        issue = dashboard()
+        del issue["body"]
+        verdict, _, _ = self.run_main([issue])
+        self.assertEqual(verdict, uw.V_API_ERROR)
+
+    def test_api_failures_still_push_nothing(self):
+        for response, expected in (
+                ((403, {"X-RateLimit-Remaining": "0"}, ""), uw.V_RATE_LIMITED),
+                ((429, {}, ""), uw.V_SECONDARY_LIMIT),
+                ((404, {}, ""), uw.V_REPO_UNREACHABLE),
+                ((503, {}, ""), uw.V_API_ERROR),
+                ((0, {}, ""), uw.V_API_ERROR),
+                ((200, {}, "{}"), uw.V_API_ERROR),
+                ((200, {}, "not json"), uw.V_API_ERROR),
+                ((200, {"Link": '<https://example.invalid>; rel="next"'}, "[]"),
+                 uw.V_API_ERROR)):
+            with self.subTest(response=response):
+                verdict, facts, _ = self.run_main(response=response)
+                self.assertEqual(verdict, expected)
+                self.assertEqual(facts, {"http": response[0]})
+                self.assertIsNone(uw.push_status(verdict))
+
+    def test_missing_repo_does_not_fetch(self):
+        with patch.dict(os.environ, {}, clear=True), \
+                patch.object(uw, "fetch") as fetch, patch.object(uw, "log"):
+            verdict, facts, count = uw.main()
+        fetch.assert_not_called()
+        self.assertEqual((verdict, facts, count), (uw.V_API_ERROR, {}, 0))
 
 
 class TestNextActions(unittest.TestCase):
-    """The body's `next=` line: one FIXED LITERAL per verdict (rule 4).
+    """The message's `next=` field: one fixed literal per verdict.
 
     The value of this field is that an alert says what to do without anyone
     opening a runbook, so the failure to guard against is a verdict with no
@@ -281,19 +278,8 @@ class TestNextActions(unittest.TestCase):
                 # spelling across the estate is worth keeping.
                 self.assertNotIn("confirm", action.lower())
 
-    def test_the_five_red_verdicts_name_a_command_or_a_place_to_look(self):
-        # The intended signal and the four Renovate failures are the ones an
-        # operator acts on, so each must point somewhere specific. Renamed from
-        # "three" when `renovate-stale` joined them and from "four" when
-        # `renovate-lookup-failed` did: an unasserted literal is one a reword
-        # can silently gut.
-        self.assertIn("gh pr list", uw.NEXT_ACTIONS[uw.V_UPDATES_PENDING])
-        self.assertIn("apply-homelab", uw.NEXT_ACTIONS[uw.V_UPDATES_PENDING])
-        self.assertIn("Mend job log", uw.NEXT_ACTIONS[uw.V_RENOVATE_STALE])
-        self.assertIn("managerFilePatterns",
-                      uw.NEXT_ACTIONS[uw.V_RENOVATE_STALE])
+    def test_the_red_verdicts_name_a_place_to_look(self):
         self.assertIn("installations", uw.NEXT_ACTIONS[uw.V_DASHBOARD_MISSING])
-        self.assertIn("gh issue list", uw.NEXT_ACTIONS[uw.V_CONFIG_ERROR])
         self.assertIn("Dependency Dashboard",
                       uw.NEXT_ACTIONS[uw.V_LOOKUP_FAILED])
         # Two places to read and no remedy: the one case diagnosed ended at
@@ -371,203 +357,8 @@ class TestFetch(unittest.TestCase):
             "/issues?state=open&per_page=100")
 
 
-class TestRelaxedPullRequestThreshold(unittest.TestCase):
-    """An open pull request is the NORMAL state under session cadence.
-
-    The old rule went red on any open pull request, which under a 4-to-6-week
-    session makes red the steady state -- and an alarm that is normally red is
-    not an alarm. Red now means "this has been waiting long enough that a
-    session was skipped".
-    """
-
-    def setUp(self):
-        self.now = datetime(2026, 8, 26, 12, 0, tzinfo=timezone.utc)
-        self.dash = {"user": {"login": uw.RENOVATE_LOGIN},
-                     "title": uw.DASHBOARD_TITLE,
-                     "updated_at": "2026-08-25T12:00:00Z"}
-
-    def _pr(self, days_old):
-        created = self.now - timedelta(days=days_old)
-        return {"user": {"login": uw.RENOVATE_LOGIN},
-                "pull_request": {"url": "x"},
-                "number": 101,
-                "created_at": created.strftime("%Y-%m-%dT%H:%M:%SZ")}
-
-    def test_a_young_pull_request_is_green(self):
-        verdict, facts = uw.decide([self._pr(3)], self.dash, [], self.now)
-        self.assertEqual(verdict, uw.V_UPDATES_WAITING)
-        self.assertEqual(facts["prs_open"], 1)
-        self.assertEqual(uw.ping_suffix(verdict), "0")
-
-    def test_a_pull_request_just_under_the_threshold_is_still_green(self):
-        verdict, _ = uw.decide([self._pr(uw.PR_AGE_RED_DAYS - 1)],
-                               self.dash, [], self.now)
-        self.assertEqual(verdict, uw.V_UPDATES_WAITING)
-
-    def test_a_pull_request_at_exactly_the_threshold_is_still_green(self):
-        # The boundary itself. `decide` compares with `>`, so the threshold day
-        # is the last green one -- the same shape as the dashboard clause.
-        verdict, facts = uw.decide([self._pr(uw.PR_AGE_RED_DAYS)],
-                                   self.dash, [], self.now)
-        self.assertEqual(verdict, uw.V_UPDATES_WAITING)
-        self.assertEqual(facts["oldest_pr_days"], uw.PR_AGE_RED_DAYS)
-
-    def test_a_pull_request_past_the_threshold_is_red(self):
-        verdict, facts = uw.decide([self._pr(uw.PR_AGE_RED_DAYS + 1)],
-                                   self.dash, [], self.now)
-        self.assertEqual(verdict, uw.V_UPDATES_PENDING)
-        self.assertEqual(facts["oldest_pr_days"], uw.PR_AGE_RED_DAYS + 1)
-        self.assertEqual(uw.ping_suffix(verdict), "fail")
-
-    def test_the_threshold_is_about_a_session_and_a_half(self):
-        self.assertGreaterEqual(uw.PR_AGE_RED_DAYS, 42)
-        self.assertLessEqual(uw.PR_AGE_RED_DAYS, 60)
-
-    def test_a_config_error_still_outranks_any_pull_request_age(self):
-        config = [{"user": {"login": uw.RENOVATE_LOGIN}, "title": "Action Required"}]
-        verdict, _ = uw.decide([self._pr(1)], self.dash, config, self.now)
-        self.assertEqual(verdict, uw.V_CONFIG_ERROR)
-
-
-class TestRenovateLiveness(unittest.TestCase):
-    """Renovate's own liveness, as a RED VERDICT ON THE SAME SIGNAL.
-
-    An earlier design gave this a destination of its own, on the argument that
-    an alerting backend notifies on status FLIPS and the first one was
-    permanently red. This task removes the permanent red, so the one signal
-    flips on a Renovate death exactly as a second one would have. One
-    destination, one enum -- and that held when the destination changed from a
-    healthchecks.io check to a kuma push monitor.
-
-    What these lock down is that liveness OUTRANKS the pull-request rules.
-    A dead Renovate with a young pull request still open must not read as
-    `updates-waiting`, which is green: that is the failure the split was
-    invented to prevent, and precedence is what actually prevents it.
-    """
-
-    def setUp(self):
-        self.now = datetime(2026, 8, 26, 12, 0, tzinfo=timezone.utc)
-
-    def _dash(self, days_old):
-        moved = self.now - timedelta(days=days_old)
-        return {"user": {"login": uw.RENOVATE_LOGIN},
-                "title": uw.DASHBOARD_TITLE,
-                "updated_at": moved.strftime("%Y-%m-%dT%H:%M:%SZ")}
-
-    def _pr(self, days_old):
-        created = self.now - timedelta(days=days_old)
-        return {"user": {"login": uw.RENOVATE_LOGIN},
-                "pull_request": {"url": "x"},
-                "number": 101,
-                "created_at": created.strftime("%Y-%m-%dT%H:%M:%SZ")}
-
-    def test_a_fresh_dashboard_and_no_pull_requests_is_ok(self):
-        verdict, _ = uw.decide([], self._dash(1), [], self.now)
-        self.assertEqual(verdict, uw.V_OK)
-
-    def test_a_dashboard_at_the_threshold_is_still_ok(self):
-        verdict, _ = uw.decide(
-            [], self._dash(uw.RENOVATE_ALIVE_MAX_DAYS), [], self.now)
-        self.assertEqual(verdict, uw.V_OK)
-
-    def test_a_dashboard_past_the_threshold_is_red(self):
-        verdict, _ = uw.decide(
-            [], self._dash(uw.RENOVATE_ALIVE_MAX_DAYS + 1), [], self.now)
-        self.assertEqual(verdict, uw.V_RENOVATE_STALE)
-        self.assertEqual(uw.ping_suffix(uw.V_RENOVATE_STALE), "fail")
-
-    def test_staleness_outranks_a_young_pull_request(self):
-        # THE WHOLE POINT. A young pull request alone is green. Renovate can
-        # die with one still open, and the check must go red anyway.
-        verdict, _ = uw.decide([self._pr(2)],
-                               self._dash(uw.RENOVATE_ALIVE_MAX_DAYS + 1),
-                               [], self.now)
-        self.assertEqual(verdict, uw.V_RENOVATE_STALE)
-
-    def test_a_config_error_still_outranks_staleness(self):
-        config = [{"user": {"login": uw.RENOVATE_LOGIN}, "title": "Action Required"}]
-        verdict, _ = uw.decide(
-            [], self._dash(uw.RENOVATE_ALIVE_MAX_DAYS + 1), config, self.now)
-        self.assertEqual(verdict, uw.V_CONFIG_ERROR)
-
-    def test_a_missing_dashboard_keeps_its_own_more_specific_verdict(self):
-        verdict, _ = uw.decide([], None, [], self.now)
-        self.assertEqual(verdict, uw.V_DASHBOARD_MISSING)
-
-    def test_an_unparseable_dashboard_timestamp_is_not_evidence_of_life(self):
-        # A dashboard whose timestamp did not parse yields no dash_age_days.
-        # That is a read failure about one field, never proof Renovate is
-        # alive, so it must NOT silently pass the liveness rule as `ok`.
-        dash = {"user": {"login": uw.RENOVATE_LOGIN},
-                "title": uw.DASHBOARD_TITLE,
-                "updated_at": "not-a-timestamp"}
-        verdict, facts = uw.decide([], dash, [], self.now)
-        self.assertNotIn("dash_age_days", facts)
-        self.assertEqual(verdict, uw.V_API_ERROR)
-        self.assertEqual(uw.ping_suffix(verdict), "log")
-
-    def test_unparseable_pull_request_timestamps_stay_green_unlike_the_dashboard(self):
-        # THE ASYMMETRY, ASSERTED SO IT IS A DECISION AND NOT AN OVERSIGHT. An
-        # unparseable DASHBOARD timestamp is `api-error`, because that field is
-        # the only evidence Renovate is alive. An unparseable pull-request
-        # `created_at` is not: the pull requests were still counted, so
-        # "updates are waiting" is known true and only their age is unreadable,
-        # and the green `updates-waiting` states that truth without escalating.
-        pr = {"user": {"login": uw.RENOVATE_LOGIN},
-              "pull_request": {"url": "x"},
-              "number": 101,
-              "created_at": "not-a-timestamp"}
-        verdict, facts = uw.decide([pr], self._dash(1), [], self.now)
-        self.assertNotIn("oldest_pr_days", facts)
-        self.assertEqual(facts["prs_open"], 1)
-        self.assertEqual(verdict, uw.V_UPDATES_WAITING)
-
-    def test_renovate_stale_is_determinate_and_red(self):
-        self.assertIn(uw.V_RENOVATE_STALE, uw.VERDICTS)
-        self.assertIn(uw.V_RENOVATE_STALE, uw.DETERMINATE)
-        self.assertNotIn(uw.V_RENOVATE_STALE, uw.GREEN)
-
-    def test_the_threshold_is_a_whole_number_of_days_at_or_above_the_floor(self):
-        # RENAMED, AND THE NAME MATTERS. This was
-        # `test_the_threshold_was_armed_not_left_at_a_sentinel`, which claimed
-        # something no assertion here can check: `>= 14` cannot tell a threshold
-        # armed from observation apart from the unarmed floor, and as of
-        # 2026-08-26 the value IS the unarmed floor -- six heartbeats had been
-        # logged, fewer than the fourteen the arming rule needs. Those six were
-        # healthchecks.io pings whose bodies the vault's read-only API key
-        # cannot fetch; the history now accumulates in the kuma monitor, where
-        # it is readable. The constant's own comment and monitoring.md carry
-        # that status; a test name must not contradict them. What this actually
-        # checks is the type and the floor.
-        self.assertIsInstance(uw.RENOVATE_ALIVE_MAX_DAYS, int)
-        self.assertGreaterEqual(uw.RENOVATE_ALIVE_MAX_DAYS, 14)
-
-    def test_there_is_no_second_check_left_behind(self):
-        # A removal test. The second UUID, its enum and its action map are
-        # gone; a half-removal that leaves `alive_decide` importable but
-        # unpinged is the shape this asserts against.
-        for name in ("alive_decide", "alive_ping_suffix", "ALIVE_VERDICTS",
-                     "ALIVE_NEXT_ACTIONS", "alive_next_action_for",
-                     "A_OK", "A_STALE", "A_UNKNOWN"):
-            self.assertFalse(hasattr(uw, name), name)
-
-
 class TestLookupFailures(unittest.TestCase):
-    """The dashboard's repository problems, as a determinate red.
-
-    THE GAP THIS CLOSES. Renovate reported `Failed to look up docker package
-    ghcr.io/keel-hq/keel` on the dependency dashboard for weeks and nothing
-    noticed: the watcher counted pull requests and identified the dashboard by
-    title, and a problem inside the body is neither. Both keel images are
-    digest-pinned so that the update engine cannot update itself, which makes
-    Renovate the only thing that can move them -- and a failed lookup opens no
-    pull request, so the frozen image looks exactly like an up-to-date one.
-
-    Two properties matter more than the count itself. An UNREADABLE dashboard is
-    still indeterminate and still pushes nothing: this reads a body that was
-    successfully fetched, and adds no new way to be wrong about GitHub. And no
-    package NAME ever reaches the heartbeat -- the section is remote text.
-    """
+    """Lookup failures are red; unreadable bodies remain indeterminate."""
 
     def setUp(self):
         self.now = datetime(2026, 8, 26, 12, 0, tzinfo=timezone.utc)
@@ -586,10 +377,11 @@ class TestLookupFailures(unittest.TestCase):
         moved = self.now - timedelta(days=days_old)
         return {"user": {"login": uw.RENOVATE_LOGIN},
                 "title": uw.DASHBOARD_TITLE,
-                "updated_at": moved.strftime("%Y-%m-%dT%H:%M:%SZ")}
+                "updated_at": moved.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "body": ""}
 
     def test_the_observed_body_is_a_determinate_red_with_a_count(self):
-        verdict, facts = uw.decide([], self._dash(), [], self.now)
+        verdict, facts = uw.decide(self._dash())
         self.assertEqual(verdict, uw.V_LOOKUP_FAILED)
         self.assertEqual(facts["lookup_failures"], 1)
         self.assertEqual(uw.push_status(verdict), "down")
@@ -597,7 +389,7 @@ class TestLookupFailures(unittest.TestCase):
     def test_each_failed_package_is_counted_once(self):
         dash = self._dash(packages=("ghcr.io/keel-hq/keel",
                                     "docker.io/library/redis"))
-        _, facts = uw.decide([], dash, [], self.now)
+        _, facts = uw.decide(dash)
         self.assertEqual(facts["lookup_failures"], 2)
 
     def test_the_section_heading_does_not_inflate_the_count(self):
@@ -610,7 +402,7 @@ class TestLookupFailures(unittest.TestCase):
     def test_a_dashboard_with_no_problem_section_is_not_a_zero(self):
         # None, never 0: a count taken from a section that is not there.
         self.assertIsNone(uw.count_lookup_failures(self._plain_dash()))
-        verdict, facts = uw.decide([], self._plain_dash(), [], self.now)
+        verdict, facts = uw.decide(self._plain_dash())
         self.assertEqual(verdict, uw.V_OK)
         self.assertNotIn("lookup_failures", facts)
 
@@ -630,7 +422,7 @@ class TestLookupFailures(unittest.TestCase):
         dash = self._plain_dash()
         dash["body"] = ("> Renovate failed to look up the following"
                         " dependencies: something new.\n")
-        verdict, facts = uw.decide([], dash, [], self.now)
+        verdict, facts = uw.decide(dash)
         self.assertEqual(verdict, uw.V_LOOKUP_FAILED)
         self.assertEqual(facts["lookup_failures"], 0)
 
@@ -644,7 +436,7 @@ class TestLookupFailures(unittest.TestCase):
         dash["body"] = ("## Repository Problems\n"
                         "\n"
                         "- `WARN: Package lookup failures`\n")
-        verdict, facts = uw.decide([], dash, [], self.now)
+        verdict, facts = uw.decide(dash)
         self.assertEqual(verdict, uw.V_LOOKUP_FAILED)
         self.assertEqual(facts["lookup_failures"], 0)
         # The alternation is on the bullet TEXT, not on the heading: another
@@ -664,32 +456,9 @@ class TestLookupFailures(unittest.TestCase):
                         "\n"
                         "- `WARN: Package lookup failures`\n"
                         "\n") + dash["body"]
-        verdict, facts = uw.decide([], dash, [], self.now)
+        verdict, facts = uw.decide(dash)
         self.assertEqual(verdict, uw.V_LOOKUP_FAILED)
         self.assertEqual(facts["lookup_failures"], 2)
-
-    def test_it_outranks_the_green_pull_request_verdicts(self):
-        # A dependency Renovate cannot look up proposes nothing, so the
-        # pull-request count is an undercount by exactly the frozen images.
-        # `updates-waiting` is GREEN, so precedence here decides the colour.
-        pr = {"user": {"login": uw.RENOVATE_LOGIN},
-              "pull_request": {"url": "x"}, "number": 101,
-              "created_at": "2026-08-25T12:00:00Z"}
-        verdict, facts = uw.decide([pr], self._dash(), [], self.now)
-        self.assertEqual(verdict, uw.V_LOOKUP_FAILED)
-        self.assertEqual(facts["prs_open"], 1)
-
-    def test_staleness_outranks_it_and_a_config_error_outranks_both(self):
-        stale = self._dash(days_old=uw.RENOVATE_ALIVE_MAX_DAYS + 1)
-        verdict, facts = uw.decide([], stale, [], self.now)
-        self.assertEqual(verdict, uw.V_RENOVATE_STALE)
-        # The count is recorded whichever verdict wins the contest.
-        self.assertEqual(facts["lookup_failures"], 1)
-        config = [{"user": {"login": uw.RENOVATE_LOGIN},
-                   "title": "Action Required"}]
-        verdict, facts = uw.decide([], self._dash(), config, self.now)
-        self.assertEqual(verdict, uw.V_CONFIG_ERROR)
-        self.assertEqual(facts["lookup_failures"], 1)
 
     def test_it_is_determinate_and_red(self):
         self.assertIn(uw.V_LOOKUP_FAILED, uw.VERDICTS)
@@ -697,20 +466,16 @@ class TestLookupFailures(unittest.TestCase):
         self.assertNotIn(uw.V_LOOKUP_FAILED, uw.GREEN)
         self.assertEqual(uw.ping_suffix(uw.V_LOOKUP_FAILED), "fail")
 
-    def test_an_unreadable_dashboard_is_still_indeterminate(self):
-        # THE CONTRACT THIS CHANGE MUST NOT TOUCH. Reading the body adds no new
-        # way to be wrong about GitHub: a body is only read once the issue list
-        # came back, and an unparseable dashboard timestamp is still
-        # `api-error`, which pushes nothing.
+    def test_a_lookup_failure_does_not_need_a_dashboard_timestamp(self):
         dash = self._dash()
-        dash["updated_at"] = "not-a-timestamp"
-        verdict, _ = uw.decide([], dash, [], self.now)
-        self.assertEqual(verdict, uw.V_API_ERROR)
-        self.assertIsNone(uw.push_status(verdict))
+        del dash["updated_at"]
+        verdict, _ = uw.decide(dash)
+        self.assertEqual(verdict, uw.V_LOOKUP_FAILED)
+        self.assertEqual(uw.push_status(verdict), "down")
 
     def test_no_package_name_reaches_the_heartbeat(self):
         # RULE 4. The body names packages; only the count is emitted.
-        _, facts = uw.decide([], self._dash(), [], self.now)
+        _, facts = uw.decide(self._dash())
         msg = uw.build_message(uw.V_LOOKUP_FAILED, facts, 1787776469)
         self.assertNotIn("keel", msg)
         self.assertNotIn("Failed to look up", msg)
@@ -720,9 +485,7 @@ class TestLookupFailures(unittest.TestCase):
         # `next=` for this verdict is 103 characters, over half the budget, so
         # the count heads the counter group. Asserted with the widest realistic
         # fact set, which is where a token further down the group is lost.
-        facts = {"prs_open": 3, "oldest_pr": 58, "oldest_pr_days": 48,
-                 "dash_age_days": 2, "config_issues": 0, "http": 404,
-                 "lookup_failures": 11}
+        facts = {"http": 404, "lookup_failures": 11}
         msg = uw.build_message(uw.V_LOOKUP_FAILED, facts, 1787776469)
         self.assertLessEqual(len(msg), uw.MSG_LIMIT)
         self.assertIn("lookup_failures=11", msg)
@@ -865,10 +628,10 @@ class TestHeartbeatMessage(unittest.TestCase):
     tearDown = setUp
 
     def test_verdict_is_the_first_token(self):
-        uw.hc_emit("prs_open=3")
-        uw.hc_summary(uw.V_UPDATES_PENDING)
+        uw.hc_emit("lookup_failures=3")
+        uw.hc_summary(uw.V_LOOKUP_FAILED)
         self.assertTrue(uw.kuma_msg().startswith(
-            "verdict=" + uw.V_UPDATES_PENDING + " "))
+            "verdict=" + uw.V_LOOKUP_FAILED + " "))
 
     def test_default_verdict_is_indeterminate_not_a_success(self):
         # If nothing ever calls hc_summary, the message must not claim a green
@@ -883,7 +646,7 @@ class TestHeartbeatMessage(unittest.TestCase):
     def test_the_message_is_one_line_and_bounded(self):
         uw.hc_summary(uw.V_OK)
         for _ in range(80):
-            uw.hc_emit("oldest_pr_days=12")
+            uw.hc_emit("lookup_failures=12")
         msg = uw.kuma_msg()
         # At most the limit, and close to it: the trim to a token boundary gives
         # back up to one token, so an exact-equality assertion here would fail
@@ -901,38 +664,20 @@ class TestHeartbeatMessage(unittest.TestCase):
     def test_the_cut_never_lands_mid_token(self):
         uw.hc_summary(uw.V_OK)
         for _ in range(40):
-            uw.hc_emit("oldest_pr_days=12")
+            uw.hc_emit("lookup_failures=12")
         msg = uw.kuma_msg()
         self.assertLessEqual(len(msg), uw.MSG_LIMIT)
         # Every token is a whole key=value pair the run actually emitted; a
         # plain slice left fragments like `oldes` and `ht` behind.
         for token in msg.split(" "):
             self.assertRegex(token, r"^[a-z0-9_]+=\S*$", token)
-        self.assertTrue(msg.endswith("oldest_pr_days=12"))
+        self.assertTrue(msg.endswith("lookup_failures=12"))
 
 
 class TestMessageBudget(unittest.TestCase):
-    """`run_epoch=` and a whole `next=` must survive the cut for EVERY verdict.
+    """Every message retains its verdict, run time and complete next action."""
 
-    This is a regression test for a real defect, not a style rule. `run_epoch=`
-    was emitted last, and the assembled message runs 130 to 289 characters, so
-    it was cut from every verdict except `ok` -- all four reds and
-    `updates-waiting` lost it. A silence-triggered alert carries the PREVIOUS
-    run's message, and `run_epoch=` is the only thing in it that says whether
-    the message is about this alert at all, so it was absent from exactly the
-    cases it exists for while monitoring.md told the operator to read it.
-
-    `next=` is 89 to 111 characters -- over half the budget -- so this asserts
-    the two fields that must survive, not that everything does. What the cut
-    takes is the tail of the counter group, and the pod log carries all of it.
-    """
-
-    # The widest realistic fact set: every optional field present and wide.
-    # `lookup_failures` is in it because the set has to stay the widest one --
-    # a field left out here is a field the budget is never tested against.
-    FACTS = {"prs_open": 3, "oldest_pr": 58, "oldest_pr_days": 48,
-             "dash_age_days": 2, "config_issues": 0, "http": 404,
-             "lookup_failures": 11}
+    FACTS = {"http": 404, "lookup_failures": 11}
 
     RUN_EPOCH = 1787776469
 
@@ -965,30 +710,22 @@ class TestMessageBudget(unittest.TestCase):
                 self.assertTrue(
                     self._assemble(verdict).startswith("verdict=%s " % verdict))
 
-    def test_the_thresholds_are_the_tokens_the_cut_takes_first(self):
-        # The other end of the budget claim, and the reason monitoring.md can
-        # say the two threshold literals are what a cut message loses. They are
-        # emitted LAST, and the trim keeps a whole-token prefix, so whatever is
-        # dropped is dropped from the tail -- asserted here rather than left as
-        # a property of the emit order that nothing checks.
+    def test_age_and_pull_request_fields_are_not_emitted(self):
+        facts = dict(self.FACTS, prs_open=3, oldest_pr=58, oldest_pr_days=48,
+                     dash_age_days=2, config_issues=1)
+        uw.build_message(uw.V_OK, facts, self.RUN_EPOCH)
+        body = uw.hc_body()
+        for key in ("prs_open", "oldest_pr", "oldest_pr_days", "dash_age_days",
+                    "config_issues", "pr_age_red_days", "renovate_alive_max_days"):
+            self.assertNotIn(key + "=", body)
+
+    def test_truncation_preserves_a_whole_token_prefix(self):
         for verdict in sorted(uw.VERDICTS):
             with self.subTest(verdict=verdict):
                 msg = self._assemble(verdict)
                 full = " ".join(uw.SUMMARY + uw.BODY_LINES)
-                # The two thresholds really are the last two emitted.
-                self.assertTrue(full.endswith(
-                    "pr_age_red_days=%d renovate_alive_max_days=%d"
-                    % (uw.PR_AGE_RED_DAYS, uw.RENOVATE_ALIVE_MAX_DAYS)))
-                # What survives is a whole-token PREFIX of what was emitted, so
-                # nothing is ever dropped from the middle and the tail goes
-                # first. This is the assertion that makes "the thresholds are
-                # cut first" true rather than merely intended.
                 self.assertEqual(full.split(" ")[:len(msg.split(" "))],
                                  msg.split(" "))
-                if len(full) > uw.MSG_LIMIT:
-                    # A truncated message has lost the LAST token, which by the
-                    # assertion above is a threshold, never a counter.
-                    self.assertNotIn("renovate_alive_max_days=", msg)
 
     def test_no_next_action_can_grow_past_the_budget(self):
         # The guard on the guard: a longer NEXT_ACTIONS entry would silently

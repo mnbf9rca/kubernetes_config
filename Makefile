@@ -410,15 +410,13 @@ check-renovate-scope-vps:
 # covered the day it lands. A glob that matches nothing would report OK having
 # checked nothing, but the ping-body guard on the next line hard-fails if
 # hermes-app-alive.sh goes missing (it is in that guard's REQUIRED_TARGETS), so
-# the tree cannot silently move out from under this target. Updating
-# the Hermes app stack is not a script here at all: it is a runbook an agent (or
-# the operator) executes about weekly, docs/operations/hermes-vm-updates.md.
+# the tree cannot silently move out from under this target. The operator updates
+# the Hermes app stack with the WebUI's Update Now button; see
+# docs/operations/hermes-vm.md.
 # The update wrapper that used to live beside the alive check, along with its
 # two test harnesses, its systemd unit and its root-owned entry point, was
 # deleted on 2026-08-27: a task that is always run with someone watching does
-# not need a thousand lines of unwatched-failure machinery. Nothing mechanical
-# guards runbook prose, and no guard in this repository reads it; that is the
-# trade the deletion makes.
+# not need a thousand lines of unwatched-failure machinery.
 #
 # Not wired into diff-*/apply-*: nothing here is applied to a cluster, so
 # gating a cluster apply on it would be noise. That is a real cost — nothing

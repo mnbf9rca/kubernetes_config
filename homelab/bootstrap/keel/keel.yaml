@@ -44,24 +44,11 @@ metadata:
   name: keel
   namespace: keel
   labels: { app: keel }
-  # NO keel ANNOTATIONS HERE, DELIBERATELY. Removed 2026-08-26.
-  #
-  # keel used to watch its own Deployment with `policy: force`, so a hijacked
-  # `ghcr.io/keel-hq/keel:latest` reached this cluster within one six-hour poll
-  # holding keel's own ClusterRole. The update engine must not update itself.
-  #
-  # Two facts make re-adding them worse than useless. `match-tag: "true"` on a
-  # PINNED tag only refreshes the digest, so the annotations would look like
-  # coverage while freezing the version — the state traefik and meilisearch were
-  # in until they were de-keeled on 2026-08-26. And an incomplete set is worse
-  # still: without `match-tag`, keel silently downgrades a semver tag to
-  # `:latest`.
-  #
-  # The image below is pinned by tag AND digest. Renovate watches homelab/**
-  # (renovate.json) as of 2026-08-26, so the bump arrives as a pull request and
-  # the update session takes it through the normal read-the-diff / apply flow.
-  # This directory is on the `pinDigests: false` packageRule: the digest is
-  # already here by hand, so Renovate has nothing to add by re-proposing it.
+  annotations:
+    keel.sh/policy: force
+    keel.sh/match-tag: "true"
+    keel.sh/trigger: poll
+    keel.sh/pollSchedule: "@every 6h"
 spec:
   replicas: 1
   selector:
@@ -73,10 +60,8 @@ spec:
       serviceAccountName: keel
       containers:
         - name: keel
-          image: ghcr.io/keel-hq/keel:0.22.1@sha256:a82382e86766794d3decb65574ff07026d91d58b1aa10da94d698dfc02636e0f
-          # A digest is immutable, so `Always` buys a registry round trip per
-          # pod start and nothing else.
-          imagePullPolicy: IfNotPresent
+          image: ghcr.io/keel-hq/keel:latest
+          imagePullPolicy: Always
           command: [/bin/keel]
           env:
             - name: NAMESPACE

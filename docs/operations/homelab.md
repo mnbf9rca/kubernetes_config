@@ -14,7 +14,7 @@ Kubectl context: `cynexia-homelab`.
 | cert-manager | Let's Encrypt, Route53 DNS-01 solver, single wildcard `*.cynexia.net` cert |
 | local-path-provisioner | Backed by the node's SSD user volume (`/var/mnt/ssd`) |
 | NFS CSI driver | Static PV/PVCs against the Proxmox host's ZFS pool |
-| keel | Image auto-updates from floating tags — **except** the workloads locked to the pinned mode because they write into persistent data they own (the `STATEFUL` tuple in `scripts/check-renovate-scope.py`), the workloads pinned by choice, and keel itself, which is digest-pinned (see [keel](#keel) below) |
+| keel | Floating image updates, including keel itself; see [keel](#keel) below |
 | restic | Nightly CronJob (03:00 UTC) → Backblaze B2 `b2:homelab-restic-d5e15f22`, 7 daily / 4 weekly / 6 monthly. Pings healthchecks.io on start and exit code — see [monitoring.md](monitoring.md#the-restic-ping-wrapper) |
 | jottacloud-backup | Own namespace; rclone Jottacloud → NFS, then kopia → B2 `cloud-files-backup`; reports to the `jottacloud-backup` uptime-kuma push monitor |
 
@@ -29,18 +29,23 @@ Any new hostPath/hostNetwork workload needs the same treatment.
 `cert-manager`, `nfs-csi` and `local-path` are pulled in as raw GitHub URLs with the version in the *path*, which the `kustomize` manager does not parse; it reads `?ref=` and `images:` transformers, and this tree has neither.
 That manager's only footprint in the repo is the VPS's `vps/bootstrap/local-path/kustomization.yaml`, pinned `?ref=v0.0.37`.
 Bumping a homelab base is still a hand edit of the URL.
+Update these three bundles during the Kubernetes step of `/update-estate`.
 `keel`'s namespace **is** declared there, because upstream keel moved to Helm-only distribution and `homelab/bootstrap/keel/keel.yaml` is hand-written.
 
 ### keel
 
-keel is digest-pinned and carries no keel annotations of its own.
-A self-updating controller holding cluster-wide read **and write** across every workload kind — its ClusterRole grants `get, delete, watch, list, update` on Deployments, DaemonSets, StatefulSets, ReplicaSets, ReplicationControllers, Pods, Jobs and CronJobs — is the one component where an unattended tag change is a security event, not a convenience.
-Its bump belongs in a reviewed pull request, not a six-hour poll.
+The manifests select `ghcr.io/keel-hq/keel:latest` for self-updates and `traefik:v3` for Traefik.
+Both controllers carry the full keel annotation set: `force`, `match-tag: "true"`, `poll`, and `@every 6h`.
+Every container moved to a floating image has `imagePullPolicy: Always`.
+Jobs and CronJobs pull their floating tags at each run without keel annotations.
 
-Renovate has watched `homelab/bootstrap/**` since 2026-08-26, when `renovate.json` was widened from three namespaces to `homelab/**` and `vps/**`, so keel's own bump now arrives as a pull request instead of waiting for someone to remember it.
-`scripts/check-renovate-scope.py` reports `homelab/bootstrap/keel/keel.yaml` as in scope, and runs in the `diff-homelab`/`apply-homelab` preflight — so if that scope is ever narrowed again, the next apply fails rather than the pin going quietly stale.
+The accepted recovery point for application data is the nightly dump or application snapshot captured by restic.
+An automatic update can require restoration and lose changes since that recovery point.
+The existing restore procedures remain the recovery path.
 
-The widening deliberately does **not** let Renovate re-propose keel's digest: `homelab/bootstrap/keel/**` is on the `pinDigests: false` packageRule, because the image is already pinned by tag and digest by hand.
+`scripts/check-renovate-scope.py` checks floating controller annotations and Renovate coverage for remaining pins.
+The `alpine/k8s` backup runtime stays pinned because it has no suitable floating tag.
+Renovate excludes floating runtime images from digest pinning.
 
 Its RBAC was trimmed on August 26, 2026 (PR #68): no `secrets` rule, no `pods/portforward`.
 Verify keel's permissions with a SelfSubjectAccessReview issued with keel's own ServiceAccount token from inside the cluster — `kubectl auth can-i --as=` is meaningless through the Omni proxy, which ignores impersonation and answers as the caller.
@@ -71,13 +76,15 @@ cloudflared was retired from the downloads-era stack but is not retired homelab-
 
 `homelab/ops/` holds work that belongs to the estate rather than to any one application: two CronJobs, both dead-man's-switches over the update path itself.
 
-- **`update-watch`**, at 06:45Z daily, makes a single unauthenticated GitHub call, counts the open Renovate pull requests on this repo, and drives the `homelab-update-watch` uptime-kuma push monitor, so an update that has waited past the threshold goes DOWN instead of passing unnoticed.
-  A *waiting* update is UP — the monitor catches a skipped update session; it does not nag about the normal state.
+- **`update-watch`**, at 06:45Z daily, reads the Renovate dependency dashboard through GitHub's unauthenticated API.
+  It pushes DOWN for dependency lookup failures or a missing dashboard, and UP when neither condition exists.
+  It does not track pull-request age or dashboard age.
   It pushes **nothing at all** on a run that could not read GitHub, which stops "I could not look" reading as "everything is fine".
   Full behaviour and every cause of DOWN: [monitoring.md](monitoring.md#the-update-watcher).
 - **`keel-fresh`**, at 07:15Z daily, makes one request to keel's own `/metrics` — a single ClusterIP endpoint, `keel.keel.svc.cluster.local:9300`, reached across the namespace boundary from `ops`; it scrapes nothing else and holds no cluster-wide read — and pushes the `homelab-keel-fresh` uptime-kuma monitor.
   It is the only thing that would notice keel's registry poll loop had wedged: keel's own probes hit `/healthz`, which stays green while the poll goroutine is dead.
-  Verdict enum, the image floor and why there is no `/start`: [monitoring.md](monitoring.md#the-keel-dead-mans-switch).
+  The configured `IMAGE_FLOOR` is 17, derived from the rendered floating controller images.
+  Verdict enum and why there is no `/start`: [monitoring.md](monitoring.md#the-keel-dead-mans-switch).
 
 The half-hour gap is deliberate: the two update-path checks should not alert in the same minute.
 `keel-fresh` keeps two integers of state on a 32Mi `local-path` PVC, `keel-fresh-state` — the previous run's process start time and poll counter — which is the only way to assert a counter is *increasing*.
@@ -88,10 +95,9 @@ Three things about this namespace are deliberate and should survive a refactor:
 - **It is not `health` and not `backup`.**
   Its scope is the whole repo, so a health-namespace object alerting about other namespaces would misstate ownership; and `backup` runs at PSA privileged for restic's hostPaths, which an outbound-HTTPS poller has no business inheriting.
   `ops` is PSA baseline, the cluster default, and needs no ServiceAccount and no RBAC.
-- **No keel here, by choice rather than by prohibition.**
-  Neither job writes persistent data it owns, so neither is on the `STATEFUL` lock; pinning is simply always allowed.
-  Every image is version-pinned and Renovate watches this tree, so neither job's own pin is an unwatched image.
-  Since 2026-08-26 that is gated: `check-renovate-scope-homelab` runs in the `diff-homelab`/`apply-homelab` preflight, so losing the scope fails the next apply.
+- **Each scheduled run pulls its runtime image.**
+  The manifests select `python:3-alpine` for `update-watch` and `curlimages/curl:latest` for `keel-fresh`.
+  Both use `imagePullPolicy: Always` and no keel annotations.
 - **Removal is one commit,** with a long list in it.
   Drop `- ops` from `homelab/kustomization.yaml`, `rm -r homelab/ops/`, remove the namespace block, remove every `OPS_*` variable from `.env.tpl` and from both Makefile lists — `OPS_KUMA_UPDATE_TOKEN` and `OPS_KUMA_KEEL_TOKEN`, plus `OPS_HC_UPDATE_UUID` for as long as that retired line is still wired; grep rather than working from a list here — and from `scripts/check-ping-bodies.py` remove **both** `REQUIRED_TARGETS` entries (`update-watch.py` and `keel-fresh.sh`), **every name in that file's `update-watch.py` block of `PY_VALUE_ALLOWLIST`** — no count is written here, because it read "eight" while the block held nine, and a stale count leaves names on a security allowlist for code that no longer exists — and `PUSH_URL` from `DENY_VARS`.
   Then apply, `kubectl delete namespace ops` — which takes the `keel-fresh-state` PVC with it — and delete the `keel` **Service** in the `keel` namespace, which exists only to serve `keel-fresh` and survives deletion of the `ops` namespace.
@@ -112,6 +118,9 @@ Two hostnames for one box (storage-NIC IP vs. general LAN name), not two servers
 All the data that matters lives on that zpool.
 The Talos node's own SSD partitions (vmdata LVM, user volume) are for VM/system lifecycle — etcd and local-path PVCs — not for NFS-backed data.
 The homelab restic/B2 job backs up **only** that SSD (`/var/mnt/ssd/local-path-provisioner`); it is the only backup destination this repo manages and it does **not** cover the NFS zpool, which has its own backup story on the NAS side, outside this repo.
+
+The restic backup CronJob and init Job select `restic/restic:latest` with `imagePullPolicy: Always`.
+The Hermes pull CronJob selects `kroniak/ssh-client:latest` with the same pull policy.
 
 Applications' own scheduled backups (sonarr, radarr, emby, sabnzbd) must write zips to `/config/Backups/` so restic catches them.
 The sqlite-quiesce sidecar pattern from earlier drafts of the plan is **not** used here — it is redundant when the app's own zip backup already handles DB consistency.
@@ -409,44 +418,31 @@ The unit still reaches `active`.
 Every check in this document passes while the iOS app answers every message with `AIAgent not available`.
 Upstream reaches the same conclusion in `bootstrap.py`, where `ensure_python_has_webui_deps` prefers the agent venv and creates a local `.venv` only when no agent venv can run both.
 
-**This section is why the update runbook installs the WebUI's requirements into the agent venv**, under a constraint file generated from that venv, and why `hindsight-client` is a third resident of it rather than a tenant of its own environment.
+The WebUI and `hindsight-client` therefore share the agent venv.
 It is also why `hermes-app-alive.sh` imports `run_agent` every day at 05:45 UTC: that import is the cheapest assertion that catches the failure documented above, and no HTTP check on any of the three services can catch it.
-The verification step that repeats it after every update is in [hermes-vm-updates.md](hermes-vm-updates.md#verify).
 
-#### Update — tracks upstream, not pinned
+#### Updates
 
-The checkout tracks `origin/master` rather than a pinned tag, which is the ruling of August 26, 2026.
-Upstream's newest tag sits more than 560 commits behind its own deployed master, and it stopped tagging; a pin here would freeze the WebUI on code nobody runs.
-
-**The WebUI moves as one step of the whole-VM update procedure, not on its own.**
-The procedure is a runbook that an agent or the operator follows roughly weekly, with someone watching: [hermes-vm-updates.md](hermes-vm-updates.md).
-Its [Update](hermes-vm-updates.md#update) step fetches `origin/master`, checks the branch out with `git checkout -f -B master origin/master`, and installs `requirements.txt` into the **agent** venv under a constraint file frozen from that same venv moments earlier.
-
-Two consequences of that checkout form matter before you touch the tree by hand:
-
-- **`git checkout master && git pull --ff-only` agrees with it.**
-  That command leaves the checkout in the shape the runbook maintains: local `master`, HEAD attached, tracking upstream.
-- **`-f` force-sets the branch, so uncommitted changes in `/home/hermes/hermes-webui` are discarded.**
-  Do not keep work there.
-  The runbook's preconditions stop on a dirty tree for exactly this reason, and the `-f` states the intent rather than hiding it.
-
-**The constraint file is not decoration.**
-`pyyaml` and `cryptography` are already hermes-agent dependencies (`pyproject.toml` pins `pyyaml==6.0.3` and `cryptography==50.0.0`), so today the install is a no-op.
-The risk is not that the dependencies go missing; it is that an unpinned install eventually moves one of them under four production services.
-With `-c`, pip fails loudly and a person decides.
+Use the WebUI's **Update Now** button to update Hermes.
+There is no scheduled updater or separate weekly update runbook.
+See [hermes-vm.md](hermes-vm.md) for VM operation.
 
 #### Rollback when an update breaks the app
 
 **Nothing rolls back on its own.**
-Rollback is a manual, judgement-bearing procedure, and the full form — agent, WebUI, `hindsight-client` and the six units, in the order that matters — is [the runbook's Rollback section](hermes-vm-updates.md#rollback).
-Read its caveat before you start: **a rollback restores code and pinned versions, and cannot restore state**, because `hermes update`'s configuration and `state.db` migrations are forward-only.
+Rollback is a manual, judgement-bearing procedure, and the full form — agent, WebUI, `hindsight-client` and the six units, in the order that matters — is [Rollback](hermes-vm.md#rollback).
+Read the rollback caveat before starting.
+A code and dependency rollback cannot undo forward-only configuration or `state.db` migrations.
 State comes back only from the `--backup` snapshot, and only by discarding everything since.
 
-What makes a by-hand rollback possible is a file the runbook writes **before anything mutates**: `~/.hermes/hermes-update.pre-run`, which records `agent_sha`, `agent_branch`, `webui_sha` and `client_version`, then gains `target_sha` and `webui_target_sha` as the run proceeds.
+The retired runbook recorded `agent_sha`, `agent_branch`, `webui_sha` and `client_version` in `~/.hermes/hermes-update.pre-run`.
+A historical copy may also contain `target_sha` and `webui_target_sha`.
+WebUI updates do not maintain that record.
 It is plain text, mode 0644, and every value in it is an ordinary identifier.
-It lives inside `~/.hermes`, so the nightly zip carries it and a rebuilt VM inherits a rollback target — confirm the revisions it names still exist in both checkouts before trusting it.
+It lives inside `~/.hermes`, so the nightly zip can preserve an old rollback target.
+Confirm its revisions exist and identify the intended recovery point before using it.
 
-To roll back the WebUI alone, to the revision recorded before this run:
+Use a validated historical record to roll back the WebUI alone:
 
 ```sh
 SHA=$(sed -n 's/^webui_sha=//p' /home/hermes/.hermes/hermes-update.pre-run)
@@ -455,7 +451,9 @@ systemctl --user restart hermes-webui
 ```
 
 That form leaves the checkout on a branch rather than detached, which is the state the next update expects.
-It moves the WebUI alone, so use it only when the agent side is known good — otherwise take the runbook's ordered rollback, which regenerates the constraint file from the restored agent tree.
+It moves the WebUI alone.
+Use it only when the agent side is known good.
+Otherwise, follow [Rollback](hermes-vm.md#rollback).
 
 Second resort, if the record is missing or names a revision that is itself broken: the Hermex repo publishes the upstream commit the app was last validated against as `UPSTREAM_TESTED_SHA`.
 The branch is `master`, not `main`.

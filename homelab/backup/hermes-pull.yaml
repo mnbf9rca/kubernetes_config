@@ -104,35 +104,8 @@ spec:
               type: RuntimeDefault
           containers:
             - name: hermes-pull
-              # kroniak/ssh-client (Alpine 3.23 + openssh-client), pinned by
-              # digest because it is an unofficial personal Docker Hub image
-              # handling an SSH private key and a zip full of live secrets —
-              # a mutable tag can be repointed, a digest cannot. Digest is
-              # tag 3.23's manifest list as served by Docker Hub 2026-08-24
-              # (pushed 2026-02-03). Probed in-cluster 2026-08-24 as uid
-              # 1999: ssh, sha256sum, wget, awk, du, od, head, stat all
-              # present; curl absent (the script uses wget); bare `ssh -V`
-              # failed with "No user exists for uid 1999", which is what the
-              # hermes-passwd mount fixes. alpine/k8s:1.36.0 (the
-              # influx-backup image) was probed first and ships no ssh.
-              # Renovate has watched this file since the 2026-08-26 scope
-              # widening to homelab/**, and the shape of what it proposes here
-              # is worth knowing before the first one lands. The reference
-              # carries a digest and NO TAG, so Renovate resolves it against
-              # `latest` and opens DIGEST-UPDATE pull requests whenever that
-              # tag is repointed. A digest update is not a major, so the
-              # ALL-MAJORS dashboard rule does not hold it back. renovate.json
-              # therefore carries a packageRule naming kroniak/ssh-client
-              # that holds these on the Dependency Dashboard instead, and
-              # repeats this warning in the pull request body — because THIS
-              # comment sits ~20 lines above the image line and a pull request
-              # diff shows three lines of context, so the one reader who most
-              # needs it is the one who cannot see it.
-              # Treat an approved bump as a new image, not a rubber stamp:
-              # this container handles an SSH private key and a zip full of
-              # live secrets. Re-run the probe from the design's rollout
-              # section before applying, exactly as for a manual bump.
-              image: kroniak/ssh-client@sha256:cfb58718a2cfbb248214a9c33655f16438e0f1014c054e0e524d3eb232ccdb2b
+              image: kroniak/ssh-client:latest
+              imagePullPolicy: Always
               command: ["sh", "/scripts/hermes-pull.sh"]
               env:
                 # uptime-kuma push monitor `homelab-hermes-pull`

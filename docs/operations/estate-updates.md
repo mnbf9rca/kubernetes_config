@@ -6,30 +6,32 @@ This document is the reference material that skill reads; it does not repeat the
 
 The strategy behind it lives in the local-only design note `docs/superpowers/specs/2026-08-26-estate-update-strategy.md`, which is gitignored.
 
-## Two modes, and nothing else
+## Update ownership
 
 | Mode | Surface | Cadence | Watched by |
 |---|---|---|---|
-| Continuous | keel on both clusters (floating tags), `unattended-upgrades` on the hermes VM | Its own timer | `homelab-keel-fresh` and `vps-keel-fresh`, **uptime-kuma push monitors** ([uptime-kuma.md](uptime-kuma.md#push-monitors)) |
-| The session | Every open Renovate pull request, the hand-managed kustomize pins, Talos and Kubernetes through Omni, the Hermes VM update runbook | Every 4 to 6 weeks | `estate-update` (45d / 7d) and `hermes-update` (10d / 4d), **healthchecks.io** checks, both pinged by hand from the laptop ([monitoring.md](monitoring.md#healthchecksio-checks)) |
+| Floating runtime images | Keel on both clusters; Jobs and CronJobs use `imagePullPolicy: Always` | Six-hour Keel polling or each new Job Pod | `homelab-keel-fresh`, `vps-keel-fresh`, and existing job monitors |
+| Pinned dependencies | `alpine/k8s`, MCP build inputs, and the VPS local-path `?ref=` base | Renovate without a monthly window | `homelab-update-watch` reports lookup failures and a missing dashboard |
+| Interactive infrastructure | Talos, Kubernetes and remote-base bundles through `/update-estate` | A few times a year, or sooner for an advisory | Existing `estate-update` check; its configured 45-day period is unchanged |
+| Hermes application | The operator presses the WebUI's **Update Now** button | Operator choice | Existing daily `hermes-app-alive` monitor |
+| Hermes operating system | `unattended-upgrades` | Existing timer | Existing daily `hermes-app-alive` monitor indirectly |
 
-Which signal lives in healthchecks.io and which in uptime-kuma, and why, is in [monitoring.md](monitoring.md#healthchecksio-checks); the names were kept the same across the move, so look in whichever of the two holds the signal a step names.
-
-The rule that keeps them apart: **a floating tag means keel; a pinned tag means Renovate; never both.**
-A `match-tag: "true"` annotation on a semver pin refreshes the digest only, so a pinned image carrying keel annotations is frozen while looking covered.
-
-**Renovate opens its pull requests in a monthly window**, on the first of the month, set by the top-level `schedule` in `renovate.json`.
-They then wait for the next session, which the operator starts by asking for it every four to six weeks and which the `estate-update` dead-man check nags at 45 days — so a pull request opened continuously would only age on the dashboard until that session came round anyway.
-The window limits branch creation alone: an already-open pull request still rebases and automerges outside it, and the three-day `minimumReleaseAge` wait is unchanged.
-The one group that keeps opening pull requests at any time is **influxdb-mcp build inputs**, because it is also the one group that automerges, and it automerges because its merge deploys nothing that needs an apply.
-An unattended apply was considered and declined: `health` and `hindsight` hold state that an unwatched rollout can damage — InfluxDB upgrades its on-disk index in place and hindsight runs forward-only Alembic migrations against an agent's memory — so every other bump keeps its human-started session.
+Everything on both clusters floats unless its image has no floating channel.
+Floating Deployments, DaemonSets and StatefulSets carry the full Keel annotation set.
+Jobs and CronJobs use floating tags with `imagePullPolicy: Always`, without Keel annotations.
+PostgreSQL stays within `pg17`, `17-alpine`, or `16-alpine`; major upgrades remain explicit dump-and-restore operations.
+Restic binaries float, while repository-format migrations remain explicit operations.
+Nightly dumps are the accepted recovery path for application schema changes.
+Meilisearch is rebuildable and follows `v1` with `MEILI_UPGRADE_DB=true` permanently enabled.
+Renovate retains its three-day stability wait and the MCP build-input automerge.
+The existing 45-day infrastructure heartbeat period does not match the new few-times-yearly session cadence; its configuration was not changed.
 
 **One image in this estate is built here, and its update has no apply step.**
 `ghcr.io/mnbf9rca/influxdb-mcp-server` is built from `homelab/health/mcp/` by this repository's one workflow, and the Deployment follows its floating `stable` tag under keel.
 So a Renovate pull request against those build inputs — the `node` base image, or the pinned `influxdb-mcp-server` package with the lockfile that moves with it, grouped as **influxdb-mcp build inputs** — **deploys nothing when it merges**.
 The pull request's build makes and signs the image, its merge promotes that digest to `stable`, and keel delivers it on its six-hour poll.
 Confirm both the pull request's build and the merge's `promote` run went green, and move on: there is no `make apply-homelab` for that change and `make diff-homelab` is empty for it.
-Everything else in `homelab/health/` is still pinned, and its bumps still need the ordinary apply.
+Only the `alpine/k8s` runtime in `homelab/health/` remains pinned and needs an ordinary apply.
 
 **That group automerges**, so in the ordinary case a session never sees the pull request at all: it merges itself once its three required checks and the three-day `minimumReleaseAge` wait have passed.
 What a failed automerge leaves behind is an **open Renovate pull request carrying a red check** — so treat one of those as the signal, and read the failing check rather than merging past it.
@@ -100,7 +102,7 @@ Export one with `omnictl cluster template export <cluster> -o <file>` if you wan
 Sidero documents export-then-`omnictl cluster template sync` as the way to move such a cluster onto template management, so running `sync` against one is not an update step — it is the adoption decision itself, taken by running a command.
 Adopting it is a design decision and not a step in an update session, because the exported template inlines the cluster's config patches by `idOverride` — including the five `homelab/talos/machineconfig-patches/` files that `make apply-talos` already owns.
 That would give those patches two writers, last write winning, with no guard between the two tools: the concurrent-writer failure this repo has already paid for once.
-Taking it means deciding in the same change which tool owns the patches, and deleting or guarding the other; until somebody does, the web UI is the only upgrade path and Step 4 of the session needs the operator.
+Taking it means deciding in the same change which tool owns the patches, and deleting or guarding the other; until somebody does, the web UI is the only upgrade path and Step 3 of the session needs the operator.
 
 **`homelab/talos/` and `vps/talos/` are a subset of the live patch set, not an inventory of it.**
 Omni is the system of record for machine config patches, and these trees hold only the ones this repository authors.
@@ -205,9 +207,9 @@ Not done, deliberately.
 
 Renovate's `kustomize` manager reads the VPS go-getter URL.
 The remaining kustomize base pins repeat the version inside the URL path, sometimes twice, and a regex manager for them is exactly the fragile parsing this estate refuses.
-The session bumps them by hand.
+The Talos/Kubernetes session bumps these remote bundles by hand.
 
-The inventory — which files, which upstream repository, and how many occurrences each bump touches — is the work list in `.claude/skills/update-estate/SKILL.md`, Step 3.
+The inventory — which files, which upstream repository, and how many occurrences each bump touches — is the work list in `.claude/skills/update-estate/SKILL.md`, Step 3, under remote-base bundles.
 It lives there rather than here because it is consulted at exactly one step of one session, and one copy cannot go stale against the other.
 
 ## Omni etcd backups
@@ -291,15 +293,6 @@ There is deliberately **no automated `omni-etcd-backup-age` check**.
 `omnictl`'s only credential is a full-privilege operator identity, and a pod holding it would escalate any Secret read into lifecycle control of both clusters.
 The session asserting the age at its start is the compensating control.
 
-## The Hermes VM update step
-
-There is no updater on the VM.
-The step is to **follow `docs/operations/hermes-vm-updates.md` end to end** — preconditions, change analysis, the detached update, verification, the report ping, and rollback if verification fails.
-The runbook is written for an agent or the operator to execute with the session open, because `hermes update` sometimes carries a step that needs judgement, and its preconditions are the only gate on this step: the skill adds none of its own.
-
-The runbook's report step pings `hermes-update`, on success only.
-Why that check is separate from `estate-update`, and what to read when it goes red, is in [monitoring.md](monitoring.md#healthchecksio-checks).
-
 ## What the session does not cover
 
 - **No CVE scanning.**
@@ -308,6 +301,6 @@ Why that check is separate from `estate-update`, and what to read when it goes r
 - **No automated applies.**
   Nothing applies unattended, and the one thing that merges unattended is the `influxdb-mcp build inputs` group described above — which renders no manifest and so reaches no cluster through an apply.
   An auto-applier would need a permanent kubeconfig and a 1Password token on an always-on runner, and it could not judge whether a diff line reverts another branch's deployed work.
-- **Keel-managed SQLite applications get no pre-update dump.**
-  The nightly restic sweep is the accepted floor.
+- **Floating applications get no mandatory pre-update dump.**
+  Nightly native dumps and the restic sweep are the accepted recovery floor.
 - **Restore drills stay manual**, on the session's occasional checklist.

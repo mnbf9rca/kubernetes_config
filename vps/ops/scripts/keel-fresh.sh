@@ -96,37 +96,12 @@ IMAGES_METRIC=poll_trigger_tracked_images
 # handles that, and the %d truncation to whole seconds is deliberate.
 START_METRIC=process_start_time_seconds
 
-# The literal floor for tracked images. It must be derived from the count that
-# will be true AFTER this plan's de-keeling, not from the count observed today,
-# and it must keep a container of headroom: the point of a floor is that losing
-# one workload's annotations does not alarm while losing the WATCH does.
-#
-# The arithmetic, measured 2026-08-26 from this cluster's own
-# poll_trigger_tracked_images: keel tracks 9 images on the VPS. That is already
-# after Task 1 removed keel's own annotations and Task 4 removed meilisearch's,
-# both of which are applied here, so 9 is the steady state rather than a number
-# still due to fall.
-#
-# THE GAUGE COUNTS IMAGES, NOT WORKLOADS, WHICH IS WHY IT IS 9 AND NOT 8. Eight
-# Deployments here carry the keel annotation set - cloudflared, karakeep, n8n,
-# umami, uptime-kuma, freshrss, changedetection.io and sockpuppetbrowser - but
-# four of them (freshrss, karakeep, n8n, uptime-kuma) also run an alpine:3.20
-# quiesce sidecar, and keel tracks the images of every container in an annotated
-# workload. Those four contribute one shared ninth image between them. Anyone
-# reconciling this number against the workload list will be off by one until
-# they account for that sidecar.
-#
-# meilisearch is NOT in the tracked set any more, but its registries_scanned_total
-# series is still on /metrics at its last value - the retired-series behaviour the
-# header describes, observed here rather than reasoned about: ten counter series,
-# nine tracked images.
-#
-# So the steady-state count is 9 and the floor is 7, two below. Setting it to 9
-# would leave ZERO margin, which is the failure this constant exists to avoid.
-#
-# Raise it deliberately when the estate grows; a floor that drifts below reality
-# is a check that has stopped checking.
-IMAGE_FLOOR=7
+# The literal floor for tracked images. Derived from the rendered vps
+# inventory on 2026-09-11: 12 distinct image references across every container
+# of every keel-annotated Deployment, DaemonSet and StatefulSet.
+# Shared sidecar images count once; Jobs and CronJobs do not count.
+# The floor equals this inventory; verify the same live gauge after apply.
+IMAGE_FLOOR=12
 
 STATE_DIR=/state
 STATE_FILE=$STATE_DIR/last

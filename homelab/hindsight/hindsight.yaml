@@ -2,19 +2,6 @@
 # VM 103. One file, every resource declaring its own namespace explicitly, per
 # the repo's one-file-per-service rule.
 #
-# NO keel ANNOTATIONS ON ANY WORKLOAD IN THIS FILE, and that is not an
-# oversight. Every one of them is a stateful workload: the api and control-plane
-# run forward-only Alembic migrations on startup against an agent's memory, the
-# postgres pod owns the PGDATA, and hindsight-pg-dump writes the dump that is
-# the only rollback. `keel.sh/policy: force` on any of them is how you get an
-# unattended schema migration at 3 a.m. with no dump taken first. Every image is
-# version-pinned, Renovate proposes the bumps, and the upgrade runs the
-# dump-first runbook — `make hindsight-upgrade`, then merge, diff, apply. All
-# four are named, with those reasons, in the STATEFUL tuple in
-# scripts/check-renovate-scope.py, which fails the apply if keel annotations or
-# a floating tag appear on any of them. The lock is on these workloads, not on
-# the namespace (operator ruling, 2026-09-06).
-#
 # Runbook, restore procedure and key rotation: docs/operations/hindsight.md
 ---
 apiVersion: v1
@@ -91,6 +78,11 @@ kind: Deployment
 metadata:
   name: hindsight-postgres
   namespace: hindsight
+  annotations:
+    keel.sh/policy: force
+    keel.sh/match-tag: "true"
+    keel.sh/trigger: poll
+    keel.sh/pollSchedule: "@every 6h"
 spec:
   replicas: 1
   # RWO local-path PVC on a single-node cluster: two postgres pods can never run
@@ -109,12 +101,9 @@ spec:
         - name: postgres
           # pgvector >= 0.8.0 covers the one documented feature floor (iterative
           # scans); PostgreSQL 17 is chosen so the major does not need revisiting
-          # soon. Renovate watches homelab/hindsight/**, but MAJOR postgres bumps
-          # are disabled in renovate.json on purpose: a major is a dump-and-restore,
-          # not a tag edit, and a grouped PR carrying one would be a data-loss trap
-          # that `make hindsight-upgrade` could not catch — the dump would succeed
-          # and the new major would refuse the old data directory.
-          image: pgvector/pgvector:0.8.6-pg17@sha256:cf134a767f474095eeba57e0117be8e568e011a63f33fbf252f14c9b760f8e6f
+          # soon. The pg17 channel keeps updates within that PostgreSQL major.
+          image: pgvector/pgvector:pg17
+          imagePullPolicy: Always
           env:
             # The image's entrypoint creates this database and role on an empty
             # PGDATA. That role owns its database and can run `CREATE EXTENSION
@@ -191,6 +180,11 @@ kind: Deployment
 metadata:
   name: hindsight
   namespace: hindsight
+  annotations:
+    keel.sh/policy: force
+    keel.sh/match-tag: "true"
+    keel.sh/trigger: poll
+    keel.sh/pollSchedule: "@every 6h"
 spec:
   replicas: 1
   strategy:
@@ -220,12 +214,10 @@ spec:
           # retain and reflect touch the paid LLM. Embeddings and reranker env stays
           # at the `local` provider defaults — zero configuration.
           #
-          # KEEP THIS PIN AT OR ABOVE 0.9.1 FOREVER. The liveness probe below uses
-          # /health/live, which exists from 0.9.1; 0.5.0+ also satisfies the dedup
-          # gate the canary relies on. Renovate watches homelab/hindsight/**;
-          # upgrade via `make hindsight-upgrade`, which takes the pre-upgrade dump
-          # that IS the rollback — migrations are forward-only.
-          image: ghcr.io/vectorize-io/hindsight-api:0.9.1
+          # The liveness probe requires /health/live, available from 0.9.1;
+          # the canary's dedup gate requires 0.5.0 or later.
+          image: ghcr.io/vectorize-io/hindsight-api:latest
+          imagePullPolicy: Always
           env:
             # The full DSN lives in the Secret as one key, so the assembled URL
             # exists in exactly one place and the password never appears in a plain
@@ -331,7 +323,7 @@ spec:
             timeoutSeconds: 5
             failureThreshold: 3
           # /health/live is IN-PROCESS ONLY and never touches the database (present
-          # from 0.9.1, which the pin guarantees), so a slow or recovering postgres
+          # from 0.9.1), so a slow or recovering postgres
           # cannot crashloop the single API replica. Restart is safe: the container
           # is stateless and migrations re-run idempotently under the advisory lock.
           livenessProbe:
@@ -343,9 +335,8 @@ spec:
             requests: { cpu: 500m, memory: 1536Mi }
             limits: { cpu: "2", memory: 3Gi }
         - name: control-plane
-          # Same version tag as the API, always. Renovate groups them, and a skewed
-          # pair is an untested combination.
-          image: ghcr.io/vectorize-io/hindsight-control-plane:0.9.1
+          image: ghcr.io/vectorize-io/hindsight-control-plane:latest
+          imagePullPolicy: Always
           env:
             - { name: HINDSIGHT_CP_DATAPLANE_API_URL, value: "http://localhost:8888" }
             # The control plane authenticates to the dataplane with the SAME tenant
@@ -467,7 +458,8 @@ spec:
               # is the wget one. pg_dump needs no vector extension client-side.
               # Keep the MAJOR (17) matched to the server image above - bump the
               # two together.
-              image: postgres:17.11-alpine@sha256:18cfe3ef5e6815560c98237d6216d1e5119702fb0f3894c8785dd58b8bbe5d73
+              image: postgres:17-alpine
+              imagePullPolicy: Always
               command: ["sh", "/scripts/hindsight-pg-dump.sh"]
               env:
                 # `PGPASSWORD`, not the envsubst name. A generated script may never
@@ -530,9 +522,8 @@ spec:
           restartPolicy: Never
           containers:
             - name: canary
-              # Renovate watches homelab/hindsight/**; this pin moves with the
-              # grouped PR like the rest.
-              image: curlimages/curl:8.21.0@sha256:7c12af72ceb38b7432ab85e1a265cff6ae58e06f95539d539b654f2cfa64bb13
+              image: curlimages/curl:latest
+              imagePullPolicy: Always
               command: ["sh", "/scripts/hindsight-canary.sh"]
               env:
                 # `CANARY_API_KEY`, not HINDSIGHT_TENANT_API_KEY, for the same
