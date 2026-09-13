@@ -256,9 +256,18 @@ The rules that must not be broken:
   4. **Does a constant encode a count taken from somewhere else?**
      Re-derive it from that source rather than from your model of it, and confirm it against the live value after the apply.
      `IMAGE_FLOOR` counts deduplicated images across every container of every keel-annotated workload, so one two-container workload moves it by two.
+- **A runbook an agent executes is simple steps plus latent sharp edges, and nothing else.**
+  A line earns its place if it is a step, or a hazard the agent cannot discover at the moment it fails.
+  Anything observable at failure time gets no pre-scripted diagnosis: the agent reads the error then.
+- **Rigour is calibrated to the stakes, and this is a homelab, not a Mars rover.**
+  Keep the checks that prevent lockout or data loss.
+  Drop soaks, staged rollouts and the rest of the ceremony, and fix forward when something breaks.
 - **A design review needs a seat whose only brief is deletion.**
   Brief one reviewer to hunt for machinery that exists to feel rigorous and name both what to delete and what of value is lost, then verify each finding adversarially — tell the verifier that "protects against neither lockout nor data loss" argues **for** the finding.
   That seat found four deletions two other reviewers missed (2026-08-27); the spec or plan's own author cannot fill it.
+- **An operator ruling beats a review finding.**
+  Once the operator has chosen an approach, a finding against it is input for fixing that design, not grounds to reopen the decision.
+  Harvest the finding's fixes into the chosen design, and state the contradiction in one sentence only.
 - **Probes: readiness on every long-running container that serves traffic; liveness only where that probe can actually detect the failure *and* a restart is a safe remedy** (everything here is single-replica, so an over-eager liveness probe manufactures outages).
   **Always set `timeoutSeconds`** — the 1s default false-positives on a loaded node.
   **Probe the data plane, not a control-plane health endpoint**: the vendor-documented probe would have stayed green through the 2026-08-18 Pomerium wedge.
@@ -359,6 +368,9 @@ The rules that must not be broken:
   Identifiers only — never the value.
   Err on the side of logging: a false-positive row costs one unnecessary rotation; a silent disclosure costs the assumption of confidentiality.
   This applies even when the exposure feels harmless (short-lived token, local-only transcript, immediately-cleared scrollback).
+  A suspected exposure is not a reason to stop work: log it, say so, and carry on.
+  Before you open a pull request, read the whole diff against master (`git diff origin/master...HEAD`) for secret values — tokens, passwords, private keys, the 1Password service-account token.
+  Name anything you find in the pull request body, and add the honesty-box row.
 - **Know the difference between a secret and an identifier.**
   Conflating them wastes rotations, clutters the honesty box, and — worse — makes agents refuse to log or print things that are perfectly fine, which hides real diagnostics.
   Three tiers:
@@ -385,14 +397,19 @@ The rules that must not be broken:
   Upstream pull requests, issues on third-party trackers, pushes to public forks, and comments on other people's repositories are all publicly attributed to the operator.
   Prepare the work locally — branches, commits, drafted PR and issue text — and present it for review; the operator says when each item is published, one item at a time.
   Merging pull requests in this repo when asked is fine: the gate is third-party visibility, not git mechanics.
+  The repository accepts squash merges only, so the merge command is `gh pr merge <n> --squash --delete-branch`.
 - Prefer `kubectl exec deployment/<name> -- sh -c '...'` plus `rollout restart` for in-container file tweaks rather than spinning up a helper pod.
 - Documentation belongs in `docs/`, **referenced** from this file rather than included in it.
   When you learn something operational, write it into the relevant `docs/` file and add a pointer here only if it changes how an agent edits the repo.
+- **Leave the whole file better than you found it.**
+  When you edit a document, run a prose-quality pass over all of it, not only the lines you changed.
+  Pass that instruction on to any subagent you give documentation work.
 - **Markdown is not hard-wrapped** (operator ruling, 2026-08-27).
   Write one line per sentence, or per paragraph where a paragraph is one thought; let the editor wrap it.
   A sentence then owns a line in every diff, so a one-word change shows as a one-line change instead of reflowing the paragraph around it.
   This holds for every `.md` file in the repo, this one included: the whole corpus was reflowed on 2026-08-28, so a hard-wrapped paragraph now reads as a regression.
   The exception is **files that ship to a machine and are read with `cat` or `less`** — apt configuration, systemd units, shell scripts and their comments — which keep the roughly 80-column wrapping they have, because no editor wraps them where they are read. No Markdown file is in that set.
+  GitHub pull request bodies and comments are the other exception: one line per paragraph there, because GitHub renders a hard line break as a break.
 - **Anything that asks the operator to act follows Simplified Technical English rules.**
   A review request, a runbook step, a question, a pull request body: one instruction per sentence, at most 20 words, imperative and active, every term defined or already in this file.
   Explanatory prose, the reasons behind a rule, stays in ordinary clear English.
