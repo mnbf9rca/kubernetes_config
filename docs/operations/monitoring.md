@@ -281,11 +281,12 @@ The four single-DB services still take the newest match, because their glob is o
 
 ## healthchecks.io checks
 
-**Four checks remain part of this repo's reporting policy, and routine jobs otherwise push to uptime-kuma.**
+**The checks in the table below are the whole of this repo's healthchecks.io reporting policy, and routine jobs otherwise push to uptime-kuma.**
 The account is capped at 20 checks and six of them are pinged from outside this repo, so a check on healthchecks.io has to earn its slot.
 The two restic checks keep their multi-line triage bodies; `vps-uptime-kuma-alive` watches kuma from outside it; `estate-update` records operator sessions.
 Every other job in this estate drives a **push monitor** — inventory in [uptime-kuma.md](uptime-kuma.md#push-monitors).
 Migrated August 26, 2026.
+List the live account with the read-only API key rather than trusting a count written anywhere: the command is in [Checks in the account that this repo does not ping](#checks-in-the-account-that-this-repo-does-not-ping).
 
 | Check | 1Password reference | Period / grace | Pinged by |
 |---|---|---|---|
@@ -357,7 +358,7 @@ The read-only healthchecks.io API key is `op://Homelab/healthchecks.io/read-only
 
 **The account-level nag is set to Daily.** healthchecks.io notifies on status *flips*, so a check that is already down raises nothing further; the supported fix is the account-wide report (Profile → reports, Hourly or Daily).
 **Decision, taken August 26, 2026: Daily**, recorded on the operator's confirmation, since the Management API does not expose the report frequency and nothing here can check it.
-The four supported checks are the two restic checks, `vps-uptime-kuma-alive` and `estate-update`.
+The supported checks are the two restic checks, `vps-uptime-kuma-alive` and `estate-update`.
 None has a normally-red steady state, so a daily reminder is signal.
 **It does not reach the push monitors**: kuma's own notifications are configured per monitor inside kuma, and it has no equivalent digest.
 A push monitor that goes DOWN alerts once on the flip and then stays quiet.
@@ -534,7 +535,7 @@ Do not treat any of those as a target — re-run the guard for today's figure.
 What must never happen is a *file* losing its last sink call, or dropping out of the scan — that is "I could not look" reported as "I looked and everything is fine", and `REQUIRED_TARGETS` in the guard exists to catch the second half of it.
 
 Healthchecks.io bodies die with their ping-log entry, `Check.prune()` removing the objects then the ping rows — 100 entries per check on Hobbyist, 1000 on Business.
-The four checks in the table above retain that history at healthchecks.io.
+The checks in the table above retain that history at healthchecks.io.
 kuma keeps heartbeats per monitor on its own retention setting, in the VPS database that the nightly restic sweep backs up.
 
 One healthchecks.io quirk survives and still constrains what may be written: `has_confirmation_link` is set from the body on every action, driving a UI nag, so no body may contain the substring `confirm`.
@@ -618,7 +619,7 @@ It is a deliberate copy rather than a shared file: a homelab pod holding a VPS k
 
 `vps-keel-fresh` is pushed from the same cluster uptime-kuma runs on, so a VPS-wide outage takes the job and its watcher together.
 That is layer 4's job, not this monitor's: `vps-uptime-kuma-alive` is at healthchecks.io precisely so something outside the VPS notices.
-The same reasoning now covers twelve push monitors rather than two, and it is the reason `vps-uptime-kuma-alive` may never move: if kuma dies, every heartbeat in the estate stops arriving and only something outside it can say so.
+The same reasoning now covers every push monitor rather than two, and it is the reason `vps-uptime-kuma-alive` may never move: if kuma dies, every heartbeat in the estate stops arriving and only something outside it can say so.
 
 | `verdict=` | Means |
 |---|---|
