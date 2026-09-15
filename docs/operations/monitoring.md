@@ -22,6 +22,10 @@ Read [What this does not catch](#what-this-does-not-catch) before you trust a gr
 | An uptime-kuma monitor is UP but the service is down | Suspect an Access redirect — [uptime-kuma.md](uptime-kuma.md#the-cloudflare-access-trap) |
 | Everything is green and the data is still wrong | Expected; several probes are shallow by design — [What this does not catch](#what-this-does-not-catch) |
 
+Establish access and read the manifest before you probe anything.
+An external `curl` cannot tell a down tunnel from a hung origin, so isolate hop by hop, starting at the origin container and working outwards.
+Say which findings you verified and which you inferred.
+
 ## The decision rule
 
 Monitor the artifact, not the process — a live process proves nothing.

@@ -44,6 +44,13 @@ make check-tools     # kubectl kustomize envsubst op direnv talosctl omnictl jq 
 `envsubst` ships in the `gettext` keg and may need `brew link --force gettext` on a fresh Mac.
 Sign in to the 1Password CLI (`op signin`) before running anything that calls `op read`.
 
+The operator's SSH keys live in 1Password and are used through its SSH agent, so the `~/.ssh/id_*` files are not the source of truth.
+Plain `ssh` works; a pod that needs a key gets it with `op read` into a Secret.
+
+Sidero Labs publishes every documentation page as LLM-clean markdown.
+Start at <https://docs.siderolabs.com/llms.txt>, then fetch the specific `.md` page.
+Do not guess command names from `--help` output or from a web search.
+
 ## Bootstrap sequence
 
 ```bash

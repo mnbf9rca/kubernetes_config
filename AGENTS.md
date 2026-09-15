@@ -14,7 +14,7 @@ Cluster-specific detail, runbooks and procedures live under `docs/`, referenced 
 | `docs/operations/homelab.md` | Homelab cluster: platform stack, namespaces/workloads, NFS and storage, node network, DNS/Route53, encryption at rest, operational gotchas |
 | `docs/operations/homelab-health.md` | The `health` namespace: ingest pipeline, image update modes, InfluxDB bootstrap, backups/restore, Garmin re-auth, monitoring, probe rationale |
 | `docs/operations/vps.md` | VPS cluster: shape, workloads, Cloudflare tunnel/Access, DB decisions, backups |
-| `docs/operations/monitoring.md` | How failures get noticed: the triage table, probe policy and inventory, CronJob deadlines, the backup verification gates, the five healthchecks.io checks that remain, the twelve uptime-kuma push monitors, the disclosure rules for both, and what none of it catches |
+| `docs/operations/monitoring.md` | How failures get noticed: the triage table, probe policy and inventory, CronJob deadlines, the backup verification gates, the four healthchecks.io checks that remain, the twelve uptime-kuma push monitors, the disclosure rules for both, and what none of it catches |
 | `docs/operations/uptime-kuma.md` | Layer 3/4 runbook: creating uptime-kuma monitors by hand, per-monitor HTTP settings, the Cloudflare Access trap, the push monitors driven from inside the clusters (and the one driven from the hermes VM) and the bypass they need, the self-monitor |
 | `docs/operations/hindsight.md` | The `hindsight` namespace: the self-hosted memory backend for the Hermes profiles — topology, auth, the extraction LLM and its provider, the canary, upgrade and restore runbooks, the restore drill, key rotation, and the removal path |
 | `docs/operations/estate-updates.md` | How the estate gets patched: floating workloads, the pinned-image exception, the Talos/Kubernetes version ledger, remote-base bumps and Omni etcd backups; the interactive session is the `/update-estate` skill |
@@ -256,9 +256,18 @@ The rules that must not be broken:
   4. **Does a constant encode a count taken from somewhere else?**
      Re-derive it from that source rather than from your model of it, and confirm it against the live value after the apply.
      `IMAGE_FLOOR` counts deduplicated images across every container of every keel-annotated workload, so one two-container workload moves it by two.
+- **A runbook an agent executes is simple steps plus latent sharp edges, and nothing else.**
+  A line earns its place if it is a step, or a hazard the agent cannot discover at the moment it fails.
+  Anything observable at failure time gets no pre-scripted diagnosis: the agent reads the error then.
+- **Rigour is calibrated to the stakes, and this is a homelab, not a Mars rover.**
+  Keep the checks that prevent lockout or data loss.
+  Drop soaks, staged rollouts and the rest of the ceremony, and fix forward when something breaks.
 - **A design review needs a seat whose only brief is deletion.**
   Brief one reviewer to hunt for machinery that exists to feel rigorous and name both what to delete and what of value is lost, then verify each finding adversarially — tell the verifier that "protects against neither lockout nor data loss" argues **for** the finding.
   That seat found four deletions two other reviewers missed (2026-08-27); the spec or plan's own author cannot fill it.
+- **An operator ruling beats a review finding.**
+  Once the operator has chosen an approach, a finding against it is input for fixing that design, not grounds to reopen the decision.
+  Harvest the finding's fixes into the chosen design, and state the contradiction in one sentence only.
 - **Probes: readiness on every long-running container that serves traffic; liveness only where that probe can actually detect the failure *and* a restart is a safe remedy** (everything here is single-replica, so an over-eager liveness probe manufactures outages).
   **Always set `timeoutSeconds`** — the 1s default false-positives on a loaded node.
   **Probe the data plane, not a control-plane health endpoint**: the vendor-documented probe would have stayed green through the 2026-08-18 Pomerium wedge.
@@ -269,7 +278,7 @@ The rules that must not be broken:
 - **Scheduled work gets a dead-man's-switch, not a probe.**
   Every CronJob sets `timeZone: "UTC"` and `activeDeadlineSeconds` (with `concurrencyPolicy: Forbid`, one hung run silently blocks every later run), plus `startingDeadlineSeconds` where a missed window must be retried rather than dropped.
   **New scheduled work drives an uptime-kuma PUSH monitor, not a healthchecks.io check** (migrated 2026-08-26).
-  Five checks remain at healthchecks.io; the inventory, and each check's reason for keeping its slot, is the table in `docs/operations/monitoring.md` — read that rather than an enumeration here, which drifted once already.
+  Four checks remain at healthchecks.io, and the orphaned `hermes-update` check still holds a slot until somebody deletes it by hand; the inventory, and each check's reason for keeping its slot, is the table in `docs/operations/monitoring.md` — read that rather than an enumeration here, which drifted once already.
   The default contract for a new job is **`up` on exit 0 and `down` otherwise**, from an EXIT trap in the shell runners — the two hindsight jobs, `influx-backup`, `hermes-pull` and both `keel-fresh` jobs — or, in Python, from a module-level `try`/`except` that catches every exception and pushes on the way out, which is what `cloudflare-analytics` does.
   There is **no `/start` equivalent** and none may be invented: a push is a heartbeat carrying a status, so `activeDeadlineSeconds` is the whole of the hang bound and the monitor's interval plus retry is the silence bound.
   Two jobs deliberately push **nothing** on some runs and that must not change: `ingest-freshness` pushes only when both buckets are fresh, because a `down` on a stale bucket would trade a 36-hour tolerance for a 6-hour one on a signal that depends on the operator syncing a watch; and `update-watch` pushes nothing on an indeterminate run, because "I could not read GitHub" is neither a success nor a failure.
@@ -359,6 +368,9 @@ The rules that must not be broken:
   Identifiers only — never the value.
   Err on the side of logging: a false-positive row costs one unnecessary rotation; a silent disclosure costs the assumption of confidentiality.
   This applies even when the exposure feels harmless (short-lived token, local-only transcript, immediately-cleared scrollback).
+  A suspected exposure is not a reason to stop work: log it, say so, and carry on.
+  Before you open a pull request, read the whole diff against master (`git diff origin/master...HEAD`) for secret values — tokens, passwords, private keys, the 1Password service-account token.
+  Name anything you find in the pull request body, and add the honesty-box row.
 - **Know the difference between a secret and an identifier.**
   Conflating them wastes rotations, clutters the honesty box, and — worse — makes agents refuse to log or print things that are perfectly fine, which hides real diagnostics.
   Three tiers:
@@ -385,14 +397,19 @@ The rules that must not be broken:
   Upstream pull requests, issues on third-party trackers, pushes to public forks, and comments on other people's repositories are all publicly attributed to the operator.
   Prepare the work locally — branches, commits, drafted PR and issue text — and present it for review; the operator says when each item is published, one item at a time.
   Merging pull requests in this repo when asked is fine: the gate is third-party visibility, not git mechanics.
+  The repository accepts squash merges only, so the merge command is `gh pr merge <n> --squash --delete-branch`.
 - Prefer `kubectl exec deployment/<name> -- sh -c '...'` plus `rollout restart` for in-container file tweaks rather than spinning up a helper pod.
 - Documentation belongs in `docs/`, **referenced** from this file rather than included in it.
   When you learn something operational, write it into the relevant `docs/` file and add a pointer here only if it changes how an agent edits the repo.
+- **Leave the whole file better than you found it.**
+  When you edit a document, run a prose-quality pass over all of it, not only the lines you changed.
+  Pass that instruction on to any subagent you give documentation work.
 - **Markdown is not hard-wrapped** (operator ruling, 2026-08-27).
   Write one line per sentence, or per paragraph where a paragraph is one thought; let the editor wrap it.
   A sentence then owns a line in every diff, so a one-word change shows as a one-line change instead of reflowing the paragraph around it.
   This holds for every `.md` file in the repo, this one included: the whole corpus was reflowed on 2026-08-28, so a hard-wrapped paragraph now reads as a regression.
   The exception is **files that ship to a machine and are read with `cat` or `less`** — apt configuration, systemd units, shell scripts and their comments — which keep the roughly 80-column wrapping they have, because no editor wraps them where they are read. No Markdown file is in that set.
+  GitHub pull request bodies and comments are the other exception: one line per paragraph there, because GitHub renders a hard line break as a break.
 - **Anything that asks the operator to act follows Simplified Technical English rules.**
   A review request, a runbook step, a question, a pull request body: one instruction per sentence, at most 20 words, imperative and active, every term defined or already in this file.
   Explanatory prose, the reasons behind a rule, stays in ordinary clear English.
