@@ -19,6 +19,18 @@ kubectl -n vps exec deploy/uptime-kuma -- \
 
 **`/metrics` omits monitors created after the process started, until it restarts.**
 Using `/metrics` as an inventory produces a wrong answer; `kuma.db` is the reliable source.
+
+A monitor is created by hand in the UI, so the roster moves without a commit and no count written down here stays true for long.
+List the current roster from the live database:
+
+```bash
+kubectl --context cynexia-vps -n vps exec deploy/uptime-kuma -- \
+  sqlite3 -readonly /app/data/kuma.db \
+  'select name, type from monitor order by name'
+```
+
+The `uptime-kuma` container ships `sqlite3` at `/usr/bin/sqlite3`, so the command needs no `-c` flag and installs nothing.
+
 The pod's `sqlite-snapshot` sidecar writes `kuma.db.restic` beside the database every 12 hours (`sleep 43200` in `vps/workloads/scripts/sqlite-snapshot.sh`), and the nightly `restic-backup` CronJob captures it, so a rebuild restores the monitors.
 
 ## Settings for every HTTP monitor

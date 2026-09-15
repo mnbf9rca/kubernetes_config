@@ -619,7 +619,7 @@ It is a deliberate copy rather than a shared file: a homelab pod holding a VPS k
 
 `vps-keel-fresh` is pushed from the same cluster uptime-kuma runs on, so a VPS-wide outage takes the job and its watcher together.
 That is layer 4's job, not this monitor's: `vps-uptime-kuma-alive` is at healthchecks.io precisely so something outside the VPS notices.
-The same reasoning now covers twelve push monitors rather than two, and it is the reason `vps-uptime-kuma-alive` may never move: if kuma dies, every heartbeat in the estate stops arriving and only something outside it can say so.
+The same reasoning now covers every push monitor rather than two, and it is the reason `vps-uptime-kuma-alive` may never move: if kuma dies, every heartbeat in the estate stops arriving and only something outside it can say so.
 
 | `verdict=` | Means |
 |---|---|
