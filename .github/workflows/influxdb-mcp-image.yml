@@ -154,7 +154,7 @@ jobs:
           set -euo pipefail
           echo "IMAGE=ghcr.io/mnbf9rca/influxdb-mcp-server:sha-${HEAD_SHA:0:12}" >> "$GITHUB_ENV"
 
-      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
 
       # Built once, loaded into the local daemon, and asserted BEFORE anything
       # is pushed.
