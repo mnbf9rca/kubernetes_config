@@ -1,7 +1,6 @@
 # Agent teams
 
-Operator ruling, September 20, 2026.
-This is the working arrangement for multi-agent sessions in this repository.
+Operator rulings, September 20, 2026, define this repository's multi-agent working arrangement.
 
 ## Three seats, one workspace
 
@@ -108,7 +107,8 @@ Use absolute paths for every file named in messages to the operator, so links ar
 ### Escalation
 
 Escalate findings that contradict the spec or plan to the chief of staff.
-Escalate cluster changes, irreversible actions, publishing, or anything that needs the operator's credentials or a browser sign-in.
+Run every step your credentials and tools allow, including restore drills with the job key.
+Ask the operator only for private-vault access, browser sign-in or publication approval.
 Escalate a diff resource the branch never touched, or a guard failure outside the task's files.
 Escalate disagreements that survive two rounds, or a silent seat after one re-prompt.
 For an unresolved finding, write the finding verbatim and the builder's counter-position in one SDD file.

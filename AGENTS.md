@@ -214,8 +214,8 @@ The rules that must not be broken:
 ## When Editing
 
 - **Use three seats for multi-agent work: chief of staff, builder and reviewer.**
-  Keep the chief of staff outside the direct builder–reviewer loop.
-  Pass handovers as paths to files under `.superpowers/sdd/<plan>/`, never as pasted output.
+  Run every step your credentials and tools allow, including restore drills with the job key.
+  Ask the operator only for private-vault access, browser sign-in or publication approval.
   Roles, loop limits, escalation, access and Herdr commands: `docs/operations/agent-teams.md`.
 - Keep the one-file-per-service pattern; keep all of a service's resources in that file.
 - **Every workload on both clusters floats unless no floating channel exists.**

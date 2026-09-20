@@ -166,22 +166,45 @@ No privileged B2 key is needed.
    Record that difference before judging the drill.
    No scratch push is required.
 
-4. Parse one restored issue and one restored release JSON file.
+4. Validate the restored JSON files.
 
    ```sh
-   python3 -m json.tool "$GHM_DRILL/restore/data/repositories/kubernetes_config/issues/<number>.json" >/dev/null
-   python3 -m json.tool "$GHM_DRILL/restore/data/repositories/kubernetes_config/releases/<tag>.json" >/dev/null
+   python3 - "$GHM_DRILL/restore/data/repositories" <<'PY'
+   import json
+   import sys
+   from pathlib import Path
+
+   root = Path(sys.argv[1])
+   issue = next(iter(sorted((root / "kubernetes_config/issues").glob("*.json"))))
+   releases = sorted((root / "kubernetes_config/releases").glob("*.json"))
+   if not releases:
+       releases = sorted(root.glob("*/releases/*.json"))
+   for path in [issue, *releases[:1]]:
+       with path.open() as source:
+           json.load(source)
+       print(f"PASS: {path}")
+   if not releases:
+       print("No release JSON files were restored.")
+   PY
    ```
 
-   Replace the two placeholders with files present in the restore.
-   Record the drill date, repository and results below.
+   The check selects the first issue and release from `kubernetes_config`, with a release fallback across restored repositories.
+   An absent restored release is reported explicitly.
+
+5. Record the drill date, repository and results below.
 
 ## Runbook: cutover
 
 Create an empty destination repository.
-Set `GHM_MIRROR` to its restored bare mirror directory.
-Set `GHM_NEW_REMOTE` to the destination's plain Git URL.
-Push the mirror to the new remote.
+
+```sh
+gh repo create
+GHM_MIRROR="$GHM_DRILL/restore/data/repositories/kubernetes_config/repository"
+printf 'Destination plain Git URL: '
+read -r GHM_NEW_REMOTE
+```
+
+Push the restored mirror to the new remote.
 
 ```sh
 git -C "$GHM_MIRROR" push --mirror "$GHM_NEW_REMOTE"
@@ -260,6 +283,11 @@ Substitute your own reference for `op://<private vault>/<item>/<field>`.
 `env -u OP_SERVICE_ACCOUNT_TOKEN op read` uses the desktop-app session instead of the restricted service account.
 
 10. Set `GHM_OPERATOR_SECRET_REF` to your private-vault reference.
+
+    ```sh
+    GHM_OPERATOR_SECRET_REF='op://<private vault>/<item>/<field>'
+    ```
+
 11. Read credentials into a subshell environment.
 12. Unhide each listed path.
 
@@ -338,9 +366,10 @@ That command deletes the versions recovery needs.
 | Fresh owner-repository API count | 98 on 2026-09-20; matches the successful run |
 | Restic snapshots | 2 on 2026-09-20; the failed first attempt also saved a snapshot |
 | PVC token scan | `CLEAN` on 2026-09-20 |
-| Restore drill date | not yet done |
-| Restore drill repository and HEAD comparison | not yet done |
-| Issue and release JSON validation | not yet done |
+| Restore drill date | 2026-09-20 |
+| Restore drill repository and snapshot | `kubernetes_config`, snapshot `50697667` |
+| Restore, clone and HEAD comparison | Passed; operator confirmed at approximately 17:05 UTC |
+| Issue and release JSON validation | Passed; `issues/29.json` and `releases/v0.0.10.json` parsed successfully |
 
 The successful run reported `verdict=ok`, and the restic runner reported `rc=0` with no push-delivery failure.
 The failed first attempt counted 115 repositories; the later count of 98 is consistent with the operator's deletions that day.
