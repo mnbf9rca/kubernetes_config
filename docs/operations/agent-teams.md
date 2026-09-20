@@ -83,7 +83,8 @@ Review that batch once.
 ### Ownership and waiting
 
 After a review, the next move belongs to the builder.
-The reviewer waits only for a prompt.
+Run every step your credentials and tools allow, including restore drills with the job key.
+Ask the operator only for private-vault access, browser sign-in or publication approval.
 Re-prompt once after fifteen minutes without a reply, then escalate continued silence to the chief of staff.
 Operator ruling, September 20, 2026: never run long tasks synchronously.
 Never block your turn on another seat or cluster Job for more than about one minute.
@@ -107,8 +108,7 @@ Use absolute paths for every file named in messages to the operator, so links ar
 ### Escalation
 
 Escalate findings that contradict the spec or plan to the chief of staff.
-Run every step your credentials and tools allow, including restore drills with the job key.
-Ask the operator only for private-vault access, browser sign-in or publication approval.
+Escalate irreversible actions, and cluster changes outside the task's plan, to the chief of staff.
 Escalate a diff resource the branch never touched, or a guard failure outside the task's files.
 Escalate disagreements that survive two rounds, or a silent seat after one re-prompt.
 For an unresolved finding, write the finding verbatim and the builder's counter-position in one SDD file.
