@@ -18,7 +18,7 @@ The builder uses an isolated Git worktree branch within the shared repository.
 The chief of staff keeps its context clean.
 It captures the operator's answers to brainstorming questions before the builder writes the specification.
 It does not read inventories or diffs, or write specifications or plans.
-It rules only when the builder and reviewer disagree or the plan is defective.
+It rules on disagreements, defective plans and the escalations defined below.
 
 The builder writes the specification, then the implementation plan, then the code and documentation.
 It commits on its isolated worktree branch.
@@ -51,14 +51,64 @@ A short routing message can also carry the commit range and verdict.
 3. Send the reviewer the report path, brief path, changed file paths and commit range.
 4. Write the review verdict to an SDD file.
 5. Reply directly to the builder with the verdict path and verdict.
-6. Fix the findings.
+6. Fix the Critical and Important findings in one commit.
 7. Send the next report path and commit range.
-8. Repeat until the reviewer gives a clean verdict.
+8. Repeat within the limits below until clean or escalated.
 9. Tell the chief of staff the result and final report path.
 
 Steps 4 and 5 belong to the reviewer; the builder performs the other steps.
 The chief of staff does not relay reports, diffs or findings between them.
 Unresolved disagreement or a defective plan goes to the chief of staff as an SDD file path.
+
+## Loop governance
+
+### Limits and batching
+
+Task reviews allow at most three fix rounds.
+Escalate any finding still open after the third fix round.
+Spec and plan reviews allow two rounds.
+Whole-branch reviews allow one fix wave and one scoped re-review.
+Escalate anything left after those limits.
+Only Critical and Important findings re-enter a loop.
+Put Minors on the ledger's deferred list.
+Fix deferred Minors in one batch at the end, or leave them deferred.
+Do not re-raise a deferred Minor.
+Re-review only the fix diff.
+Fix all findings admitted to a round in one commit.
+Send one re-review request for that commit.
+Never make one commit per finding.
+The reviewer sends one ranked report per request.
+Dispatch small same-shape work, such as table rows or the four secret edits, as one batch.
+Review that batch once.
+
+### Ownership and waiting
+
+After a review, the next move belongs to the builder.
+The reviewer waits only for a prompt.
+Re-prompt once after fifteen minutes without a reply.
+Escalate continued silence after that re-prompt to the chief of staff.
+Hand external waits longer than fifteen minutes to a monitor held by the chief of staff.
+A long Job or rate-limited run must not occupy an idle seat.
+
+### Ledger and reports
+
+The builder maintains `.superpowers/sdd/<plan>/progress.md`, the ledger; the chief of staff reads it on demand.
+Send the chief of staff one line at task start, task completion and each escalation.
+Include the verdict at completion.
+Send no per-round updates to the chief of staff.
+The chief of staff reports to the operator only at milestones: spec ready, plan ready, deployed or blocked.
+A decision only the operator can make is also a reporting milestone.
+
+### Escalation
+
+Escalate findings that contradict the spec or plan to the chief of staff.
+Escalate cluster changes, irreversible actions, publishing, or needs for operator credentials or browser sign-in.
+Escalate a diff resource the branch never touched, or a guard failure outside the task's files.
+Escalate disagreements that survive two rounds, or a silent seat after one re-prompt.
+For an unresolved finding, write the finding verbatim and the builder's counter-position in one SDD file.
+Send its absolute path to the chief of staff.
+The chief of staff's ruling is final.
+Record that ruling in the ledger.
 
 ## Herdr commands
 
