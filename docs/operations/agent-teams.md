@@ -65,6 +65,7 @@ Unresolved disagreement or a defective plan goes to the chief of staff as an SDD
 ### Limits and batching
 
 Task reviews allow at most three fix rounds.
+A disputed finding escalates after two rounds even inside a task review.
 Escalate any finding still open after the third fix round.
 Spec and plan reviews allow two rounds.
 Whole-branch reviews allow one fix wave and one scoped re-review.
@@ -88,21 +89,23 @@ The reviewer waits only for a prompt.
 Re-prompt once after fifteen minutes without a reply.
 Escalate continued silence after that re-prompt to the chief of staff.
 Hand external waits longer than fifteen minutes to a monitor held by the chief of staff.
+That monitor is a background watch in the chief of staff's session.
 A long Job or rate-limited run must not occupy an idle seat.
 
 ### Ledger and reports
 
-The builder maintains `.superpowers/sdd/<plan>/progress.md`, the ledger; the chief of staff reads it on demand.
-Send the chief of staff one line at task start, task completion and each escalation.
-Include the verdict at completion.
-Send no per-round updates to the chief of staff.
+The builder maintains `.superpowers/sdd/<plan>/progress.md`, the ledger.
+The chief of staff reads it on demand.
+The builder sends the chief of staff one line at task start, task completion and each escalation.
+The completion line includes the verdict.
+The builder sends no per-round updates to the chief of staff.
 The chief of staff reports to the operator only at milestones: spec ready, plan ready, deployed or blocked.
 A decision only the operator can make is also a reporting milestone.
 
 ### Escalation
 
 Escalate findings that contradict the spec or plan to the chief of staff.
-Escalate cluster changes, irreversible actions, publishing, or needs for operator credentials or browser sign-in.
+Escalate cluster changes, irreversible actions, publishing, or anything that needs the operator's credentials or a browser sign-in.
 Escalate a diff resource the branch never touched, or a guard failure outside the task's files.
 Escalate disagreements that survive two rounds, or a silent seat after one re-prompt.
 For an unresolved finding, write the finding verbatim and the builder's counter-position in one SDD file.

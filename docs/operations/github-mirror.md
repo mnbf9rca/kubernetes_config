@@ -17,6 +17,7 @@ Its `mirror` init container uses `ghcr.io/josegonzalez/python-github-backup:late
 Its `restic` container uses `restic/restic:latest` for backup, retention, verification and the heartbeat.
 Both containers mount the `github-mirror` local-path PVC at `/data`; its 10Gi request is not a quota.
 The pod runs as UID/GID 1999 on `ubuntu-16gb-fsn1-2`, with writable `/tmp`, a six-hour deadline and no concurrent runs.
+The restic container sets `RESTIC_CACHE_DIR=/tmp/restic-cache`, so its cache does not need `HOME`.
 
 The existing 04:00 UTC sweep also carries this PVC into the other B2 repository as a free second copy.
 
@@ -61,6 +62,8 @@ Repositories missing upstream keep their local directories.
 Fetch pruning removes refs inside each mirror, so earlier snapshots preserve deleted refs and rewritten history.
 Gists are listed through the public endpoint `/users/mnbf9rca/gists` because the PAT has no gist permission.
 GitHub offers only read-and-write permission for gists; secret gists are not backed up.
+GitHub returns the same Git “not found” error for an empty wiki and one the token cannot read.
+The mirror treats both as absent, so a successful run does not prove every wiki was backed up.
 
 ## Monitoring
 
