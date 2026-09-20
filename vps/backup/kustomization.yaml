@@ -4,6 +4,7 @@ kind: Kustomization
 resources:
   - restic-init-job.yaml
   - restic-cronjob.yaml
+  - github-mirror.yaml
 
 # Job scripts as real files, mounted at /scripts. The content-hash suffix is
 # left ON, so editing a script rolls the workload that mounts it rather than
@@ -50,3 +51,10 @@ configMapGenerator:
     namespace: backup
     files:
       - restic-init.sh=scripts/restic-init.sh
+  # Mounted by the github-mirror CronJob (both containers). A CronJob's
+  # template is mutable, so this one may change freely.
+  - name: github-mirror-scripts
+    namespace: backup
+    files:
+      - github-mirror.py=scripts/github-mirror.py
+      - github-mirror-restic.sh=scripts/github-mirror-restic.sh
