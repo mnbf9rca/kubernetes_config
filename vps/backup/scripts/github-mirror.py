@@ -29,6 +29,7 @@ import json
 import os
 import subprocess
 import sys
+import traceback
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -106,7 +107,7 @@ def refs(repo):
         capture_output=True, text=True, check=False,
     )
     if p.returncode != 0:
-        return {}
+        raise RuntimeError("git for-each-ref failed")
     return dict(line.split(" ", 1) for line in p.stdout.splitlines() if " " in line)
 
 
@@ -135,7 +136,7 @@ def classify(before, after, default_ref, repo):
         ["git", "-C", str(repo), "merge-base", "--is-ancestor", old, new],
         capture_output=True, check=False,
     )
-    return (1, 0) if p.returncode == 1 else (0, 0)
+    return (1, 0) if p.returncode != 0 else (0, 0)
 
 
 def wiki_absent(proc):
@@ -159,59 +160,63 @@ def write_status(data, **kv):
 
 def main():
     data = Path(os.environ.get("MIRROR_DATA", "/data"))
-    token_file = os.environ.get("GITHUB_TOKEN_FILE", "/run/secrets/github/token")
-    login = os.environ["GITHUB_LOGIN"]
-    token = read_token(token_file)
     counts = dict(repos=0, gists=0, forced_default=0, deleted_default=0, mirror_failed=0)
-
     try:
-        repos = api_get_all("/user/repos?affiliation=owner", token)
-        gists = api_get_all(f"/users/{login}/gists")  # public endpoint: PAT has no gist scope
-    except ApiError as e:
-        print(f"enumerate failed: {e}", file=sys.stderr)
-        write_status(data, verdict="enumerate-failed", **counts)
-        return 0
-    if not repos:
-        print("enumerate failed: empty owner list", file=sys.stderr)
-        write_status(data, verdict="enumerate-failed", **counts)
-        return 0
+        token_file = os.environ.get("GITHUB_TOKEN_FILE", "/run/secrets/github/token")
+        login = os.environ["GITHUB_LOGIN"]
+        token = read_token(token_file)
+        verdict = "enumerate-failed"
+        try:
+            repos = api_get_all("/user/repos?affiliation=owner", token)
+            gists = api_get_all(f"/users/{login}/gists")  # public endpoint: PAT has no gist scope
+        except ApiError as e:
+            print(f"enumerate failed: {e}", file=sys.stderr)
+            repos = []
+        else:
+            if not repos:
+                print("enumerate failed: empty owner list", file=sys.stderr)
 
-    env = git_env(token)
-    for r in repos:
-        name = r["name"]
-        dest = data / "repositories" / name / "repository"
-        before = refs(dest)
-        p = mirror(r["clone_url"], dest, env)
-        if p.returncode != 0:
-            print(f"mirror failed: {name} rc={p.returncode}", file=sys.stderr)
-            counts["mirror_failed"] += 1
-            continue
-        counts["repos"] += 1
-        f, d = classify(before, refs(dest), f"refs/heads/{r['default_branch']}", dest)
-        counts["forced_default"] += f
-        counts["deleted_default"] += d
-        if r.get("has_wiki"):
-            wdest = data / "repositories" / name / "wiki"
-            wp = mirror(r["clone_url"].removesuffix(".git") + ".wiki.git", wdest, env)
-            if wp.returncode != 0 and not wiki_absent(wp):
-                print(f"wiki mirror failed: {name} rc={wp.returncode}", file=sys.stderr)
-                counts["mirror_failed"] += 1
-    for g in gists:
-        dest = data / "gists" / g["id"] / "repository"
-        p = mirror(g["git_pull_url"], dest, env)
-        if p.returncode != 0:
-            print(f"gist mirror failed: {g['id']} rc={p.returncode}", file=sys.stderr)
-            counts["mirror_failed"] += 1
-            continue
-        counts["gists"] += 1
+        if repos:
+            env = git_env(token)
+            for r in repos:
+                name = r["name"]
+                dest = data / "repositories" / name / "repository"
+                before = refs(dest)
+                p = mirror(r["clone_url"], dest, env)
+                if p.returncode != 0:
+                    print(f"mirror failed: {name} rc={p.returncode}", file=sys.stderr)
+                    counts["mirror_failed"] += 1
+                    continue
+                counts["repos"] += 1
+                f, d = classify(before, refs(dest), f"refs/heads/{r['default_branch']}", dest)
+                counts["forced_default"] += f
+                counts["deleted_default"] += d
+                if r.get("has_wiki"):
+                    wdest = data / "repositories" / name / "wiki"
+                    wp = mirror(r["clone_url"].removesuffix(".git") + ".wiki.git", wdest, env)
+                    if wp.returncode != 0 and not wiki_absent(wp):
+                        print(f"wiki mirror failed: {name} rc={wp.returncode}", file=sys.stderr)
+                        counts["mirror_failed"] += 1
+            for g in gists:
+                dest = data / "gists" / g["id"] / "repository"
+                p = mirror(g["git_pull_url"], dest, env)
+                if p.returncode != 0:
+                    print(f"gist mirror failed: {g['id']} rc={p.returncode}", file=sys.stderr)
+                    counts["mirror_failed"] += 1
+                    continue
+                counts["gists"] += 1
 
-    export_rc = run_export(data, login, token_file)
-    if counts["mirror_failed"]:
+            export_rc = run_export(data, login, token_file)
+            if counts["mirror_failed"]:
+                verdict = "mirror-failed"
+            elif export_rc != 0:
+                verdict = "export-failed"
+            else:
+                verdict = "ok"
+    except Exception:
+        traceback.print_exc(file=sys.stderr)
         verdict = "mirror-failed"
-    elif export_rc != 0:
-        verdict = "export-failed"
-    else:
-        verdict = "ok"
+
     write_status(data, verdict=verdict, **counts)
     return 0
 

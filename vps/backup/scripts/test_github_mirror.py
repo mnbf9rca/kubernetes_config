@@ -6,11 +6,14 @@ deletion classification against real git repositories, and the enumeration
 fail-safe paths (empty list, API error) that must touch nothing on disk.
 """
 import importlib.util
+import io
 import os
 import subprocess
 import tempfile
 import unittest
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
+from unittest.mock import patch
 
 HERE = Path(__file__).resolve().parent
 # The script has a hyphen in its name, so it cannot be imported by name.
@@ -89,6 +92,8 @@ class TestClassify(unittest.TestCase):
 
 class TestEnumerationFailSafe(unittest.TestCase):
     def setUp(self):
+        self.enterContext(redirect_stdout(io.StringIO()))
+        self.enterContext(redirect_stderr(io.StringIO()))
         self.tmp = tempfile.TemporaryDirectory()
         self.data = Path(self.tmp.name) / "data"
         self.data.mkdir()
@@ -125,6 +130,15 @@ class TestEnumerationFailSafe(unittest.TestCase):
         self.assertEqual(gm.main(), 0)
         self.assertTrue(self._status().startswith("verdict=enumerate-failed "))
         self.assertEqual(sorted(p.name for p in self.data.iterdir()), [".status"])
+
+    def test_mirror_exception_writes_failed_status(self):
+        gm.api_get_all = lambda path, token=None: (
+            [{"name": "repo", "clone_url": "file:///unused", "default_branch": "main"}]
+            if path.startswith("/user/repos") else []
+        )
+        with patch.object(gm, "mirror", side_effect=RuntimeError("mirror failed")):
+            self.assertEqual(gm.main(), 0)
+        self.assertTrue(self._status().startswith("verdict=mirror-failed "))
 
 
 if __name__ == "__main__":
