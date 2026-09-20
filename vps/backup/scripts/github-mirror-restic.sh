@@ -63,7 +63,13 @@ on_exit() {
   if [ "$_xrc" -eq 0 ]; then
     emit "verdict=ok"
   else
-    if [ "$VERDICT" = ok ]; then emit "verdict=restic-failed"; else emit "verdict=$VERDICT"; fi
+    if [ "$STEP" = verdict ]; then
+      emit "verdict=default-branch-changed"
+    elif [ "$VERDICT" = ok ]; then
+      emit "verdict=restic-failed"
+    else
+      emit "verdict=$VERDICT"
+    fi
   fi
   emit "repos=$REPOS"
   emit "forced_default=$FORCED"
