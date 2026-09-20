@@ -209,7 +209,8 @@ The residual is honest and small: this samples once a night, so a fill faster th
 
 Both promote to failure only when restic itself succeeded, so a real restic failure keeps its own, more specific exit code.
 The homelab gate announces its passing counts (`12/12 artifacts present`, `5/5 newer than 30h`).
-The VPS gate records counts in the ping body and prints findings only; its exit status records success.
+The VPS gate records counts in the ping body and prints only its findings.
+On a clean run, the pod log ends at the gate heading and the exit status is the pass signal.
 In both, **"I could not look" must never be reported as "everything is fine"** — an unreadable `/data` or an unopenable PVC directory fails the job.
 
 **The one deliberate divergence is that homelab gates the prune**, because pruning is the step that destroys data: failing the job afterwards still alerts, but the seven good daily snapshots are already being expired on schedule while the alert goes unread.
@@ -595,7 +596,7 @@ Ten were created on August 26, 2026: `homelab-keel-fresh` and `vps-keel-fresh`, 
 An eleventh, **`hermes-app-alive`**, is the one driven from **outside** both clusters: a `no_agent` cron job inside the hermes agent on the off-cluster VM at 05:45 UTC, `up` on exit 0 and `down` otherwise ([hermes-vm.md](hermes-vm.md#reading-a-down-hermes-app-alive)).
 That widens the `/api/push/*` Access bypass's blast radius past "the clusters".
 A twelfth, **`Withings-ingest`**, was added on September 2, 2026 for the `withings-ingest` CronJob in `health`.
-The `vps-github-mirror` push monitor covers the nightly `github-mirror` CronJob in `backup`, with a 86400s interval and one retry at 7200s.
+The `vps-github-mirror` push monitor covers the nightly `github-mirror` CronJob in `backup`, with an 86400s interval and one retry at 7200s.
 It pushes `up` on exit 0 and `down` otherwise, including default-branch force-pushes and deletions.
 Its message carries `verdict=`, `repos=`, `forced_default=`, `deleted_default=` and, on failure, `failed_step=`.
 The six verdicts and the current final-step precedence are documented in [github-mirror.md](github-mirror.md#monitoring).

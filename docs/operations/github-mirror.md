@@ -103,7 +103,7 @@ Monitor configuration is in [uptime-kuma.md](uptime-kuma.md#push-monitors).
 3. Run the one-off initialization pod.
 
    ```sh
-   kubectl --context cynexia-vps -n backup run restic-init-ghmirror --rm -it --restart=Never --image=restic/restic:latest --overrides='{"spec":{"containers":[{"name":"r","image":"restic/restic:latest","command":["restic","init"],"envFrom":[{"secretRef":{"name":"github-mirror"}}]}]}}'
+   kubectl --context cynexia-vps -n backup run restic-init-ghmirror --rm -it --restart=Never --image=restic/restic:latest --overrides='{"spec":{"containers":[{"name":"r","image":"restic/restic:latest","command":["restic","init"],"env":[{"name":"AWS_ACCESS_KEY_ID","valueFrom":{"secretKeyRef":{"name":"github-mirror","key":"AWS_ACCESS_KEY_ID"}}},{"name":"AWS_SECRET_ACCESS_KEY","valueFrom":{"secretKeyRef":{"name":"github-mirror","key":"AWS_SECRET_ACCESS_KEY"}}},{"name":"RESTIC_REPOSITORY","valueFrom":{"secretKeyRef":{"name":"github-mirror","key":"RESTIC_REPOSITORY"}}},{"name":"RESTIC_PASSWORD","valueFrom":{"secretKeyRef":{"name":"github-mirror","key":"RESTIC_PASSWORD"}}}]}]}}'
    ```
 
 4. Record the successful initialization date below.
@@ -137,10 +137,15 @@ No privileged B2 key is needed.
 
    Restic preserves the restored path below the target directory ([restore reference](https://restic.readthedocs.io/en/stable/050_restore.html)).
 
-2. Clone the restored mirror and compare its HEAD with GitHub's current default-branch HEAD.
+2. Clone the restored mirror.
 
    ```sh
    git clone --no-hardlinks "$GHM_DRILL/restore/data/repositories/kubernetes_config/repository" "$GHM_DRILL/work"
+   ```
+
+3. Compare the clone's HEAD with GitHub's current default-branch HEAD.
+
+   ```sh
    printf '%s\n' 'GH_TOKEN=op://VPS/GitHub/PAT' > "$GHM_DRILL/gh.env.tpl"
    GHM_BRANCH=$(op run --env-file="$GHM_DRILL/gh.env.tpl" -- gh api repos/mnbf9rca/kubernetes_config --jq .default_branch)
    GHM_REMOTE_HEAD=$(op run --env-file="$GHM_DRILL/gh.env.tpl" -- gh api "repos/mnbf9rca/kubernetes_config/commits/$GHM_BRANCH" --jq .sha)
@@ -151,7 +156,7 @@ No privileged B2 key is needed.
    Record that difference before judging the drill.
    No scratch push is required.
 
-3. Parse one restored issue and one restored release JSON file.
+4. Parse one restored issue and one restored release JSON file.
 
    ```sh
    python3 -m json.tool "$GHM_DRILL/restore/data/repositories/kubernetes_config/issues/<number>.json" >/dev/null
@@ -184,50 +189,138 @@ Keep the JSON exports for reference; Git pushes do not recreate issues, pull req
 
 ## Runbook: unhide after a mass hide
 
-Stop the compromised writer before recovery.
+The master key is required to revoke the compromised job key; the operator key lacks `deleteKeys`.
+Use the protected laptop for all recovery steps.
+
+1. Authorize the B2 CLI with the master key at its interactive prompts.
+
+   ```sh
+   set +x
+   unset B2_APPLICATION_KEY_ID B2_APPLICATION_KEY
+   b2 account authorize
+   ```
+
+2. Revoke the compromised job key.
+
+   ```sh
+   GHM_OLD_JOB_KEY_ID=$(env -u OP_SERVICE_ACCOUNT_TOKEN op read op://VPS/GitHub/b2-github-mirror-job-key-id)
+   b2 key delete "$GHM_OLD_JOB_KEY_ID"
+   ```
+
+3. Create a replacement job key with the same four capabilities.
+
+   ```sh
+   GHM_BUCKET=$(env -u OP_SERVICE_ACCOUNT_TOKEN op read op://VPS/GitHub/b2-github-mirror-bucket)
+   GHM_NEW_JOB_KEY=$(b2 key create --bucket "$GHM_BUCKET" github-mirror-job listBuckets,listFiles,readFiles,writeFiles)
+   ```
+
+   The command captures the new ID and secret without printing them.
+
+4. Copy the replacement ID to the clipboard.
+
+   ```sh
+   printf '%s\n' "$GHM_NEW_JOB_KEY" | awk '{print $1}' | pbcopy
+   ```
+
+5. Paste the ID into `op://VPS/GitHub/b2-github-mirror-job-key-id` using the 1Password desktop app.
+6. Copy the replacement secret to the clipboard.
+
+   ```sh
+   printf '%s\n' "$GHM_NEW_JOB_KEY" | awk '{print $2}' | pbcopy
+   ```
+
+7. Paste the secret into `op://VPS/GitHub/b2-github-mirror-job-secret` using the 1Password desktop app.
+8. Clear the clipboard.
+
+   ```sh
+   pbcopy </dev/null
+   unset GHM_NEW_JOB_KEY
+   ```
+
+9. Run `make apply-vps` from the deployed branch to update the Secret.
+
+   ```sh
+   make apply-vps
+   ```
+
 Use the operator key from the laptop, never from a cluster.
 Resolve the operator secret with interactive 1Password access, without the service-account token.
 The operator secret reference is intentionally outside the VPS vault.
 Substitute your own reference for `op://<private vault>/<item>/<field>`.
 `env -u OP_SERVICE_ACCOUNT_TOKEN op read` uses the desktop-app session instead of the restricted service account.
 
-1. Set `GHM_OPERATOR_SECRET_REF` to your private-vault reference.
-2. Read credentials into a subshell environment.
-3. List hide markers and unhide each affected path.
+10. Set `GHM_OPERATOR_SECRET_REF` to your private-vault reference.
+11. Read credentials into a subshell environment.
+12. Unhide each listed path.
 
-   ```bash
-   (
-     set +x
-     set -euo pipefail
-     B2_APPLICATION_KEY_ID=$(env -u OP_SERVICE_ACCOUNT_TOKEN op read op://VPS/GitHub/b2-github-mirror-operator-key-id)
-     B2_APPLICATION_KEY=$(env -u OP_SERVICE_ACCOUNT_TOKEN op read "$GHM_OPERATOR_SECRET_REF")
-     export B2_APPLICATION_KEY_ID B2_APPLICATION_KEY
-     GHM_BUCKET=$(env -u OP_SERVICE_ACCOUNT_TOKEN op read op://VPS/GitHub/b2-github-mirror-bucket)
-     b2 ls --versions --recursive --json "b2://$GHM_BUCKET" \
-       | jq -r '[.[] | select(.action == "hide") | .fileName] | unique[]' \
-       | while IFS= read -r GHM_PATH; do
-           b2 file unhide "b2://$GHM_BUCKET/$GHM_PATH"
-         done
-   )
-   ```
+    ```bash
+    (
+      set +x
+      set -euo pipefail
+      B2_APPLICATION_KEY_ID=$(env -u OP_SERVICE_ACCOUNT_TOKEN op read op://VPS/GitHub/b2-github-mirror-operator-key-id)
+      B2_APPLICATION_KEY=$(env -u OP_SERVICE_ACCOUNT_TOKEN op read "$GHM_OPERATOR_SECRET_REF")
+      export B2_APPLICATION_KEY_ID B2_APPLICATION_KEY
+      GHM_BUCKET=$(env -u OP_SERVICE_ACCOUNT_TOKEN op read op://VPS/GitHub/b2-github-mirror-bucket)
+      b2 ls --versions --recursive --json "b2://$GHM_BUCKET" \
+        | jq -r '[.[] | select(.action == "hide") | .fileName] | unique[]' \
+        | while IFS= read -r GHM_PATH; do
+            b2 file unhide "b2://$GHM_BUCKET/$GHM_PATH" || echo "unhide failed: $GHM_PATH" >&2
+          done
+    )
+    ```
 
-   B2 CLI caches authentication locally, even when keys arrive through environment variables ([CLI reference](https://b2-command-line-tool.readthedocs.io/en/stable/)).
-   Use only the operator's protected laptop for this procedure.
-   `b2 file unhide` removes hide markers and requires `deleteFiles`; it does not restore versions already deleted by lifecycle retention.
+    B2 CLI caches authentication locally, even when keys arrive through environment variables ([CLI reference](https://b2-command-line-tool.readthedocs.io/en/stable/)).
+    Use only the operator's protected laptop for this procedure.
+    `b2 file unhide` removes hide markers and requires `deleteFiles`; it does not restore versions already deleted by lifecycle retention.
 
-4. Run the restore drill with the job key again.
+13. Repeat the loop until it prints nothing.
+14. Confirm no backup job is running before removing stale locks.
+15. Remove stale locks with the replacement job key.
+
+    ```sh
+    AWS_ACCESS_KEY_ID=op://VPS/GitHub/b2-github-mirror-job-key-id \
+    AWS_SECRET_ACCESS_KEY=op://VPS/GitHub/b2-github-mirror-job-secret \
+    RESTIC_REPOSITORY=op://VPS/GitHub/restic-github-mirror-repository \
+    RESTIC_PASSWORD=op://VPS/GitHub/restic-github-mirror-password \
+      op run -- restic unlock
+    ```
+
+16. Check the recovered repository with the replacement job key.
+
+    ```sh
+    AWS_ACCESS_KEY_ID=op://VPS/GitHub/b2-github-mirror-job-key-id \
+    AWS_SECRET_ACCESS_KEY=op://VPS/GitHub/b2-github-mirror-job-secret \
+    RESTIC_REPOSITORY=op://VPS/GitHub/restic-github-mirror-repository \
+    RESTIC_PASSWORD=op://VPS/GitHub/restic-github-mirror-password \
+      op run -- restic check
+    ```
+
+    Unhiding can restore legitimately pruned packs, forgotten snapshots and stale locks.
+    The next nightly `forget --prune` hides obsolete objects again.
+
+17. Run the restore drill with the job key again.
 
 Never run `b2 rm --versions` during recovery.
 That command deletes the versions recovery needs.
 
 ## Residual threats
 
-- **B2 master key, or any `writeKeys` or `writeBuckets` key, compromised.** Either can mint a delete key or shorten the lifecycle rule. Those keys live only in 1Password vaults the service account cannot read.
-- **Hide, then wait.** An attacker holding the job key hides everything on day 0 and it is gone around day 366. Detection within the year is load-bearing; because the runner never initialises, the next morning's `restic cat config` fails and the heartbeat goes `down`.
-- **Overwrite.** `writeFiles` allows uploading a corrupt `config` or index under the same name; the old version is implicitly hidden and recoverable for the same window.
-- **Repository password disclosure.** The design protects availability, not confidentiality; the password sits in the same Secret as the job key.
-- **Export completeness.** `github-backup` swallows some failures and exits 0, for example a failed release-asset download. The git mirrors are strict; the JSON export is best-effort, a non-zero exit from the tool is the `export-failed` verdict, and the pod log is the record of anything it swallowed.
-- **Cost attack.** The job key can upload but not delete, so a flood bills for a year. B2 spending alerts are outside this repo.
+- **B2 master key, or any `writeKeys` or `writeBuckets` key, compromised.**
+  Either can mint a delete key or shorten the lifecycle rule.
+  Those keys live only in 1Password vaults the service account cannot read.
+- **Hide, then wait.**
+  An attacker holding the job key hides everything on day 0 and it is gone around day 366.
+  Detection within the year is load-bearing; because the runner never initialises, the next morning's `restic cat config` fails and the heartbeat goes `down`.
+- **Overwrite.**
+  `writeFiles` allows uploading a corrupt `config` or index under the same name; the old version is implicitly hidden and recoverable for the same window.
+- **Repository password disclosure.**
+  The design protects availability, not confidentiality; the password sits in the same Secret as the job key.
+- **Export completeness.**
+  `github-backup` swallows some failures and exits 0, for example a failed release-asset download.
+  The git mirrors are strict; the JSON export is best-effort, a non-zero exit from the tool is the `export-failed` verdict, and the pod log is the record of anything it swallowed.
+- **Cost attack.**
+  The job key can upload but not delete, so a flood bills for a year.
+  B2 spending alerts are outside this repo.
 
 ## Record
 

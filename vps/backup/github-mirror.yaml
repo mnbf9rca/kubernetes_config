@@ -115,9 +115,26 @@ spec:
                   value: "https://uptime.cynexia.com/api/push/${VPS_GHMIRROR_KUMA_TOKEN}"
                 - name: RESTIC_CACHE_DIR
                   value: /tmp/restic-cache
-              envFrom:
-                - secretRef:
-                    name: github-mirror
+                - name: AWS_ACCESS_KEY_ID
+                  valueFrom:
+                    secretKeyRef:
+                      name: github-mirror
+                      key: AWS_ACCESS_KEY_ID
+                - name: AWS_SECRET_ACCESS_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      name: github-mirror
+                      key: AWS_SECRET_ACCESS_KEY
+                - name: RESTIC_REPOSITORY
+                  valueFrom:
+                    secretKeyRef:
+                      name: github-mirror
+                      key: RESTIC_REPOSITORY
+                - name: RESTIC_PASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: github-mirror
+                      key: RESTIC_PASSWORD
               securityContext:
                 allowPrivilegeEscalation: false
                 readOnlyRootFilesystem: true
