@@ -80,11 +80,11 @@ The mirror's `.status` also carries `gists=` and `mirror_failed=`.
 | `mirror-failed` | A Git mirror failed, or the mirror script caught an unexpected exception. |
 | `export-failed` | `github-backup` returned a nonzero exit code. |
 | `restic-failed` | A restic step failed while the mirror verdict was `ok`. |
-| `default-branch-changed` | The final verdict step failed; nonzero counters identify a default-branch rewrite or deletion. |
+| `default-branch-changed` | The mirror verdict was `ok`, but the final counter check failed; nonzero counters identify a default-branch rewrite or deletion. |
 
-The current runner gives `STEP=verdict` precedence over the mirror verdict.
-After successful restic steps, an earlier enumeration, mirror or export failure therefore also produces `default-branch-changed`.
-Read `.status` and the pod's `mirror_verdict=` detail for the original cause.
+On a nonzero exit, the runner preserves any mirror verdict other than `ok`.
+With an `ok` mirror verdict, failure at `STEP=verdict` produces `default-branch-changed`; failure at an earlier step produces `restic-failed`.
+Read `failed_step=` for the failing runner phase and `.status` for the mirror result.
 The reader can also emit `no-status` or `unknown` when status input is missing or incomplete; these are diagnostic fallback values.
 
 A `down` with `forced_default>0` means an old default-branch commit is not an ancestor of the new tip, or Git could not prove ancestry.

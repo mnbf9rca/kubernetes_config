@@ -63,12 +63,13 @@ on_exit() {
   if [ "$_xrc" -eq 0 ]; then
     emit "verdict=ok"
   else
-    if [ "$STEP" = verdict ]; then
-      emit "verdict=default-branch-changed"
-    elif [ "$VERDICT" = ok ]; then
-      emit "verdict=restic-failed"
-    else
+    # Preserve mirror failures before classifying a nonzero runner exit.
+    if [ "$VERDICT" != ok ]; then
       emit "verdict=$VERDICT"
+    elif [ "$STEP" = verdict ]; then
+      emit "verdict=default-branch-changed"
+    else
+      emit "verdict=restic-failed"
     fi
   fi
   emit "repos=$REPOS"
