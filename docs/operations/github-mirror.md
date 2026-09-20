@@ -330,13 +330,21 @@ That command deletes the versions recovery needs.
 
 | Check | Record |
 |---|---|
-| Repository initialization date | not yet done |
-| First completed run date | not yet done |
-| First run `repos=` count | not yet done |
-| Fresh owner-repository API count | not yet done |
+| Verification date | 2026-09-20 |
+| Repository initialization date | 2026-09-20 |
+| First successful run | 2026-09-20, `github-mirror-second`, completed at 16:46:44 UTC |
+| First successful run counts | `repos=98 gists=4 mirror_failed=0 export_failed=0 export_gone=0` |
+| Default-branch change counts | `forced_default=0 deleted_default=0` |
+| Fresh owner-repository API count | 98 on 2026-09-20; matches the successful run |
+| Restic snapshots | 2 on 2026-09-20; the failed first attempt also saved a snapshot |
+| PVC token scan | `CLEAN` on 2026-09-20 |
 | Restore drill date | not yet done |
 | Restore drill repository and HEAD comparison | not yet done |
 | Issue and release JSON validation | not yet done |
+
+The successful run reported `verdict=ok`, and the restic runner reported `rc=0` with no push-delivery failure.
+The failed first attempt counted 115 repositories; the later count of 98 is consistent with the operator's deletions that day.
+There is no difference between the successful run's count and the fresh API count.
 
 Compare the first run's `repos=` count with a fresh owner-repository count.
 Use the reference-only template created during the drill.
