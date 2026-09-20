@@ -19,7 +19,6 @@ The chief of staff keeps its context clean.
 It captures the operator's answers to brainstorming questions before the builder writes the specification.
 It does not read inventories or diffs, or write specifications or plans.
 It rules on disagreements, defective plans and the escalations defined below.
-
 The builder writes the specification, then the implementation plan, then the code and documentation.
 It commits on its isolated worktree branch.
 The reviewer reviews each artifact in turn.
@@ -104,6 +103,7 @@ The completion line includes the verdict.
 The builder sends no per-round updates to the chief of staff.
 The chief of staff reports to the operator only at milestones: spec ready, plan ready, deployed or blocked.
 A decision only the operator can make is also a reporting milestone.
+Use absolute paths for every file named in messages to the operator, so links are clickable.
 
 ### Escalation
 

@@ -421,6 +421,7 @@ The rules that must not be broken:
   A review request, a runbook step, a question, a pull request body: one instruction per sentence, at most 20 words, imperative and active, every term defined or already in this file.
   Explanatory prose, the reasons behind a rule, stays in ordinary clear English.
   Operator ruling, 2026-09-06: the operator reviews under time pressure and an instruction that takes two readings is a fault.
+  Operator ruling, 2026-09-20: use absolute paths for every file named in messages to the operator, so links are clickable.
 - **Documentation, not agent memories.**
   Do not record repo, cluster, or account state in an agent's private memory system — that hides operational knowledge from the operator, from other agents, and from review.
   Anything worth remembering goes in `docs/` (or this file, per the rule above), where it is versioned, diffable and shared.
