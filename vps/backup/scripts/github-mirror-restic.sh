@@ -63,7 +63,7 @@ on_exit() {
   if [ "$_xrc" -eq 0 ]; then
     emit "verdict=ok"
   else
-    emit "verdict=$VERDICT"
+    if [ "$VERDICT" = ok ]; then emit "verdict=restic-failed"; else emit "verdict=$VERDICT"; fi
   fi
   emit "repos=$REPOS"
   emit "forced_default=$FORCED"
@@ -71,6 +71,7 @@ on_exit() {
   # LAST: the only token that varies in length.
   [ "$_xrc" -eq 0 ] || emit "failed_step=$STEP"
   if [ "$_xrc" -eq 0 ]; then push_kuma up; else push_kuma down; fi
+  exit "$_xrc"
 }
 trap on_exit EXIT
 
