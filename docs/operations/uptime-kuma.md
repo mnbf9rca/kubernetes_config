@@ -193,7 +193,7 @@ Eight groups hold the tree.
 | `homelab apps` | The homelab tunnel's HTTP monitors, plus the `Hermes` group |
 | `Hermes` | `hermes API`, `hermes-app-alive` and `hindsight-canary` — the Hermes stack and the memory backend it reads |
 | `health data` | `Data MCP`, `hae.cynexia.com` and the `health` namespace's push monitors |
-| `Backups` | `health-influx-backup`, `homelab-hermes-pull`, `hindsight-pg-dump` and `jottacloud-backup` |
+| `Backups` | `health-influx-backup`, `homelab-hermes-pull`, `hindsight-pg-dump`, `jottacloud-backup` and `vps-github-mirror` |
 | `Updates` | `homelab-keel-fresh`, `vps-keel-fresh` and `homelab-update-watch` |
 | `blog.cynexia.com` | `blog.cynexia.com homepage` and `blog database status` |
 | `recordwell` | `recordwell.app website`, `auth API live` and `Auth API health` |
@@ -343,13 +343,14 @@ Set the type to **Push**, take the token from the generated push URL — the las
 The manifest, never the script, assembles the URL: the `env:` block sets `PUSH_URL: "https://uptime.cynexia.com/api/push/${TOKEN_VAR}"`, and only `PUSH_URL` reaches the runner.
 A generated script rides the same envsubst stream as its manifest and envsubst rewrites the bare `$NAME` form too, so a script naming the allowlisted variable would publish the token inside a ConfigMap; `make check-script-substitution` enforces the rename.
 
-The last column records **per-job semantics**, not a uniform contract: each job decides for itself what it pushes and when, and they genuinely differ.
+The last column records when each job pushes and what it reports.
 Read it per row rather than assuming up-on-success everywhere.
 
 | Monitor | Token | Interval / retries | Pushed by, and on what |
 |---|---|---|---|
 | `homelab-keel-fresh` | `op://Homelab/keel-fresh/kuma-push-token` | 86400s, 1 retry at 21600s | `keel-fresh` CronJob in `ops`, from an EXIT trap: `up` on exit 0, `down` on any failure. Never silent on a failure it can observe |
 | `vps-keel-fresh` | `op://VPS/keel-fresh/kuma-push-token` | 86400s, 1 retry at 21600s | `keel-fresh` CronJob in the VPS `ops` namespace, from an EXIT trap: `up` on exit 0, `down` on any failure. The same contract as the row above, from the cluster this uptime-kuma runs on |
+| `vps-github-mirror` | `op://VPS/GitHub/kuma-github-mirror-token` | 86400s, 1 retry at 7200s | `github-mirror` CronJob in `backup`, from an EXIT trap: `up` on exit 0, `down` otherwise, including on any default-branch force-push or deletion. `msg` carries `verdict=`, `repos=`, `forced_default=`, `deleted_default=` and `failed_step=` on failure. [Verdict meanings](github-mirror.md#monitoring) |
 | `health-influx-backup` | `op://Homelab/health-healthchecks/backup-kuma-push-token` | 86400s, 1 retry at 21600s | `influx-backup` CronJob in `health`, from an EXIT trap: `up` on exit 0, `down` otherwise. `msg` carries `verdict=` and `buckets=n/m`, plus `failed_step=` and `error=` on a failure |
 | `homelab-cloudflare-analytics` | `op://Homelab/health-healthchecks/cloudflare-kuma-push-token` | 3600s, 1 retry at 7200s | `cloudflare-analytics` CronJob in `health`, Python: `up` on rc 0, `down` otherwise, the unrecoverable-gap path included. `msg` carries `verdict=` from `ok\|incomplete\|gap\|failed`, `chunks=n/m`, `rows=` and `series=` |
 | `Withings-ingest` | `op://Homelab/health-healthchecks/withings-kuma-push-token` | 1800s, 1 retry at 900s | `withings-ingest` CronJob in `health`, Python: `up` on rc 0, `down` otherwise. `msg` carries `verdict=` from `ok\|failed`, `groups=` and `points=`, plus `failure=` from a five-member enum, plus `exception=` after it on an unhandled error |

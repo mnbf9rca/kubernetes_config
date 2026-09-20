@@ -13,6 +13,7 @@ Read [What this does not catch](#what-this-does-not-catch) before you trust a gr
 | `health-garmin-and-apple-ingest` is DOWN | Check whether the operator synced a watch before suspecting the pipeline. The last heartbeat's `apple_age_h=`/`garmin_age_h=` names which path was ageing — [the push monitors](uptime-kuma.md#push-monitors) |
 | `Withings-ingest` is DOWN | `failure=` names the stage it reached. `failure=token_persist` is the one with a clock on it: the refresh succeeded, the rotated token was lost, and the old one is running down an eight-hour grace, so fix the volume and force a run inside that window or the repair is a browser re-authorization. Every other stage is safe until the next run — [homelab-health.md](homelab-health.md#the-token-rule) |
 | `homelab-update-watch` is DOWN | In a fresh heartbeat, `verdict=` names the cause and `next=` names the command to run; a stale `run_epoch=` means the watcher itself went quiet — [The update watcher](#the-update-watcher) |
+| `vps-github-mirror` is DOWN | Read the verdict, default-branch counters and original mirror status — [GitHub mirror monitoring](github-mirror.md#monitoring) |
 | A sidecar shows `RESTARTS: 0` but its snapshot is missing | Expected; they log rather than exit. Read the sidecar's stderr — [Why the sidecars have no probes](#why-the-sidecars-have-no-probes) |
 | The Grafana Cloud NoData alert on the health datasources fires | The PDC agent, its tunnel or InfluxDB failed, and the alert does not say which. Start at `kubectl -n health logs deploy/pdc-agent`, then the InfluxDB pod — [homelab-health.md](homelab-health.md#grafana-cloud-over-private-datasource-connect) |
 | `hindsight-canary` is DOWN | Read `verdict=`: `retain-failed` is the API, the database or the tenant key; `recall-miss` is the retrieval side. An agent is losing memories right now — [hindsight.md](hindsight.md) |
@@ -154,8 +155,8 @@ Generated scripts also pass through envsubst, so run `make check-script-substitu
 |---|---|---|
 | `timeZone: "UTC"` | every job | Otherwise the schedule follows kube-controller-manager's local zone |
 | `startingDeadlineSeconds` | 3600 (update-watch and both clusters' keel-fresh included), except 1800 for cloudflare-analytics, 600 for withings-ingest and hindsight-canary, 300 for jottacloud, and unset for `ingest-freshness` | A missed window retries for that long, then drops. `update-watch` takes the 3600 default deliberately: a silently skipped run is the failure it exists to prevent |
-| `activeDeadlineSeconds` | restic 14400, influx-backup 3600, hindsight-pg-dump 3600, hermes-pull 1800, cloudflare-analytics 1200, withings-ingest 600, ingest-freshness 300, update-watch 300, keel-fresh 300 on both clusters, hindsight-canary 300, jottacloud 21600 | With `concurrencyPolicy: Forbid`, one hung run silently blocks every later run |
-| `ttlSecondsAfterFinished` | 259200 on both restic jobs, hermes-pull, cloudflare-analytics, withings-ingest, update-watch and both clusters' keel-fresh; 172800 on influx-backup and hindsight-pg-dump; 3600 on hindsight-canary, which runs hourly; 86400 on the rest | A Friday failure on the restic jobs survives until Monday |
+| `activeDeadlineSeconds` | restic 14400, influx-backup 3600, hindsight-pg-dump 3600, hermes-pull 1800, cloudflare-analytics 1200, withings-ingest 600, ingest-freshness 300, update-watch 300, keel-fresh 300 on both clusters, hindsight-canary 300, jottacloud 21600, github-mirror 21600 | With `concurrencyPolicy: Forbid`, one hung run silently blocks every later run |
+| `ttlSecondsAfterFinished` | 259200 on both restic jobs, github-mirror, hermes-pull, cloudflare-analytics, withings-ingest, update-watch and both clusters' keel-fresh; 172800 on influx-backup and hindsight-pg-dump; 3600 on hindsight-canary, which runs hourly; 86400 on the rest | A Friday failure on the restic jobs survives until Monday |
 | `terminationGracePeriodSeconds` | not set on any job | busybox `ash` runs as PID 1 and never forwards SIGTERM to restic, so a grace period only slows teardown. `restic unlock` at the head of the next run recovers the lock |
 
 Two of those are the hindsight jobs.
@@ -207,7 +208,8 @@ An unparseable `df` reading **fails**, on the same "I could not look" rule as th
 The residual is honest and small: this samples once a night, so a fill faster than a day still lands between runs.
 
 Both promote to failure only when restic itself succeeded, so a real restic failure keeps its own, more specific exit code.
-Both announce their passes (`12/12 artifacts present`, `5/5 newer than 30h`): a gate that prints nothing when happy is indistinguishable from one that never ran.
+The homelab gate announces its passing counts (`12/12 artifacts present`, `5/5 newer than 30h`).
+The VPS gate records counts in the ping body and prints findings only; its exit status records success.
 In both, **"I could not look" must never be reported as "everything is fine"** — an unreadable `/data` or an unopenable PVC directory fails the job.
 
 **The one deliberate divergence is that homelab gates the prune**, because pruning is the step that destroys data: failing the job afterwards still alerts, but the seven good daily snapshots are already being expired on schedule while the alert goes unread.
@@ -364,7 +366,7 @@ None has a normally-red steady state, so a daily reminder is signal.
 A push monitor that goes DOWN alerts once on the flip and then stays quiet.
 
 **One trap is Python-only and it is silent.**
-Cloudflare answers urllib's default `Python-urllib/3.x` User-Agent with HTTP 403 and `error code: 1010` before the request reaches kuma, so both Python jobs set an explicit `User-Agent` on the push and both suites assert it.
+Cloudflare answers urllib's default `Python-urllib/3.x` User-Agent with HTTP 403 and `error code: 1010` before the request reaches kuma, so the Python push jobs set an explicit `User-Agent` and their suites assert it.
 A push failure is swallowed by design, so the only symptom is a monitor that never goes UP.
 Shell runners use curl or wget and are unaffected.
 Measurement and detail: [uptime-kuma.md](uptime-kuma.md#push-monitors).
@@ -521,7 +523,7 @@ Read that as one rule with three outcomes rather than three rules.
 
 Everything that used to be a body line is now printed to the pod log as well — the shell runners as a `detail:` line from the exit trap, the Python jobs as a `heartbeat message (full):` block — so nothing was lost, it moved.
 **Read the pod log first**; the heartbeat history is the fallback, not the record.
-The pod log's window is `ttlSecondsAfterFinished` on the Job, and that varies more than it looks: **3 days** for `cloudflare-analytics`, `withings-ingest`, `hermes-pull`, `update-watch` and both `keel-fresh` jobs; **2 days** for `influx-backup` and `hindsight-pg-dump`; **1 day** for `ingest-freshness` and `jottacloud-backup`; and **1 hour** for `hindsight-canary`, which runs hourly.
+The pod log's window is `ttlSecondsAfterFinished` on the Job, and that varies more than it looks: **3 days** for `github-mirror`, `cloudflare-analytics`, `withings-ingest`, `hermes-pull`, `update-watch` and both `keel-fresh` jobs; **2 days** for `influx-backup` and `hindsight-pg-dump`; **1 day** for `ingest-freshness` and `jottacloud-backup`; and **1 hour** for `hindsight-canary`, which runs hourly.
 So it is an hour on the canary and no more than three days on anything.
 
 `make check-ping-bodies` enforces all of this.
@@ -593,6 +595,10 @@ Ten were created on August 26, 2026: `homelab-keel-fresh` and `vps-keel-fresh`, 
 An eleventh, **`hermes-app-alive`**, is the one driven from **outside** both clusters: a `no_agent` cron job inside the hermes agent on the off-cluster VM at 05:45 UTC, `up` on exit 0 and `down` otherwise ([hermes-vm.md](hermes-vm.md#reading-a-down-hermes-app-alive)).
 That widens the `/api/push/*` Access bypass's blast radius past "the clusters".
 A twelfth, **`Withings-ingest`**, was added on September 2, 2026 for the `withings-ingest` CronJob in `health`.
+The `vps-github-mirror` push monitor covers the nightly `github-mirror` CronJob in `backup`, with a 86400s interval and one retry at 7200s.
+It pushes `up` on exit 0 and `down` otherwise, including default-branch force-pushes and deletions.
+Its message carries `verdict=`, `repos=`, `forced_default=`, `deleted_default=` and, on failure, `failed_step=`.
+The six verdicts and the current final-step precedence are documented in [github-mirror.md](github-mirror.md#monitoring).
 Because the healthchecks.io account is capped at 20 checks, new scheduled work takes a push monitor instead.
 Both the roster and the Cloudflare Access bypass that lets a job reach the push endpoint are in **[uptime-kuma.md](uptime-kuma.md#push-monitors)**.
 
