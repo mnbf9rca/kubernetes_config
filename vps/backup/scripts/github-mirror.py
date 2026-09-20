@@ -39,7 +39,7 @@ PER_PAGE = 100
 EXPORT_FLAGS = [
     "--issues", "--issue-comments", "--issue-events",
     "--pulls", "--pull-comments", "--pull-reviews", "--pull-commits",
-    "--releases", "--assets", "--labels", "--milestones", "--starred",
+    "--releases", "--assets", "--labels", "--milestones",
     "--private", "--fork", "--incremental", "--prefer-ssh",
 ]
 
@@ -144,12 +144,30 @@ def wiki_absent(proc):
     return proc.returncode == 128 and "not found" in proc.stderr.lower()
 
 
-def run_export(data, login, token_file):
-    """The JSON export. Clones nothing (no --repositories/--wikis/--gists),
-    and --prefer-ssh stops the tool building a token URL even in memory."""
+def run_export(data, login, token_file, repo=None):
+    """Export one repo, or account data when repo is None. Never clones;
+    --prefer-ssh prevents token URLs even in memory."""
+    flags = ([*EXPORT_FLAGS, "--repository", repo] if repo is not None else
+             ["--starred", "--private", "--fork", "--incremental", "--prefer-ssh"])
     cmd = ["github-backup", login, "--token-fine", f"file://{token_file}",
-           "--output-directory", str(data), *EXPORT_FLAGS]
+           "--output-directory", str(data), *flags]
     return subprocess.run(cmd, check=False).returncode
+
+
+def repository_gone(login, name, token):
+    """Only a confirmed 404 makes an export failure informational."""
+    req = urllib.request.Request(
+        f"{API}/repos/{login}/{name}",
+        headers={"Accept": "application/vnd.github+json",
+                 "User-Agent": "github-mirror", "Authorization": f"Bearer {token}"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=60):
+            return False
+    except urllib.error.HTTPError as e:
+        return e.code == 404
+    except OSError:
+        return False
 
 
 def write_status(data, **kv):
@@ -160,7 +178,8 @@ def write_status(data, **kv):
 
 def main():
     data = Path(os.environ.get("MIRROR_DATA", "/data"))
-    counts = dict(repos=0, gists=0, forced_default=0, deleted_default=0, mirror_failed=0)
+    counts = dict(repos=0, gists=0, forced_default=0, deleted_default=0,
+                  mirror_failed=0, export_failed=0, export_gone=0)
     try:
         token_file = os.environ.get("GITHUB_TOKEN_FILE", "/run/secrets/github/token")
         login = os.environ["GITHUB_LOGIN"]
@@ -206,10 +225,18 @@ def main():
                     continue
                 counts["gists"] += 1
 
-            export_rc = run_export(data, login, token_file)
+            for r in repos:
+                if run_export(data, login, token_file, r["name"]) != 0:
+                    if repository_gone(login, r["name"], token):
+                        counts["export_gone"] += 1
+                        print(f"export gone: {r['name']} (HTTP 404)", flush=True)
+                    else:
+                        counts["export_failed"] += 1
+            if run_export(data, login, token_file) != 0:
+                counts["export_failed"] += 1
             if counts["mirror_failed"]:
                 verdict = "mirror-failed"
-            elif export_rc != 0:
+            elif counts["export_failed"]:
                 verdict = "export-failed"
             else:
                 verdict = "ok"

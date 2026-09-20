@@ -131,6 +131,30 @@ class TestEnumerationFailSafe(unittest.TestCase):
         self.assertTrue(self._status().startswith("verdict=enumerate-failed "))
         self.assertEqual(sorted(p.name for p in self.data.iterdir()), [".status"])
 
+    def test_export_failure_continues_with_later_repos(self):
+        names = ["first", "gone", "last"]
+        gm.api_get_all = lambda path, token=None: (
+            [{"name": name, "clone_url": "file:///unused", "default_branch": "main"}
+             for name in names] if path.startswith("/user/repos") else []
+        )
+
+        def export(data, login, token_file, repo=None):
+            return int(repo == "gone")
+
+        for gone in (False, True):
+            with self.subTest(gone=gone), \
+                    patch.object(gm, "mirror", return_value=subprocess.CompletedProcess([], 0)), \
+                    patch.object(gm, "run_export", side_effect=export) as run_export, \
+                    patch.object(gm, "repository_gone", return_value=gone) as check_gone:
+                self.assertEqual(gm.main(), 0)
+                verdict = "ok" if gone else "export-failed"
+                self.assertTrue(self._status().startswith(f"verdict={verdict} "))
+                self.assertIn(f"export_failed={int(not gone)}", self._status().split())
+                self.assertIn(f"export_gone={int(gone)}", self._status().split())
+                self.assertEqual([call.args[3] if len(call.args) > 3 else None
+                                  for call in run_export.call_args_list], names + [None])
+                check_gone.assert_called_once_with("someone", "gone", "github_pat_not_real")
+
     def test_mirror_exception_writes_failed_status(self):
         gm.api_get_all = lambda path, token=None: (
             [{"name": "repo", "clone_url": "file:///unused", "default_branch": "main"}]

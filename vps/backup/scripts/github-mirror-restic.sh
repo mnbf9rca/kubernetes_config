@@ -82,7 +82,9 @@ on_exit() {
 }
 trap on_exit EXIT
 
-# Read the status line: each token is key=value of a fixed enum or digits.
+# Status tokens: verdict, repos, gists, forced_default, deleted_default,
+# mirror_failed, export_failed, export_gone (informational).
+# Each token is key=value of a fixed enum or digits.
 # The values are taken by a fixed-format parse, never by executing the file.
 step read-status
 [ -r "$DATA/.status" ] || { VERDICT=no-status; exit 1; }

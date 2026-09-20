@@ -58,6 +58,8 @@ The runner never runs `restic init`: a missing repository is a failure, not perm
 ```
 
 The exporter uses incremental issue and pull-request state beside the JSON files.
+Each enumerated repository gets a separate export invocation, so a failed export does not prevent later repositories from running.
+The starred list is exported once per run, separately from repository data.
 Repositories missing upstream keep their local directories.
 Fetch pruning removes refs inside each mirror, so earlier snapshots preserve deleted refs and rewritten history.
 Gists are listed through the public endpoint `/users/mnbf9rca/gists` because the PAT has no gist permission.
@@ -75,14 +77,18 @@ A deadline kill can skip the trap and is detected through silence.
 The first export can hit the six-hour deadline; the second night completes it from the incremental checkpoints.
 
 The message carries `verdict=`, `repos=`, `forced_default=` and `deleted_default=`, followed by `failed_step=` on failure.
-The mirror's `.status` also carries `gists=` and `mirror_failed=`.
+The mirror's `.status` also carries `gists=`, `mirror_failed=`, `export_failed=` and `export_gone=`.
+After a repository export fails, the script checks that repository with an authenticated GET.
+A confirmed 404 increments `export_gone`, logs the repository name and does not cause a down by itself.
+The `export_failed` counter counts other nonzero exporter exits, including the separate account export, and causes a down.
+An unconfirmed disappearance, including a failed follow-up request, remains an export failure.
 
 | Verdict | Meaning |
 |---|---|
-| `ok` | Mirror and export reported success, restic completed, and both default-branch change counters are zero. |
+| `ok` | No mirror or export failures were counted, restic completed, and both default-branch change counters are zero. |
 | `enumerate-failed` | Repository/gist enumeration failed, or the owner repository list was empty. |
 | `mirror-failed` | A Git mirror failed, or the mirror script caught an unexpected exception. |
-| `export-failed` | `github-backup` returned a nonzero exit code. |
+| `export-failed` | At least one exporter invocation failed (`export_failed>0`), while Git mirroring succeeded. |
 | `restic-failed` | A restic step failed while the mirror verdict was `ok`. |
 | `default-branch-changed` | The mirror verdict was `ok`, but the final counter check failed; nonzero counters identify a default-branch rewrite or deletion. |
 
@@ -315,7 +321,7 @@ That command deletes the versions recovery needs.
   The design protects availability, not confidentiality; the password sits in the same Secret as the job key.
 - **Export completeness.**
   `github-backup` swallows some failures and exits 0, for example a failed release-asset download.
-  The git mirrors are strict; the JSON export is best-effort, a non-zero exit from the tool is the `export-failed` verdict, and the pod log is the record of anything it swallowed.
+  The git mirrors are strict; the JSON export is best-effort, a counted export failure produces the `export-failed` verdict, and the pod log is the record of anything it swallowed.
 - **Cost attack.**
   The job key can upload but not delete, so a flood bills for a year.
   B2 spending alerts are outside this repo.
