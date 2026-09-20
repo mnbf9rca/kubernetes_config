@@ -69,6 +69,7 @@ It receives `up` on exit 0 and `down` otherwise from the restic runner's EXIT tr
 There is no start heartbeat.
 An interval of 86400 seconds and one retry after 7200 seconds detects silence after about 26 hours.
 A deadline kill can skip the trap and is detected through silence.
+The first export can hit the six-hour deadline; the second night completes it from the incremental checkpoints.
 
 The message carries `verdict=`, `repos=`, `forced_default=` and `deleted_default=`, followed by `failed_step=` on failure.
 The mirror's `.status` also carries `gists=` and `mirror_failed=`.
@@ -274,18 +275,7 @@ Substitute your own reference for `op://<private vault>/<item>/<field>`.
     `b2 file unhide` removes hide markers and requires `deleteFiles`; it does not restore versions already deleted by lifecycle retention.
 
 13. Repeat the loop until it prints nothing.
-14. Confirm no backup job is running before removing stale locks.
-15. Remove stale locks with the replacement job key.
-
-    ```sh
-    AWS_ACCESS_KEY_ID=op://VPS/GitHub/b2-github-mirror-job-key-id \
-    AWS_SECRET_ACCESS_KEY=op://VPS/GitHub/b2-github-mirror-job-secret \
-    RESTIC_REPOSITORY=op://VPS/GitHub/restic-github-mirror-repository \
-    RESTIC_PASSWORD=op://VPS/GitHub/restic-github-mirror-password \
-      op run -- restic unlock
-    ```
-
-16. Check the recovered repository with the replacement job key.
+14. Check the recovered repository with the replacement job key.
 
     ```sh
     AWS_ACCESS_KEY_ID=op://VPS/GitHub/b2-github-mirror-job-key-id \
@@ -298,7 +288,12 @@ Substitute your own reference for `op://<private vault>/<item>/<field>`.
     Unhiding can restore legitimately pruned packs, forgotten snapshots and stale locks.
     The next nightly `forget --prune` hides obsolete objects again.
 
-17. Run the restore drill with the job key again.
+15. Run the restore drill with the job key again.
+16. Run `b2 account clear`.
+
+    ```sh
+    b2 account clear
+    ```
 
 Never run `b2 rm --versions` during recovery.
 That command deletes the versions recovery needs.

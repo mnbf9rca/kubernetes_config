@@ -102,7 +102,7 @@ restic cat config >/dev/null            # exit 10 = repository gone: fatal, neve
 step unlock
 restic unlock                            # stale locks only; each pod has a fresh hostname
 step backup
-restic backup --quiet --tag nightly "$DATA"
+restic backup --tag nightly "$DATA"
 step forget
 # Prunes only when a snapshot was removed, so nothing prunes in year one.
 restic forget --quiet --keep-within 1y --prune --max-unused unlimited
