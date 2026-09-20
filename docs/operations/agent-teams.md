@@ -86,11 +86,14 @@ Review that batch once.
 
 After a review, the next move belongs to the builder.
 The reviewer waits only for a prompt.
-Re-prompt once after fifteen minutes without a reply.
-Escalate continued silence after that re-prompt to the chief of staff.
-Hand external waits longer than fifteen minutes to a monitor held by the chief of staff.
-That monitor is a background watch in the chief of staff's session.
-A long Job or rate-limited run must not occupy an idle seat.
+Re-prompt once after fifteen minutes without a reply, then escalate continued silence to the chief of staff.
+Operator ruling, September 20, 2026: never run long tasks synchronously.
+Never block your turn on another seat or cluster Job for more than about one minute.
+Start a background monitor or background wait, then continue other work or end your turn.
+For Herdr agents, poll `herdr agent get <name>` in the background and report `done` or `blocked`.
+For cluster Jobs, poll the Job's conditions in the background and report completion or failure.
+Use foreground `herdr agent wait` only for waits known to take less than one minute.
+Hand external waits longer than fifteen minutes to a background monitor in the chief of staff's session.
 
 ### Ledger and reports
 
