@@ -171,6 +171,15 @@ VPS_RESTIC_REPOSITORY=op://VPS/b2-restic/repository
 # healthchecks.io dead-man's-switch for the nightly restic CronJob
 VPS_RESTIC_HC_UUID=op://VPS/b2-restic/healthcheck-uuid
 
+# github-mirror CronJob (vps/backup/github-mirror.yaml). Job key: hide-only,
+# no deleteFiles. The operator key with deleteFiles is NOT here on purpose.
+VPS_GITHUB_PAT=op://VPS/GitHub/PAT
+VPS_GHMIRROR_B2_KEY_ID=op://VPS/GitHub/b2-github-mirror-job-key-id
+VPS_GHMIRROR_B2_KEY=op://VPS/GitHub/b2-github-mirror-job-secret
+VPS_GHMIRROR_RESTIC_REPOSITORY=op://VPS/GitHub/restic-github-mirror-repository
+VPS_GHMIRROR_RESTIC_PASSWORD=op://VPS/GitHub/restic-github-mirror-password
+VPS_GHMIRROR_KUMA_TOKEN=op://VPS/GitHub/kuma-github-mirror-token
+
 # n8n credential encryption key — load-bearing, extracted from old VPS
 N8N_ENCRYPTION_KEY=op://VPS/n8n/encryption-key
 

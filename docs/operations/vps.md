@@ -289,12 +289,16 @@ A shared postgres was researched and rejected: karakeep is sqlite-only (karakeep
 
 ## Backups
 
+The `github-mirror` CronJob keeps GitHub mirrors and JSON exports on a PVC, with separate daily restic history for account loss and late-detected compromise.
+Its key model, monitor verdicts and recovery procedures are in [github-mirror.md](github-mirror.md).
+The existing nightly sweep also carries this PVC into the other B2 repository as a free second copy.
+
 Separate B2 bucket and separate restic repo from homelab.
 The restic CronJob runs at 04:00 UTC and backs up `/var/mnt/data/local-path-provisioner` by hostPath, with the same 7 daily / 4 weekly / 6 monthly retention as homelab, and `--group-by paths`.
 
 That hostPath exists on the storage node only, so the job carries a `nodeSelector` naming `ubuntu-16gb-fsn1-2` — one of the three mechanisms in "Storage is single-node on purpose" above, and the reason a three-node cluster still backs up the right tree.
 
-That flag is load-bearing: `restic forget` groups by host+paths by default, and every CronJob pod has a unique hostname, so each nightly snapshot formed a group of one and the policy kept all of them.
+The `--group-by paths` flag is required: `restic forget` groups by host+paths by default, and every CronJob pod has a unique hostname, so each nightly snapshot formed a group of one and the policy kept all of them.
 Verified on homelab 2026-08-20 — 137 snapshots in 137 groups across 131 hostnames, nothing ever pruned since the backup system was built.
 The backup CronJob and init Job select `restic/restic:latest` with `imagePullPolicy: Always` and no keel annotations.
 

@@ -20,6 +20,8 @@ Cluster-specific detail, runbooks and procedures live under `docs/`, referenced 
 | `docs/operations/estate-updates.md` | How the estate gets patched: floating workloads, the pinned-image exception, the Talos/Kubernetes version ledger, remote-base bumps and Omni etcd backups; the interactive session is the `/update-estate` skill |
 | `docs/operations/hermes-vm.md` | The Hermes VM itself: lingering, triaging a DOWN `hermes-app-alive`, installing the kept components, `unattended-upgrades` with its automatic reboot, what the daily check does not watch, the trade the in-gateway cron job makes, the docker terminal sandboxes with their managed scope and per-profile mounts, the runbook for creating a profile, and the VM's own facts |
 | `docs/operations/safer-web-reader.md` | The quarantined web-reader profile and its completion broker: the four-tool surface, the envelope contract, the deployed configuration baseline, and its verification record |
+| `docs/operations/github-mirror.md` | GitHub mirrors and JSON exports, B2 key separation, heartbeat verdicts, initialization, restore, cutover and unhide runbooks |
+| `docs/operations/agent-teams.md` | Agent-team roles, loop limits, escalation, access and Herdr commands |
 
 Design documents and implementation plans are local-only under the gitignored `docs/superpowers/` tree (`specs/2026-04-11-talos-homelab-rebuild-design.md`, `plans/2026-04-11-talos-homelab-rebuild.md`).
 
@@ -211,6 +213,10 @@ The rules that must not be broken:
 
 ## When Editing
 
+- **Use three seats for multi-agent work: chief of staff, builder and reviewer.**
+  Pass handovers as file paths under `.superpowers/sdd/<plan>/`, never pasted output, with the chief of staff outside that loop.
+  Run every step your credentials and tools allow; ask the operator only for private-vault access, browser sign-in or publication approval.
+  Roles, loop limits, escalation, access and Herdr commands: `docs/operations/agent-teams.md`.
 - Keep the one-file-per-service pattern; keep all of a service's resources in that file.
 - **Every workload on both clusters floats unless no floating channel exists.**
   Use the full keel annotation set on floating Deployments, DaemonSets and StatefulSets, including keel itself on `latest`.
@@ -415,6 +421,7 @@ The rules that must not be broken:
   A review request, a runbook step, a question, a pull request body: one instruction per sentence, at most 20 words, imperative and active, every term defined or already in this file.
   Explanatory prose, the reasons behind a rule, stays in ordinary clear English.
   Operator ruling, 2026-09-06: the operator reviews under time pressure and an instruction that takes two readings is a fault.
+  Operator ruling, 2026-09-20: use absolute paths for every file named in messages to the operator, so links are clickable.
 - **Documentation, not agent memories.**
   Do not record repo, cluster, or account state in an agent's private memory system — that hides operational knowledge from the operator, from other agents, and from review.
   Anything worth remembering goes in `docs/` (or this file, per the rule above), where it is versioned, diffable and shared.

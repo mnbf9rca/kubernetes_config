@@ -1,0 +1,175 @@
+# Nightly mirror and JSON export of the operator's GitHub account, snapshotted
+# to a hide-only B2 repository with a year of daily retention. Two threats,
+# two answers: account loss (the mirrors and exports on this PVC) and
+# late-detected compromise (restic history that the job's key cannot delete).
+# Design, key model, restore drill and unhide runbook:
+# docs/operations/github-mirror.md. Monitoring semantics:
+# docs/operations/monitoring.md.
+---
+# local-path provisions a plain directory with no quota; 10Gi documents
+# intent (about 4 GB of bare repos plus 250 MB of release assets plus JSON).
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: github-mirror
+  namespace: backup
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 10Gi
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: github-mirror
+  namespace: backup
+spec:
+  # 01:00 UTC, before the 04:00 restic sweep, which also carries this PVC to
+  # the other repository as a free second copy.
+  schedule: "0 1 * * *"
+  timeZone: "UTC"
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 3600
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      # Six hours: the FIRST export is about 24,000 API calls against a 5,000
+      # per hour limit and sleeps through resets; a nightly incremental run is
+      # minutes. A deadline kill skips the EXIT trap, pushes nothing, and the
+      # `vps-github-mirror` monitor goes DOWN by silence at interval plus retry.
+      activeDeadlineSeconds: 21600
+      backoffLimit: 0
+      ttlSecondsAfterFinished: 259200
+      template:
+        spec:
+          # local-path binds on first consumer and refuses every node but this
+          # one; the selector is what lands the first bind (as keel-fresh does).
+          nodeSelector:
+            kubernetes.io/hostname: ubuntu-16gb-fsn1-2
+          restartPolicy: Never
+          securityContext:
+            runAsNonRoot: true
+            # The tool image's default user is uid 1000; the estate's
+            # convention is 1999, and HOME on the emptyDir below makes that
+            # work for git and for the tool.
+            runAsUser: 1999
+            runAsGroup: 1999
+            fsGroup: 1999
+            fsGroupChangePolicy: "OnRootMismatch"
+            seccompProfile:
+              type: RuntimeDefault
+          initContainers:
+            - name: mirror
+              image: ghcr.io/josegonzalez/python-github-backup:latest
+              imagePullPolicy: Always
+              command: ["python3", "/scripts/github-mirror.py"]
+              env:
+                - name: HOME
+                  value: /tmp
+                - name: MIRROR_DATA
+                  value: /data
+                - name: GITHUB_TOKEN_FILE
+                  value: /run/secrets/github/token
+                - name: GITHUB_LOGIN
+                  value: mnbf9rca
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: [ALL]
+              resources:
+                requests:
+                  memory: 256Mi
+                  cpu: 100m
+                limits:
+                  memory: 1Gi
+                  cpu: "1"
+              volumeMounts:
+                - name: data
+                  mountPath: /data
+                - name: scripts
+                  mountPath: /scripts
+                  readOnly: true
+                - name: github-token
+                  mountPath: /run/secrets/github
+                  readOnly: true
+                - name: tmp
+                  mountPath: /tmp
+          containers:
+            - name: restic
+              image: restic/restic:latest
+              imagePullPolicy: Always
+              command: ["sh", "/scripts/github-mirror-restic.sh"]
+              env:
+                - name: MIRROR_DATA
+                  value: /data
+                # uptime-kuma push monitor `vps-github-mirror`
+                # (op://VPS/GitHub/kuma-github-mirror-token). Only PUSH_URL
+                # reaches the script, so the ConfigMap cannot be rewritten by
+                # envsubst; the placeholder lives here, in the manifest.
+                - name: PUSH_URL
+                  value: "https://uptime.cynexia.com/api/push/${VPS_GHMIRROR_KUMA_TOKEN}"
+                - name: RESTIC_CACHE_DIR
+                  value: /tmp/restic-cache
+                - name: AWS_ACCESS_KEY_ID
+                  valueFrom:
+                    secretKeyRef:
+                      name: github-mirror
+                      key: AWS_ACCESS_KEY_ID
+                - name: AWS_SECRET_ACCESS_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      name: github-mirror
+                      key: AWS_SECRET_ACCESS_KEY
+                - name: RESTIC_REPOSITORY
+                  valueFrom:
+                    secretKeyRef:
+                      name: github-mirror
+                      key: RESTIC_REPOSITORY
+                - name: RESTIC_PASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: github-mirror
+                      key: RESTIC_PASSWORD
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: [ALL]
+              resources:
+                requests:
+                  memory: 256Mi
+                  cpu: 100m
+                limits:
+                  memory: 1Gi
+                  cpu: "1"
+              volumeMounts:
+                - name: data
+                  mountPath: /data
+                  readOnly: true
+                - name: scripts
+                  mountPath: /scripts
+                  readOnly: true
+                - name: tmp
+                  mountPath: /tmp
+          volumes:
+            - name: data
+              persistentVolumeClaim:
+                claimName: github-mirror
+            - name: scripts
+              configMap:
+                name: github-mirror-scripts
+            - name: github-token
+              secret:
+                secretName: github-mirror
+                items:
+                  - key: token
+                    path: token
+                defaultMode: 0440
+            - name: tmp
+              emptyDir:
+                sizeLimit: 2Gi
