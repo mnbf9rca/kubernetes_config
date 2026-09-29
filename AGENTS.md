@@ -21,7 +21,7 @@ Cluster-specific detail, runbooks and procedures live under `docs/`, referenced 
 | `docs/operations/hermes-vm.md` | The Hermes VM itself: lingering, triaging a DOWN `hermes-app-alive`, installing the kept components, `unattended-upgrades` with its automatic reboot, what the daily check does not watch, the trade the in-gateway cron job makes, the docker terminal sandboxes with their managed scope and per-profile mounts, the runbook for creating a profile, and the VM's own facts |
 | `docs/operations/safer-web-reader.md` | The quarantined web-reader profile and its completion broker: the four-tool surface, the envelope contract, the deployed configuration baseline, and its verification record |
 | `docs/operations/github-mirror.md` | GitHub mirrors and JSON exports, B2 key separation, heartbeat verdicts, initialization, restore, cutover and unhide runbooks |
-| `docs/operations/agent-teams.md` | Agent-team roles, loop limits, escalation, access and Herdr commands |
+| `docs/operations/agent-teams.md` | **Read before dispatching any agent or subagent.** Agent-team roles, loop limits, escalation, access and Herdr commands |
 
 Design documents and implementation plans are local-only under the gitignored `docs/superpowers/` tree (`specs/2026-04-11-talos-homelab-rebuild-design.md`, `plans/2026-04-11-talos-homelab-rebuild.md`).
 
@@ -214,9 +214,13 @@ The rules that must not be broken:
 ## When Editing
 
 - **Use three seats for multi-agent work: chief of staff, builder and reviewer.**
+  Any request that names a subagent, Codex, a reviewer or multi-agent work is routed through those three seats, whatever words the operator used for it.
+  The chief of staff reads `docs/operations/agent-teams.md` before dispatching anything, and never dispatches a generic Claude subagent for builder or reviewer work: the builder is Codex (`implementer`) and the reviewer is `k8s-reviewer`.
+  The chief of staff does not read inventories, diffs or cluster state itself; those belong to the builder and the reviewer, and reading them is what fills the context the seat exists to keep clean.
   Pass handovers as file paths under `.superpowers/sdd/<plan>/`, never pasted output, with the chief of staff outside that loop.
   Run every step your credentials and tools allow; ask the operator only for private-vault access, browser sign-in or publication approval.
   Roles, loop limits, escalation, access and Herdr commands: `docs/operations/agent-teams.md`.
+  On 2026-09-29 a chief of staff asked to "get subagent or codex to review" an upgrade dispatched two generic Claude subagents and read the cluster inventories itself, never having opened that document.
 - Keep the one-file-per-service pattern; keep all of a service's resources in that file.
 - **Every workload on both clusters floats unless no floating channel exists.**
   Use the full keel annotation set on floating Deployments, DaemonSets and StatefulSets, including keel itself on `latest`.
