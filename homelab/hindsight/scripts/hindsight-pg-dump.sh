@@ -110,8 +110,11 @@ push_kuma() {
   _st=$1
   _m=$(cut -c1-200 "$MSG_FILE" 2>/dev/null | tr -d '\n' \
        | LC_ALL=C tr -c 'A-Za-z0-9=._:/-' '+') || _m=""
-  wget -q -T 15 -O /dev/null "$PUSH_URL?status=$_st&msg=$_m" >/dev/null 2>&1 \
-    || echo "kuma: push not delivered" >&2
+  for _attempt in 1 2; do
+    wget -q -T 15 -O /dev/null "$PUSH_URL?status=$_st&msg=$_m" >/dev/null 2>&1 && { msg_reset; return 0; }
+    [ "$_attempt" -eq 2 ] || sleep 2 || true
+  done
+  echo "kuma: push not delivered" >&2
   msg_reset
   return 0
 }

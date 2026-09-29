@@ -88,10 +88,14 @@ emit() { { printf '%s ' "$*" | LC_ALL=C tr -cd '\040-\176'; } 2>/dev/null >> "$M
 push_kuma() {
   _st=$1
   _m=$(cut -c1-200 "$MSG_FILE" 2>/dev/null) || _m=""
-  curl -fsS -m 15 -o /dev/null -G \
-    --data-urlencode "status=$_st" \
-    --data-urlencode "msg=$_m" \
-    "$PUSH_URL" || echo "kuma: push not delivered" >&2
+  for _attempt in 1 2; do
+    curl -fsS -m 15 -o /dev/null -G \
+      --data-urlencode "status=$_st" \
+      --data-urlencode "msg=$_m" \
+      "$PUSH_URL" >/dev/null 2>&1 && { msg_reset; return 0; }
+    [ "$_attempt" -eq 2 ] || sleep 2 || true
+  done
+  echo "kuma: push not delivered" >&2
   msg_reset
   return 0
 }
