@@ -69,7 +69,7 @@ kubernetes_config/
 │   ├── plugins/              # canonical copies of the profile-scoped Hermes plugins (safer-reader-broker + its test)
 │   ├── profiles/             # canonical copies of the per-profile SOUL.md personas
 │   └── skills/               # canonical copies of promoted Hermes skills (untrusted-web-content-analysis)
-├── scripts/                  # repo-level helpers (karakeep tags, FreshRSS WebSub status, the check-* guards)
+├── scripts/                  # repo-level helpers (karakeep tags, FreshRSS WebSub status, the check-* guards, reauth.sh)
 ├── legacy-microk8s/          # frozen reference copies of the old microk8s manifests
 └── no_longer_used/           # retired manifests kept for reference
 ```
