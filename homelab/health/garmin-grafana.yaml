@@ -22,7 +22,9 @@ spec:
   # interactive 2FA login, plan Task 11 Step 3 — done 2026-07-26, ~annual).
   # If auth expires, scale to 0 FIRST, redo the login pod, then back to 1 —
   # a crashlooping pod fires an MFA SMS at the operator on every restart.
-  replicas: 1
+  # Paused 2026-09-29: the operator was receiving MFA SMS codes. Scaled to 0 on the
+  # cluster the same day; keep 0 committed until the re-auth runbook is run.
+  replicas: 0
   strategy: { type: Recreate }
   selector: { matchLabels: { app: garmin-grafana } }
   template:
