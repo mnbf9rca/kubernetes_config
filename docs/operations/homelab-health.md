@@ -809,18 +809,80 @@ There is no `make` target for this: it needs a browser, a 30-second code window 
 
 Losing the file costs the credential and nothing else: the resume point is in the bucket, so a re-authorization picks up where the data ends rather than replaying the account.
 
-## Garmin re-authentication (annual)
+## Garmin re-authentication
 
-Tokens on the `garmin-tokens` PVC last roughly a year.
-When they expire:
+The `garmin-grafana` Deployment logs in to Garmin Connect with the token cache on the `garmin-tokens` PVC.
+A token lasts about a year, and only the interactive login pod below can write a new one, because the account uses multi-factor authentication by SMS.
 
-1. **Scale `garmin-grafana` to 0 first.**
-   A crashlooping pod with an expired token fires a multi-factor-authentication SMS at the operator on every restart.
-2. Run the interactive login pod.
-   It needs `enableServiceLinks: false` — the influxdb Service's injected `INFLUXDB_PORT=tcp://...` otherwise crashes the script's `int()` parse — plus the full InfluxDB v1 env block, because the script demo-writes to InfluxDB before it shows the login prompt.
-3. Scale back to 1.
+### An MFA SMS does not mean the token has expired
 
-**Keep `replicas: 0` committed while paused** — `make apply-homelab` resurrects any uncommitted scale-down.
+The Deployment carries no Garmin credentials, and that is deliberate.
+The fetch script catches connection errors and authentication errors from the token login in one clause, and on either one it falls back to a credential login.
+With `GARMINCONNECT_EMAIL` and `GARMINCONNECT_BASE64_PASSWORD` in the environment, that fallback ran without a pause: Garmin accepted the password, sent the operator an MFA SMS, and the script died at the code prompt because a pod has no terminal.
+Between September 12 and September 29, 2026 the pod restarted ten times on transient errors and sent ten SMS codes, while the token stayed valid the whole time.
+Without credentials the fallback fails at the e-mail prompt, before it reaches Garmin, and the restart retries the still-valid token.
+
+So when SMS codes arrive, first find out whether the token is still valid:
+
+1. Scale the Deployment to 0: `kubectl --context cynexia-homelab -n health scale deploy/garmin-grafana --replicas=0`.
+2. Run steps 1 to 2 of the login procedure below.
+3. If the log shows `Login to Garmin Connect successful using stored session tokens`, the token is valid. Skip to step 5 of the login procedure.
+
+### Login procedure
+
+The pod manifest is `homelab/health/garmin-login-pod.yaml`.
+It is not in the kustomization, so `make apply-homelab` never creates it.
+It runs the same image as the Deployment with a TTY, the Garmin credentials from the `health-garmin` Secret, and `enableServiceLinks: false`, which the manifest's header explains.
+
+Before you start, scale the Deployment to 0 and commit `replicas: 0`, because `make apply-homelab` resurrects any uncommitted scale-down.
+
+1. Create the pod:
+
+       kubectl --context cynexia-homelab apply -f homelab/health/garmin-login-pod.yaml
+
+2. Attach to it in a real terminal, not through an agent:
+
+       kubectl --context cynexia-homelab -n health attach -it garmin-login
+
+   The script reads the e-mail and password from the Secret and asks only for the SMS code.
+   Type the code and press Enter.
+   Wait for the log line that reports a successful login, then for the first `Success : updated influxDB database` lines.
+   Press Ctrl-C to detach.
+
+3. Check the token file. It must be dated now and larger than 256 bytes:
+
+       kubectl --context cynexia-homelab -n health exec garmin-login -- ls -l /home/appuser/.garminconnect/
+
+4. Delete the pod:
+
+       kubectl --context cynexia-homelab -n health delete pod garmin-login
+
+5. Set `replicas: 1`, commit, and apply.
+6. Confirm the new pod reports `Login to Garmin Connect successful using stored session tokens` and has 0 restarts after an hour.
+
+Two hazards:
+
+- Garmin rate-limits logins by IP address.
+  If the prompt reports a 429 error, wait one hour before you run step 2 again.
+  Every credential login sends another SMS, so do not retry in a loop.
+- The prompt echoes what you type.
+  It must not ask for the password, because the Secret supplies it.
+  If it does, the Secret is wrong: stop, and fix it with the procedure below.
+
+### Changing the Garmin password
+
+The `health-garmin` Secret is rendered from two fields of the 1Password item `op://Homelab/health-garmin`: `email` and `b64-password`.
+The script wants the password Base64-encoded.
+The item also has a plain `password` field, but on September 29, 2026 it was empty: `b64-password` was the only copy of the credential.
+After you change the password at Garmin:
+
+1. Store the new plain password in the `password` field of the item, in the 1Password app or with `op item edit`. From then on that field is the source of truth.
+2. Derive `b64-password` from it. This reads the plain field, strips the trailing newline that `op read` adds, encodes it, and writes the result back. The password never appears on your terminal:
+
+       op item edit health-garmin --vault Homelab "b64-password=$(op read 'op://Homelab/health-garmin/password' | tr -d '\n' | base64)"
+
+   Use `printf '%s'`, never `echo`, if you encode by hand: a trailing newline inside the Base64 makes Garmin reject the password.
+3. Re-render the Secret with `make apply-homelab` before you run the login procedure, because the login pod reads the Secret when it starts.
 
 ## Why probes exist here (2026-08-18 Pomerium wedge)
 
