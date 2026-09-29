@@ -1,0 +1,47 @@
+# One-off interactive Garmin Connect login pod. NOT in kustomization.yaml: it is
+# created and deleted by hand, per the "Garmin re-authentication" runbook in
+# docs/operations/homelab-health.md.
+#
+# Same image, InfluxDB env and token PVC as the garmin-grafana Deployment, plus:
+#   - stdin/tty, so the MFA code prompt can be answered with `kubectl attach`;
+#   - the Garmin credentials from the health-garmin Secret, which the Deployment
+#     deliberately does not carry (see the comment there);
+#   - enableServiceLinks: false, because the influxdb Service's injected
+#     INFLUXDB_PORT=tcp://... otherwise crashes the script's int() parse before
+#     it reaches the login prompt. The InfluxDB env block is required too: the
+#     script writes to InfluxDB before it prompts.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: garmin-login
+  namespace: health
+spec:
+  restartPolicy: Never
+  enableServiceLinks: false
+  securityContext: { fsGroup: 1000 }
+  containers:
+    - name: garmin-fetch
+      image: thisisarpanghosh/garmin-fetch-data:latest
+      imagePullPolicy: Always
+      stdin: true
+      tty: true
+      env:
+        - { name: INFLUXDB_VERSION, value: "1" }
+        - { name: INFLUXDB_HOST, value: influxdb.health.svc.cluster.local }
+        - { name: INFLUXDB_PORT, value: "8086" }
+        - { name: INFLUXDB_USERNAME, value: garmin }
+        - name: INFLUXDB_PASSWORD
+          valueFrom: { secretKeyRef: { name: health-influxdb, key: garmin-v1-password } }
+        - { name: INFLUXDB_DATABASE, value: GarminStats }
+        - name: GARMINCONNECT_EMAIL
+          valueFrom: { secretKeyRef: { name: health-garmin, key: email } }
+        - name: GARMINCONNECT_BASE64_PASSWORD
+          valueFrom: { secretKeyRef: { name: health-garmin, key: b64-password } }
+        - { name: USER_TIMEZONE, value: Europe/London }
+        - { name: UPDATE_INTERVAL_SECONDS, value: "900" }
+        - { name: TAG_MEASUREMENTS_WITH_USER_EMAIL, value: "True" }
+      volumeMounts:
+        - { name: tokens, mountPath: /home/appuser/.garminconnect }
+  volumes:
+    - name: tokens
+      persistentVolumeClaim: { claimName: garmin-tokens }

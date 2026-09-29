@@ -18,10 +18,17 @@ metadata:
     keel.sh/trigger: poll
     keel.sh/pollSchedule: "@every 6h"
 spec:
-  # Requires the garmin-tokens PVC to hold a valid token cache (one-time
-  # interactive 2FA login, plan Task 11 Step 3 — done 2026-07-26, ~annual).
-  # If auth expires, scale to 0 FIRST, redo the login pod, then back to 1 —
-  # a crashlooping pod fires an MFA SMS at the operator on every restart.
+  # Requires the garmin-tokens PVC to hold a valid token cache, written by the
+  # one-off interactive login pod in garmin-login-pod.yaml (not in the
+  # kustomization). Tokens last about a year; runbook: docs/operations/homelab-health.md.
+  #
+  # No GARMINCONNECT_EMAIL / GARMINCONNECT_BASE64_PASSWORD here, deliberately.
+  # The script falls back to a credential login on ANY token-login error,
+  # transient ones included, and with credentials present that fallback logs in,
+  # makes Garmin send the operator an MFA SMS, then dies at the code prompt
+  # because there is no TTY. Ten restarts and ten SMS codes in 17 days, 2026-09-29.
+  # Without credentials the fallback fails at the e-mail prompt instead, before
+  # it reaches Garmin, and the restart retries the still-valid token.
   replicas: 1
   strategy: { type: Recreate }
   selector: { matchLabels: { app: garmin-grafana } }
@@ -42,10 +49,6 @@ spec:
             - name: INFLUXDB_PASSWORD
               valueFrom: { secretKeyRef: { name: health-influxdb, key: garmin-v1-password } }
             - { name: INFLUXDB_DATABASE, value: GarminStats }
-            - name: GARMINCONNECT_EMAIL
-              valueFrom: { secretKeyRef: { name: health-garmin, key: email } }
-            - name: GARMINCONNECT_BASE64_PASSWORD
-              valueFrom: { secretKeyRef: { name: health-garmin, key: b64-password } }
             - { name: USER_TIMEZONE, value: Europe/London }
             - { name: UPDATE_INTERVAL_SECONDS, value: "900" }
             - { name: TAG_MEASUREMENTS_WITH_USER_EMAIL, value: "True" }
