@@ -43,9 +43,9 @@ Do not merge past a failed or pending check.
 
 ## When to run a session out of band
 
-Run a session when an advisory in FreshRSS's `security` category names a component this estate runs.
+Run a session immediately when an advisory in FreshRSS's `security` category names a component this estate runs.
 These feeds supply the estate's vulnerability signal; Renovate emits none for container images, and no scanner runs here.
-Cloudflare Access is the primary boundary, but an advisory still requires an earlier update session.
+Cloudflare Access is the primary boundary; advisory response remains immediate.
 
 Components covered include Talos, Kubernetes, cert-manager, Traefik, cloudflared, Keel, InfluxDB, the Grafana PDC agent, PostgreSQL and restic.
 The scope also includes every image under `homelab/health/`, `homelab/hindsight/`, `homelab/ops/` and `*/backup/`.
@@ -59,8 +59,8 @@ The control-plane count determines whether an upgrade causes an outage or rolls 
 
 | Cluster | Talos | Kubernetes | Control-plane nodes | Confirmed |
 |---|---|---|---|---|
-| homelab | 1.14.2 | 1.36.4 | 1 (`talos-5yn-s9u`) | September 29, 2026 |
-| vps | 1.14.2 | 1.36.4 | 3 (`ubuntu-16gb-fsn1-2`, `ubuntu-4gb-fsn1-2`, `ubuntu-4gb-nbg1-1`) | September 29, 2026 |
+| homelab | 1.14.2 | 1.37.1 | 1 (`talos-5yn-s9u`) | September 29, 2026 |
+| vps | 1.14.2 | 1.37.1 | 3 (`ubuntu-16gb-fsn1-2`, `ubuntu-4gb-fsn1-2`, `ubuntu-4gb-nbg1-1`) | September 29, 2026 |
 
 Read the live versions and control-plane counts:
 
@@ -96,7 +96,7 @@ omnictl cluster kubernetes upgrade-pre-checks <cluster> --to <version>
 [Sidero's Talos upgrade guide](https://docs.siderolabs.com/talos/v1.14/configure-your-talos-cluster/lifecycle-management/upgrading-talos) recommends upgrading the starting minor to its latest patch before moving to the next minor.
 Configuration migration is tested only between adjacent minor releases.
 Use the latest patch of each minor when following that recommended path.
-Omni's permitted targets describe what it allows; they do not guarantee that the vendor's recommended patch step is enforced.
+Omni can permit a path that omits the recommended patch step.
 On September 29, 2026, Omni allowed Talos 1.13.9 directly to 1.14.2 even though 1.13.10 was available.
 Both clusters took that direct adjacent-minor path, deliberately omitting the recommended starting-minor patch step.
 A Talos upgrade does not move Kubernetes; the two are separate operations.
@@ -184,9 +184,9 @@ Kube-proxy remained v1.36.4.
 Both syncs completed with zero backlog and all active workloads Running and Ready.
 VPS retained `--iface-can-reach=10.0.0.1`, and a pod resolved and connected to a Service with its endpoint on another node.
 
-Current bootstrap state, September 29, 2026: both clusters have kube-proxy v1.36.4, CoreDNS v1.14.7, Flannel 0.28.9 and `outofsync: 0`; the planned Kubernetes 1.37 sync later this session may supersede these versions within hours.
+Current bootstrap state, September 29, 2026: the Kubernetes sync moved only kube-proxy from v1.36.4 to v1.37.1 on both clusters, retaining CoreDNS v1.14.7 and Flannel 0.28.9 with `outofsync: 0`; the Kubernetes upgrades took five minutes on homelab (22:20–22:25 UTC) and approximately eight minutes on VPS (22:25–22:33:04 UTC, with completion recorded by Omni).
 
-Read the distinct changed lines to identify changes repeated across objects:
+Read the distinct changed lines to identify what differs across the backlog:
 
 ```bash
 omnictl cluster kubernetes manifest-sync <cluster> 2>&1 | grep -E '^[-+][^-+]' | sort -u
@@ -198,6 +198,10 @@ Applying restarts kube-proxy, the CNI and DNS.
 The single-node homelab has a brief outage; VPS rolls across nodes.
 Verify service networking after each sync.
 Confirm that the generated VPS Flannel manifest retains `--iface-can-reach=10.0.0.1` before applying.
+
+```bash
+talosctl --context cynexia-vps -n ubuntu-16gb-fsn1-2 get manifests 05-flannel -o json | jq '.spec[] | select(.kind=="DaemonSet") | .spec.template.spec.containers[].args'
+```
 
 Do not run `talosctl get manifests -o yaml` without filtering.
 The output embeds the cluster's bootstrap-token Secret.
@@ -246,7 +250,7 @@ The estate deliberately does not configure them.
 
 Renovate's `kustomize` manager reads the VPS go-getter URL.
 Other remote-base pins repeat versions inside URL paths, sometimes twice.
-The estate uses manual bundle updates instead of a regex manager for those formats.
+The estate uses manual bundle updates to avoid fragile URL parsing in a regex manager.
 
 Step 3 of `.claude/skills/update-estate/SKILL.md` lists the files, upstream repositories and occurrences for each remote-base bump.
 That inventory stays beside its only consumer to avoid maintaining two copies.
