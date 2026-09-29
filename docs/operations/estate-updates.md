@@ -1,10 +1,9 @@
 # Estate updates
 
-How every part of this estate gets patched, and what the periodic update session does.
-The session itself is a repo skill — `.claude/skills/update-estate/SKILL.md`, invoked as `/update-estate`.
-This document is the reference material that skill reads; it does not repeat the runbook.
-
-The strategy behind it lives in the local-only design note `docs/superpowers/specs/2026-08-26-estate-update-strategy.md`, which is gitignored.
+This document describes how the estate gets patched and what the periodic update session covers.
+The session runs through `.claude/skills/update-estate/SKILL.md`, invoked as `/update-estate`.
+This document supplies reference material without repeating that runbook.
+The strategy lives in the gitignored design note `docs/superpowers/specs/2026-08-26-estate-update-strategy.md`.
 
 ## Update ownership
 
@@ -24,62 +23,69 @@ Restic binaries float, while repository-format migrations remain explicit operat
 Nightly dumps are the accepted recovery path for application schema changes.
 Meilisearch is rebuildable and follows `v1` with `MEILI_UPGRADE_DB=true` permanently enabled.
 Renovate retains its three-day stability wait and the MCP build-input automerge.
-The existing 45-day infrastructure heartbeat period does not match the new few-times-yearly session cadence; its configuration was not changed.
+The existing 45-day infrastructure heartbeat period does not match the few-times-yearly session cadence; its configuration remains unchanged.
 
-**One image in this estate is built here, and its update has no apply step.**
-`ghcr.io/mnbf9rca/influxdb-mcp-server` is built from `homelab/health/mcp/` by this repository's one workflow, and the Deployment follows its floating `stable` tag under keel.
-So a Renovate pull request against those build inputs — the `node` base image, or the pinned `influxdb-mcp-server` package with the lockfile that moves with it, grouped as **influxdb-mcp build inputs** — **deploys nothing when it merges**.
-The pull request's build makes and signs the image, its merge promotes that digest to `stable`, and keel delivers it on its six-hour poll.
-Confirm both the pull request's build and the merge's `promote` run went green, and move on: there is no `make apply-homelab` for that change and `make diff-homelab` is empty for it.
-Only the `alpine/k8s` runtime in `homelab/health/` remains pinned and needs an ordinary apply.
+**The repository builds one image, and its update needs no manifest apply.**
+The repository's one workflow builds `ghcr.io/mnbf9rca/influxdb-mcp-server` from `homelab/health/mcp/`.
+The Deployment follows its floating `stable` tag under Keel.
+Renovate groups the `node` base image, pinned `influxdb-mcp-server` package and corresponding lockfile as **influxdb-mcp build inputs**.
+The pull request build creates and signs the image; the merge promotes that digest to `stable`.
+Keel delivers it on its six-hour poll.
+Confirm that the pull request build passed.
+Confirm that the merge's `promote` run passed.
+This change needs no `make apply-homelab`, and its `make diff-homelab` is empty.
+The `alpine/k8s` runtime in `homelab/health/` remains pinned and needs an ordinary apply.
 
-**That group automerges**, so in the ordinary case a session never sees the pull request at all: it merges itself once its three required checks and the three-day `minimumReleaseAge` wait have passed.
-What a failed automerge leaves behind is an **open Renovate pull request carrying a red check** — so treat one of those as the signal, and read the failing check rather than merging past it.
+The build-input group automerges after its three required checks and the three-day `minimumReleaseAge` wait pass.
+An open Renovate pull request with a failed check therefore needs attention.
+Read the failed check before taking further action.
+Do not merge past a failed or pending check.
 
 ## When to run a session out of band
 
-An advisory in the FreshRSS `security` category that names a component this estate runs triggers a session **now**, not at the next calendar slot.
-That is the whole of the estate's vulnerability signal: Renovate emits none for container images, and no scanner runs here.
-Cloudflare Access is the primary boundary, which is what makes a cadence-based answer proportionate — but only if an advisory actually shortens the cadence.
+Run a session when an advisory in FreshRSS's `security` category names a component this estate runs.
+These feeds supply the estate's vulnerability signal; Renovate emits none for container images, and no scanner runs here.
+Cloudflare Access is the primary boundary, but an advisory still requires an earlier update session.
 
-Components to match an advisory against: Talos, Kubernetes, cert-manager, Traefik, cloudflared, keel, InfluxDB, the Grafana PDC agent, PostgreSQL, restic, and every image under `homelab/health/`, `homelab/hindsight/`, `homelab/ops/` and `*/backup/`.
+Components covered include Talos, Kubernetes, cert-manager, Traefik, cloudflared, Keel, InfluxDB, the Grafana PDC agent, PostgreSQL and restic.
+The scope also includes every image under `homelab/health/`, `homelab/hindsight/`, `homelab/ops/` and `*/backup/`.
 
 ## The version ledger
 
-Recorded at the end of every session.
-A session that changes neither version still updates the "confirmed" date, so a stale date means a session was skipped.
-The control-plane count is part of the record because it decides whether an upgrade is an outage or a roll.
+Update this ledger at the end of every session.
+Update the confirmed date even when neither version changes.
+A stale date indicates a skipped session.
+The control-plane count determines whether an upgrade causes an outage or rolls across nodes.
 
 | Cluster | Talos | Kubernetes | Control-plane nodes | Confirmed |
 |---|---|---|---|---|
-| homelab | 1.13.9 | 1.36.4 | 1 (`talos-5yn-s9u`) | August 28, 2026 |
-| vps | 1.13.9 | 1.36.4 | 3 (`ubuntu-16gb-fsn1-2`, `ubuntu-4gb-fsn1-2`, `ubuntu-4gb-nbg1-1`) | August 28, 2026 |
+| homelab | 1.14.2 | 1.36.4 | 1 (`talos-5yn-s9u`) | September 29, 2026 |
+| vps | 1.14.2 | 1.36.4 | 3 (`ubuntu-16gb-fsn1-2`, `ubuntu-4gb-fsn1-2`, `ubuntu-4gb-nbg1-1`) | September 29, 2026 |
 
-Read the live values with:
+Read the live versions and control-plane counts:
 
 ```bash
 omnictl get clusters -o json | jq '{id:.metadata.id, talos:.spec.talosversion, k8s:.spec.kubernetesversion}'
 kubectl --context cynexia-homelab get nodes -o wide    # OS-IMAGE names the booted Talos
+kubectl --context cynexia-vps get nodes -o wide
 kubectl --context cynexia-homelab get nodes -l node-role.kubernetes.io/control-plane
 kubectl --context cynexia-vps get nodes -l node-role.kubernetes.io/control-plane
 ```
 
-When Omni's recorded version and the booted version disagree, an upgrade did not finish.
-Resolve that before starting any other upgrade.
+A difference between Omni's recorded version and the booted version indicates an unfinished upgrade.
+Resolve that difference before starting another upgrade.
+Read the ledger before planning an upgrade.
+Confirm the control-plane count from the live cluster.
 
-**Read the control-plane count from the table above before you plan an upgrade, and re-measure it rather than trusting your memory of it.**
-The count decides the shape of the operation:
-
-- **A single-node control plane makes the upgrade a total outage** on that cluster for the length of one reboot.
-  Draining, rebooting and rejoining the only node takes the API server, etcd and every workload with it.
-  Tell the operator before you start one.
-- **A three-node control plane rolls one machine at a time**, and Omni waits for etcd health between them.
-  Verify quorum between machines with `talosctl -n <node> etcd members` — three members, all healthy — before letting the next one go.
+- A single-node control plane loses the API server, etcd and every workload during its reboot.
+  Tell the operator before starting this outage.
+- A three-node control plane rolls one machine at a time, with Omni waiting for etcd health between machines.
+  Check etcd membership with `talosctl -n <node> etcd members` between machines.
+  Confirm that all three members are healthy before the next machine proceeds.
 
 ## Upgrading Talos and Kubernetes through Omni
 
-**Ask Omni what it will allow before you plan anything.**
-Omni refuses unsupported paths and publishes the permitted targets:
+Read Omni's permitted upgrade targets before planning an upgrade:
 
 ```bash
 omnictl get talosupgradestatus <cluster> -o yaml        # .spec.upgradeversions = allowed Talos targets
@@ -87,145 +93,177 @@ omnictl get kubernetesupgradestatus <cluster> -o yaml   # same for Kubernetes
 omnictl cluster kubernetes upgrade-pre-checks <cluster> --to <version>
 ```
 
-Talos policy, from Sidero's own documentation: configuration migration is tested only between adjacent minor releases, so **upgrade to the latest patch of every intermediate minor** rather than jumping.
-Omni enforces this and will require an intermediate hop.
-A Talos upgrade does **not** move Kubernetes; the two are separate operations.
+[Sidero's Talos upgrade guide](https://docs.siderolabs.com/talos/v1.14/configure-your-talos-cluster/lifecycle-management/upgrading-talos) recommends upgrading the starting minor to its latest patch before moving to the next minor.
+Configuration migration is tested only between adjacent minor releases.
+Use the latest patch of each minor when following that recommended path.
+Omni's permitted targets describe what it allows; they do not guarantee that the vendor's recommended patch step is enforced.
+On September 29, 2026, Omni allowed Talos 1.13.9 directly to 1.14.2 even though 1.13.10 was available.
+Both clusters took that direct adjacent-minor path, deliberately omitting the recommended starting-minor patch step.
+A Talos upgrade does not move Kubernetes; the two are separate operations.
 
-Sidero states no Kubernetes skew policy of its own — it points at the Talos support matrix for which Kubernetes versions each Talos release supports.
-Upstream Kubernetes skew rules apply, and Sidero does not restate them, so do not quote Sidero for them.
+The Talos support matrix determines which Kubernetes versions each Talos release supports.
+Upstream Kubernetes version-skew rules also apply; Sidero does not define a separate Kubernetes skew policy.
 
-The documented mechanism is the Omni web UI: **Clusters → the cluster → Update Talos**, and **Update Kubernetes**.
-A cluster-template path exists (`talos.version` and `kubernetes.version` on a `kind: Cluster` document, applied with `omnictl cluster template diff -f <file>` then `omnictl cluster template sync -f <file>`), but this repo keeps no template file — `homelab/talos/` and `vps/talos/` hold machine config patches only.
-Export one with `omnictl cluster template export <cluster> -o <file>` if you want a reviewable diff; otherwise the UI is the working path.
+Use **Clusters → the cluster → Update Talos** or **Update Kubernetes** in the Omni web UI.
+Cluster templates also support upgrades through `talos.version` and `kubernetes.version` in a `kind: Cluster` document.
+This repository has no cluster template; `homelab/talos/` and `vps/talos/` contain machine config patches only.
+An export with `omnictl cluster template export <cluster> -o <file>` can support inspection.
+Do not run `omnictl cluster template sync` during an update session.
 
-**Do not take that path.** Both clusters were created in the web interface rather than from a template, which the cluster resource shows by carrying no template annotation.
-Sidero documents export-then-`omnictl cluster template sync` as the way to move such a cluster onto template management, so running `sync` against one is not an update step — it is the adoption decision itself, taken by running a command.
-Adopting it is a design decision and not a step in an update session, because the exported template inlines the cluster's config patches by `idOverride` — including the five `homelab/talos/machineconfig-patches/` files that `make apply-talos` already owns.
-That would give those patches two writers, last write winning, with no guard between the two tools: the concurrent-writer failure this repo has already paid for once.
-Taking it means deciding in the same change which tool owns the patches, and deleting or guarding the other; until somebody does, the web UI is the only upgrade path and Step 3 of the session needs the operator.
+Both clusters were created in the web interface and carry no template annotation.
+Sidero documents export followed by template sync as adoption into template management.
+Adoption needs a separate design decision because exported templates inline config patches through `idOverride`.
+Those include the five homelab patch files already owned by `make apply-talos`.
+Two tools would then write the same patches, with the last write winning and no guard between them.
+Any adoption must assign one owner and remove or guard the other writer.
+Until then, the web UI remains the upgrade path, and Step 3 of the session requires the operator.
 
-**`homelab/talos/` and `vps/talos/` are a subset of the live patch set, not an inventory of it.**
-Omni is the system of record for machine config patches, and these trees hold only the ones this repository authors.
-`make apply-talos` is push-only: it applies each file under `homelab/talos/machineconfig-patches/`, never enumerates what Omni already holds, and never deletes.
-It also covers the homelab alone — there is no VPS equivalent, so the two files under `vps/talos/machineconfig-patches/` reach Omni only through a hand-run `omnictl apply`.
-A patch created in the web interface, or one whose file was deleted here, therefore stays applied and invisible.
-Omni's own patches are recognisable by the `omni.sidero.dev/system-patch:` label — the `400-<cluster>-control-planes-untaint` pair and the per-machine `900-cm-<machine>-kubernetes-upgrade` patches written by `KubernetesUpgradeStatusController` — and they must never be copied into a file here, because a repo copy would collide with a resource Omni rewrites.
-The hand-made ones carry no such label, and those are the ones that need a decision.
-`200-homelab`, which sets the cluster's pod and service subnets, was typed into the cluster-creation form and lived only in Omni until it was codified from the live cluster on August 28, 2026.
-The reconciliation has already caught one: `500-7a4333c7-df30-4205-a022-fd93154da992`, a fossil of the pre-SSD kubelet self-bind on `/var/mnt/local-path-provisioner`, survived in Omni after its codified successor was deleted from this repository at `ea0a75c`, inert only because nothing mounted at that path any more.
-The operator deleted it on August 28, 2026 (`omnictl delete configpatch <id>` — note it restarts the kubelet, so a future deletion of this kind belongs in a maintenance window rather than in the middle of an update session).
-Run `omnictl get configpatches` at the start of every estate-update session and reconcile the list against these two trees; anything unaccounted for is either Omni's by its label or a decision waiting to be made.
+**Omni is the system of record for machine config patches.**
+The two repository trees contain only the patches authored here, not the entire live inventory.
+`make apply-talos` applies each homelab patch file without enumerating or deleting live patches.
+It covers homelab alone; the two VPS patch files require a manual `omnictl apply`.
+A patch created in the UI or deleted from the repository can therefore remain active in Omni.
 
-Editing the `Clusters.omni.sidero.dev` resource directly to change a version is **undocumented**.
-It is mechanically possible and it is not a supported path.
-Do not.
+Omni's generated patches carry the `omni.sidero.dev/system-patch:` label.
+Examples include `400-<cluster>-control-planes-untaint` and per-machine `900-cm-<machine>-kubernetes-upgrade` patches from `KubernetesUpgradeStatusController`.
+Do not copy these generated patches into the repository.
+A repository copy would compete with resources Omni rewrites.
+Patches without that label need an ownership decision.
+The subnet patch `200-homelab` existed only in Omni until it was codified on August 28, 2026.
 
-**`talosctl upgrade-k8s` does not work against these clusters.**
+Reconciliation also found obsolete patch `500-7a4333c7-df30-4205-a022-fd93154da992`.
+It retained the pre-SSD kubelet self-bind on `/var/mnt/local-path-provisioner` after its successor was removed at `ea0a75c`.
+It was inert because nothing mounted at that path.
+The operator deleted it on August 28, 2026 with `omnictl delete configpatch <id>`.
+Patch deletion can restart the kubelet.
+Schedule such deletions in a maintenance window.
+Run `omnictl get configpatches` at the start of each session.
+Compare the list with both repository patch trees.
+Identify each remaining patch by its system label or an explicit ownership decision.
+
+Direct version edits to `Clusters.omni.sidero.dev` are undocumented and unsupported.
+Do not change versions through that resource.
+
+**`talosctl upgrade-k8s` cannot access these clusters.**
 Omni's RBAC denies the Talos-side Kubernetes proxy, so even `--dry-run` fails with `rpc error: code = PermissionDenied desc = not authorized`.
-Plain Talos API calls through the same talosconfig succeed, so this is authorization, not a broken config.
+Plain Talos API calls through the same talosconfig succeed; this is an authorization restriction.
 
 ## Bootstrap manifests
 
-Omni never applies Kubernetes bootstrap manifest changes on its own — CoreDNS, kube-proxy, the CNI plugin and the bootstrap tokens — because doing so would overwrite hand edits.
-The changes accumulate as a backlog and wait for review.
+Omni holds bootstrap manifest changes for review instead of applying them automatically and overwriting manual edits.
+The backlog includes CoreDNS, kube-proxy, the CNI plugin and bootstrap tokens.
 
 ```bash
 omnictl get kubernetesupgrademanifeststatus -o yaml     # .spec.outofsync = pending objects
-omnictl cluster kubernetes manifest-sync <cluster>      # --dry-run defaults to TRUE: prints what it would do
+omnictl cluster kubernetes manifest-sync <cluster>    # dry run by default
 omnictl cluster kubernetes manifest-sync <cluster> --dry-run=false   # applies
 ```
 
-The UI equivalent is **Bootstrap Manifests** in the left navigation, which Omni surfaces after a Kubernetes upgrade completes and before the changes are applied.
-Read the dry run in full and apply only what suits this cluster.
+The UI exposes **Bootstrap Manifests** in the left navigation after a Kubernetes upgrade, before those changes are applied.
+Read the dry run in full.
+Apply only changes suitable for the cluster.
 
-**A backlog here is not cosmetic, and the first session to read one found out why.**
-Both clusters carried `outofsync: 21` with an empty `lastfatalerror` on August 28, 2026, accumulated before that session.
-Reading the dry run showed it was not drift in annotations: kube-proxy was running **v1.35.3** on homelab and **v1.35.2** on the VPS against a control plane that had just moved to **v1.36.4**.
-CoreDNS was on v1.13.2 and Flannel on v0.27.4.
-Earlier Kubernetes upgrades had moved the control plane and left these behind, because Omni holds them back by design and nothing had ever applied them.
+On August 28, 2026, both clusters had `outofsync: 21` and an empty `lastfatalerror`.
+The dry run showed kube-proxy v1.35.3 on homelab and v1.35.2 on VPS against control planes at v1.36.4.
+CoreDNS was v1.13.2 and Flannel was 0.27.4.
+Earlier control-plane upgrades had left these components behind because no session had applied the held manifests.
+The August 28 sync brought both clusters to kube-proxy v1.36.4, CoreDNS v1.14.6 and Flannel 0.28.8, with zero backlog.
 
-One minor of skew between kube-proxy and the API server is the edge of what upstream supports, so the next upgrade would have taken it out of support.
-Both clusters were synced on August 28, 2026 and now report `outofsync: 0`, with kube-proxy v1.36.4, CoreDNS v1.14.6 and Flannel 0.28.8.
+[Upstream's version-skew policy](https://kubernetes.io/releases/version-skew-policy/) permits kube-proxy up to three minor versions older than kube-apiserver, but never newer.
+During a mixed-version API-server rollout, kube-proxy must satisfy that limit against every API server it can contact.
+The August 28 one-minor lag was within support, not at its boundary.
+Sync bootstrap manifests during the session that creates the backlog to keep networking components aligned and avoid accumulating skew.
 
-**Read the distinct changed lines rather than paging through the objects**, which is what turned a count that looked like drift into a version gap:
+On September 29, 2026, Talos moved from 1.13.9 to 1.14.2 on both clusters.
+Homelab took six minutes, from 21:29 to 21:35 UTC, for one reboot.
+VPS took seven minutes, from 21:36 to 21:43 UTC, to roll three machines.
+Each cluster then had four pending bootstrap objects.
+The sync moved CoreDNS from v1.14.6 to v1.14.7 and both Flannel images from 0.28.8 to 0.28.9.
+It enabled Flannel's nftables setting, added Linux amd64/arm64 affinity to CoreDNS and kube-proxy, and requested 100m CPU and 50Mi memory for kube-proxy.
+Kube-proxy remained v1.36.4.
+Both syncs completed with zero backlog and all active workloads Running and Ready.
+VPS retained `--iface-can-reach=10.0.0.1`, and a pod resolved and connected to a Service with its endpoint on another node.
+
+Current bootstrap state, September 29, 2026: both clusters have kube-proxy v1.36.4, CoreDNS v1.14.7, Flannel 0.28.9 and `outofsync: 0`; the planned Kubernetes 1.37 sync later this session may supersede these versions within hours.
+
+Read the distinct changed lines to identify changes repeated across objects:
 
 ```bash
 omnictl cluster kubernetes manifest-sync <cluster> 2>&1 | grep -E '^[-+][^-+]' | sort -u
 ```
 
-That collapses the whole backlog to the set of things that actually differ, which is where the image versions are.
-Then read the dry run in full before applying, because the one-liner discards the object each line belongs to.
+This view discards the object each line belongs to.
+Map each changed line back to its object in the full dry run before applying.
+Applying restarts kube-proxy, the CNI and DNS.
+The single-node homelab has a brief outage; VPS rolls across nodes.
+Verify service networking after each sync.
+Confirm that the generated VPS Flannel manifest retains `--iface-can-reach=10.0.0.1` before applying.
 
-So read the count as a version gap, not a queue of formatting changes, and sync it in the session that creates it.
-Applying restarts kube-proxy, the CNI and DNS, so verify service networking afterwards rather than assuming: on the single-node homelab this is a brief outage, and on the VPS it rolls.
-
-Do not run `talosctl get manifests -o yaml` unfiltered to inspect the sources: the output embeds the cluster's bootstrap-token Secret.
+Do not run `talosctl get manifests -o yaml` without filtering.
+The output embeds the cluster's bootstrap-token Secret.
 
 ## Recovering a bad upgrade
 
-- **Assert an etcd backup before you start.**
-  `omnictl get etcdbackupstatus <cluster> -o yaml` must show an empty `error` and a recent `lastbackuptime`.
+- Check `omnictl get etcdbackupstatus <cluster> -o yaml` before starting.
+  Confirm an empty `error` and a recent `lastbackuptime`.
   The backup is the primary recovery path.
-- **Talos rolls back.**
-  Talos boots the new image once and only makes the bootloader change permanent after it verifies itself and rejoins, so a node that fails to boot reverts on its own.
-  `talosctl rollback` reverts a node that booted but broke your workloads.
-  Whether Omni's RBAC permits that command here is untested.
-- **Kubernetes does not roll back.**
-  There is no A/B equivalent and no documented downgrade path, though Omni's `upgradeversions` list may offer a lower version.
-- **A node showing `Rebooting` or `Installing` is still working.**
-  Wait before intervening, then read `omnictl machine-logs <machine-id>`, then the serial console.
-  Talos allows no SSH access by design.
-- **Never** delete machines out of band at the infrastructure provider, add control-plane nodes to repair quorum, or `kubectl delete node` a control-plane node during a stalled upgrade.
+- Talos boots a new image once before making the bootloader change permanent.
+  A node that fails verification and rejoining reverts automatically.
+  `talosctl rollback` can revert a node that booted but broke workloads; Omni RBAC permission for it remains untested here.
+- Kubernetes has no equivalent rollback or documented downgrade path, even if Omni lists a lower upgrade target.
+- Wait while a node reports `Rebooting` or `Installing`.
+  Read `omnictl machine-logs <machine-id>` if it stalls.
+  Inspect the serial console if those logs do not explain the failure.
+  Talos provides no SSH access.
+- Do not delete machines at the infrastructure provider during a stalled upgrade.
+  Do not add control-plane nodes to repair quorum.
+  Do not run `kubectl delete node` against a control-plane node during a stalled upgrade.
 
 ## Advisory feeds
 
-Subscribed in FreshRSS under the category `security`.
-Every URL below was fetched and returned a valid feed on August 26, 2026.
+FreshRSS subscribes to these feeds in the `security` category.
+Each returned a valid feed on August 26, 2026.
 
-| Component | Feed | What it actually is |
+| Component | Feed | Content |
 |---|---|---|
-| Kubernetes | `https://kubernetes.io/docs/reference/issues-security/official-cve-feed/feed.xml` | A purpose-built vulnerability feed (RSS 2.0, title "Kubernetes Vulnerability Announcements - CVE Feed") |
+| Kubernetes | `https://kubernetes.io/docs/reference/issues-security/official-cve-feed/feed.xml` | RSS 2.0 vulnerability announcements |
 | Talos Linux | `https://github.com/siderolabs/talos/releases.atom` | Release notes |
 | cert-manager | `https://github.com/cert-manager/cert-manager/releases.atom` | Release notes |
 | Traefik | `https://github.com/traefik/traefik/releases.atom` | Release notes |
 | cloudflared | `https://github.com/cloudflare/cloudflared/releases.atom` | Release notes |
 
-**Four of the five are release feeds, not advisory feeds, and that is the honest state of the world.**
-GitHub publishes no per-repository security-advisory Atom feed: `/security/advisories.atom` answers 406 with an empty body, and so does the global `https://github.com/advisories.atom`.
-These projects announce CVE fixes in their release notes, so the coverage is real — you will read every routine release alongside the security ones.
+Four feeds contain release notes, including CVE fixes, so routine releases appear alongside security updates.
+On August 26, GitHub's per-repository `/security/advisories.atom` and global `https://github.com/advisories.atom` returned HTTP 406 with empty bodies.
+The `kubernetes-security-announce` Google Group had no working feed.
+Its `groups.google.com/forum/feed/...` URLs returned 404, as did equivalent URLs for unrelated public groups.
+The Kubernetes CVE feed supplies that coverage instead.
 
-The `kubernetes-security-announce` Google Group has **no working feed**.
-Every `groups.google.com/forum/feed/...` form answers 404, and so does the same form for unrelated public groups, so Google has retired the endpoint rather than restricted this group.
-The Kubernetes CVE feed above is the substitute.
-Do not spend a session rediscovering this.
-
-Genuine advisories exist as JSON at `https://api.github.com/repos/<owner>/<repo>/security-advisories?state=published`.
-FreshRSS can consume JSON sources, but each needs field mapping and an authenticated token to stay inside the 60-requests-per-hour anonymous limit.
-Not done, deliberately.
+Published advisories are also available as JSON at `https://api.github.com/repos/<owner>/<repo>/security-advisories?state=published`.
+FreshRSS can consume JSON with field mapping, but these sources would need authentication to avoid the anonymous 60-requests-per-hour limit.
+The estate deliberately does not configure them.
 
 ## Hand-managed pins
 
 Renovate's `kustomize` manager reads the VPS go-getter URL.
-The remaining kustomize base pins repeat the version inside the URL path, sometimes twice, and a regex manager for them is exactly the fragile parsing this estate refuses.
-The Talos/Kubernetes session bumps these remote bundles by hand.
+Other remote-base pins repeat versions inside URL paths, sometimes twice.
+The estate uses manual bundle updates instead of a regex manager for those formats.
 
-The inventory — which files, which upstream repository, and how many occurrences each bump touches — is the work list in `.claude/skills/update-estate/SKILL.md`, Step 3, under remote-base bundles.
-It lives there rather than here because it is consulted at exactly one step of one session, and one copy cannot go stale against the other.
+Step 3 of `.claude/skills/update-estate/SKILL.md` lists the files, upstream repositories and occurrences for each remote-base bump.
+That inventory stays beside its only consumer to avoid maintaining two copies.
 
 ## Omni etcd backups
 
 Automatic etcd backups are configured per cluster and stored in S3.
-Omni's backend choice (`local` or `s3`) is fixed at Omni initialization and cannot be changed from `omnictl`.
+Omni's backend choice, `local` or `s3`, is fixed at initialization and cannot be changed through `omnictl`.
 
-**Assert the age at the start of every session:**
+Check backup age at the start of each session:
 
 ```bash
 omnictl get etcdbackupoverallstatus -o yaml     # configurationname, configurationerror, status
 omnictl get etcdbackupstatus -o yaml            # per cluster: lastbackuptime, lastbackupattempt
 ```
 
-`lastbackuptime.seconds` is raw Unix seconds, which no one can judge by eye.
-Convert it:
+Convert `lastbackuptime.seconds` from Unix seconds to a readable timestamp:
 
 ```bash
 omnictl get etcdbackupstatus -o json | jq -r '"\(.metadata.id) \(.spec.lastbackuptime.seconds | todate)"'
@@ -237,35 +275,35 @@ The documentation places these resources in `ephemeral`; this instance returns t
 **Never run `omnictl get etcdbackups3configs`.**
 It prints the Backblaze B2 access key and secret in plaintext.
 
-To list individual backups, the cluster selector is mandatory and must use the full label key:
+Use the full cluster label when listing individual backups:
 
 ```bash
 omnictl get etcdbackup --selector omni.sidero.dev/cluster=homelab
 ```
 
-A bare `omnictl get etcdbackups` fails with `cluster ID must be specified in query`, and `--selector cluster=homelab` fails with `unsupported label query term`.
+A bare backup query fails because the cluster selector is mandatory.
 
-**Where the interval lives.**
-For a cluster managed by a cluster template, it is `features.backupConfiguration.interval` in the `Cluster` document — a Go duration string, where `0` disables automatic backups:
+For template-managed clusters, the interval is `features.backupConfiguration.interval` in the `Cluster` document.
+It accepts a Go duration string; `0` disables automatic backups.
 
 ```yaml
 kind: Cluster
 name: homelab
 kubernetes:
-  version: v1.36.0
+  version: v1.36.4
 talos:
-  version: v1.13.8
+  version: v1.14.2
 features:
   backupConfiguration:
     interval: 1h
 ```
 
-Applied with `omnictl cluster template diff -f <file>` then `omnictl cluster template sync -f <file>`.
+Template-managed clusters use `omnictl cluster template diff -f <file>` followed by `omnictl cluster template sync -f <file>`.
+This estate has not adopted template management, as explained above.
+The `-f/--file` flag belongs to each subcommand, not the parent command.
+Put the verb before `-f`.
 
-The verb comes **before** `-f`.
-`-f/--file` is a flag on the subcommands (`diff`, `sync`, `render`, `validate`), not on the parent command, so putting the file first and the verb last fails with an unknown-shorthand error.
-
-For a cluster managed as a raw resource, the equivalent is lowercase and structured, on the `Clusters.omni.sidero.dev` resource, applied with `omnictl apply -f <file>`:
+For raw cluster resources, `omnictl apply -f <file>` uses a lowercase structured interval on `Clusters.omni.sidero.dev`:
 
 ```yaml
 metadata:
@@ -280,27 +318,26 @@ spec:
     enabled: true
 ```
 
-The live resource carries `enabled: true` inside `backupconfiguration`, which appears in neither documented example.
-Do not drop it when hand-editing.
+The live resource includes `backupconfiguration.enabled: true`, which neither documented example shows.
+Preserve that field when editing.
+Both clusters had backups enabled at a one-hour interval on August 28, 2026.
 
-Both clusters were confirmed enabled at a 1-hour interval on August 28, 2026.
+Omni never deletes backup objects.
+The bucket grows without bound unless storage-side lifecycle rules limit retention.
+This repository neither configures nor checks those rules.
 
-**Omni never deletes objects from the backup bucket.**
-The bucket grows without bound unless a lifecycle rule is set on the storage side.
-That rule is not this repo's to apply, and nothing here checks it.
-
-There is deliberately **no automated `omni-etcd-backup-age` check**.
-`omnictl`'s only credential is a full-privilege operator identity, and a pod holding it would escalate any Secret read into lifecycle control of both clusters.
-The session asserting the age at its start is the compensating control.
+There is no automated `omni-etcd-backup-age` check.
+The only available `omnictl` credential is a full-privilege operator identity.
+Giving it to a pod would turn a Secret read into lifecycle control of both clusters.
+Each session checks backup age manually instead.
 
 ## What the session does not cover
 
-- **No CVE scanning.**
-  Compensated by keel cadence, session cadence and the advisory feeds above.
-  A gap, documented rather than papered over.
-- **No automated applies.**
-  Nothing applies unattended, and the one thing that merges unattended is the `influxdb-mcp build inputs` group described above — which renders no manifest and so reaches no cluster through an apply.
-  An auto-applier would need a permanent kubeconfig and a 1Password token on an always-on runner, and it could not judge whether a diff line reverts another branch's deployed work.
-- **Floating applications get no mandatory pre-update dump.**
-  Nightly native dumps and the restic sweep are the accepted recovery floor.
-- **Restore drills stay manual**, on the session's occasional checklist.
+- No CVE scanner runs here; Keel, periodic sessions and advisory feeds provide partial coverage.
+- No unattended manifest apply runs here.
+  The MCP build-input group automerges and reaches the cluster through Keel's image update.
+  An automatic applier would need permanent Kubernetes and 1Password credentials on a runner.
+  It could not judge whether a diff reverts another branch's deployed work.
+- Floating applications have no mandatory dump before each update.
+  Nightly native dumps and restic backups are the accepted recovery floor.
+- Restore drills remain manual, on the session's occasional checklist.
