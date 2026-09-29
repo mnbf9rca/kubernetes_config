@@ -184,7 +184,7 @@ Kube-proxy remained v1.36.4.
 Both syncs completed with zero backlog and all active workloads Running and Ready.
 VPS retained `--iface-can-reach=10.0.0.1`, and a pod resolved and connected to a Service with its endpoint on another node.
 
-Current bootstrap state, September 29, 2026: the Kubernetes sync moved only kube-proxy from v1.36.4 to v1.37.1 on both clusters, retaining CoreDNS v1.14.7 and Flannel 0.28.9 with `outofsync: 0`; the Kubernetes upgrades took five minutes on homelab (22:20–22:25 UTC) and approximately eight minutes on VPS (22:25–22:33:04 UTC, with completion recorded by Omni).
+Current bootstrap state, September 29, 2026: the Kubernetes sync moved only kube-proxy from v1.36.4 to v1.37.1 on both clusters, retaining CoreDNS v1.14.7 and Flannel 0.28.9 with `outofsync: 0`; the Kubernetes upgrades took five minutes on homelab (22:20–22:25 UTC) and approximately eight minutes on VPS (22:25–about 22:33 UTC).
 
 Read the distinct changed lines to identify what differs across the backlog:
 
