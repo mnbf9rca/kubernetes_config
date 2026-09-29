@@ -114,6 +114,17 @@ kubectl --context cynexia-homelab get nodes
 make check-context                       # asserts current-context == cynexia-homelab
 ```
 
+## Daily re-authentication
+
+The Omni keys expire about once a day, and every expired tool parks on a browser sign-in tab at its next call.
+`scripts/reauth.sh` runs that first call for every tool at once: omnictl, kubectl and talosctl on both clusters, and ssh to the hermes VM.
+It prints one `OK` or `FAIL` line per check and exits 1 if any failed.
+Run it while you are at the keyboard, at the start of a session and again after any `key expired` error:
+
+```bash
+scripts/reauth.sh
+```
+
 ## Secrets for the apply workflow
 
 Cluster access alone is not enough to run `make apply-homelab` / `make apply-vps` — those need 1Password-backed values.
