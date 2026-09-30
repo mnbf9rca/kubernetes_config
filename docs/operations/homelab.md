@@ -35,6 +35,7 @@ Update these three bundles during the Kubernetes step of `/update-estate`.
 ### keel
 
 The manifests select `ghcr.io/keel-hq/keel:latest` for self-updates and `traefik:v3` for Traefik.
+Keel can rewrite `traefik:v3` as `library/traefik:v3`; a later apply restores the equivalent name and rolls Traefik, so this diff alone does not prove missing deployed branch content.
 Both controllers carry the full keel annotation set: `force`, `match-tag: "true"`, `poll`, and `@every 6h`.
 Every container moved to a floating image has `imagePullPolicy: Always`.
 Jobs and CronJobs pull their floating tags at each run without keel annotations.

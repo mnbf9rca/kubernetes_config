@@ -88,6 +88,7 @@ The rules that must not be broken:
   **The old `set -a` + `op inject` block in `.envrc` is gone deliberately — do not restore it.**
   Because `OP_SERVICE_ACCOUNT_TOKEN` lives in the shell environment once direnv has exported it, `op run` — and therefore every build/diff/apply target — works from **any directory in that shell, git worktrees included**: no avoiding worktrees for `op`-dependent work (operator ruling, 2026-08-27).
   direnv keys its allow record on path *and* content, though, so a fresh worktree's committed `.envrc` starts unallowed: if direnv reports `.envrc is blocked` on entering one, run `direnv allow` there once.
+  Non-interactive shells such as Codex's `zsh -lc` have no direnv hook, so each command must run `eval "$(direnv export zsh)"` or every `op` call prompts through the 1Password desktop app.
 - **Never commit plaintext secret values.**
   `${VAR}` placeholders only.
 - **`op run` masks stdout, not env vars** — corrected 2026-08-20; the previous claim in this file was a misdiagnosis.
