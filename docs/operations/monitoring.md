@@ -208,7 +208,7 @@ An unparseable `df` reading **fails**, on the same "I could not look" rule as th
 The residual is honest and small: this samples once a night, so a fill faster than a day still lands between runs.
 
 Both promote to failure only when restic itself succeeded, so a real restic failure keeps its own, more specific exit code.
-The homelab gate announces its passing counts (`12/12 artifacts present`, `5/5 newer than 30h`).
+The homelab gate announces its passing artifact and freshness counts.
 The VPS gate records counts in the ping body and prints only its findings.
 On a clean run, the pod log ends at the gate heading and the exit status is the pass signal.
 In both, **"I could not look" must never be reported as "everything is fine"** — an unreadable `/data` or an unopenable PVC directory fails the job.
@@ -241,6 +241,9 @@ An explicit list beats a wildcard, which cannot tell "no databases exist" from "
 | homelab | influx-lp-export | `/data/pvc-*_health_health-dumps/lp/*.lp.gz` | <30h |
 | homelab | hermes-zip | `/data/pvc-*_backup_hermes-dumps/hermes-*.zip` | ≥16 MiB **and** <30h |
 | homelab | hindsight-dump | `/data/pvc-*_hindsight_hindsight-dumps/hindsight-*.sql.gz` | ≥4 KiB **and** <30h |
+| homelab | spoolman-db | `/data/pvc-*_printing_spoolman-data/spoolman.db` | ≥12,697 B |
+| homelab | filabridge-db | `/data/pvc-*_printing_filabridge-data/filabridge.db` | ≥409 B |
+| homelab | printguard-state | `/data/pvc-*_printing_printguard-data/state.json` | ≥195 B |
 
 Homelab byte floors sit an order of magnitude under observed sizes: they reject a zero-length or truncated file, not slow growth.
 `hindsight-dump` follows the same derivation from a measured seed run: 4 KiB, from 48,829 B / 23 tables at rollout step 5 on August 24, 2026.
@@ -259,7 +262,7 @@ Entries are globs because local-path-provisioner names each PVC directory `<pvNa
 On VPS an unmatched glob survives literally and fails the `-f` test, which is the `MISSING` verdict.
 On homelab the StorageClass is `reclaimPolicy: Retain`, so a recreated PVC leaves its predecessor behind forever; each glob takes its newest match, so a live artifact normally beats its frozen predecessor — but if the live artifact is absent entirely, the orphan is the only match and the check passes on it.
 Telling bound from orphaned needs the Kubernetes API from inside the job, not worth a ServiceAccount and RBAC on a backup CronJob: the orphan is under `/data` and is backed up too, so this is the gate reporting on the wrong file, not a lost recovery point.
-The gate prints each resolved path, so the substitution shows up in the log rather than hiding behind "8/8".
+The gate prints each resolved path, so the substitution shows up in the log rather than hiding behind a passing aggregate count.
 
 Two homelab checks have no VPS equivalent.
 **Mount identity** is the first-order one: Talos puts the kubelet pod directory on the EPHEMERAL partition (`/dev/sda6`), the same filesystem `/var/mnt/ssd/local-path-provisioner` falls back to when the SSD user volume fails to mount.
@@ -648,10 +651,10 @@ Every branch in *this* script is determinate — its only peer is a ClusterIP, s
 **The message is short, deliberately.** kuma stores one line per heartbeat, so the alert carries `verdict=`, `polls_delta=` and `images=n/floor` and nothing else.
 The rest — the metric names, the stored state, the resolved endpoint — is in the pod log.
 
-**The image floors are exact counts: `IMAGE_FLOOR=17` on homelab and `IMAGE_FLOOR=12` on VPS.**
+**The image floors are exact counts: `IMAGE_FLOOR=20` on homelab and `IMAGE_FLOOR=12` on VPS.**
 They count distinct floating image references across every container, including sidecars and initContainers, in keel-annotated workloads.
 A shared image counts once even when several workloads use it.
-These values come from the new manifest inventory and have **not yet been verified against live keel metrics after apply**.
+The homelab count of 20 matched the live Keel gauge after the printer services were applied on 2026-10-08.
 Recompute both floors when the keel-managed image set changes.
 Compare each floor with its cluster's live `poll_trigger_tracked_images` after apply.
 

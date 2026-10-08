@@ -75,6 +75,13 @@ metadata:
 apiVersion: v1
 kind: Namespace
 metadata:
+  name: printing
+  # PSA baseline (cluster default). The printer services need no hostPath,
+  # hostNetwork, ServiceAccount, or RBAC.
+---
+apiVersion: v1
+kind: Namespace
+metadata:
   name: proxy
   # PSA baseline (cluster default), so no labels. tinyproxy needs no hostPath,
   # no hostNetwork, no ServiceAccount and no RBAC - only a ClusterIP the

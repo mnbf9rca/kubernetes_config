@@ -89,11 +89,11 @@ IMAGES_METRIC=poll_trigger_tracked_images
 START_METRIC=process_start_time_seconds
 
 # The literal floor for tracked images. Derived from the rendered homelab
-# inventory on 2026-09-11: 17 distinct image references across every container
+# inventory on 2026-10-08: 20 distinct image references across every container
 # of every keel-annotated Deployment, DaemonSet and StatefulSet.
 # Shared sidecar images count once; Jobs and CronJobs do not count.
 # The floor equals this inventory; verify the same live gauge after apply.
-IMAGE_FLOOR=17
+IMAGE_FLOOR=20
 
 STATE_DIR=/state
 STATE_FILE=$STATE_DIR/last

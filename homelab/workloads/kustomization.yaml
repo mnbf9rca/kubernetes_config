@@ -16,3 +16,6 @@ resources:
   - emby.yaml
   - jottacloud-backup.yaml
   - tinyproxy.yaml
+  - spoolman.yaml
+  - filabridge.yaml
+  - printguard.yaml
