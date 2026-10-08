@@ -18,8 +18,9 @@ The chief of staff keeps its context clean.
 It captures the operator's answers to brainstorming questions before the builder writes the specification.
 It does not read inventories or diffs, or write specifications or plans.
 It rules on disagreements, defective plans and the escalations defined below.
-The builder writes the specification, then the implementation plan, then the code and documentation.
-It commits on its isolated worktree branch.
+The builder writes the specification and implementation plan.
+Operator ruling, 2026-10-08: the operator approves the specification, and the chief of staff approves the implementation plan.
+After those approvals, the builder writes the code and documentation and commits on its isolated worktree branch.
 The reviewer reviews each artifact in turn.
 Design review includes the deletion seat required by [AGENTS.md](../../AGENTS.md#when-editing): identify unnecessary machinery and what deleting it would lose.
 Task reviews give separate spec-compliance and quality verdicts.
@@ -29,8 +30,9 @@ Access does not authorize changes to a cluster.
 ## Before the operator leaves
 
 Pre-warm SSH, both kubectl contexts, omnictl and talosctl access for every seat.
-Run `scripts/reauth.sh` from the main checkout after every worktree is created; it warms all of those and allows each worktree's `.envrc` so `op` can run without prompting.
-A seat whose shell is not interactive, which is how Codex runs commands (`zsh -lc`), gets no direnv hook: it must prefix every `make` or `op` command with `eval "$(direnv export zsh)"`, or each call prompts the operator through the 1Password desktop app.
+Create each worktree, run `scripts/reauth.sh` from the main checkout to authorize its `.envrc`, and only then open that seat's tab and start its agent.
+Every seat runs `scripts/reauth.sh --seat` when it starts to check its inherited service account token and warm SSH, kubectl, omnictl and talosctl access without loading any `.envrc`.
+A non-interactive seat such as Codex does not run the direnv hook, so if `OP_SERVICE_ACCOUNT_TOKEN` is absent it stops and asks to be restarted from a shell where direnv has loaded; re-evaluating `.envrc` inside a child process cannot fix the seat's environment and can prompt through the 1Password desktop app.
 Use [Omni access](omni-access.md) for setup and authentication.
 The kubectl contexts are `cynexia-homelab` and `cynexia-vps`.
 A browser sign-in prompt during unattended work blocks that seat until the operator returns.

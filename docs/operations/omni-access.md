@@ -117,8 +117,9 @@ make check-context                       # asserts current-context == cynexia-ho
 ## Daily re-authentication
 
 The Omni keys expire about once a day, and every expired tool parks on a browser sign-in tab at its next call.
-`scripts/reauth.sh` runs that first call for every tool at once: omnictl, kubectl and talosctl on both clusters, and ssh to the hermes VM.
-It also checks 1Password: it confirms the service-account token is valid, allows every worktree's `.envrc` that matches the main checkout's, and proves a non-interactive shell in each worktree can export the token through direnv, because a seat that cannot falls back to the desktop app and prompts the operator once per `op` call.
+`scripts/reauth.sh` first checks that its caller inherited `OP_SERVICE_ACCOUNT_TOKEN`, then warms omnictl, kubectl and talosctl on both clusters, ssh to the hermes VM, and 1Password through that token.
+The plain command also authorizes matching worktree `.envrc` files and checks that each can export the token through direnv, so run it from the main checkout while at the keyboard after creating a worktree.
+Every seat runs `scripts/reauth.sh --seat` when it starts; that skips the `.envrc` checks and their desktop prompts.
 It prints one `OK` or `FAIL` line per check and exits 1 if any failed.
 Run it while you are at the keyboard, at the start of a session and again after any `key expired` error:
 
