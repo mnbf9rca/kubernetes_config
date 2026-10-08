@@ -87,8 +87,8 @@ The rules that must not be broken:
   The `Makefile` defines `OP_RUN := op run --env-file=.env.tpl --`, and every build/diff/apply target runs its guards in the parent shell then re-enters make under it, so values exist inside one child process only.
   **The old `set -a` + `op inject` block in `.envrc` is gone deliberately — do not restore it.**
   Because `OP_SERVICE_ACCOUNT_TOKEN` lives in the shell environment once direnv has exported it, `op run` — and therefore every build/diff/apply target — works from **any directory in that shell, git worktrees included**: no avoiding worktrees for `op`-dependent work (operator ruling, 2026-08-27).
-  direnv keys its allow record on path *and* content, so a fresh worktree's committed `.envrc` starts unallowed: after creating a worktree, run `scripts/reauth.sh --worktrees` from the main checkout to authorize it before opening the agent's tab.
-  Non-interactive shells such as Codex's `zsh -lc` have no direnv hook: they must inherit `OP_SERVICE_ACCOUNT_TOKEN` when the agent starts. If it is absent, stop and restart the agent from a shell where direnv has loaded; re-evaluating `.envrc` per command can trigger 1Password desktop prompts without fixing the agent's environment.
+  direnv keys its allow record on path *and* content, so a fresh worktree's committed `.envrc` starts unallowed: after creating a worktree, run `scripts/reauth.sh` from the main checkout to authorize it before opening the agent's tab.
+  Non-interactive shells such as Codex's `zsh -lc` have no direnv hook: they must inherit `OP_SERVICE_ACCOUNT_TOKEN` when the agent starts and run `scripts/reauth.sh --seat`. If the token is absent, stop and restart the agent from a shell where direnv has loaded; re-evaluating `.envrc` per command can trigger 1Password desktop prompts without fixing the agent's environment.
 - **Never commit plaintext secret values.**
   `${VAR}` placeholders only.
 - **`op run` masks stdout, not env vars** — corrected 2026-08-20; the previous claim in this file was a misdiagnosis.

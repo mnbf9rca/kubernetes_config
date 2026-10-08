@@ -29,8 +29,8 @@ Access does not authorize changes to a cluster.
 ## Before the operator leaves
 
 Pre-warm SSH, both kubectl contexts, omnictl and talosctl access for every seat.
-Create each worktree, run `scripts/reauth.sh --worktrees` from the main checkout to authorize its `.envrc`, and only then open that seat's tab and start its agent.
-Every seat runs plain `scripts/reauth.sh` when it starts to check its inherited service account token and warm SSH, kubectl, omnictl and talosctl access without loading any `.envrc`.
+Create each worktree, run `scripts/reauth.sh` from the main checkout to authorize its `.envrc`, and only then open that seat's tab and start its agent.
+Every seat runs `scripts/reauth.sh --seat` when it starts to check its inherited service account token and warm SSH, kubectl, omnictl and talosctl access without loading any `.envrc`.
 A non-interactive seat such as Codex does not run the direnv hook, so if `OP_SERVICE_ACCOUNT_TOKEN` is absent it stops and asks to be restarted from a shell where direnv has loaded; re-evaluating `.envrc` inside a child process cannot fix the seat's environment and can prompt through the 1Password desktop app.
 Use [Omni access](omni-access.md) for setup and authentication.
 The kubectl contexts are `cynexia-homelab` and `cynexia-vps`.

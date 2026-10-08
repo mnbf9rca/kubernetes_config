@@ -10,7 +10,7 @@
 #
 # Checks the caller's token first, then runs every check and prints one verdict
 # per check. Exits 1 if any check fails.
-# Usage: scripts/reauth.sh [--worktrees] (from the repo root or any worktree)
+# Usage: scripts/reauth.sh [--seat] (from the repo root or any worktree)
 
 # If the main .envrc itself changed, allow it there before restarting this seat.
 if [ -z "${OP_SERVICE_ACCOUNT_TOKEN:-}" ]; then
@@ -20,9 +20,9 @@ fi
 echo 'OK:   service account token present'
 
 case "$*" in
-  '') check_worktrees=0 ;;
-  --worktrees) check_worktrees=1 ;;
-  *) echo 'FAIL: usage: scripts/reauth.sh [--worktrees]'; exit 1 ;;
+  '') check_worktrees=1 ;;
+  --seat) check_worktrees=0 ;;
+  *) echo 'FAIL: usage: scripts/reauth.sh [--seat]'; exit 1 ;;
 esac
 
 rc=0
@@ -63,8 +63,8 @@ check "ssh hermes@hermes.cynexia.net" ssh -o BatchMode=yes -o ConnectTimeout=10 
 # this script runs; a child cannot set its parent's environment.
 check "op service account token valid" op whoami
 if [ "$check_worktrees" -eq 1 ]; then
-  # Only the operator's setup run loads .envrc in worktrees; a seat's default
-  # run must not open 1Password desktop prompts for every worktree.
+  # The plain operator run loads .envrc in worktrees; --seat skips this loop
+  # so a seat cannot prompt through the desktop app for every worktree.
   repo=$(git -C "$(dirname "$0")" rev-parse --show-toplevel)
   # A for loop, not a pipeline into `while read`: a pipeline runs the loop in a
   # subshell and the rc=1 below would be lost. Worktree paths here carry no spaces.
