@@ -8,8 +8,15 @@
 # mints a new key, so each call below is that trigger. Run this while you are
 # at the keyboard: an unattended run parks every expired tool on a browser tab.
 #
-# Prints one OK/FAIL line per check, runs them all, exits 1 if any failed.
+# Checks the caller's token first, then runs every check and prints one verdict
+# per check. Exits 1 if any check fails.
 # Usage: scripts/reauth.sh          (from the repo root or any worktree)
+
+if [ -z "${OP_SERVICE_ACCOUNT_TOKEN:-}" ]; then
+  echo 'FAIL: this shell has no service account token. Stop, and ask for this agent to be restarted from a shell where direnv has loaded. Remember to authorize new worktrees first with scripts/reauth.sh from the main checkout.'
+  exit 1
+fi
+echo 'OK:   service account token present'
 
 rc=0
 
@@ -45,9 +52,8 @@ check "ssh hermes@hermes.cynexia.net" ssh -o BatchMode=yes -o ConnectTimeout=10 
 
 # 1Password. `op run` needs OP_SERVICE_ACCOUNT_TOKEN in the environment; without
 # it every op call falls back to the desktop app and prompts the operator once
-# per call. direnv exports the token, but only from an allowed .envrc and only
-# in a shell that runs its hook: Codex runs commands as `zsh -lc`, which is not
-# interactive, so a seat there has to `eval "$(direnv export zsh)"` itself.
+# per call. The calling shell must already have inherited the token before
+# this script runs; a child cannot set its parent's environment.
 # Allow every worktree's .envrc that matches the main checkout's, then prove a
 # non-interactive shell in each one can reach the token without inheriting it.
 check "op service account token valid" op whoami
