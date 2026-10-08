@@ -362,8 +362,8 @@ Read it per row rather than assuming up-on-success everywhere.
 | `jottacloud-backup` | `op://Homelab/jottacloud-backup/kuma-push-token` | 21600s, 1 retry at 7200s | The `jottacloud-backup-scheduled` CronJob's own image, on success only. This repo does not build that image and does not control the request — see the note below |
 | `hermes-app-alive` | `op://hermes/hermes-app-alive/kuma-push-token` | 86400s, 1 retry at 21600s | A `no_agent` cron job inside `hermes-gateway` on the hermes VM at 05:45 UTC, `up` on exit 0 and `down` on failure, from an EXIT trap |
 
-The keel image floors are exactly **17 for homelab** and **12 for VPS**, counting distinct floating images across all containers in keel-annotated workloads.
-These manifest-derived floors have **not yet been verified against live keel metrics after apply**.
+The keel image floors are exactly **20 for homelab** and **12 for VPS**, counting distinct floating images across all containers in keel-annotated workloads.
+The homelab count of 20 matched the live Keel gauge after the printer services were applied on 2026-10-08.
 PR counts, PR ages and dashboard age do not affect `homelab-update-watch`; its API-error silence behavior is unchanged.
 
 Each migrated row's interval and retry mirror the period and grace of the healthchecks.io check it replaced, so nothing got quieter or noisier in the move (August 26, 2026).

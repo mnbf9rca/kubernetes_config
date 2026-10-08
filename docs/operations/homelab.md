@@ -111,19 +111,19 @@ Three things about this namespace are deliberate and should survive a refactor:
 
 The three private UIs are `https://spoolman.cynexia.net`, `https://filabridge.cynexia.net`, and `https://printguard.cynexia.net`. They have no login. Treat LAN/tailnet access as full control. Do not publish them to the internet. PrintGuard must be running and watching the print to detect or report a failure. Check its dashboard before relying on it.
 
-The Core One+ PrusaLink address is `192.168.17.97`. The separate Buddy3D camera has Local Stream Mode enabled at `rtsp://192.168.17.103/live`. FilaBridge reaches Spoolman at `http://spoolman.printing.svc.cluster.local:8000`. The Telegram bot token is `op://Homelab/printguard/telegram_token`; the chat ID is its `chat_id` text field at `op://Homelab/printguard/chat_id`. The PrusaLink API key is in the `Homelab` vault. Keep these values out of Git and terminal output.
+The Core One+ PrusaLink address is `192.168.17.97`. The separate Buddy3D camera has Local Stream Mode enabled at `rtsp://192.168.17.103/live`. FilaBridge reaches Spoolman at `http://spoolman.printing.svc.cluster.local:8000`. The Telegram bot token is `op://Homelab/printguard/telegram_token`; the chat ID is its `chat_id` text field at `op://Homelab/printguard/chat_id`. Find the PrusaLink API key on the printer at **Settings > Network > PrusaLink**. It is the displayed password. Keep these values out of Git and terminal output.
 
 First-run setup belongs to the operator:
 
 1. Open Spoolman. Add the filament and the spool in the printer. Note its starting weight.
-2. Open FilaBridge. Set the printer address to `192.168.17.97`. Enter the PrusaLink API key from 1Password. Set Spoolman to `http://spoolman.printing.svc.cluster.local:8000`. Map the Core One+ toolhead to the loaded spool.
+2. Open FilaBridge. Set the printer address to `192.168.17.97`. Read the PrusaLink API key from the printer screen and enter it. Set Spoolman to `http://spoolman.printing.svc.cluster.local:8000`. Map the Core One+ toolhead to the loaded spool.
 3. Open PrintGuard. Add the printer at `192.168.17.97` with user `maker` and the API key as its password. Add the RTSP camera. Link a monitor to the printer and camera.
 4. Set **On sustained defect** to **Pause**. Turn **Push notifications** on. Keep the initial threshold at 0.75 and three consecutive detections. Crop the print area into the square detection region.
 5. Enter the Telegram bot token and chat ID from 1Password. Send a test alert. Confirm its snapshot arrives.
 
 For acceptance, start a small print through Prusa Connect. After it finishes, compare FilaBridge's recorded use with the decrease in Spoolman's mapped spool weight. During a separate safe Prusa Connect print, stage a visible failure while present at the printer. Confirm the printer pauses after a sustained detection. Confirm Telegram receives a snapshot with the pause result. Stop the test if needed.
 
-Spoolman stores `spoolman.db` on `spoolman-data`, FilaBridge stores `filabridge.db` on `filabridge-data`, and PrintGuard stores `state.json` on `printguard-data`. The existing nightly homelab restic job copies these local-path PVCs. If state is lost, restore the matching PVC from restic. Restart that single Deployment. Restic copies live SQLite files, so a snapshot taken during a write can be inconsistent even when its file-size gate passes. Re-enter credentials from 1Password if restored app state cannot use them.
+Spoolman stores `spoolman.db` on `spoolman-data`, FilaBridge stores `filabridge.db` on `filabridge-data`, and PrintGuard stores `state.json` on `printguard-data`. The existing nightly homelab restic job copies these local-path PVCs. If state is lost, restore the matching PVC from restic. Restart that single Deployment. Restic copies live SQLite files, so a snapshot taken during a write can be inconsistent even when its file-size gate passes. After a restore, read the PrusaLink API key from the printer screen again. If PrintGuard needs its Telegram settings, re-enter them from 1Password.
 
 ## Storage and NFS
 
