@@ -118,12 +118,12 @@ First-run setup belongs to the operator:
 1. Open Spoolman. Add the filament and the spool in the printer. Note its starting weight.
 2. Open FilaBridge. Set the printer address to `192.168.17.97`. Read the PrusaLink API key from the printer screen and enter it. Set Spoolman to `http://spoolman.printing.svc.cluster.local:8000`. Map the Core One+ toolhead to the loaded spool.
 3. Open PrintGuard. Add the printer at `192.168.17.97` with user `maker` and the API key as its password. Add the RTSP camera. Link a monitor to the printer and camera.
-4. Set **On sustained defect** to **Pause**. Turn **Push notifications** on. Keep the initial threshold at 0.75 and three consecutive detections. Crop the print area into the square detection region.
+4. Open the monitor tile and find **On sustained defect** under **Monitoring**. Set it to **Pause the print**. Turn **Push notifications** on. Keep the initial threshold at 0.75 and three consecutive detections. Crop the print area into the square detection region.
 5. Enter the Telegram bot token and chat ID from 1Password. Send a test alert. Confirm its snapshot arrives.
 
 For acceptance, start a small print through Prusa Connect. After it finishes, compare FilaBridge's recorded use with the decrease in Spoolman's mapped spool weight. During a separate safe Prusa Connect print, stage a visible failure while present at the printer. Confirm the printer pauses after a sustained detection. Confirm Telegram receives a snapshot with the pause result. Stop the test if needed.
 
-Spoolman stores `spoolman.db` on `spoolman-data`, FilaBridge stores `filabridge.db` on `filabridge-data`, and PrintGuard stores `state.json` on `printguard-data`. The existing nightly homelab restic job copies these local-path PVCs. If state is lost, restore the matching PVC from restic. Restart that single Deployment. Restic copies live SQLite files, so a snapshot taken during a write can be inconsistent even when its file-size gate passes. After a restore, read the PrusaLink API key from the printer screen again. If PrintGuard needs its Telegram settings, re-enter them from 1Password.
+Spoolman stores `spoolman.db` on `spoolman-data`, FilaBridge stores `filabridge.db` on `filabridge-data`, and PrintGuard stores `state.json` on `printguard-data`. The existing nightly homelab restic job copies these local-path PVCs. If state is lost, restore the whole matching PVC directory from restic, then restart that single Deployment. For FilaBridge, include `filabridge.db-wal` and `filabridge.db-shm`; do not restore `filabridge.db` alone. Restic copies live SQLite files, so a snapshot taken during a write can be inconsistent even when its file-size gate passes. After a restore, read the PrusaLink API key from the printer screen again. If PrintGuard needs its Telegram settings, re-enter them from 1Password.
 
 ## Storage and NFS
 

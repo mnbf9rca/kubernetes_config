@@ -266,8 +266,9 @@ spec:
                   # there means "produced on a schedule", and this file changes only when the
                   # job runs, which the `withings-ingest` monitor already reports.
                   # Printing first-run sizes on 2026-10-08: spoolman.db 126976 B,
-                  # filabridge.db 4096 B, state.json 1957 B. Floors are one tenth,
-                  # rounded down; idle application state gets no freshness entry.
+                  # filabridge.db 4096 B (WAL-mode header page, not data size),
+                  # state.json 1957 B. Floors are one tenth, rounded down;
+                  # idle application state gets no freshness entry.
                   EXPECTED_ARTIFACTS="
                   emby-library:/data/pvc-*_downloads_emby-config/data/library.db:1048576
                   hydra2-config:/data/pvc-*_downloads_hydra2-config/nzbhydra.yml:4096
