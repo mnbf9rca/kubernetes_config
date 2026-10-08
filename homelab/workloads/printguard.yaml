@@ -1,0 +1,77 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: printguard-data
+  namespace: printing
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 5Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: printguard
+  namespace: printing
+  annotations:
+    keel.sh/policy: force
+    keel.sh/match-tag: "true"
+    keel.sh/trigger: poll
+    keel.sh/pollSchedule: "@every 6h"
+spec:
+  replicas: 1
+  strategy: { type: Recreate }
+  selector: { matchLabels: { app: printguard } }
+  template:
+    metadata:
+      labels: { app: printguard }
+    spec:
+      containers:
+        - name: printguard
+          image: ghcr.io/oliverbravery/printguard:latest
+          imagePullPolicy: Always
+          env:
+            - { name: PRINTGUARD_ORIGINS, value: "https://printguard.cynexia.net" }
+          ports:
+            - { name: http, containerPort: 8000 }
+          readinessProbe:
+            httpGet: { path: /, port: http }
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          volumeMounts:
+            - { name: data, mountPath: /data }
+      volumes:
+        - name: data
+          persistentVolumeClaim: { claimName: printguard-data }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: printguard
+  namespace: printing
+spec:
+  selector: { app: printguard }
+  ports:
+    - { name: http, port: 8000, targetPort: http }
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: printguard
+  namespace: printing
+spec:
+  ingressClassName: traefik
+  rules:
+    - host: printguard.cynexia.net
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: printguard
+                port:
+                  number: 8000

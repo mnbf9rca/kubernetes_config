@@ -63,10 +63,11 @@ Verify keel's permissions with a SelfSubjectAccessReview issued with keel's own 
 | `backup` | Backup | restic init Job + nightly CronJob (PSA privileged — hostPath) |
 | `health` | Personal health data pipeline | influxdb, apple-health-ingester, garmin-grafana, influxdb-mcp (behind Cloudflare Access), pdc-agent (the Grafana Cloud Private Datasource Connect tunnel), cloudflared, backup + freshness CronJobs — see [homelab-health.md](homelab-health.md) |
 | `hindsight` | Memory backend for the Hermes profiles | hindsight API, its PostgreSQL, the nightly `pg_dump` and the 15-minute canary — see [hindsight.md](hindsight.md) |
+| `printing` | Core One+ printer services | Spoolman inventory, FilaBridge filament accounting, PrintGuard failure detection — see below |
 | `ops` | Cluster-wide operational jobs | `update-watch` and `keel-fresh` CronJobs — see below |
 | `proxy` | Residential egress for changedetection on the VPS | tinyproxy — see [vps.md](vps.md#residential-egress-through-the-homelab) |
 
-Ingress hostnames are `*.cynexia.net` (Route53), Traefik-fronted, LAN/Tailscale only: `sonarr`, `radarr`, `sab`, `hydra`, `emby`, `hindsight`, `hindsight-ui`.
+Ingress hostnames are `*.cynexia.net` (Route53), Traefik-fronted, LAN/Tailscale only: `sonarr`, `radarr`, `sab`, `hydra`, `emby`, `hindsight`, `hindsight-ui`, `spoolman`, `filabridge`, `printguard`.
 `grafana-health.cynexia.net` was one of them until September 6, 2026, when the self-hosted Grafana was removed.
 
 Retired in the rebuild: immich, ollama, open-webui, komga, jellyfin, mylar3, lazylibrarian, caddy, postgresql.
@@ -105,6 +106,24 @@ Three things about this namespace are deliberate and should survive a refactor:
   Finally retire both instruments: the `homelab-update-watch` *and* `homelab-keel-fresh` uptime-kuma push monitors — both push monitors since August 26, 2026 — then delete both 1Password items.
 
   Removing only `keel-fresh` and keeping `update-watch` is the same list minus the `OPS_KUMA_UPDATE_TOKEN`, `update-watch.py` and `PY_VALUE_ALLOWLIST` items, and without deleting the namespace.
+
+### Printing
+
+The three private UIs are `https://spoolman.cynexia.net`, `https://filabridge.cynexia.net`, and `https://printguard.cynexia.net`. They have no login. Treat LAN/tailnet access as full control. Do not publish them to the internet. PrintGuard must be running and watching the print to detect or report a failure. Check its dashboard before relying on it.
+
+The Core One+ PrusaLink address is `192.168.17.97`. The separate Buddy3D camera has Local Stream Mode enabled at `rtsp://192.168.17.103/live`. FilaBridge reaches Spoolman at `http://spoolman.printing.svc.cluster.local:8000`. The Telegram bot token is `op://Homelab/printguard/telegram_token`; the operator has already saved the private chat ID as the `chat_id` text field at `op://Homelab/printguard/chat_id`. The PrusaLink API key is in the `Homelab` vault. Keep these values out of Git and terminal output.
+
+First-run setup belongs to the operator:
+
+1. Open Spoolman. Add the filament and the spool in the printer. Note its starting weight.
+2. Open FilaBridge. Set the printer address to `192.168.17.97`. Enter the PrusaLink API key from 1Password. Set Spoolman to `http://spoolman.printing.svc.cluster.local:8000`. Map the Core One+ toolhead to the loaded spool.
+3. Open PrintGuard. Add the printer at `192.168.17.97` with user `maker` and the API key as its password. Add the RTSP camera. Link a monitor to the printer and camera.
+4. Set **On sustained defect** to **Pause**. Turn **Push notifications** on. Keep the initial threshold at 0.75 and three consecutive detections. Crop the print area into the square detection region.
+5. Enter the Telegram bot token and chat ID from 1Password. Send a test alert. Confirm its snapshot arrives.
+
+For acceptance, start a small print through Prusa Connect. After it finishes, compare FilaBridge's recorded use with the decrease in Spoolman's mapped spool weight. During a separate safe Prusa Connect print, stage a visible failure while present at the printer. Confirm the printer pauses after a sustained detection. Confirm Telegram receives a snapshot with the pause result. Stop the test if needed.
+
+Spoolman stores `spoolman.db` on `spoolman-data`, FilaBridge stores `filabridge.db` on `filabridge-data`, and PrintGuard stores `state.json` on `printguard-data`. The existing nightly homelab restic job copies these local-path PVCs. If state is lost, restore the matching PVC from restic. Restart that single Deployment. Restic copies live SQLite files, so a snapshot taken during a write can be inconsistent even when its file-size gate passes. Re-enter credentials from 1Password if restored app state cannot use them.
 
 ## Storage and NFS
 
