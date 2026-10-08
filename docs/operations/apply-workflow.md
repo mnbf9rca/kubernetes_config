@@ -329,7 +329,7 @@ The coupling is the kind that gets routed around under time pressure; the answer
 What it allows through is a short, stated list — the two copy notes, the image floor, the schedule, the monitor name, the runner-script and manifest paths, the `nodeSelector`, the 1Password vault path and the token variable — and everything else must match byte for byte.
 Its own header carries the list and the reasoning.
 
-The current `IMAGE_FLOOR` values are 17 for homelab and 12 for VPS, counting deduplicated images across keel-annotated workloads.
+The current `IMAGE_FLOOR` values are 20 for homelab and 12 for VPS, counting deduplicated images across keel-annotated workloads.
 
 Arming the update-mode guard originally needed wider scope because pinned images then existed outside the three watched homelab trees.
 Any future repo-owned pin outside Renovate's scope still fails the guard.

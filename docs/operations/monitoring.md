@@ -648,7 +648,7 @@ Every branch in *this* script is determinate — its only peer is a ClusterIP, s
 **The message is short, deliberately.** kuma stores one line per heartbeat, so the alert carries `verdict=`, `polls_delta=` and `images=n/floor` and nothing else.
 The rest — the metric names, the stored state, the resolved endpoint — is in the pod log.
 
-**The image floors are exact counts: `IMAGE_FLOOR=17` on homelab and `IMAGE_FLOOR=12` on VPS.**
+**The image floors are exact counts: `IMAGE_FLOOR=20` on homelab and `IMAGE_FLOOR=12` on VPS.**
 They count distinct floating image references across every container, including sidecars and initContainers, in keel-annotated workloads.
 A shared image counts once even when several workloads use it.
 These values come from the new manifest inventory and have **not yet been verified against live keel metrics after apply**.

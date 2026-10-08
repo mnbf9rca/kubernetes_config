@@ -85,7 +85,7 @@ cloudflared was retired from the downloads-era stack but is not retired homelab-
   Full behaviour and every cause of DOWN: [monitoring.md](monitoring.md#the-update-watcher).
 - **`keel-fresh`**, at 07:15Z daily, makes one request to keel's own `/metrics` — a single ClusterIP endpoint, `keel.keel.svc.cluster.local:9300`, reached across the namespace boundary from `ops`; it scrapes nothing else and holds no cluster-wide read — and pushes the `homelab-keel-fresh` uptime-kuma monitor.
   It is the only thing that would notice keel's registry poll loop had wedged: keel's own probes hit `/healthz`, which stays green while the poll goroutine is dead.
-  The configured `IMAGE_FLOOR` is 17, derived from the rendered floating controller images.
+  The configured `IMAGE_FLOOR` is 20, derived from the rendered floating controller images.
   Verdict enum and why there is no `/start`: [monitoring.md](monitoring.md#the-keel-dead-mans-switch).
 
 The half-hour gap is deliberate: the two update-path checks should not alert in the same minute.
@@ -111,7 +111,7 @@ Three things about this namespace are deliberate and should survive a refactor:
 
 The three private UIs are `https://spoolman.cynexia.net`, `https://filabridge.cynexia.net`, and `https://printguard.cynexia.net`. They have no login. Treat LAN/tailnet access as full control. Do not publish them to the internet. PrintGuard must be running and watching the print to detect or report a failure. Check its dashboard before relying on it.
 
-The Core One+ PrusaLink address is `192.168.17.97`. The separate Buddy3D camera has Local Stream Mode enabled at `rtsp://192.168.17.103/live`. FilaBridge reaches Spoolman at `http://spoolman.printing.svc.cluster.local:8000`. The Telegram bot token is `op://Homelab/printguard/telegram_token`; the operator has already saved the private chat ID as the `chat_id` text field at `op://Homelab/printguard/chat_id`. The PrusaLink API key is in the `Homelab` vault. Keep these values out of Git and terminal output.
+The Core One+ PrusaLink address is `192.168.17.97`. The separate Buddy3D camera has Local Stream Mode enabled at `rtsp://192.168.17.103/live`. FilaBridge reaches Spoolman at `http://spoolman.printing.svc.cluster.local:8000`. The Telegram bot token is `op://Homelab/printguard/telegram_token`; the chat ID is its `chat_id` text field at `op://Homelab/printguard/chat_id`. The PrusaLink API key is in the `Homelab` vault. Keep these values out of Git and terminal output.
 
 First-run setup belongs to the operator:
 
