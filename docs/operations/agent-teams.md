@@ -18,8 +18,9 @@ The chief of staff keeps its context clean.
 It captures the operator's answers to brainstorming questions before the builder writes the specification.
 It does not read inventories or diffs, or write specifications or plans.
 It rules on disagreements, defective plans and the escalations defined below.
-The builder writes the specification, then the implementation plan, then the code and documentation.
-It commits on its isolated worktree branch.
+The builder writes the specification and implementation plan.
+Operator ruling, 2026-10-08: the operator approves the specification, and the chief of staff approves the implementation plan.
+After those approvals, the builder writes the code and documentation and commits on its isolated worktree branch.
 The reviewer reviews each artifact in turn.
 Design review includes the deletion seat required by [AGENTS.md](../../AGENTS.md#when-editing): identify unnecessary machinery and what deleting it would lose.
 Task reviews give separate spec-compliance and quality verdicts.
