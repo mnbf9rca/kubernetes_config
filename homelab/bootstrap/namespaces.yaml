@@ -97,6 +97,12 @@ metadata:
 apiVersion: v1
 kind: Namespace
 metadata:
+  name: netdisco
+  # Default baseline PSA; the pod needs no host access.
+---
+apiVersion: v1
+kind: Namespace
+metadata:
   name: printing
   # PSA baseline (cluster default). The printer services need no hostPath,
   # hostNetwork, ServiceAccount, or RBAC.

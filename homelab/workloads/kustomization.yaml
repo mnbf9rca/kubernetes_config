@@ -21,6 +21,7 @@ resources:
   - printguard.yaml
   - homepage.yaml
   - netalertx.yaml
+  - netdisco.yaml
 
 configMapGenerator:
   - name: netalertx-bootstrap

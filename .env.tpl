@@ -165,6 +165,11 @@ HINDSIGHT_CANARY_HC_UUID=op://Homelab/hindsight/canary-healthcheck-uuid
 NETALERTX_OPNSENSE_KEY=op://Homelab/netalertx/opnsense-key
 NETALERTX_OPNSENSE_SECRET=op://Homelab/netalertx/opnsense-secret
 
+# Netdisco read-only SNMP and database (homelab only)
+NETDISCO_SWITCH_SNMP_COMMUNITY=op://Homelab/switches/community-string
+NETDISCO_GATEWAY_SNMP_COMMUNITY=op://Homelab/opnsense/snmp-community
+NETDISCO_PG_PASSWORD=op://Homelab/netdisco/pg-password
+
 # --- VPS cluster secrets (Phase 2) ---
 
 # Restic / Backblaze B2 for VPS (separate bucket, separate repo, separate password)
