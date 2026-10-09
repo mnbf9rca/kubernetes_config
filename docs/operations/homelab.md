@@ -79,7 +79,7 @@ tinyproxy was on that list until September 2, 2026, when it returned in its own 
 
 cloudflared was retired from the downloads-era stack but remains in `homelab/bootstrap/cloudflared/` for the whole homelab.
 The connector runs in the `cloudflared` namespace with tunnel UUID `1a4245a3-5264-420c-9893-b45ff25a0214`, separate from the VPS `cynexia-vps` tunnel.
-Its Cloudflare display name may still be `cynexia-health`.
+Its Cloudflare display name is `cynexia-homelab`; the 2026-10-09 name change kept the UUID and credentials.
 The legacy 1Password **DOCUMENT** item `health-cloudflared` is retrieved by ID through `make create-homelab-cloudflared-secret` (`op document get`, not `op read`).
 The tunnel serves origins in `health`, `proxy`, `homepage` and the Hermes VM.
 After editing its ConfigMap routes, restart `deploy/cloudflared` in the `cloudflared` namespace because the config uses a `subPath` mount.
