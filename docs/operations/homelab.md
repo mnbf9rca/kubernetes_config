@@ -65,7 +65,7 @@ Verify keel's permissions with a SelfSubjectAccessReview issued with keel's own 
 | `hindsight` | Memory backend for the Hermes profiles | hindsight API, its PostgreSQL, the nightly `pg_dump` and the 15-minute canary — see [hindsight.md](hindsight.md) |
 | `printing` | Core One+ printer services | Spoolman inventory, FilaBridge filament accounting, PrintGuard failure detection — see below |
 | `cloudflared` | Shared homelab Cloudflare tunnel | Connector for health, Hermes, proxy and Homepage routes — `homelab/bootstrap/cloudflared/` |
-| `homepage` | Service directory | Static 17-link Homepage at `home.cynexia.com` behind Cloudflare Access |
+| `homepage` | Service directory | 33-link Homepage at `home.cynexia.com` behind Cloudflare Access |
 | `ops` | Cluster-wide operational jobs | `update-watch` and `keel-fresh` CronJobs — see below |
 | `proxy` | Residential egress for changedetection on the VPS | tinyproxy — see [vps.md](vps.md#residential-egress-through-the-homelab) |
 
@@ -103,10 +103,12 @@ Either run `cloudflared tunnel login` once, or create the single record through 
 
 To recreate the credentials Secret, `make create-homelab-cloudflared-secret`.
 
-`homelab/workloads/homepage.yaml` serves a static directory of 17 links at `home.cynexia.com`.
+`homelab/workloads/homepage.yaml` serves a grouped directory of 33 links at `home.cynexia.com`, including local device interfaces and cloud consoles.
 Its origin has no login, so the Cloudflare Access application for that hostname, with only the reusable `allow_cynexia_com` policy, is the public gate.
 Deleting that application exposes the page.
-Later edits to its `services.yaml` ConfigMap need `kubectl -n homepage rollout restart deploy/homepage` because the file uses a `subPath` mount.
+The Buddy3D camera card opens `rtsp://192.168.17.103/live` in a registered RTSP player; browsers do not render that stream themselves.
+Local IP links need LAN or tailnet reachability from the browser.
+Later edits to the ConfigMap need `kubectl -n homepage rollout restart deploy/homepage` because its files use `subPath` mounts.
 
 ### The `ops` namespace
 

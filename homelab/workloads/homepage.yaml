@@ -4,45 +4,168 @@ metadata:
   name: homepage-config
   namespace: homepage
 data:
+  settings.yaml: |
+    title: Cynexia
+    description: Home, services and infrastructure
+    theme: dark
+    color: teal
+    headerStyle: clean
+    fullWidth: true
+    layout:
+      Media: { style: row, columns: 4, icon: emby.svg }
+      Reading and automation: { style: row, columns: 4, icon: freshrss.svg }
+      Home: { style: row, columns: 4, icon: home-assistant.svg }
+      Workshop and printing: { style: row, columns: 4, icon: prusa-research.svg }
+      Network: { style: row, columns: 4, icon: mikrotik.svg }
+      Infrastructure: { style: row, columns: 4, icon: proxmox.svg }
+      Agents: { style: row, columns: 4, icon: hermes-agent-alt.svg }
+  custom.css: |
+    body {
+      background: radial-gradient(circle at 12% 0%, #134e4a66, transparent 32rem),
+                  radial-gradient(circle at 90% 12%, #312e8166, transparent 36rem),
+                  #0b1220 !important;
+      background-attachment: fixed !important;
+    }
   services.yaml: |
     - Media:
         - Emby:
+            icon: emby.svg
             href: https://emby.cynexia.net
+            description: Movies and series
         - Sonarr:
+            icon: sonarr.svg
             href: https://sonarr.cynexia.net
+            description: Series library
         - Radarr:
+            icon: radarr.svg
             href: https://radarr.cynexia.net
+            description: Movie library
         - SABnzbd:
+            icon: sabnzbd.svg
             href: https://sab.cynexia.net
+            description: Downloads
         - Hydra2:
+            icon: nzbhydra2.svg
             href: https://hydra.cynexia.net
+            description: Indexer search
     - Reading and automation:
         - FreshRSS:
+            icon: freshrss.svg
             href: https://rss.cynexia.com
+            description: Feeds
         - Karakeep:
+            icon: karakeep.svg
             href: https://keep.cynexia.com
+            description: Saved links
         - changedetection:
+            icon: changedetection.svg
             href: https://watch.cynexia.com
+            description: Website changes
         - n8n:
+            icon: n8n.svg
             href: https://n8n.cynexia.com
-    - Health and agents:
-        - Hindsight UI:
-            href: https://hindsight-ui.cynexia.net
-        - Hermes:
-            href: https://hermes.cynexia.com
-        - Hermes WebUI:
-            href: https://hermes-app.cynexia.com
-    - Operations and printing:
-        - Uptime Kuma:
-            href: https://uptime.cynexia.com
-        - Umami:
-            href: https://analytics.cynexia.com
+            description: Workflows
+    - Home:
+        - Home Assistant:
+            icon: home-assistant.svg
+            href: https://192.168.17.102/
+            description: 192.168.17.102 · home automation
+        - WLED light:
+            icon: mdi-led-strip-variant
+            href: http://10.0.2.121/
+            description: 10.0.2.121 · lighting
+        - Emoncms:
+            icon: mdi-chart-line
+            href: http://192.168.17.179/
+            description: 192.168.17.179 · energy data
+    - Workshop and printing:
+        - Prusa Core One:
+            icon: prusa-research.svg
+            href: http://192.168.17.97/
+            description: 192.168.17.97 · PrusaLink
+        - Buddy3D camera:
+            icon: mdi-cctv
+            href: rtsp://192.168.17.103/live
+            description: 192.168.17.103 · open in an RTSP player
+        - Printer:
+            icon: printer.svg
+            href: http://192.168.17.88/
+            description: 192.168.17.88 · web interface
         - Spoolman:
+            icon: spoolman.svg
             href: https://spoolman.cynexia.net
+            description: Filament inventory
         - Filabridge:
+            icon: mdi-link-variant
             href: https://filabridge.cynexia.net
+            description: Print and spool bridge
         - PrintGuard:
+            icon: mdi-shield-check
             href: https://printguard.cynexia.net
+            description: Print monitoring
+    - Network:
+        - MikroTik Loft:
+            icon: mikrotik.svg
+            href: http://192.168.17.14/
+            description: 192.168.17.14
+        - MikroTik Study:
+            icon: mikrotik.svg
+            href: http://192.168.17.12/
+            description: 192.168.17.12
+        - MikroTik 10G switch:
+            icon: mikrotik.svg
+            href: http://192.168.17.11/
+            description: 192.168.17.11
+        - MikroTik Garage:
+            icon: mikrotik.svg
+            href: http://192.168.17.10/
+            description: 192.168.17.10
+        - GS1900 Garage:
+            icon: zyxel-networks.svg
+            href: https://192.168.17.13/
+            description: 192.168.17.13 · Zyxel switch
+    - Infrastructure:
+        - Proxmox FS:
+            icon: proxmox.svg
+            href: https://fs.cynexia.net:8006/
+            description: Storage host
+        - Proxmox PVE:
+            icon: proxmox.svg
+            href: https://pve3.cynexia.net:8006/
+            description: Virtualization host
+        - Hetzner Console:
+            icon: hetzner.svg
+            href: https://console.hetzner.com/
+            description: Cloud servers
+        - Cloudflare Dashboard:
+            icon: cloudflare.svg
+            href: https://dash.cloudflare.com/
+            description: DNS and Access
+        - AWS Console:
+            icon: aws.svg
+            href: https://console.aws.amazon.com/console/home/?nc2=h_si&src=header-signin
+            description: AWS services
+        - Uptime Kuma:
+            icon: uptime-kuma.svg
+            href: https://uptime.cynexia.com
+            description: Availability
+        - Umami:
+            icon: umami.svg
+            href: https://analytics.cynexia.com
+            description: Analytics
+    - Agents:
+        - Hindsight UI:
+            icon: mdi-brain
+            href: https://hindsight-ui.cynexia.net
+            description: Agent memory
+        - Hermes:
+            icon: hermes-agent-alt.svg
+            href: https://hermes.cynexia.com
+            description: Agent dashboard
+        - Hermes WebUI:
+            icon: hermes.svg
+            href: https://hermes-app.cynexia.com
+            description: Agent chat
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -80,8 +203,10 @@ spec:
             timeoutSeconds: 5
             failureThreshold: 3
           volumeMounts:
-            # A later services.yaml edit needs kubectl -n homepage rollout restart deploy/homepage.
+            # Later ConfigMap edits need kubectl -n homepage rollout restart deploy/homepage.
             - { name: config, mountPath: /app/config/services.yaml, subPath: services.yaml, readOnly: true }
+            - { name: config, mountPath: /app/config/settings.yaml, subPath: settings.yaml, readOnly: true }
+            - { name: config, mountPath: /app/config/custom.css, subPath: custom.css, readOnly: true }
       volumes:
         - name: config
           configMap: { name: homepage-config }
