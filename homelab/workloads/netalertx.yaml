@@ -35,14 +35,14 @@ spec:
           imagePullPolicy: Always
           command: ["/bin/sh", "/scripts/netalertx-bootstrap.sh"]
           env:
-            - { name: LOADED_PLUGINS, value: "['RSTIMPRT','ICMP']" }
+            - { name: LOADED_PLUGINS, value: "['RSTIMPRT','ICMP','NBTSCAN','INTRNT']" }
             - name: OPNSENSE_API_KEY
               valueFrom: { secretKeyRef: { name: netalertx-opnsense, key: api-key } }
             - name: OPNSENSE_API_SECRET
               valueFrom: { secretKeyRef: { name: netalertx-opnsense, key: api-secret } }
           securityContext:
             capabilities:
-              add: [NET_RAW, NET_ADMIN]
+              add: [NET_RAW, NET_ADMIN, NET_BIND_SERVICE]
           ports:
             - { name: http, containerPort: 20211 }
           readinessProbe:

@@ -116,34 +116,33 @@ Later edits to the ConfigMap need `kubectl -n homepage rollout restart deploy/ho
 `https://netalertx.cynexia.net` is a private Traefik UI.
 Its Route53 `A` record in zone `Z3409TNW35PGSS` points to `10.100.0.100` with TTL 60 (see [DNS](#dns-route53)).
 Keep it off the public Cloudflare tunnel.
-On first deployment, port-forward `svc/netalertx` to 20211, open Settings and set `SETPWD` from `op://Homelab/netalertx/password`, then prove a fresh login before creating the DNS record.
-The UI login and any manual device labels, locks, groups and network-tree assignments live on `netalertx-data` and survive pod restarts.
+The operator chose no UI password. Anyone on the private LAN or tailnet who can reach the UI can change its settings, so do not expose the Ingress publicly.
+Manual device labels, locks, groups and network-tree assignments live on `netalertx-data` and survive pod restarts.
 
-`homelab/workloads/scripts/netalertx-bootstrap.sh` owns the two authenticated REST Import definitions, five-minute REST/ICMP schedules, three scan subnets, 90-day device history and `LOG_LEVEL=minimal` through `APP_CONF_OVERRIDE`; `LOADED_PLUGINS` is set on the Deployment.
+`homelab/workloads/scripts/netalertx-bootstrap.sh` owns one authenticated REST Import, five-minute REST/ICMP schedules, three scan subnets, 90-day device history and `LOG_LEVEL=minimal` through `APP_CONF_OVERRIDE`; `LOADED_PLUGINS` includes REST Import, ICMP, NBTSCAN and INTRNT.
 Do not edit those settings in the UI: the next start reapplies them.
-`LOADED_PLUGINS` alone does not stop an upstream plugin whose `*_RUN` default is active.
-The override explicitly disables ARP, Avahi, DIG, INTRNT, NBT and NSLOOKUP scans; keep every unwanted scanner disabled there.
-The imports read OPNsense ARP (`mac`, `ip`, `hostname`, `manufacturer`) and Kea DHCPv4 leases (`hwaddr`, `address`, `hostname`, `mac_info`).
-ARP rows carry no hostnames, so automatic names come from Kea leases.
-The two API values come from `op://Homelab/opnsense-netalertx/`; keep `/data`, app configuration, logs and restic restores private because the effective config contains reversibly encoded credentials.
-The `netalertx` gateway user has `Diagnostics: ARP Table` plus `Services: DHCP: Kea (v4)`.
-That Kea grant also allows DHCP settings changes; OPNsense has no narrower lease-only read grant.
+The override explicitly schedules NBTSCAN and INTRNT, and disables ARPSCAN, AVAHISCAN, DIGSCAN and NSLOOKUP; `LOADED_PLUGINS` alone does not stop an upstream plugin whose `*_RUN` default is active.
+NBTSCAN looks for NetBIOS names, while INTRNT tracks WAN reachability; neither supplies a LAN MAC inventory.
+The import reads OPNsense's resolved ARP snapshot (`mac`, `ip`, `hostname`, `manufacturer`) through `search_arp?resolve=yes`.
+Dnsmasq serves DHCPv4 names, and Unbound forwards `lan.cynexia.net` and reverse lookups to it, so active ARP rows with PTR records carry hostnames across all three VLANs.
+The NetAlertX key and secret come from `op://Homelab/netalertx/opnsense-key` and `/opnsense-secret`; its OPNsense user has only `Diagnostics: ARP Table`.
+Keep `/data`, app configuration, logs and restic restores private because the effective config contains reversibly encoded credentials.
 Never raise `LOG_LEVEL` above `minimal`, even briefly for debugging: NetAlertX then writes the reversibly encoded OPNsense credentials to pod logs and `/data/app.log`.
 If that happens, record the disclosure in `secrets-to-rotate.md` and rotate the gateway API key.
 
 ICMP sweeps Home (`192.168.17.0/24`), Servers (`10.100.0.0/24`) and IoT (`10.0.2.0/24`) every five minutes.
 The three `/24` sweeps exceeded the image's 10-second default timeout, so the override bounds each ICMP run at 120 seconds, below the five-minute schedule.
 The pod uses routed pings, not layer-2 discovery on each VLAN.
-Ping-only IPs without a gateway ARP or Kea MAC are skipped; quiet and ICMP-silent devices may be absent or slow to change state.
-Kea's configured DHCPv4 `valid_lifetime` was 4000 seconds at rollout: a departed DHCP client can remain online until its last lease or renewal expires, at most 66 minutes 40 seconds.
-Check the current lifetime on OPNsense if presence looks stale.
+The import uses the gateway ARP snapshot, which is cached for 30 seconds; quiet devices without an ARP row may be absent.
+Dnsmasq leases last 4000 seconds, so a departed DHCP client may retain a DNS name for up to 66 minutes 40 seconds after its last renewal.
+ICMP-silent devices may be slow to change presence state.
 The gateway mDNS repeater is enabled on all three VLANs, but the image's Avahi lookup resolved zero names from a normal pod; `AVAHISCAN` stays off.
 Add or lock names manually for static-address devices.
 MAC is the identity key: randomized MACs create new records, and several IPs sharing one MAC can collapse into one device.
 The network tree needs manual parent/type assignments; it does not discover switch ports.
 
 The existing nightly restic job backs up the entire `netalertx-data` local-path PVC and checks for `/data/db/app.db`.
-To restore, stop the Deployment, restore the whole PVC directory including any `app.db-wal` and `app.db-shm`, restart, and check the login and database.
+To restore, stop the Deployment, restore the whole PVC directory including any `app.db-wal` and `app.db-shm`, restart, and check the UI and database.
 A live-file restic copy can capture inconsistent SQLite state despite a passing file-size gate; use a different snapshot if SQLite will not open.
 No separate backup Job or freshness check exists for this mostly idle database.
 
@@ -239,6 +238,16 @@ The resulting retry storm also trips RFC 5905 KoD rate-limiting on the gateway's
 
 `homelab/talos/machineconfig-patches/305-homelab-lan-network.yaml` therefore puts `ens18` on a static address and moves NTP to public servers (time.cloudflare.com, time.google.com, pool.ntp.org), so the cluster depends on the gateway for neither.
 The OPNsense Kea reservation is kept as defense in depth.
+
+### Gateway DHCP and local names
+
+OPNsense Dnsmasq serves DHCPv4 on Home, Servers and IoT with 4000-second leases.
+Unbound forwards `lan.cynexia.net` and the three reverse /24 zones to Dnsmasq on `127.0.0.1:53053`.
+Kea DHCPv4 and its Control Agent are disabled; the Kea subnets and 30 reservations remain for rollback.
+
+A Dnsmasq reconfigure restarts the daemon and empties `/var/etc/dnsmasq-leases`, its supplemental DNS `addn-hosts` file.
+The actual DHCP lease database is `/var/db/dnsmasq.leases` and survived the 2026-10-09 reconfigure.
+After any reconfigure, check a live lease on each VLAN and forward/PTR answers through Unbound.
 
 ## DNS (Route53)
 

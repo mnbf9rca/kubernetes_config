@@ -276,6 +276,8 @@ The rules that must not be broken:
 - **A design review needs a seat whose only brief is deletion.**
   Brief one reviewer to hunt for machinery that exists to feel rigorous and name both what to delete and what of value is lost, then verify each finding adversarially — tell the verifier that "protects against neither lockout nor data loss" argues **for** the finding.
   That seat found four deletions two other reviewers missed (2026-08-27); the spec or plan's own author cannot fill it.
+- **An agent must not disable or descope a product feature in the operator's name.**
+  Present what it does and its cost, then let the operator choose whether to enable it.
 - **An operator ruling beats a review finding.**
   Once the operator has chosen an approach, a finding against it is input for fixing that design, not grounds to reopen the decision.
   Harvest the finding's fixes into the chosen design, and state the contradiction in one sentence only.

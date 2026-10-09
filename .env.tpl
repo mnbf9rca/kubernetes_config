@@ -162,8 +162,8 @@ HINDSIGHT_CANARY_HC_UUID=op://Homelab/hindsight/canary-healthcheck-uuid
 # triage runbook and a one-line kuma message cannot carry it.
 
 # NetAlertX OPNsense REST imports (homelab only)
-NETALERTX_OPNSENSE_KEY=op://Homelab/opnsense-netalertx/key
-NETALERTX_OPNSENSE_SECRET=op://Homelab/opnsense-netalertx/secret
+NETALERTX_OPNSENSE_KEY=op://Homelab/netalertx/opnsense-key
+NETALERTX_OPNSENSE_SECRET=op://Homelab/netalertx/opnsense-secret
 
 # --- VPS cluster secrets (Phase 2) ---
 
