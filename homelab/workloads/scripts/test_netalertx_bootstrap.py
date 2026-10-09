@@ -55,47 +55,43 @@ class BootstrapTest(unittest.TestCase):
             result = subprocess.run(["sh", str(test_script)], env=env, capture_output=True, text=True)
             return result, output.read_text() if output.exists() else None
 
-    def test_two_tls_verified_imports_preserve_dummy_credentials(self):
+    def test_one_resolved_arp_import_preserves_dummy_credentials(self):
         result, output = self.run_bootstrap()
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout, "")
         override = json.loads(output)
         self.assertEqual(override["LOG_LEVEL"], "minimal")
         # Upstream also loads plugins with non-disabled RUN defaults.
-        for plugin in ("ARPSCAN", "AVAHISCAN", "DIGSCAN", "INTRNT", "NBTSCAN", "NSLOOKUP"):
+        for plugin in ("ARPSCAN", "AVAHISCAN", "DIGSCAN", "NSLOOKUP"):
             self.assertEqual(override[f"{plugin}_RUN"], "disabled")
+        for plugin in ("NBTSCAN", "INTRNT"):
+            self.assertEqual(override[f"{plugin}_RUN"], "schedule")
         self.assertEqual(override["SCAN_SUBNETS"], ["192.168.17.0/24", "10.100.0.0/24", "10.0.2.0/24"])
         self.assertEqual(str(override["DEV_HIST_DAYS"]), "90")
         self.assertEqual(str(override["ICMP_RUN_TIMEOUT"]), "120")
         for prefix in ("RSTIMPRT", "ICMP"):
             self.assertEqual(override[f"{prefix}_RUN"], "schedule")
             self.assertEqual(override[f"{prefix}_RUN_SCHD"], "*/5 * * * *")
-        imports = [decode_import(item) for item in override["RSTIMPRT_imports"]]
-        self.assertEqual(len(imports), 2)
-        by_url = {item["RSTIMPRT_url"]: item for item in imports}
-        self.assertEqual(set(by_url), {
-            "https://gw.cynexia.net/api/diagnostics/interface/search_arp",
-            "https://gw.cynexia.net/api/kea/leases4/search",
-        })
-        for item in imports:
-            for field, want in {
-                "RSTIMPRT_method": "GET",
-                "RSTIMPRT_verify_ssl": True,
-                "RSTIMPRT_auth_type": "basic",
-                "RSTIMPRT_username": KEY,
-                "RSTIMPRT_password": SECRET,
-                "RSTIMPRT_device_path": "rows",
-            }.items():
-                self.assertEqual(item[field], want)
-            self.assertFalse(item.get("RSTIMPRT_fake_mac", False))
-        arp = by_url["https://gw.cynexia.net/api/diagnostics/interface/search_arp"]
-        kea = by_url["https://gw.cynexia.net/api/kea/leases4/search"]
-        for item, mapping in (
-            (arp, {"scanMac": "mac", "scanLastIP": "ip", "scanName": "hostname", "scanVendor": "manufacturer"}),
-            (kea, {"scanMac": "hwaddr", "scanLastIP": "address", "scanName": "hostname", "scanVendor": "mac_info"}),
-        ):
-            for field, want in mapping.items():
-                self.assertEqual(item[f"RSTIMPRT_{field}"], want)
+        self.assertEqual(len(override["RSTIMPRT_imports"]), 1)
+        arp = decode_import(override["RSTIMPRT_imports"][0])
+        for field, want in {
+            "RSTIMPRT_name": "OPNsense ARP",
+            "RSTIMPRT_url": "https://gw.cynexia.net/api/diagnostics/interface/search_arp?resolve=yes",
+            "RSTIMPRT_method": "GET",
+            "RSTIMPRT_verify_ssl": True,
+            "RSTIMPRT_auth_type": "basic",
+            "RSTIMPRT_username": KEY,
+            "RSTIMPRT_password": SECRET,
+            "RSTIMPRT_device_path": "rows",
+            "RSTIMPRT_scanMac": "mac",
+            "RSTIMPRT_scanLastIP": "ip",
+            "RSTIMPRT_scanName": "hostname",
+            "RSTIMPRT_scanVendor": "manufacturer",
+            "RSTIMPRT_fake_mac": False,
+        }.items():
+            self.assertEqual(arp[field], want)
+        self.assertNotIn("kea", SCRIPT.read_text().lower())
+        self.assertNotIn("NETALERTX_IMPORT_COMMAND", SCRIPT.read_text())
 
     def test_missing_credential_fails_without_printing_values(self):
         for key, secret in ((None, SECRET), (KEY, None), ("", SECRET), (KEY, "")):

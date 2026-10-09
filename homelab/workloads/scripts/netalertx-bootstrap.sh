@@ -24,15 +24,13 @@ encode_import() {
     base64 | tr -d '\n'
 }
 
-arp=$(encode_import 'OPNsense ARP' 'https://gw.cynexia.net/api/diagnostics/interface/search_arp' mac ip manufacturer)
-kea=$(encode_import 'OPNsense Kea leases' 'https://gw.cynexia.net/api/kea/leases4/search' hwaddr address mac_info)
+arp=$(encode_import 'OPNsense ARP' 'https://gw.cynexia.net/api/diagnostics/interface/search_arp?resolve=yes' mac ip manufacturer)
 [ -n "$arp" ] || exit 1
-[ -n "$kea" ] || exit 1
-APP_CONF_OVERRIDE=$(jq -nc --arg arp "$arp" --arg kea "$kea" '{
+APP_CONF_OVERRIDE=$(jq -nc --arg arp "$arp" '{
   LOG_LEVEL:"minimal",
   ARPSCAN_RUN:"disabled",AVAHISCAN_RUN:"disabled",DIGSCAN_RUN:"disabled",
-  INTRNT_RUN:"disabled",NBTSCAN_RUN:"disabled",NSLOOKUP_RUN:"disabled",
-  RSTIMPRT_imports:[$arp,$kea],RSTIMPRT_RUN:"schedule",RSTIMPRT_RUN_SCHD:"*/5 * * * *",
+  NSLOOKUP_RUN:"disabled",NBTSCAN_RUN:"schedule",INTRNT_RUN:"schedule",
+  RSTIMPRT_imports:[$arp],RSTIMPRT_RUN:"schedule",RSTIMPRT_RUN_SCHD:"*/5 * * * *",
   ICMP_RUN:"schedule",ICMP_RUN_SCHD:"*/5 * * * *",ICMP_RUN_TIMEOUT:120,
   SCAN_SUBNETS:["192.168.17.0/24","10.100.0.0/24","10.0.2.0/24"],DEV_HIST_DAYS:90
 }')
