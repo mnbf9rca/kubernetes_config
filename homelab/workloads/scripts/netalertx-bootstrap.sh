@@ -30,6 +30,7 @@ APP_CONF_OVERRIDE=$(jq -nc --arg arp "$arp" '{
   LOG_LEVEL:"minimal",
   ARPSCAN_RUN:"disabled",AVAHISCAN_RUN:"disabled",DIGSCAN_RUN:"disabled",
   NSLOOKUP_RUN:"disabled",NBTSCAN_RUN:"schedule",INTRNT_RUN:"schedule",
+  NMAP_RUN:"schedule",NMAP_RUN_SCHD:"0 2 * * *",
   RSTIMPRT_imports:[$arp],RSTIMPRT_RUN:"schedule",RSTIMPRT_RUN_SCHD:"*/5 * * * *",
   ICMP_RUN:"schedule",ICMP_RUN_SCHD:"*/5 * * * *",ICMP_RUN_TIMEOUT:120,
   SCAN_SUBNETS:["192.168.17.0/24","10.100.0.0/24","10.0.2.0/24"],DEV_HIST_DAYS:90

@@ -66,7 +66,7 @@ Verify keel's permissions with a SelfSubjectAccessReview issued with keel's own 
 | `printing` | Core One+ printer services | Spoolman inventory, FilaBridge filament accounting, PrintGuard failure detection — see below |
 | `cloudflared` | Shared homelab Cloudflare tunnel | Connector for health, Hermes, proxy and Homepage routes — `homelab/bootstrap/cloudflared/` |
 | `homepage` | Service directory | 40-link Homepage at `home.cynexia.com` behind Cloudflare Access |
-| `netalertx` | Private device inventory | Resolved OPNsense ARP import, ICMP, NBTSCAN and INTRNT; see [NetAlertX](#netalertx) |
+| `netalertx` | Private device inventory | Resolved OPNsense ARP import, ICMP, NBTSCAN, INTRNT and daily NMAP; see [NetAlertX](#netalertx) |
 | `ops` | Cluster-wide operational jobs | `update-watch` and `keel-fresh` CronJobs — see below |
 | `proxy` | Residential egress for changedetection on the VPS | tinyproxy — see [vps.md](vps.md#residential-egress-through-the-homelab) |
 
@@ -119,10 +119,11 @@ Keep it off the public Cloudflare tunnel.
 The operator chose no UI password. Anyone on the private LAN or tailnet who can reach the UI can change its settings, so do not expose the Ingress publicly.
 Manual device labels, locks, groups and network-tree assignments live on `netalertx-data` and survive pod restarts.
 
-`homelab/workloads/scripts/netalertx-bootstrap.sh` owns one authenticated REST Import, five-minute REST/ICMP schedules, three scan subnets, 90-day device history and `LOG_LEVEL=minimal` through `APP_CONF_OVERRIDE`; `LOADED_PLUGINS` includes REST Import, ICMP, NBTSCAN and INTRNT.
+`homelab/workloads/scripts/netalertx-bootstrap.sh` owns one authenticated REST Import, five-minute REST/ICMP schedules, three scan subnets, 90-day device history and `LOG_LEVEL=minimal` through `APP_CONF_OVERRIDE`; `LOADED_PLUGINS` includes REST Import, ICMP, NBTSCAN, INTRNT and NMAP.
 Do not edit those settings in the UI: the next start reapplies them.
-The override explicitly schedules NBTSCAN and INTRNT, and disables ARPSCAN, AVAHISCAN, DIGSCAN and NSLOOKUP; `LOADED_PLUGINS` alone does not stop an upstream plugin whose `*_RUN` default is active.
+The override explicitly schedules NBTSCAN, INTRNT and daily 02:00 NMAP, and disables ARPSCAN, AVAHISCAN, DIGSCAN and NSLOOKUP; `LOADED_PLUGINS` alone does not stop an upstream plugin whose `*_RUN` default is active.
 NBTSCAN looks for NetBIOS names, while INTRNT tracks WAN reachability; neither supplies a LAN MAC inventory.
+NMAP uses the image default ports 1–10,000 and may upset IoT devices; exclude one by appending `--exclude <device IP>` to `NMAP_ARGS` in Settings (keep the default `-p -10000`).
 The import reads OPNsense's resolved ARP snapshot (`mac`, `ip`, `hostname`, `manufacturer`) through `search_arp?resolve=yes`.
 Dnsmasq serves DHCPv4 names, and Unbound forwards `lan.cynexia.net` and reverse lookups to it, so active ARP rows with PTR records carry hostnames across all three VLANs.
 The NetAlertX key and secret come from `op://Homelab/netalertx/opnsense-key` and `/opnsense-secret`; its OPNsense user has only `Diagnostics: ARP Table`.

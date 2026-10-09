@@ -34,7 +34,7 @@ spec:
           imagePullPolicy: Always
           command: ["/bin/sh", "/scripts/netalertx-bootstrap.sh"]
           env:
-            - { name: LOADED_PLUGINS, value: "['RSTIMPRT','ICMP','NBTSCAN','INTRNT']" }
+            - { name: LOADED_PLUGINS, value: "['RSTIMPRT','ICMP','NBTSCAN','INTRNT','NMAP']" }
             - name: OPNSENSE_API_KEY
               valueFrom: { secretKeyRef: { name: netalertx-opnsense, key: api-key } }
             - name: OPNSENSE_API_SECRET

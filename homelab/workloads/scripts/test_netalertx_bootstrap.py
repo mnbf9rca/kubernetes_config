@@ -64,8 +64,10 @@ class BootstrapTest(unittest.TestCase):
         # Upstream also loads plugins with non-disabled RUN defaults.
         for plugin in ("ARPSCAN", "AVAHISCAN", "DIGSCAN", "NSLOOKUP"):
             self.assertEqual(override[f"{plugin}_RUN"], "disabled")
-        for plugin in ("NBTSCAN", "INTRNT"):
+        for plugin in ("NBTSCAN", "INTRNT", "NMAP"):
             self.assertEqual(override[f"{plugin}_RUN"], "schedule")
+        self.assertEqual(override["NMAP_RUN_SCHD"], "0 2 * * *")
+        self.assertNotIn("NMAP_ARGS", override)
         self.assertEqual(override["SCAN_SUBNETS"], ["192.168.17.0/24", "10.100.0.0/24", "10.0.2.0/24"])
         self.assertEqual(str(override["DEV_HIST_DAYS"]), "90")
         self.assertEqual(str(override["ICMP_RUN_TIMEOUT"]), "120")
