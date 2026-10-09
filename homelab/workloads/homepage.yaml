@@ -155,12 +155,12 @@ data:
             description: 10.100.0.7 · storage host management
         - JetKVM pve3:
             icon: jetkvm.svg
-            href: http://jetkvm-21b9710ffea4c581.lan.cynexia.net/
-            description: Virtualization host console
+            href: http://10.100.0.110/
+            description: 10.100.0.110 · virtualization host console
         - JetKVM FS:
             icon: jetkvm.svg
-            href: http://jetkvm-59503f0bd42845dc.lan.cynexia.net/
-            description: Storage host console
+            href: http://10.100.0.111/
+            description: 10.100.0.111 · storage host console
         - Hetzner Console:
             icon: hetzner.svg
             href: https://console.hetzner.com/
