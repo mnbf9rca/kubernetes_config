@@ -11,6 +11,7 @@ data:
     color: teal
     headerStyle: clean
     fullWidth: true
+    target: _blank
     layout:
       Media: { style: row, columns: 4, icon: emby.svg }
       Reading and automation: { style: row, columns: 4, icon: freshrss.svg }
@@ -26,6 +27,8 @@ data:
                   #0b1220 !important;
       background-attachment: fixed !important;
     }
+  bookmarks.yaml: |
+    []
   services.yaml: |
     - Media:
         - Emby:
@@ -233,6 +236,7 @@ spec:
           volumeMounts:
             # Later ConfigMap edits need kubectl -n homepage rollout restart deploy/homepage.
             - { name: config, mountPath: /app/config/services.yaml, subPath: services.yaml, readOnly: true }
+            - { name: config, mountPath: /app/config/bookmarks.yaml, subPath: bookmarks.yaml, readOnly: true }
             - { name: config, mountPath: /app/config/settings.yaml, subPath: settings.yaml, readOnly: true }
             - { name: config, mountPath: /app/config/custom.css, subPath: custom.css, readOnly: true }
       volumes:
