@@ -126,11 +126,11 @@ data:
             description: 192.168.17.10
         - GS1900 Garage:
             icon: zyxel-networks.svg
-            href: https://192.168.17.13/
+            href: http://192.168.17.13/
             description: 192.168.17.13 · Zyxel switch
         - GS1900-lounge:
             icon: zyxel-networks.svg
-            href: https://192.168.17.72/
+            href: http://192.168.17.72/
             description: Zyxel switch · lounge
         - NetAlertX:
             icon: mdi-lan
