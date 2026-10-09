@@ -65,7 +65,7 @@ Verify keel's permissions with a SelfSubjectAccessReview issued with keel's own 
 | `hindsight` | Memory backend for the Hermes profiles | hindsight API, its PostgreSQL, the nightly `pg_dump` and the 15-minute canary — see [hindsight.md](hindsight.md) |
 | `printing` | Core One+ printer services | Spoolman inventory, FilaBridge filament accounting, PrintGuard failure detection — see below |
 | `cloudflared` | Shared homelab Cloudflare tunnel | Connector for health, Hermes, proxy and Homepage routes — `homelab/bootstrap/cloudflared/` |
-| `homepage` | Service directory | 40-link Homepage at `home.cynexia.com` behind Cloudflare Access |
+| `homepage` | Service directory | Homepage at `home.cynexia.com` behind Cloudflare Access; current card count: `/api/services` |
 | `netalertx` | Private device inventory | Resolved OPNsense ARP import, ICMP, NBTSCAN, INTRNT and daily NMAP; see [NetAlertX](#netalertx) |
 | `ops` | Cluster-wide operational jobs | `update-watch` and `keel-fresh` CronJobs — see below |
 | `proxy` | Residential egress for changedetection on the VPS | tinyproxy — see [vps.md](vps.md#residential-egress-through-the-homelab) |
@@ -104,7 +104,7 @@ Either run `cloudflared tunnel login` once, or create the single record through 
 
 To recreate the credentials Secret, `make create-homelab-cloudflared-secret`.
 
-`homelab/workloads/homepage.yaml` serves a grouped directory of 40 links at `home.cynexia.com`, including local device interfaces and cloud consoles.
+`homelab/workloads/homepage.yaml` serves a grouped directory at `home.cynexia.com`, including local device interfaces and cloud consoles. Read its live `/api/services` response for the current card count.
 Its origin has no login, so the Cloudflare Access application for that hostname, with only the reusable `allow_cynexia_com` policy, is the public gate.
 Deleting that application exposes the page.
 The Buddy3D camera card opens `rtsp://192.168.17.103/live` in a registered RTSP player; browsers do not render that stream themselves.

@@ -197,6 +197,7 @@ The rules that must not be broken:
 ## File Conventions
 
 - Each service is **one YAML file** under `homelab/workloads/` (or `vps/workloads/`) containing its Deployment, Service, Ingress and PVCs separated by `---`.
+- Every new browser-facing service on either cluster gets a Homepage card in the same change, with a group, name, URL and icon; removing a service removes its card. Use its public `*.cynexia.net` or `*.cynexia.com` name when one exists, otherwise its reserved IP. Never use a `lan.cynexia.net` name in a card because Tailscale clients do not resolve it.
 - **Every resource declares its own `namespace:` explicitly.**
   Do NOT add a top-level `namespace:` to `homelab/workloads/kustomization.yaml` — it would rewrite the namespace on every resource and break services that live outside `downloads` (for example jottacloud-backup).
 - NFS PVs and their PVCs live in the same service file as the workload that uses them.
