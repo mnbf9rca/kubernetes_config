@@ -21,8 +21,8 @@ Kubectl context: `cynexia-homelab`.
 Workloads run on the single node because Omni's own system patch `400-homelab-control-planes-untaint` sets `cluster.allowSchedulingOnControlPlanes: true` — the mirror of the VPS twin described in [vps.md](vps.md), labelled `omni.sidero.dev/system-patch:`, so Omni owns it and it must never be copied into a file under `homelab/talos/`.
 
 PSA: the cluster enforces `baseline` by default.
-`traefik` (hostNetwork/hostPort) and `backup` (hostPath) are elevated to `privileged` by labels in `homelab/bootstrap/namespaces.yaml`.
-Any new hostPath/hostNetwork workload needs the same treatment.
+`traefik` (hostNetwork/hostPort), `backup` (hostPath), and `netalertx` (NET_ADMIN) are elevated to `privileged` by labels in `homelab/bootstrap/namespaces.yaml`.
+Any new workload requiring capabilities beyond PSA baseline needs the same treatment.
 
 `cert-manager` and `local-path-storage` namespaces are created by their upstream manifests, so they are deliberately absent from `namespaces.yaml` (kustomize rejects duplicates).
 **Those three upstream bases stay unwatched, and the 2026-08-26 Renovate widening did not change that.**
@@ -65,11 +65,12 @@ Verify keel's permissions with a SelfSubjectAccessReview issued with keel's own 
 | `hindsight` | Memory backend for the Hermes profiles | hindsight API, its PostgreSQL, the nightly `pg_dump` and the 15-minute canary — see [hindsight.md](hindsight.md) |
 | `printing` | Core One+ printer services | Spoolman inventory, FilaBridge filament accounting, PrintGuard failure detection — see below |
 | `cloudflared` | Shared homelab Cloudflare tunnel | Connector for health, Hermes, proxy and Homepage routes — `homelab/bootstrap/cloudflared/` |
-| `homepage` | Service directory | 33-link Homepage at `home.cynexia.com` behind Cloudflare Access |
+| `homepage` | Service directory | 34-link Homepage at `home.cynexia.com` behind Cloudflare Access |
+| `netalertx` | Private device inventory | ICMP sweep and OPNsense ARP/Kea imports; see [NetAlertX](#netalertx) |
 | `ops` | Cluster-wide operational jobs | `update-watch` and `keel-fresh` CronJobs — see below |
 | `proxy` | Residential egress for changedetection on the VPS | tinyproxy — see [vps.md](vps.md#residential-egress-through-the-homelab) |
 
-Ingress hostnames are `*.cynexia.net` (Route53), Traefik-fronted, LAN/Tailscale only: `sonarr`, `radarr`, `sab`, `hydra`, `emby`, `hindsight`, `hindsight-ui`, `spoolman`, `filabridge`, `printguard`.
+Ingress hostnames are `*.cynexia.net` (Route53), Traefik-fronted, LAN/Tailscale only: `sonarr`, `radarr`, `sab`, `hydra`, `emby`, `hindsight`, `hindsight-ui`, `spoolman`, `filabridge`, `printguard`, `netalertx`.
 `grafana-health.cynexia.net` was one of them until September 6, 2026, when the self-hosted Grafana was removed.
 
 Retired in the rebuild: immich, ollama, open-webui, komga, jellyfin, mylar3, lazylibrarian, caddy, postgresql.
@@ -103,12 +104,23 @@ Either run `cloudflared tunnel login` once, or create the single record through 
 
 To recreate the credentials Secret, `make create-homelab-cloudflared-secret`.
 
-`homelab/workloads/homepage.yaml` serves a grouped directory of 33 links at `home.cynexia.com`, including local device interfaces and cloud consoles.
+`homelab/workloads/homepage.yaml` serves a grouped directory of 34 links at `home.cynexia.com`, including local device interfaces and cloud consoles.
 Its origin has no login, so the Cloudflare Access application for that hostname, with only the reusable `allow_cynexia_com` policy, is the public gate.
 Deleting that application exposes the page.
 The Buddy3D camera card opens `rtsp://192.168.17.103/live` in a registered RTSP player; browsers do not render that stream themselves.
 Local IP links need LAN or tailnet reachability from the browser.
 Later edits to the ConfigMap need `kubectl -n homepage rollout restart deploy/homepage` because its files use `subPath` mounts.
+
+### NetAlertX
+
+`https://netalertx.cynexia.net` is a private Traefik UI. Its Route53 `A` record in zone `Z3409TNW35PGSS` points to `10.100.0.100` with TTL 60 (see [DNS](#dns-route53)). Keep it off the public Cloudflare tunnel. On first deployment, port-forward `svc/netalertx` to 20211, open Settings and set `SETPWD` from `op://Homelab/netalertx/password`, then prove a fresh login before creating the DNS record. The UI login and any manual device labels, locks, groups and network-tree assignments live on `netalertx-data` and survive pod restarts.
+
+`homelab/workloads/scripts/netalertx-bootstrap.sh` owns the two authenticated REST Import definitions, five-minute REST/ICMP schedules, three scan subnets, 90-day device history and `LOG_LEVEL=minimal` through `APP_CONF_OVERRIDE`; `LOADED_PLUGINS` is set on the Deployment. Do not edit those settings in the UI: the next start reapplies them. The imports read OPNsense ARP (`mac`, `ip`, `hostname`, `manufacturer`) and Kea DHCPv4 leases (`hwaddr`, `address`, `hostname`, `mac_info`), with Kea names taking precedence where both sources see a MAC. The two API values come from `op://Homelab/opnsense-netalertx/`; keep `/data`, app configuration, logs and restic restores private because the effective config contains reversibly encoded credentials. The `netalertx` gateway user has `Diagnostics: ARP Table` plus `Services: DHCP: Kea (v4)`. That Kea grant also allows DHCP settings changes; OPNsense has no narrower lease-only read grant.
+Never raise `LOG_LEVEL` above `minimal`, even briefly for debugging: NetAlertX then writes the reversibly encoded OPNsense credentials to pod logs and `/data/app.log`. If that happens, record the disclosure in `secrets-to-rotate.md` and rotate the gateway API key.
+
+ICMP sweeps Home (`192.168.17.0/24`), Servers (`10.100.0.0/24`) and IoT (`10.0.2.0/24`) every five minutes. The pod uses routed pings, not layer-2 discovery on each VLAN. Ping-only IPs without a gateway ARP or Kea MAC are skipped; quiet and ICMP-silent devices may be absent or slow to change state. Kea's configured DHCPv4 `valid_lifetime` was 4000 seconds at rollout: a departed DHCP client can remain online until its last lease or renewal expires, at most 66 minutes 40 seconds. Check the current lifetime on OPNsense if presence looks stale. The gateway mDNS repeater is enabled on all three VLANs, but the image's Avahi lookup resolved zero names from a normal pod; `AVAHISCAN` stays off. Add or lock names manually for static-address devices. MAC is the identity key: randomized MACs create new records, and several IPs sharing one MAC can collapse into one device. The network tree needs manual parent/type assignments; it does not discover switch ports.
+
+The existing nightly restic job backs up the entire `netalertx-data` local-path PVC and checks for `/data/db/app.db`. To restore, stop the Deployment, restore the whole PVC directory including any `app.db-wal` and `app.db-shm`, restart, and check the login and database. A live-file restic copy can capture inconsistent SQLite state despite a passing file-size gate; use a different snapshot if SQLite will not open. No separate backup Job or freshness check exists for this mostly idle database.
 
 ### The `ops` namespace
 
@@ -121,7 +133,7 @@ Later edits to the ConfigMap need `kubectl -n homepage rollout restart deploy/ho
   Full behaviour and every cause of DOWN: [monitoring.md](monitoring.md#the-update-watcher).
 - **`keel-fresh`**, at 07:15Z daily, makes one request to keel's own `/metrics` — a single ClusterIP endpoint, `keel.keel.svc.cluster.local:9300`, reached across the namespace boundary from `ops`; it scrapes nothing else and holds no cluster-wide read — and pushes the `homelab-keel-fresh` uptime-kuma monitor.
   It is the only thing that would notice keel's registry poll loop had wedged: keel's own probes hit `/healthz`, which stays green while the poll goroutine is dead.
-  The configured `IMAGE_FLOOR` is 21, derived from the rendered floating controller images.
+  The configured `IMAGE_FLOOR` is 22, derived from the rendered floating controller images.
   Verdict enum and why there is no `/start`: [monitoring.md](monitoring.md#the-keel-dead-mans-switch).
 
 The half-hour gap is deliberate: the two update-path checks should not alert in the same minute.

@@ -26,7 +26,8 @@ encode_import() {
 
 arp=$(encode_import 'OPNsense ARP' 'https://gw.cynexia.net/api/diagnostics/interface/search_arp' mac ip manufacturer)
 kea=$(encode_import 'OPNsense Kea leases' 'https://gw.cynexia.net/api/kea/leases4/search' hwaddr address mac_info)
-[ -n "$arp" ] && [ -n "$kea" ]
+[ -n "$arp" ] || exit 1
+[ -n "$kea" ] || exit 1
 APP_CONF_OVERRIDE=$(jq -nc --arg arp "$arp" --arg kea "$kea" '{
   LOG_LEVEL:"minimal",RSTIMPRT_imports:[$arp,$kea],RSTIMPRT_RUN:"schedule",RSTIMPRT_RUN_SCHD:"*/5 * * * *",
   ICMP_RUN:"schedule",ICMP_RUN_SCHD:"*/5 * * * *",

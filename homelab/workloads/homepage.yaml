@@ -124,6 +124,10 @@ data:
             icon: zyxel-networks.svg
             href: https://192.168.17.13/
             description: 192.168.17.13 · Zyxel switch
+        - NetAlertX:
+            icon: mdi-lan
+            href: https://netalertx.cynexia.net
+            description: Device inventory and presence
     - Infrastructure:
         - Proxmox FS:
             icon: proxmox.svg
