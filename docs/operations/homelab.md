@@ -134,6 +134,7 @@ ICMP sweeps Home (`192.168.17.0/24`), Servers (`10.100.0.0/24`) and IoT (`10.0.2
 The three `/24` sweeps exceeded the image's 10-second default timeout, so the override bounds each ICMP run at 120 seconds, below the five-minute schedule.
 The pod uses routed pings, not layer-2 discovery on each VLAN.
 The import uses the gateway ARP snapshot, which is cached for 30 seconds; quiet devices without an ARP row may be absent.
+The gateway retains an ARP entry for about 20 minutes after contact (`net.link.ether.inet.max_age=1200` on 2026-10-09), so a departed device can linger in the import for that long.
 Dnsmasq leases last 4000 seconds, so a departed DHCP client may retain a DNS name for up to 66 minutes 40 seconds after its last renewal.
 ICMP-silent devices may be slow to change presence state.
 The gateway mDNS repeater is enabled on all three VLANs, but the image's Avahi lookup resolved zero names from a normal pod; `AVAHISCAN` stays off.
@@ -237,7 +238,7 @@ Talos v1.12's controller-runtime DHCP4 client can NAK-loop on renewal if the boo
 The resulting retry storm also trips RFC 5905 KoD rate-limiting on the gateway's NTP, which surfaces as `time.SyncController` errors that look like a clock problem and send you debugging the wrong subsystem.
 
 `homelab/talos/machineconfig-patches/305-homelab-lan-network.yaml` therefore puts `ens18` on a static address and moves NTP to public servers (time.cloudflare.com, time.google.com, pool.ntp.org), so the cluster depends on the gateway for neither.
-The OPNsense Kea reservation is kept as defense in depth.
+The OPNsense Dnsmasq reservation is kept as defense in depth.
 
 ### Gateway DHCP and local names
 

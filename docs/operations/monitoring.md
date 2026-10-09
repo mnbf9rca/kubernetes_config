@@ -246,7 +246,7 @@ An explicit list beats a wildcard, which cannot tell "no databases exist" from "
 | homelab | spoolman-db | `/data/pvc-*_printing_spoolman-data/spoolman.db` | ≥12,697 B |
 | homelab | filabridge-db | `/data/pvc-*_printing_filabridge-data/filabridge.db` | ≥409 B |
 | homelab | printguard-state | `/data/pvc-*_printing_printguard-data/state.json` | ≥195 B |
-| homelab | netalertx-db | `/data/pvc-*_netalertx_netalertx-data/db/app.db` | ≥4,096 B (provisional; measure after first import) |
+| homelab | netalertx-db | `/data/pvc-*_netalertx_netalertx-data/db/app.db` | ≥232,243 B (one tenth of 2,322,432 B after first resolved ARP import on 2026-10-09) |
 
 Homelab byte floors sit an order of magnitude under observed sizes: they reject a zero-length or truncated file, not slow growth.
 `hindsight-dump` follows the same derivation from a measured seed run: 4 KiB, from 48,829 B / 23 tables at rollout step 5 on August 24, 2026.
