@@ -139,6 +139,10 @@ data:
             icon: mdi-lan
             href: https://netalertx.cynexia.net
             description: Device inventory and presence
+        - Netdisco:
+            icon: mdi-map-marker-path
+            href: https://netdisco.cynexia.net
+            description: Find devices by switch port
     - Infrastructure:
         - Proxmox FS:
             icon: proxmox.svg

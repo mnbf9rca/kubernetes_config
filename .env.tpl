@@ -169,6 +169,7 @@ NETALERTX_OPNSENSE_SECRET=op://Homelab/netalertx/opnsense-secret
 NETDISCO_SWITCH_SNMP_COMMUNITY=op://Homelab/switches/community-string
 NETDISCO_GATEWAY_SNMP_COMMUNITY=op://Homelab/opnsense/snmp-community
 NETDISCO_PG_PASSWORD=op://Homelab/netdisco/pg-password
+NETDISCO_KUMA_TOKEN=op://Homelab/netdisco/kuma-push-token
 
 # --- VPS cluster secrets (Phase 2) ---
 

@@ -110,3 +110,63 @@ spec:
   selector: { app: netdisco }
   ports:
     - { name: postgres, port: 5432, targetPort: postgres }
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata: { name: netdisco-pg-dump, namespace: netdisco }
+spec:
+  schedule: "25 2 * * *"
+  timeZone: UTC
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 3600
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      activeDeadlineSeconds: 3600
+      ttlSecondsAfterFinished: 172800
+      template:
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: pg-dump
+              image: postgres:18-alpine
+              imagePullPolicy: Always
+              command: [sh, /scripts/netdisco-pg-dump.sh]
+              env:
+                - name: PGPASSWORD
+                  valueFrom: { secretKeyRef: { name: netdisco, key: pg-password } }
+                - name: PUSH_URL
+                  valueFrom: { secretKeyRef: { name: netdisco, key: push-url } }
+              securityContext:
+                allowPrivilegeEscalation: false
+                capabilities: { drop: [ALL] }
+                seccompProfile: { type: RuntimeDefault }
+              volumeMounts:
+                - { name: dumps, mountPath: /dumps }
+                - { name: scripts, mountPath: /scripts, readOnly: true }
+              resources:
+                requests: { cpu: 100m, memory: 128Mi }
+                limits: { cpu: 500m, memory: 512Mi }
+          volumes:
+            - name: dumps
+              persistentVolumeClaim: { claimName: netdisco-dumps }
+            - name: scripts
+              configMap: { name: netdisco-scripts }
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata: { name: netdisco, namespace: netdisco }
+spec:
+  ingressClassName: traefik
+  rules:
+    - host: netdisco.cynexia.net
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: netdisco
+                port: { number: 5000 }

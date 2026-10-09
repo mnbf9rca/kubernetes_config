@@ -70,7 +70,7 @@ Verify keel's permissions with a SelfSubjectAccessReview issued with keel's own 
 | `ops` | Cluster-wide operational jobs | `update-watch` and `keel-fresh` CronJobs — see below |
 | `proxy` | Residential egress for changedetection on the VPS | tinyproxy — see [vps.md](vps.md#residential-egress-through-the-homelab) |
 
-Ingress hostnames are `*.cynexia.net` (Route53), Traefik-fronted, LAN/Tailscale only: `sonarr`, `radarr`, `sab`, `hydra`, `emby`, `hindsight`, `hindsight-ui`, `spoolman`, `filabridge`, `printguard`, `netalertx`.
+Ingress hostnames are `*.cynexia.net` (Route53), Traefik-fronted, LAN/Tailscale only: `sonarr`, `radarr`, `sab`, `hydra`, `emby`, `hindsight`, `hindsight-ui`, `spoolman`, `filabridge`, `printguard`, `netalertx`, `netdisco`.
 `grafana-health.cynexia.net` was one of them until September 6, 2026, when the self-hosted Grafana was removed.
 
 Retired in the rebuild: immich, ollama, open-webui, komga, jellyfin, mylar3, lazylibrarian, caddy, postgresql.
@@ -149,6 +149,16 @@ To restore, stop the Deployment, restore the whole PVC directory including any `
 A live-file restic copy can capture inconsistent SQLite state despite a passing file-size gate; use a different snapshot if SQLite will not open.
 No separate backup Job or freshness check exists for this mostly idle database.
 
+### Netdisco
+
+`https://netdisco.cynexia.net` is a private Traefik route to the login-protected Netdisco UI. Its Homepage card is under Network. Search by device name, IP or MAC for the learned switch port; movement history appears after a later natural change. Netdisco polls six switches (`192.168.17.10`–`.14`, `.72`) and the OPNsense Servers address `10.100.0.1` only. The two read-only SNMP communities are scoped per address in the Secret-backed `deployment.yml`; no write community or OPNsense API key is in the pod. The first admin was created interactively; its login is at `op://Homelab/netdisco/admin-username` and `/admin-password`.
+
+OPNsense has `os-net-snmp` enabled on `10.100.0.1:161` with `l3visibility=1` (`sysServices=76`). It is not listening on Home `192.168.17.1`; the Servers policy already allows the Talos node through. The gateway's ARP table supplies IP-to-MAC mapping across Home, Servers and IoT. Dnsmasq/Unbound PTR records supply names when present. An ARP entry, name or move can lag the live link until the next Netdisco collection; do not use it as an instantaneous reachability test. To roll gateway SNMP back, disable Net-SNMP in Services or remove `os-net-snmp`; retain the saved gateway config `config-1791562068.9104.xml`.
+
+Four manual links are recorded in Netdisco: gateway `ix0`/`ix1` to CRS309 `opnsense (5)`/`opnsense (6)`, CRS309 `Study` to Study `Uplink`, and CRS309 `loft` to Loft `SFP+2`. The CRS309 `POE` port leads through the unpolled Instant On switch at `192.168.17.209` to the polled lounge GS1900. Do not invent a direct POE-to-lounge link or pseudo-device. Marantz is located at lounge `GigabitEthernet2` and Prusa at Study `Port4`; APC and iLO are on CRS326 `Port18`/`Port24`, and fox-watch is on garage GS1900 `GigabitEthernet6`. Devices attached directly to the Instant On switch or behind an unpolled access point can only be located at the nearest polled uplink. Poll the Instant On switch if it ever exposes SNMP. The garage LAG is established as a logical link, but its individual member-port pairing is unverified; confirm it at the switches before adding member links. SwOS does not expose LLDP or map the observed LAG bridge-port IDs to ifIndex, so bonded-host ports may be absent. Netdisco's direct `is_uplink` flag on CRS309 POE is cleared by `discover`; treat it as an uplink in physical interpretation until Netdisco can learn the unpolled neighbor.
+
+PostgreSQL 18 stores data under `/var/lib/postgresql/18/docker` on `netdisco-postgres-data`. The `netdisco-pg-dump` CronJob writes an atomic gzip SQL dump to `netdisco-dumps` at 02:25Z, keeps seven files, and pushes to the `netdisco-pg-dump` uptime-kuma monitor. The 03:00 restic sweep copies that PVC; its expected/fresh gate requires ≥360,000 B and <30h. To restore, stop the Netdisco Deployment, recover one `netdisco-*.sql.gz` from the restic snapshot, start the PostgreSQL sidecar, then pipe `gzip -dc <dump> | psql -h netdisco-postgres -U netdisco -d netdisco` from a temporary `postgres:18-alpine` client with the password from the `netdisco` Secret. Restart the Deployment and verify the login and device count. The dump uses `--clean --if-exists`, so it replaces database objects.
+
 ### The `ops` namespace
 
 `homelab/ops/` holds work that belongs to the estate rather than to any one application: two CronJobs, both dead-man's-switches over the update path itself.
@@ -160,7 +170,7 @@ No separate backup Job or freshness check exists for this mostly idle database.
   Full behaviour and every cause of DOWN: [monitoring.md](monitoring.md#the-update-watcher).
 - **`keel-fresh`**, at 07:15Z daily, makes one request to keel's own `/metrics` — a single ClusterIP endpoint, `keel.keel.svc.cluster.local:9300`, reached across the namespace boundary from `ops`; it scrapes nothing else and holds no cluster-wide read — and pushes the `homelab-keel-fresh` uptime-kuma monitor.
   It is the only thing that would notice keel's registry poll loop had wedged: keel's own probes hit `/healthz`, which stays green while the poll goroutine is dead.
-  The configured `IMAGE_FLOOR` is 22, derived from the rendered floating controller images.
+  The configured `IMAGE_FLOOR` is 25, derived from the rendered floating controller images.
   Verdict enum and why there is no `/start`: [monitoring.md](monitoring.md#the-keel-dead-mans-switch).
 
 The half-hour gap is deliberate: the two update-path checks should not alert in the same minute.

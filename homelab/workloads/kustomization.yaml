@@ -28,3 +28,7 @@ configMapGenerator:
     namespace: netalertx
     files:
       - netalertx-bootstrap.sh=scripts/netalertx-bootstrap.sh
+  - name: netdisco-scripts
+    namespace: netdisco
+    files:
+      - netdisco-pg-dump.sh=scripts/netdisco-pg-dump.sh

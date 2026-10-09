@@ -93,7 +93,7 @@ START_METRIC=process_start_time_seconds
 # of every keel-annotated Deployment, DaemonSet and StatefulSet.
 # Shared sidecar images count once; Jobs and CronJobs do not count.
 # The floor equals this inventory; verify the same live gauge after apply.
-IMAGE_FLOOR=22
+IMAGE_FLOOR=25
 
 STATE_DIR=/state
 STATE_FILE=$STATE_DIR/last

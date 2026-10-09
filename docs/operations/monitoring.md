@@ -101,6 +101,8 @@ Defaults, unless a service's entry below says otherwise:
 | cloudflared tunnel connectors (both clusters) | liveness and readiness `/ready` (:2000) | Neither of those two Deployments has a Service — unlike the VPS `homelab-proxy` cloudflared above, which does — so readiness gates the rolling update and shows connector state. It routes nothing |
 | homepage | readiness `/api/healthcheck` (:3000), with `Host: home.cynexia.com` | Shallow process check; the endpoint does not validate `services.yaml`. No liveness probe |
 | netalertx | readiness `/` (:20211) | UI data plane. No liveness probe; PID 1 exits when a managed service exits |
+| netdisco web | readiness `/health` (:5000) | Login data plane; the PostgreSQL native sidecar has no probe |
+| netdisco-pg-dump | none | Scheduled work; deadline and kuma push monitor provide detection |
 | influxdb | `/health` | — |
 | apple-health-ingester | `tcpSocket` | No HTTP health endpoint upstream |
 | sonarr, radarr, sabnzbd, emby, hydra2 | `/` on the app port; startup, liveness and readiness | Readiness stops Traefik routing to them while they boot |
@@ -157,8 +159,8 @@ Generated scripts also pass through envsubst, so run `make check-script-substitu
 |---|---|---|
 | `timeZone: "UTC"` | every job | Otherwise the schedule follows kube-controller-manager's local zone |
 | `startingDeadlineSeconds` | 3600 (update-watch and both clusters' keel-fresh included), except 1800 for cloudflare-analytics, 600 for withings-ingest and hindsight-canary, 300 for jottacloud, and unset for `ingest-freshness` | A missed window retries for that long, then drops. `update-watch` takes the 3600 default deliberately: a silently skipped run is the failure it exists to prevent |
-| `activeDeadlineSeconds` | restic 14400, influx-backup 3600, hindsight-pg-dump 3600, hermes-pull 1800, cloudflare-analytics 1200, withings-ingest 600, ingest-freshness 300, update-watch 300, keel-fresh 300 on both clusters, hindsight-canary 300, jottacloud 21600, github-mirror 21600 | With `concurrencyPolicy: Forbid`, one hung run silently blocks every later run |
-| `ttlSecondsAfterFinished` | 259200 on both restic jobs, github-mirror, hermes-pull, cloudflare-analytics, withings-ingest, update-watch and both clusters' keel-fresh; 172800 on influx-backup and hindsight-pg-dump; 3600 on hindsight-canary, which runs hourly; 86400 on the rest | A Friday failure on the restic jobs survives until Monday |
+| `activeDeadlineSeconds` | restic 14400, influx-backup 3600, hindsight-pg-dump 3600, netdisco-pg-dump 3600, hermes-pull 1800, cloudflare-analytics 1200, withings-ingest 600, ingest-freshness 300, update-watch 300, keel-fresh 300 on both clusters, hindsight-canary 300, jottacloud 21600, github-mirror 21600 | With `concurrencyPolicy: Forbid`, one hung run silently blocks every later run |
+| `ttlSecondsAfterFinished` | 259200 on both restic jobs, github-mirror, hermes-pull, cloudflare-analytics, withings-ingest, update-watch and both clusters' keel-fresh; 172800 on influx-backup, hindsight-pg-dump and netdisco-pg-dump; 3600 on hindsight-canary, which runs hourly; 86400 on the rest | A Friday failure on the restic jobs survives until Monday |
 | `terminationGracePeriodSeconds` | not set on any job | busybox `ash` runs as PID 1 and never forwards SIGTERM to restic, so a grace period only slows teardown. `restic unlock` at the head of the next run recovers the lock |
 
 Two of those are the hindsight jobs.
@@ -243,6 +245,7 @@ An explicit list beats a wildcard, which cannot tell "no databases exist" from "
 | homelab | influx-lp-export | `/data/pvc-*_health_health-dumps/lp/*.lp.gz` | <30h |
 | homelab | hermes-zip | `/data/pvc-*_backup_hermes-dumps/hermes-*.zip` | ≥16 MiB **and** <30h |
 | homelab | hindsight-dump | `/data/pvc-*_hindsight_hindsight-dumps/hindsight-*.sql.gz` | ≥4 KiB **and** <30h |
+| homelab | netdisco-dump | `/data/pvc-*_netdisco_netdisco-dumps/netdisco-*.sql.gz` | ≥360,000 B **and** <30h |
 | homelab | spoolman-db | `/data/pvc-*_printing_spoolman-data/spoolman.db` | ≥12,697 B |
 | homelab | filabridge-db | `/data/pvc-*_printing_filabridge-data/filabridge.db` | ≥409 B |
 | homelab | printguard-state | `/data/pvc-*_printing_printguard-data/state.json` | ≥195 B |
@@ -250,6 +253,7 @@ An explicit list beats a wildcard, which cannot tell "no databases exist" from "
 
 Homelab byte floors sit an order of magnitude under observed sizes: they reject a zero-length or truncated file, not slow growth.
 `hindsight-dump` follows the same derivation from a measured seed run: 4 KiB, from 48,829 B / 23 tables at rollout step 5 on August 24, 2026.
+`netdisco-dump` uses 360,000 B, about one tenth of a 3,611,341 B / 40-table seed dump measured with seven discovered devices on October 9, 2026. Its script and restic gate carry the same floor.
 It has a twin `MIN_BYTES` in the script that writes it, `homelab/hindsight/scripts/hindsight-pg-dump.sh`, and the pair must be raised together.
 Its live size is reported as `dump_kib=` in its heartbeat message.
 The `grafana-db` and `grafana-dump` rows were removed on September 6, 2026 with the self-hosted Grafana.
@@ -654,7 +658,7 @@ Every branch in *this* script is determinate — its only peer is a ClusterIP, s
 **The message is short, deliberately.** kuma stores one line per heartbeat, so the alert carries `verdict=`, `polls_delta=` and `images=n/floor` and nothing else.
 The rest — the metric names, the stored state, the resolved endpoint — is in the pod log.
 
-**The image floors are exact counts: `IMAGE_FLOOR=22` on homelab and `IMAGE_FLOOR=12` on VPS.**
+**The image floors are exact counts: `IMAGE_FLOOR=25` on homelab and `IMAGE_FLOOR=12` on VPS.**
 They count distinct floating image references across every container, including sidecars and initContainers, in keel-annotated workloads.
 A shared image counts once even when several workloads use it.
 The prior homelab count of 20 matched the live Keel gauge after the printer services were applied on 2026-10-08; Homepage and NetAlertX each add one distinct image.

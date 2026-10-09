@@ -66,7 +66,7 @@ REQUIRED_VARS := B2_ACCOUNT_ID B2_ACCOUNT_KEY RESTIC_PASSWORD RESTIC_REPOSITORY 
                  HINDSIGHT_HC_UUID HINDSIGHT_CANARY_HC_UUID \
                  NETALERTX_OPNSENSE_KEY NETALERTX_OPNSENSE_SECRET \
                  NETDISCO_SWITCH_SNMP_COMMUNITY NETDISCO_GATEWAY_SNMP_COMMUNITY \
-                 NETDISCO_PG_PASSWORD
+                 NETDISCO_PG_PASSWORD NETDISCO_KUMA_TOKEN
 
 # Explicit envsubst allowlist. CRITICAL: envsubst with no allowlist substitutes
 # EVERY $VAR / ${VAR} token in the stream, including shell variables embedded in
@@ -107,7 +107,7 @@ ENVSUBST_VAR_NAMES := B2_ACCOUNT_ID B2_ACCOUNT_KEY RESTIC_PASSWORD RESTIC_REPOSI
                      HINDSIGHT_HC_UUID HINDSIGHT_CANARY_HC_UUID \
                      NETALERTX_OPNSENSE_KEY NETALERTX_OPNSENSE_SECRET \
                      NETDISCO_SWITCH_SNMP_COMMUNITY NETDISCO_GATEWAY_SNMP_COMMUNITY \
-                     NETDISCO_PG_PASSWORD
+                     NETDISCO_PG_PASSWORD NETDISCO_KUMA_TOKEN
 ENVSUBST_VARS := $(foreach v,$(ENVSUBST_VAR_NAMES),$${$(v)})
 # Note: TAILSCALE_AUTH_KEY is deliberately NOT in ENVSUBST_VAR_NAMES.
 # Tailscale auth keys are one-shot and only needed for initial node
