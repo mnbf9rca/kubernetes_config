@@ -122,7 +122,7 @@ The UI login and any manual device labels, locks, groups and network-tree assign
 `homelab/workloads/scripts/netalertx-bootstrap.sh` owns the two authenticated REST Import definitions, five-minute REST/ICMP schedules, three scan subnets, 90-day device history and `LOG_LEVEL=minimal` through `APP_CONF_OVERRIDE`; `LOADED_PLUGINS` is set on the Deployment.
 Do not edit those settings in the UI: the next start reapplies them.
 `LOADED_PLUGINS` alone does not stop an upstream plugin whose `*_RUN` default is active.
-The override explicitly disables ARP, Avahi, DIG, NBT and NSLOOKUP scans; keep every unwanted scanner disabled there.
+The override explicitly disables ARP, Avahi, DIG, INTRNT, NBT and NSLOOKUP scans; keep every unwanted scanner disabled there.
 The imports read OPNsense ARP (`mac`, `ip`, `hostname`, `manufacturer`) and Kea DHCPv4 leases (`hwaddr`, `address`, `hostname`, `mac_info`).
 ARP rows carry no hostnames, so automatic names come from Kea leases.
 The two API values come from `op://Homelab/opnsense-netalertx/`; keep `/data`, app configuration, logs and restic restores private because the effective config contains reversibly encoded credentials.
