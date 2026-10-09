@@ -16,7 +16,7 @@ data:
       # repo cannot express or verify. Adding an ingress line here (plus
       # `make route-homelab-dns`, which mints a CNAME for every hostname in this
       # ConfigMap) publishes the origin to the internet with whatever auth the
-      # Access dashboard happens to have. See influxdb-mcp.yaml's header.
+      # Access dashboard happens to have. See homelab/health/influxdb-mcp.yaml.
       - hostname: hae.cynexia.com
         service: http://apple-health-ingester.health.svc.cluster.local:8080
       - hostname: mcp.cynexia.com

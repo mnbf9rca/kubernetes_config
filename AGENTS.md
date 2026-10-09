@@ -53,7 +53,7 @@ kubernetes_config/
 ├── homelab/                  # Talos homelab cluster
 │   ├── kustomization.yaml    # top-level: bootstrap + secrets + workloads + backup + health + hindsight
 │   ├── talos/                # Omni ConfigPatches resources (applied via `make apply-talos`)
-│   ├── bootstrap/            # platform: namespaces (with PSA labels), local-path, NFS CSI, cert-manager, traefik, keel
+│   ├── bootstrap/            # platform: namespaces (with PSA labels), local-path, NFS CSI, cert-manager, traefik, keel, cloudflared
 │   ├── workloads/            # application workloads (one file per service, --- separated, no ns override)
 │   ├── secrets/              # Secret manifests with ${VAR} envsubst placeholders
 │   ├── health/               # health-data pipeline (floating except the alpine/k8s backup toolbox)

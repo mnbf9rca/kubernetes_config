@@ -24,7 +24,6 @@ Restoration can lose changes since the selected backup.
 | InfluxDB | `influxdb:2` |
 | Apple Health ingester | `irvinlim/apple-health-ingester:latest` |
 | Garmin fetcher | `thisisarpanghosh/garmin-fetch-data:latest` |
-| Health tunnel | `cloudflare/cloudflared:latest` |
 | PDC agent | `grafana/pdc-agent:latest` |
 | InfluxDB MCP | `ghcr.io/mnbf9rca/influxdb-mcp-server:stable` |
 | Cloudflare analytics and Withings CronJobs | `python:latest` |
@@ -54,18 +53,8 @@ The Garmin `latest` channel includes the main-branch fix for the `client.profile
 
 ## Ingress
 
-The shared homelab tunnel runs from `homelab/bootstrap/cloudflared/` in the `cloudflared` namespace, separate from the VPS cluster's `cynexia-vps` tunnel. Its UUID is `1a4245a3-5264-420c-9893-b45ff25a0214`; its Cloudflare display name may still be `cynexia-health`. The legacy 1Password **DOCUMENT** item `health-cloudflared` is retrieved by ID through `make create-homelab-cloudflared-secret` (`op document get`, not `op read`).
-
-Public `*.cynexia.com` hostnames on this tunnel:
-
-| Hostname | Purpose |
-|---|---|
-| `hae.cynexia.com` | Health Auto Export ingest → `apple-health-ingester` |
-| `mcp.cynexia.com` | Claude/Hermes MCP connector, via Cloudflare Access (Managed OAuth) |
-| `hermes.cynexia.com` | Hermes agent dashboard on the hermes VM (`hermes.cynexia.net:9119`, off-cluster), via Cloudflare Access (karakeep-style email policy) |
-| `hermes-app.cynexia.com` | `hermes-webui` on the same VM (`hermes.cynexia.net:8787`, off-cluster) — the server the Hermex iOS app talks to, via Cloudflare Access (Service Auth + the same email policy) |
-| `proxy.cynexia.com` | Residential egress proxy for changedetection on the VPS — see [vps.md](vps.md#residential-egress-through-the-homelab) |
-| `home.cynexia.com` | Static service directory in the `homepage` namespace; Access app uses only `allow_cynexia_com` |
+The `hae.cynexia.com` and `mcp.cynexia.com` ingress routes use the [shared homelab Cloudflare tunnel](homelab.md#shared-cloudflare-tunnel).
+The connector and its credentials live in the `cloudflared` namespace.
 
 `proxy.cynexia.com` is the only **TCP** origin in the ingress block — `tcp://tinyproxy.proxy.svc.cluster.local:8888`, not an HTTP service — and, like `mcp.cynexia.com`, it has an origin that authenticates nobody.
 The whole gate is its Access application, `homelab-proxy`, which carries one app-scoped Service Auth policy and nothing else: deleting or disabling that application publishes an open forward proxy on the operator's home connection rather than closing the path.
@@ -117,13 +106,7 @@ That stale flow is in-memory only and self-expires after 15 minutes (`_MCP_DASHB
 Grafana Cloud serves the dashboards now, so no cluster Service backs that hostname.
 The Cloudflare Access application `grafana` and the DNS record are retired by hand; the tunnel rule and the private Traefik hostname `grafana-health.cynexia.net` are gone.
 
-After changing hostnames in `homelab/bootstrap/cloudflared/cloudflared.yaml`, every hostname needs a proxied CNAME to `1a4245a3-5264-420c-9893-b45ff25a0214.cfargotunnel.com`.
-`make route-homelab-dns` mints them all, but it shells out to `cloudflared tunnel route dns`, which needs an **origin certificate** at `~/.cloudflared/cert.pem`.
-On a machine that has never run `cloudflared tunnel login` that file does not exist, the target aborts under `set -euo pipefail` on the *first* hostname, and a newly added one is never reached — `cloudflared` is not in `make check-tools`, so nothing warns first.
-Either run `cloudflared tunnel login` once, or create the single record through the Cloudflare API (zone `2bf4553c3f994e36202b5f574577d2e5`), which is also the only way to set the record comment this zone uses as its provenance note.
-`hermes-app.cynexia.com` was created that way.
 
-To recreate the credentials Secret, `make create-homelab-cloudflared-secret`.
 
 ## MCP behind Cloudflare Access
 
