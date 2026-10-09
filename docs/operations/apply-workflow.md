@@ -379,7 +379,8 @@ Error from server (NotFound): namespaces "ops" not found
 One such object kills the whole diff, so you get no list at all, for any resource.
 Nothing in the guarded targets creates the namespace first: `diff-*` never writes, and `apply-*` would create it happily but reading the diff first is the discipline this repo runs on.
 Hit on 2026-08-26 adding `vps/ops`.
-When an approved branch already carries both the new Namespace and its workloads, stage only that Namespace from the committed render with an explicit kubectl `--context`, then rerun the entire filtered `make diff-<cluster>` before applying the workload. NetAlertX needed this on 2026-10-09; creating only its Namespace leaves the pre-apply resource diff intact.
+When an approved branch already carries both the new Namespace and its workloads, stage only that Namespace from the committed render with an explicit kubectl `--context`, then rerun the entire filtered `make diff-<cluster>` before applying the workload.
+NetAlertX needed this on 2026-10-09; creating only its Namespace leaves the pre-apply resource diff intact.
 
 **Split the change across two applies.**
 Both halves stay inside the guarded targets, so nothing is done by hand:

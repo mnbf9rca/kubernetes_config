@@ -100,6 +100,7 @@ Defaults, unless a service's entry below says otherwise:
 | influxdb-mcp | liveness and readiness `tcpSocket` | The MCP server exposes no health endpoint. TCP detects process death, not a wedged handler |
 | cloudflared tunnel connectors (both clusters) | liveness and readiness `/ready` (:2000) | Neither of those two Deployments has a Service — unlike the VPS `homelab-proxy` cloudflared above, which does — so readiness gates the rolling update and shows connector state. It routes nothing |
 | homepage | readiness `/api/healthcheck` (:3000), with `Host: home.cynexia.com` | Shallow process check; the endpoint does not validate `services.yaml`. No liveness probe |
+| netalertx | readiness `/` (:20211) | UI data plane. No liveness probe; PID 1 exits when a managed service exits |
 | influxdb | `/health` | — |
 | apple-health-ingester | `tcpSocket` | No HTTP health endpoint upstream |
 | sonarr, radarr, sabnzbd, emby, hydra2 | `/` on the app port; startup, liveness and readiness | Readiness stops Traefik routing to them while they boot |

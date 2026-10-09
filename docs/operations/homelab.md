@@ -21,7 +21,7 @@ Kubectl context: `cynexia-homelab`.
 Workloads run on the single node because Omni's own system patch `400-homelab-control-planes-untaint` sets `cluster.allowSchedulingOnControlPlanes: true` — the mirror of the VPS twin described in [vps.md](vps.md), labelled `omni.sidero.dev/system-patch:`, so Omni owns it and it must never be copied into a file under `homelab/talos/`.
 
 PSA: the cluster enforces `baseline` by default.
-`traefik` (hostNetwork/hostPort), `backup` (hostPath), and `netalertx` (NET_ADMIN) are elevated to `privileged` by labels in `homelab/bootstrap/namespaces.yaml`.
+`traefik` (hostNetwork/hostPort), `backup` (hostPath), and `netalertx` (NET_ADMIN) are elevated to `privileged` by labels in `homelab/bootstrap/namespaces.yaml`; check that file for the current list.
 Any new workload requiring capabilities beyond PSA baseline needs the same treatment.
 
 `cert-manager` and `local-path-storage` namespaces are created by their upstream manifests, so they are deliberately absent from `namespaces.yaml` (kustomize rejects duplicates).
@@ -113,14 +113,36 @@ Later edits to the ConfigMap need `kubectl -n homepage rollout restart deploy/ho
 
 ### NetAlertX
 
-`https://netalertx.cynexia.net` is a private Traefik UI. Its Route53 `A` record in zone `Z3409TNW35PGSS` points to `10.100.0.100` with TTL 60 (see [DNS](#dns-route53)). Keep it off the public Cloudflare tunnel. On first deployment, port-forward `svc/netalertx` to 20211, open Settings and set `SETPWD` from `op://Homelab/netalertx/password`, then prove a fresh login before creating the DNS record. The UI login and any manual device labels, locks, groups and network-tree assignments live on `netalertx-data` and survive pod restarts.
+`https://netalertx.cynexia.net` is a private Traefik UI.
+Its Route53 `A` record in zone `Z3409TNW35PGSS` points to `10.100.0.100` with TTL 60 (see [DNS](#dns-route53)).
+Keep it off the public Cloudflare tunnel.
+On first deployment, port-forward `svc/netalertx` to 20211, open Settings and set `SETPWD` from `op://Homelab/netalertx/password`, then prove a fresh login before creating the DNS record.
+The UI login and any manual device labels, locks, groups and network-tree assignments live on `netalertx-data` and survive pod restarts.
 
-`homelab/workloads/scripts/netalertx-bootstrap.sh` owns the two authenticated REST Import definitions, five-minute REST/ICMP schedules, three scan subnets, 90-day device history and `LOG_LEVEL=minimal` through `APP_CONF_OVERRIDE`; `LOADED_PLUGINS` is set on the Deployment. Do not edit those settings in the UI: the next start reapplies them. The imports read OPNsense ARP (`mac`, `ip`, `hostname`, `manufacturer`) and Kea DHCPv4 leases (`hwaddr`, `address`, `hostname`, `mac_info`), with Kea names taking precedence where both sources see a MAC. The two API values come from `op://Homelab/opnsense-netalertx/`; keep `/data`, app configuration, logs and restic restores private because the effective config contains reversibly encoded credentials. The `netalertx` gateway user has `Diagnostics: ARP Table` plus `Services: DHCP: Kea (v4)`. That Kea grant also allows DHCP settings changes; OPNsense has no narrower lease-only read grant.
-Never raise `LOG_LEVEL` above `minimal`, even briefly for debugging: NetAlertX then writes the reversibly encoded OPNsense credentials to pod logs and `/data/app.log`. If that happens, record the disclosure in `secrets-to-rotate.md` and rotate the gateway API key.
+`homelab/workloads/scripts/netalertx-bootstrap.sh` owns the two authenticated REST Import definitions, five-minute REST/ICMP schedules, three scan subnets, 90-day device history and `LOG_LEVEL=minimal` through `APP_CONF_OVERRIDE`; `LOADED_PLUGINS` is set on the Deployment.
+Do not edit those settings in the UI: the next start reapplies them.
+The imports read OPNsense ARP (`mac`, `ip`, `hostname`, `manufacturer`) and Kea DHCPv4 leases (`hwaddr`, `address`, `hostname`, `mac_info`).
+ARP rows carry no hostnames, so automatic names come from Kea leases.
+The two API values come from `op://Homelab/opnsense-netalertx/`; keep `/data`, app configuration, logs and restic restores private because the effective config contains reversibly encoded credentials.
+The `netalertx` gateway user has `Diagnostics: ARP Table` plus `Services: DHCP: Kea (v4)`.
+That Kea grant also allows DHCP settings changes; OPNsense has no narrower lease-only read grant.
+Never raise `LOG_LEVEL` above `minimal`, even briefly for debugging: NetAlertX then writes the reversibly encoded OPNsense credentials to pod logs and `/data/app.log`.
+If that happens, record the disclosure in `secrets-to-rotate.md` and rotate the gateway API key.
 
-ICMP sweeps Home (`192.168.17.0/24`), Servers (`10.100.0.0/24`) and IoT (`10.0.2.0/24`) every five minutes. The pod uses routed pings, not layer-2 discovery on each VLAN. Ping-only IPs without a gateway ARP or Kea MAC are skipped; quiet and ICMP-silent devices may be absent or slow to change state. Kea's configured DHCPv4 `valid_lifetime` was 4000 seconds at rollout: a departed DHCP client can remain online until its last lease or renewal expires, at most 66 minutes 40 seconds. Check the current lifetime on OPNsense if presence looks stale. The gateway mDNS repeater is enabled on all three VLANs, but the image's Avahi lookup resolved zero names from a normal pod; `AVAHISCAN` stays off. Add or lock names manually for static-address devices. MAC is the identity key: randomized MACs create new records, and several IPs sharing one MAC can collapse into one device. The network tree needs manual parent/type assignments; it does not discover switch ports.
+ICMP sweeps Home (`192.168.17.0/24`), Servers (`10.100.0.0/24`) and IoT (`10.0.2.0/24`) every five minutes.
+The pod uses routed pings, not layer-2 discovery on each VLAN.
+Ping-only IPs without a gateway ARP or Kea MAC are skipped; quiet and ICMP-silent devices may be absent or slow to change state.
+Kea's configured DHCPv4 `valid_lifetime` was 4000 seconds at rollout: a departed DHCP client can remain online until its last lease or renewal expires, at most 66 minutes 40 seconds.
+Check the current lifetime on OPNsense if presence looks stale.
+The gateway mDNS repeater is enabled on all three VLANs, but the image's Avahi lookup resolved zero names from a normal pod; `AVAHISCAN` stays off.
+Add or lock names manually for static-address devices.
+MAC is the identity key: randomized MACs create new records, and several IPs sharing one MAC can collapse into one device.
+The network tree needs manual parent/type assignments; it does not discover switch ports.
 
-The existing nightly restic job backs up the entire `netalertx-data` local-path PVC and checks for `/data/db/app.db`. To restore, stop the Deployment, restore the whole PVC directory including any `app.db-wal` and `app.db-shm`, restart, and check the login and database. A live-file restic copy can capture inconsistent SQLite state despite a passing file-size gate; use a different snapshot if SQLite will not open. No separate backup Job or freshness check exists for this mostly idle database.
+The existing nightly restic job backs up the entire `netalertx-data` local-path PVC and checks for `/data/db/app.db`.
+To restore, stop the Deployment, restore the whole PVC directory including any `app.db-wal` and `app.db-shm`, restart, and check the login and database.
+A live-file restic copy can capture inconsistent SQLite state despite a passing file-size gate; use a different snapshot if SQLite will not open.
+No separate backup Job or freshness check exists for this mostly idle database.
 
 ### The `ops` namespace
 
