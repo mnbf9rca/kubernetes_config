@@ -253,8 +253,8 @@ An explicit list beats a wildcard, which cannot tell "no databases exist" from "
 
 Homelab byte floors sit an order of magnitude under observed sizes: they reject a zero-length or truncated file, not slow growth.
 `hindsight-dump` follows the same derivation from a measured seed run: 4 KiB, from 48,829 B / 23 tables at rollout step 5 on August 24, 2026.
-`netdisco-dump` uses 360,000 B, about one tenth of a 3,611,341 B / 40-table seed dump measured with seven discovered devices on October 9, 2026. Its script and restic gate carry the same floor.
-It has a twin `MIN_BYTES` in the script that writes it, `homelab/hindsight/scripts/hindsight-pg-dump.sh`, and the pair must be raised together.
+It has a twin `MIN_BYTES` in `homelab/hindsight/scripts/hindsight-pg-dump.sh`; raise both together.
+`netdisco-dump` uses 360,000 B, about one tenth of a 3,611,341 B / 40-table seed dump measured with seven discovered devices on October 9, 2026. Its twin is in `homelab/workloads/scripts/netdisco-pg-dump.sh`; raise both together.
 Its live size is reported as `dump_kib=` in its heartbeat message.
 The `grafana-db` and `grafana-dump` rows were removed on September 6, 2026 with the self-hosted Grafana.
 
@@ -661,7 +661,7 @@ The rest — the metric names, the stored state, the resolved endpoint — is in
 **The image floors are exact counts: `IMAGE_FLOOR=25` on homelab and `IMAGE_FLOOR=12` on VPS.**
 They count distinct floating image references across every container, including sidecars and initContainers, in keel-annotated workloads.
 A shared image counts once even when several workloads use it.
-The prior homelab count of 20 matched the live Keel gauge after the printer services were applied on 2026-10-08; Homepage and NetAlertX each add one distinct image.
+The prior homelab count of 20 matched the live Keel gauge after the printer services were applied on 2026-10-08; Homepage and NetAlertX each add one distinct image; Netdisco adds three.
 Recompute both floors when the keel-managed image set changes.
 Compare each floor with its cluster's live `poll_trigger_tracked_images` after apply.
 

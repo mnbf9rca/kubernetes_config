@@ -9,20 +9,22 @@ stamp=$(date -u +%Y%m%d%H%M%S)
 raw="$DUMP_DIR/.netdisco-$stamp.$$.raw"
 tmp="$DUMP_DIR/.netdisco-$stamp.$$.gz.tmp"
 out="$DUMP_DIR/netdisco-$stamp-$$.sql.gz"
+bytes=0
 
 finish() {
   rc=$?
   trap - EXIT
   rm -f "$raw" "$tmp" 2>/dev/null || true
   if [ "$rc" -eq 0 ]; then status=up; verdict=ok; else status=down; verdict=failed; fi
+  dump_kib=$((bytes / 1024))
   # wget diagnostics can quote the token-bearing URL; never print them.
-  wget -q -T 15 -O /dev/null "$PUSH_URL?status=$status&msg=verdict%3D$verdict" >/dev/null 2>&1 || echo 'kuma push failed' >&2
+  wget -q -T 15 -O /dev/null "$PUSH_URL?status=$status&msg=verdict%3D$verdict+dump_kib%3D$dump_kib" >/dev/null 2>&1 || echo 'kuma push failed' >&2
   exit "$rc"
 }
 trap finish EXIT
 
 # --file keeps pg_dump's exit status separate from gzip's.
-pg_dump -h netdisco-postgres -U netdisco -d netdisco --clean --if-exists --file="$raw" >/dev/null 2>&1
+pg_dump -h netdisco-postgres -U netdisco -d netdisco --clean --if-exists --file="$raw" >/dev/null
 if ! grep -q '^CREATE TABLE ' "$raw"; then
   echo 'netdisco dump has no tables' >&2
   exit 1
