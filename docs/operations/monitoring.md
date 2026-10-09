@@ -245,6 +245,7 @@ An explicit list beats a wildcard, which cannot tell "no databases exist" from "
 | homelab | spoolman-db | `/data/pvc-*_printing_spoolman-data/spoolman.db` | ≥12,697 B |
 | homelab | filabridge-db | `/data/pvc-*_printing_filabridge-data/filabridge.db` | ≥409 B |
 | homelab | printguard-state | `/data/pvc-*_printing_printguard-data/state.json` | ≥195 B |
+| homelab | netalertx-db | `/data/pvc-*_netalertx_netalertx-data/db/app.db` | ≥4,096 B (provisional; measure after first import) |
 
 Homelab byte floors sit an order of magnitude under observed sizes: they reject a zero-length or truncated file, not slow growth.
 `hindsight-dump` follows the same derivation from a measured seed run: 4 KiB, from 48,829 B / 23 tables at rollout step 5 on August 24, 2026.
@@ -652,10 +653,10 @@ Every branch in *this* script is determinate — its only peer is a ClusterIP, s
 **The message is short, deliberately.** kuma stores one line per heartbeat, so the alert carries `verdict=`, `polls_delta=` and `images=n/floor` and nothing else.
 The rest — the metric names, the stored state, the resolved endpoint — is in the pod log.
 
-**The image floors are exact counts: `IMAGE_FLOOR=21` on homelab and `IMAGE_FLOOR=12` on VPS.**
+**The image floors are exact counts: `IMAGE_FLOOR=22` on homelab and `IMAGE_FLOOR=12` on VPS.**
 They count distinct floating image references across every container, including sidecars and initContainers, in keel-annotated workloads.
 A shared image counts once even when several workloads use it.
-The prior homelab count of 20 matched the live Keel gauge after the printer services were applied on 2026-10-08; Homepage adds one distinct image.
+The prior homelab count of 20 matched the live Keel gauge after the printer services were applied on 2026-10-08; Homepage and NetAlertX each add one distinct image.
 Recompute both floors when the keel-managed image set changes.
 Compare each floor with its cluster's live `poll_trigger_tracked_images` after apply.
 

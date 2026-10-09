@@ -283,6 +283,7 @@ spec:
                   spoolman-db:/data/pvc-*_printing_spoolman-data/spoolman.db:12697
                   filabridge-db:/data/pvc-*_printing_filabridge-data/filabridge.db:409
                   printguard-state:/data/pvc-*_printing_printguard-data/state.json:195
+                  netalertx-db:/data/pvc-*_netalertx_netalertx-data/db/app.db:4096
                   "
 
                   # label:glob - existence AND freshness.

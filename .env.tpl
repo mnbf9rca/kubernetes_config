@@ -161,6 +161,10 @@ HINDSIGHT_CANARY_HC_UUID=op://Homelab/hindsight/canary-healthcheck-uuid
 # VPS_RESTIC_HC_UUID still drive live checks, because a restic ping body is the
 # triage runbook and a one-line kuma message cannot carry it.
 
+# NetAlertX OPNsense REST imports (homelab only)
+NETALERTX_OPNSENSE_KEY=op://Homelab/opnsense-netalertx/key
+NETALERTX_OPNSENSE_SECRET=op://Homelab/opnsense-netalertx/secret
+
 # --- VPS cluster secrets (Phase 2) ---
 
 # Restic / Backblaze B2 for VPS (separate bucket, separate repo, separate password)

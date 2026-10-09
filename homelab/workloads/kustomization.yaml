@@ -20,3 +20,10 @@ resources:
   - filabridge.yaml
   - printguard.yaml
   - homepage.yaml
+  - netalertx.yaml
+
+configMapGenerator:
+  - name: netalertx-bootstrap
+    namespace: netalertx
+    files:
+      - netalertx-bootstrap.sh=scripts/netalertx-bootstrap.sh
