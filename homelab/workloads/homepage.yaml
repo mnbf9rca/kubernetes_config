@@ -130,8 +130,8 @@ data:
             description: 192.168.17.13 · Zyxel switch
         - GS1900-lounge:
             icon: zyxel-networks.svg
-            href: https://192.168.17.72/
-            description: 192.168.17.72 · Zyxel switch
+            href: https://gs1900-lounge.lan.cynexia.net/
+            description: Zyxel switch · lounge
         - NetAlertX:
             icon: mdi-lan
             href: https://netalertx.cynexia.net
@@ -155,12 +155,12 @@ data:
             description: 10.100.0.7 · storage host management
         - JetKVM pve3:
             icon: jetkvm.svg
-            href: http://10.100.0.110/
-            description: 10.100.0.110 · virtualization host console
+            href: http://jetkvm-21b9710ffea4c581.lan.cynexia.net/
+            description: Virtualization host console
         - JetKVM FS:
             icon: jetkvm.svg
-            href: http://10.100.0.111/
-            description: 10.100.0.111 · storage host console
+            href: http://jetkvm-59503f0bd42845dc.lan.cynexia.net/
+            description: Storage host console
         - Hetzner Console:
             icon: hetzner.svg
             href: https://console.hetzner.com/
