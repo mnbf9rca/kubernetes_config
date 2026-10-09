@@ -659,7 +659,7 @@ Every branch in *this* script is determinate — its only peer is a ClusterIP, s
 The rest — the metric names, the stored state, the resolved endpoint — is in the pod log.
 
 **The image floors are exact counts: `IMAGE_FLOOR=25` on homelab and `IMAGE_FLOOR=12` on VPS.**
-They count distinct floating image references across every container, including sidecars and initContainers, in keel-annotated workloads.
+They count distinct floating image references in keel-annotated workloads. A native sidecar or other `initContainers` image needs `keel.sh/initContainers: "true"` on its Deployment; otherwise Keel neither updates nor counts it. Netdisco uses this annotation for PostgreSQL 18.
 A shared image counts once even when several workloads use it.
 The prior homelab count of 20 matched the live Keel gauge after the printer services were applied on 2026-10-08; Homepage and NetAlertX each add one distinct image; Netdisco adds three.
 Recompute both floors when the keel-managed image set changes.

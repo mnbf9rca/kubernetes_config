@@ -26,6 +26,7 @@ metadata:
     keel.sh/match-tag: "true"
     keel.sh/trigger: poll
     keel.sh/pollSchedule: "@every 6h"
+    keel.sh/initContainers: "true"
 spec:
   replicas: 1
   strategy: { type: Recreate }
