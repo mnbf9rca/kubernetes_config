@@ -147,9 +147,11 @@ help:
 	@echo ""
 	@echo "Health namespace targets:"
 	@echo "  health-upgrade    - take a verified pre-upgrade InfluxDB dump, then STOP"
-	@echo "  create-health-cloudflared-secret - imperatively recreate the health cloudflared creds Secret from 1P"
-	@echo "  route-health-dns  - create/update CNAMEs for every hostname in the health cloudflared ConfigMap"
 	@echo "  health-influx-bucket-bootstrap BUCKET=<name> - create one bucket + mint its ingest token"
+	@echo ""
+	@echo "Homelab tunnel targets:"
+	@echo "  create-homelab-cloudflared-secret - recreate the homelab tunnel creds Secret from 1P"
+	@echo "  route-homelab-dns - create/update CNAMEs for the homelab tunnel hostnames"
 	@echo ""
 	@echo "Hindsight namespace targets:"
 	@echo "  hindsight-upgrade - take a verified pre-upgrade pg_dump, then STOP and print the manual half"
@@ -1366,26 +1368,26 @@ create-cloudflared-secret: check-vps-context
 	  --dry-run=client -o yaml | \
 	  kubectl -n vps apply -f -
 
-# Re-create CNAMEs for every hostname in the health cloudflared ConfigMap. Run
-# once after adding a new hostname to homelab/health/cloudflared.yaml, and once
-# after a full cluster rebuild to re-attach every hostname to the current
-# cynexia-health tunnel UUID. Idempotent: cloudflared upserts the CNAME.
-.PHONY: route-health-dns
-route-health-dns:
+# Re-create CNAMEs for every hostname in the homelab cloudflared ConfigMap. Run
+# after adding a hostname or rebuilding the cluster. The UUID survives a
+# Cloudflare display-name change; cloudflared upserts each CNAME.
+.PHONY: route-homelab-dns
+route-homelab-dns:
 	@set -euo pipefail; \
-	hosts=$$(grep -E '^[[:space:]]*- hostname:' homelab/health/cloudflared.yaml | awk '{print $$3}'); \
+	hosts=$$(grep -E '^[[:space:]]*- hostname:' homelab/bootstrap/cloudflared/cloudflared.yaml | awk '{print $$3}'); \
 	for h in $$hosts; do \
-	  echo "==> cloudflared tunnel route dns cynexia-health $$h"; \
-	  cloudflared tunnel route dns cynexia-health "$$h"; \
+	  echo "==> cloudflared tunnel route dns 1a4245a3-5264-420c-9893-b45ff25a0214 $$h"; \
+	  cloudflared tunnel route dns 1a4245a3-5264-420c-9893-b45ff25a0214 "$$h"; \
 	done
 
-.PHONY: create-health-cloudflared-secret
-create-health-cloudflared-secret: check-context
+.PHONY: create-homelab-cloudflared-secret
+# 1Password document ID: legacy `health-cloudflared` item in the Homelab vault.
+create-homelab-cloudflared-secret: check-context
 	@set -euo pipefail; \
-	creds=$$(op document get health-cloudflared --vault Homelab); \
+	creds=$$(op document get 5om2b6p4hyzekdb2dwl6wy75ii --vault Homelab); \
 	if [ -z "$$creds" ]; then echo "ERROR: op document get returned empty"; exit 1; fi; \
-	printf '%s' "$$creds" | kubectl -n health create secret generic health-cloudflared-credentials \
-	  --from-file=credentials.json=/dev/stdin --dry-run=client -o yaml | kubectl -n health apply -f -
+	printf '%s' "$$creds" | kubectl -n cloudflared create secret generic homelab-cloudflared-credentials \
+	  --from-file=credentials.json=/dev/stdin --dry-run=client -o yaml | kubectl -n cloudflared apply -f -
 
 # Shell helper for health-influx-bucket-bootstrap, the one target that needs it:
 # run an influx CLI command inside the influxdb pod, authenticated as admin. It

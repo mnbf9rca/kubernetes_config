@@ -153,7 +153,7 @@ spec:
             # DO NOT set HTTP_PROXY / HTTPS_PROXY. The homelab egress proxy is
             # live again - `homelab-proxy` on port 8888, a cloudflared access
             # client reaching tinyproxy over the homelab cloudflared tunnel
-            # (`cynexia-health`) - but it is assigned PER WATCH from
+            # (connector in the `cloudflared` namespace) - but it is assigned PER WATCH from
             # changedetection's own settings, never from the environment. An
             # environment proxy would route every fetch through a cross-cluster
             # chain, including the ones that already work directly, which is

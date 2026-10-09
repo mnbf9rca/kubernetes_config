@@ -1,0 +1,97 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: homepage-config
+  namespace: homepage
+data:
+  services.yaml: |
+    - Media:
+        - Emby:
+            href: https://emby.cynexia.net
+        - Sonarr:
+            href: https://sonarr.cynexia.net
+        - Radarr:
+            href: https://radarr.cynexia.net
+        - SABnzbd:
+            href: https://sab.cynexia.net
+        - Hydra2:
+            href: https://hydra.cynexia.net
+    - Reading and automation:
+        - FreshRSS:
+            href: https://rss.cynexia.com
+        - Karakeep:
+            href: https://keep.cynexia.com
+        - changedetection:
+            href: https://watch.cynexia.com
+        - n8n:
+            href: https://n8n.cynexia.com
+    - Health and agents:
+        - Hindsight UI:
+            href: https://hindsight-ui.cynexia.net
+        - Hermes:
+            href: https://hermes.cynexia.com
+        - Hermes WebUI:
+            href: https://hermes-app.cynexia.com
+    - Operations and printing:
+        - Uptime Kuma:
+            href: https://uptime.cynexia.com
+        - Umami:
+            href: https://analytics.cynexia.com
+        - Spoolman:
+            href: https://spoolman.cynexia.net
+        - Filabridge:
+            href: https://filabridge.cynexia.net
+        - PrintGuard:
+            href: https://printguard.cynexia.net
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: homepage
+  namespace: homepage
+  annotations:
+    keel.sh/policy: force
+    keel.sh/match-tag: "true"
+    keel.sh/trigger: poll
+    keel.sh/pollSchedule: "@every 6h"
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: homepage } }
+  template:
+    metadata:
+      labels: { app: homepage }
+    spec:
+      automountServiceAccountToken: false
+      containers:
+        - name: homepage
+          image: ghcr.io/gethomepage/homepage:latest
+          imagePullPolicy: Always
+          env:
+            - { name: HOMEPAGE_ALLOWED_HOSTS, value: home.cynexia.com }
+          ports:
+            - { name: http, containerPort: 3000 }
+          readinessProbe:
+            httpGet:
+              path: /api/healthcheck
+              port: http
+              httpHeaders:
+                - { name: Host, value: home.cynexia.com }
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          volumeMounts:
+            # A later services.yaml edit needs kubectl -n homepage rollout restart deploy/homepage.
+            - { name: config, mountPath: /app/config/services.yaml, subPath: services.yaml, readOnly: true }
+      volumes:
+        - name: config
+          configMap: { name: homepage-config }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: homepage
+  namespace: homepage
+spec:
+  selector: { app: homepage }
+  ports:
+    - { name: http, port: 3000, targetPort: http }

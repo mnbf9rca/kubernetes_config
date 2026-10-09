@@ -1,7 +1,7 @@
 # Homelab cluster reference
 
 Single-node Talos Linux VM on Proxmox (`pve3`), managed by Omni, serving the media / downloads stack and the health-data pipeline.
-Not exposed to the public internet — remote access is through Tailscale.
+Private `*.cynexia.net` apps use Tailscale; selected `*.cynexia.com` origins use the shared Cloudflare tunnel.
 Kubectl context: `cynexia-homelab`.
 
 ## Platform stack
@@ -61,9 +61,11 @@ Verify keel's permissions with a SelfSubjectAccessReview issued with keel's own 
 | `traefik` | Ingress | Traefik DaemonSet (PSA privileged — hostNetwork) |
 | `keel` | Auto-updates | keel controller |
 | `backup` | Backup | restic init Job + nightly CronJob (PSA privileged — hostPath) |
-| `health` | Personal health data pipeline | influxdb, apple-health-ingester, garmin-grafana, influxdb-mcp (behind Cloudflare Access), pdc-agent (the Grafana Cloud Private Datasource Connect tunnel), cloudflared, backup + freshness CronJobs — see [homelab-health.md](homelab-health.md) |
+| `health` | Personal health data pipeline | influxdb, apple-health-ingester, garmin-grafana, influxdb-mcp (behind Cloudflare Access), pdc-agent (the Grafana Cloud Private Datasource Connect tunnel), backup + freshness CronJobs — see [homelab-health.md](homelab-health.md) |
 | `hindsight` | Memory backend for the Hermes profiles | hindsight API, its PostgreSQL, the nightly `pg_dump` and the 15-minute canary — see [hindsight.md](hindsight.md) |
 | `printing` | Core One+ printer services | Spoolman inventory, FilaBridge filament accounting, PrintGuard failure detection — see below |
+| `cloudflared` | Shared homelab Cloudflare tunnel | Connector for health, Hermes, proxy and Homepage routes — `homelab/bootstrap/cloudflared/` |
+| `homepage` | Service directory | Static 17-link Homepage at `home.cynexia.com` behind Cloudflare Access |
 | `ops` | Cluster-wide operational jobs | `update-watch` and `keel-fresh` CronJobs — see below |
 | `proxy` | Residential egress for changedetection on the VPS | tinyproxy — see [vps.md](vps.md#residential-egress-through-the-homelab) |
 
@@ -72,7 +74,9 @@ Ingress hostnames are `*.cynexia.net` (Route53), Traefik-fronted, LAN/Tailscale 
 
 Retired in the rebuild: immich, ollama, open-webui, komga, jellyfin, mylar3, lazylibrarian, caddy, postgresql.
 tinyproxy was on that list until September 2, 2026, when it returned in its own `proxy` namespace to serve changedetection on the VPS — see [vps.md](vps.md#residential-egress-through-the-homelab).
-cloudflared was retired from the downloads-era stack but is not retired homelab-wide — the `health` namespace runs the `cynexia-health` tunnel, separate from the VPS cluster's `cynexia-vps` tunnel. It is the whole cluster's tunnel rather than the namespace's own: `proxy.cynexia.com` fronts an origin in the `proxy` namespace.
+cloudflared was retired from the downloads-era stack but remains in `cloudflared` for the whole homelab. The connector uses tunnel UUID `1a4245a3-5264-420c-9893-b45ff25a0214`, separate from the VPS `cynexia-vps` tunnel. Its origins span `health`, `proxy`, `homepage` and the Hermes VM. After editing its ConfigMap routes, restart `deploy/cloudflared` in the `cloudflared` namespace because the config uses a `subPath` mount.
+
+`homelab/workloads/homepage.yaml` serves a static directory of 17 links at `home.cynexia.com`. Its origin has no login, so the Cloudflare Access application for that hostname, with only the reusable `allow_cynexia_com` policy, is the public gate. Deleting that application exposes the page. Later edits to its `services.yaml` ConfigMap need `kubectl -n homepage rollout restart deploy/homepage` because the file uses a `subPath` mount.
 
 ### The `ops` namespace
 
@@ -85,7 +89,7 @@ cloudflared was retired from the downloads-era stack but is not retired homelab-
   Full behaviour and every cause of DOWN: [monitoring.md](monitoring.md#the-update-watcher).
 - **`keel-fresh`**, at 07:15Z daily, makes one request to keel's own `/metrics` — a single ClusterIP endpoint, `keel.keel.svc.cluster.local:9300`, reached across the namespace boundary from `ops`; it scrapes nothing else and holds no cluster-wide read — and pushes the `homelab-keel-fresh` uptime-kuma monitor.
   It is the only thing that would notice keel's registry poll loop had wedged: keel's own probes hit `/healthz`, which stays green while the poll goroutine is dead.
-  The configured `IMAGE_FLOOR` is 20, derived from the rendered floating controller images.
+  The configured `IMAGE_FLOOR` is 21, derived from the rendered floating controller images.
   Verdict enum and why there is no `/start`: [monitoring.md](monitoring.md#the-keel-dead-mans-switch).
 
 The half-hour gap is deliberate: the two update-path checks should not alert in the same minute.
@@ -179,7 +183,7 @@ aws route53 change-resource-record-sets --hosted-zone-id Z3409TNW35PGSS \
 
 TTL is 60s, so after a change browsers need a hard refresh (Cmd+Shift+R) to stop using the cached target.
 
-`cynexia.com` is a **different** zone on Cloudflare, used by the VPS cluster and by the homelab cloudflared tunnel (Cloudflare name `cynexia-health`, run from the `health` namespace).
+`cynexia.com` is a **different** zone on Cloudflare, used by the VPS cluster and by the homelab cloudflared tunnel (tunnel UUID `1a4245a3-5264-420c-9893-b45ff25a0214`, run from the `cloudflared` namespace).
 It has nothing to do with Route53.
 
 ## Encryption at rest
@@ -411,7 +415,7 @@ That file is inside `~/.hermes`, so unlike the unit it **is** in the nightly zip
 
 ### Hermes WebUI on the VM
 
-`hermes-webui` ([github.com/nesquena/hermes-webui](https://github.com/nesquena/hermes-webui)) runs on port 8787 as the `hermes-webui` systemd user unit, published at `https://hermes-app.cynexia.com` through the `cynexia-health` tunnel ([homelab-health.md](homelab-health.md#ingress)).
+`hermes-webui` ([github.com/nesquena/hermes-webui](https://github.com/nesquena/hermes-webui)) runs on port 8787 as the `hermes-webui` systemd user unit, published at `https://hermes-app.cynexia.com` through the homelab tunnel ([homelab-health.md](homelab-health.md#ingress)).
 
 **One instance serves every profile.**
 It reads `~/.hermes/profiles/<name>` off disk and switches per client on a `hermes_profile` cookie, so every profile under that directory shares one process and clients get an in-app switcher.

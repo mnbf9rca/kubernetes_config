@@ -213,7 +213,7 @@ VPS cluster, Access-protected:
 The first three carry the service-token headers.
 The last two must not: their apps admit anonymous requests, and adding headers there would imply a credential that nothing checks.
 
-Homelab cloudflared tunnel (Cloudflare name `cynexia-health`):
+Homelab cloudflared tunnel (connector in `cloudflared`; UUID `1a4245a3-5264-420c-9893-b45ff25a0214`):
 
 | Monitor | URL | Access app and policies | Accepted status codes |
 |---|---|---|---|

@@ -68,7 +68,7 @@ There are five profiles and only four gateways: `safer_web_reader` has no gatewa
           |        both behind Cloudflare Access     |                |
           +-----------+-----------+                  |                |
                       |                              |                |
-      cloudflared, which runs in the HOMELAB CLUSTER (`health`         |
+      cloudflared, which runs in the HOMELAB CLUSTER (`cloudflared`    |
       namespace) and NOT on this VM; its origins are the ports below   |
                       |                              |                |
           :9119 <-----+-----> :8787                  |                |

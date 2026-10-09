@@ -156,7 +156,7 @@ The escape hatch is a dedicated Makefile target that calls `op read` and pipes i
 `make create-jotta-secret` is the canonical pattern.
 Use it only for secrets that genuinely can't be single-line; everything else flows through envsubst.
 
-1Password **document** items such as `health-cloudflared` need `op document get`, not `op read` — document items don't expose a plain field.
+1Password **document** items such as the legacy `health-cloudflared` need `op document get`, not `op read` — document items don't expose a plain field.
 
 ## Makefile targets
 
@@ -205,8 +205,8 @@ The VPS block is a deliberate copy-paste of the homelab block rather than a para
 
 | Target | What it does |
 |---|---|
-| `create-health-cloudflared-secret` | Recreates the homelab cloudflared tunnel's creds Secret (Cloudflare name `cynexia-health`) via `op document get health-cloudflared` |
-| `route-health-dns` | CNAMEs for every hostname in `homelab/health/cloudflared.yaml` onto the `cynexia-health` tunnel |
+| `create-homelab-cloudflared-secret` | Recreates the shared homelab tunnel's creds Secret in `cloudflared` via `op document get` on the stable legacy document ID |
+| `route-homelab-dns` | CNAMEs for every hostname in `homelab/bootstrap/cloudflared/cloudflared.yaml` onto the existing tunnel UUID |
 | `health-influx-bucket-bootstrap` | `BUCKET=<name>`. Creates one bucket with infinite retention and mints one read-and-write ingest token on it. Prints that token for pasting into 1Password; touches the shared read token not at all, and applies nothing |
 | `health-upgrade` | Creates a one-off Job from `cronjob/influx-backup`, waits for it, tails the log and **stops** — the pre-upgrade dump of InfluxDB, and nothing else. The script's sizes and counts arrive on the log's `detail:` line, which the target tails; the one-line heartbeat sent to the `health-influx-backup` monitor carries only the verdict and `buckets=`. Applies nothing, merges nothing, edits no pin. See [homelab-health.md](homelab-health.md) |
 

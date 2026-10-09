@@ -49,6 +49,18 @@ metadata:
 apiVersion: v1
 kind: Namespace
 metadata:
+  name: cloudflared
+  # PSA baseline (cluster default). The shared tunnel serves homelab origins.
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: homepage
+  # PSA baseline (cluster default). Homepage needs no elevated permissions.
+---
+apiVersion: v1
+kind: Namespace
+metadata:
   name: ops
   # PSA baseline (cluster default). Two workloads, both outbound-only and
   # neither needing hostPath, hostNetwork, a ServiceAccount or any RBAC:
@@ -85,7 +97,7 @@ metadata:
   name: proxy
   # PSA baseline (cluster default), so no labels. tinyproxy needs no hostPath,
   # no hostNetwork, no ServiceAccount and no RBAC - only a ClusterIP the
-  # health-namespace cloudflared pod can dial, and ordinary outbound egress.
+  # cloudflared-namespace pod can dial, and ordinary outbound egress.
   #
   # keel runs here: tinyproxy holds no persistent data, so it is on no lock, and
   # its one image floats carrying the full annotation set. Updates arrive on
