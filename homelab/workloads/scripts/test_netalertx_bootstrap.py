@@ -14,6 +14,22 @@ KEY = 'key"\\$with spaces'
 SECRET = "secret'\\$with spaces"
 
 
+def decode_import(encoded):
+    # Match upstream server/plugins/plugin_helper.py decode_settings_base64.
+    settings_list = json.loads(base64.b64decode(encoded).decode("utf-8"))
+    settings = {}
+    for _, key, kind, value in settings_list:
+        if kind.lower() == "boolean":
+            settings[key] = value.lower() == "true"
+        elif kind.lower() == "integer":
+            settings[key] = int(value)
+        elif kind.lower() == "float":
+            settings[key] = float(value)
+        else:
+            settings[key] = value
+    return settings
+
+
 class BootstrapTest(unittest.TestCase):
     def run_bootstrap(self, key=KEY, secret=SECRET):
         self.assertTrue(SCRIPT.exists(), "bootstrap script missing")
@@ -44,12 +60,13 @@ class BootstrapTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout, "")
         override = json.loads(output)
+        self.assertEqual(override["LOG_LEVEL"], "minimal")
         self.assertEqual(override["SCAN_SUBNETS"], ["192.168.17.0/24", "10.100.0.0/24", "10.0.2.0/24"])
         self.assertEqual(str(override["DEV_HIST_DAYS"]), "90")
         for prefix in ("RSTIMPRT", "ICMP"):
             self.assertEqual(override[f"{prefix}_RUN"], "schedule")
             self.assertEqual(override[f"{prefix}_RUN_SCHD"], "*/5 * * * *")
-        imports = [json.loads(base64.b64decode(item)) for item in override["RSTIMPRT_imports"]]
+        imports = [decode_import(item) for item in override["RSTIMPRT_imports"]]
         self.assertEqual(len(imports), 2)
         by_url = {item["RSTIMPRT_url"]: item for item in imports}
         self.assertEqual(set(by_url), {
