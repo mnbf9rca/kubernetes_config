@@ -21,8 +21,7 @@ metadata:
     keel.sh/trigger: poll
     keel.sh/pollSchedule: "@every 6h"
 spec:
-  # Hold until the OPNsense key has ARP-only access and half 2 is ready.
-  replicas: 0
+  replicas: 1
   strategy: { type: Recreate }
   selector: { matchLabels: { app: netalertx } }
   template:
