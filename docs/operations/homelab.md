@@ -66,7 +66,7 @@ Verify keel's permissions with a SelfSubjectAccessReview issued with keel's own 
 | `printing` | Core One+ printer services | Spoolman inventory, FilaBridge filament accounting, PrintGuard failure detection — see below |
 | `cloudflared` | Shared homelab Cloudflare tunnel | Connector for health, Hermes, proxy and Homepage routes — `homelab/bootstrap/cloudflared/` |
 | `homepage` | Service directory | 40-link Homepage at `home.cynexia.com` behind Cloudflare Access |
-| `netalertx` | Private device inventory | ICMP sweep and OPNsense ARP/Kea imports; see [NetAlertX](#netalertx) |
+| `netalertx` | Private device inventory | Resolved OPNsense ARP import, ICMP, NBTSCAN and INTRNT; see [NetAlertX](#netalertx) |
 | `ops` | Cluster-wide operational jobs | `update-watch` and `keel-fresh` CronJobs — see below |
 | `proxy` | Residential egress for changedetection on the VPS | tinyproxy — see [vps.md](vps.md#residential-egress-through-the-homelab) |
 
@@ -127,7 +127,7 @@ The import reads OPNsense's resolved ARP snapshot (`mac`, `ip`, `hostname`, `man
 Dnsmasq serves DHCPv4 names, and Unbound forwards `lan.cynexia.net` and reverse lookups to it, so active ARP rows with PTR records carry hostnames across all three VLANs.
 The NetAlertX key and secret come from `op://Homelab/netalertx/opnsense-key` and `/opnsense-secret`; its OPNsense user has only `Diagnostics: ARP Table`.
 Keep `/data`, app configuration, logs and restic restores private because the effective config contains reversibly encoded credentials.
-Never raise `LOG_LEVEL` above `minimal`, even briefly for debugging: NetAlertX then writes the reversibly encoded OPNsense credentials to pod logs and `/data/app.log`.
+Never raise `LOG_LEVEL` above `minimal`, even briefly for debugging: NetAlertX then writes the reversibly encoded OPNsense credentials to pod logs and `/tmp/log/app.log`.
 If that happens, record the disclosure in `secrets-to-rotate.md` and rotate the gateway API key.
 
 ICMP sweeps Home (`192.168.17.0/24`), Servers (`10.100.0.0/24`) and IoT (`10.0.2.0/24`) every five minutes.
