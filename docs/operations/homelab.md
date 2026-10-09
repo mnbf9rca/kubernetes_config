@@ -121,9 +121,10 @@ Manual device labels, locks, groups and network-tree assignments live on `netale
 
 `homelab/workloads/scripts/netalertx-bootstrap.sh` owns one authenticated REST Import, five-minute REST/ICMP schedules, three scan subnets, 90-day device history and `LOG_LEVEL=minimal` through `APP_CONF_OVERRIDE`; `LOADED_PLUGINS` includes REST Import, ICMP, NBTSCAN, INTRNT and NMAP.
 Do not edit those settings in the UI: the next start reapplies them.
-The override explicitly schedules NBTSCAN, INTRNT and daily 02:00 NMAP in NetAlertX's timezone (Europe/Berlin by default), and disables ARPSCAN, AVAHISCAN, DIGSCAN and NSLOOKUP; `LOADED_PLUGINS` alone does not stop an upstream plugin whose `*_RUN` default is active.
+The override explicitly schedules NBTSCAN, INTRNT and daily 02:00 NMAP in NetAlertX's configured timezone (Europe/London on 2026-10-09), and disables ARPSCAN, AVAHISCAN, DIGSCAN and NSLOOKUP; `LOADED_PLUGINS` alone does not stop an upstream plugin whose `*_RUN` default is active.
 NBTSCAN looks for NetBIOS names, while INTRNT tracks WAN reachability; neither supplies a LAN MAC inventory.
 NMAP uses the image default ports 1–10,000; the gateway will log this traffic and IoT devices may react badly, so exclude a sensitive device by appending `--exclude <device IP>` to `NMAP_ARGS` in Settings (keep the default `-p -10000`).
+The first 96-device pass took 24 minutes; NetAlertX runs plugins serially, so REST and ICMP cycles wait during NMAP.
 The import reads OPNsense's resolved ARP snapshot (`mac`, `ip`, `hostname`, `manufacturer`) through `search_arp?resolve=yes`.
 Dnsmasq serves DHCPv4 names, and Unbound forwards `lan.cynexia.net` and reverse lookups to it, so active ARP rows with PTR records carry hostnames across all three VLANs.
 The NetAlertX key and secret come from `op://Homelab/netalertx/opnsense-key` and `/opnsense-secret`; its OPNsense user has only `Diagnostics: ARP Table`.
