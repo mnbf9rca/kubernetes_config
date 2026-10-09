@@ -104,6 +104,10 @@ data:
             href: https://printguard.cynexia.net
             description: Print monitoring
     - Network:
+        - OPNsense:
+            icon: opnsense.svg
+            href: https://gw.cynexia.net/
+            description: 192.168.17.1 · firewall and gateway
         - MikroTik Loft:
             icon: mikrotik.svg
             href: http://192.168.17.14/
@@ -124,6 +128,10 @@ data:
             icon: zyxel-networks.svg
             href: https://192.168.17.13/
             description: 192.168.17.13 · Zyxel switch
+        - GS1900-lounge:
+            icon: zyxel-networks.svg
+            href: https://192.168.17.72/
+            description: 192.168.17.72 · Zyxel switch
         - NetAlertX:
             icon: mdi-lan
             href: https://netalertx.cynexia.net
@@ -137,6 +145,22 @@ data:
             icon: proxmox.svg
             href: https://pve3.cynexia.net:8006/
             description: Virtualization host
+        - Server UPS:
+            icon: apc.svg
+            href: http://10.100.0.6/logon.htm
+            description: 10.100.0.6 · APC power
+        - FS iLO:
+            icon: ilo.svg
+            href: https://10.100.0.7/
+            description: 10.100.0.7 · storage host management
+        - JetKVM pve3:
+            icon: jetkvm.svg
+            href: http://10.100.0.110/
+            description: 10.100.0.110 · virtualization host console
+        - JetKVM FS:
+            icon: jetkvm.svg
+            href: http://10.100.0.111/
+            description: 10.100.0.111 · storage host console
         - Hetzner Console:
             icon: hetzner.svg
             href: https://console.hetzner.com/
