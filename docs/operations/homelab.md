@@ -121,6 +121,8 @@ The UI login and any manual device labels, locks, groups and network-tree assign
 
 `homelab/workloads/scripts/netalertx-bootstrap.sh` owns the two authenticated REST Import definitions, five-minute REST/ICMP schedules, three scan subnets, 90-day device history and `LOG_LEVEL=minimal` through `APP_CONF_OVERRIDE`; `LOADED_PLUGINS` is set on the Deployment.
 Do not edit those settings in the UI: the next start reapplies them.
+`LOADED_PLUGINS` alone does not stop an upstream plugin whose `*_RUN` default is active.
+The override explicitly disables ARP, Avahi, DIG, NBT and NSLOOKUP scans; keep every unwanted scanner disabled there.
 The imports read OPNsense ARP (`mac`, `ip`, `hostname`, `manufacturer`) and Kea DHCPv4 leases (`hwaddr`, `address`, `hostname`, `mac_info`).
 ARP rows carry no hostnames, so automatic names come from Kea leases.
 The two API values come from `op://Homelab/opnsense-netalertx/`; keep `/data`, app configuration, logs and restic restores private because the effective config contains reversibly encoded credentials.
@@ -130,6 +132,7 @@ Never raise `LOG_LEVEL` above `minimal`, even briefly for debugging: NetAlertX t
 If that happens, record the disclosure in `secrets-to-rotate.md` and rotate the gateway API key.
 
 ICMP sweeps Home (`192.168.17.0/24`), Servers (`10.100.0.0/24`) and IoT (`10.0.2.0/24`) every five minutes.
+The three `/24` sweeps exceeded the image's 10-second default timeout, so the override bounds each ICMP run at 120 seconds, below the five-minute schedule.
 The pod uses routed pings, not layer-2 discovery on each VLAN.
 Ping-only IPs without a gateway ARP or Kea MAC are skipped; quiet and ICMP-silent devices may be absent or slow to change state.
 Kea's configured DHCPv4 `valid_lifetime` was 4000 seconds at rollout: a departed DHCP client can remain online until its last lease or renewal expires, at most 66 minutes 40 seconds.

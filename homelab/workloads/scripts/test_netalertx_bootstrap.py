@@ -61,8 +61,12 @@ class BootstrapTest(unittest.TestCase):
         self.assertEqual(result.stdout, "")
         override = json.loads(output)
         self.assertEqual(override["LOG_LEVEL"], "minimal")
+        # Upstream also loads plugins with non-disabled RUN defaults.
+        for plugin in ("ARPSCAN", "AVAHISCAN", "DIGSCAN", "NBTSCAN", "NSLOOKUP"):
+            self.assertEqual(override[f"{plugin}_RUN"], "disabled")
         self.assertEqual(override["SCAN_SUBNETS"], ["192.168.17.0/24", "10.100.0.0/24", "10.0.2.0/24"])
         self.assertEqual(str(override["DEV_HIST_DAYS"]), "90")
+        self.assertEqual(str(override["ICMP_RUN_TIMEOUT"]), "120")
         for prefix in ("RSTIMPRT", "ICMP"):
             self.assertEqual(override[f"{prefix}_RUN"], "schedule")
             self.assertEqual(override[f"{prefix}_RUN_SCHD"], "*/5 * * * *")
