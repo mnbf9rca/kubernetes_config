@@ -53,7 +53,7 @@ The Garmin `latest` channel includes the main-branch fix for the `client.profile
 
 ## Ingress
 
-The `hae.cynexia.com` and `mcp.cynexia.com` ingress routes use the [shared homelab Cloudflare tunnel](homelab.md#shared-cloudflare-tunnel).
+The health, proxy and Hermes routes discussed here use the [shared homelab Cloudflare tunnel](homelab.md#shared-cloudflare-tunnel).
 The connector and its credentials live in the `cloudflared` namespace.
 
 `proxy.cynexia.com` is the only **TCP** origin in the ingress block — `tcp://tinyproxy.proxy.svc.cluster.local:8888`, not an HTTP service — and, like `mcp.cynexia.com`, it has an origin that authenticates nobody.
@@ -105,8 +105,6 @@ That stale flow is in-memory only and self-expires after 15 minutes (`_MCP_DASHB
 `grafana.cynexia.com` was on this tunnel from September 2, 2026 until September 6, 2026, when the self-hosted Grafana was removed.
 Grafana Cloud serves the dashboards now, so no cluster Service backs that hostname.
 The Cloudflare Access application `grafana` and the DNS record are retired by hand; the tunnel rule and the private Traefik hostname `grafana-health.cynexia.net` are gone.
-
-
 
 ## MCP behind Cloudflare Access
 
