@@ -2,11 +2,11 @@
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: health-cloudflared-config
-  namespace: health
+  name: homelab-cloudflared-config
+  namespace: cloudflared
 data:
   config.yaml: |
-    tunnel: cynexia-health
+    tunnel: 1a4245a3-5264-420c-9893-b45ff25a0214
     credentials-file: /etc/cloudflared/creds/credentials.json
     no-autoupdate: true
     metrics: 0.0.0.0:2000
@@ -14,9 +14,9 @@ data:
       # SECURITY: every hostname below that fronts an AUTHLESS origin must have a
       # matching Cloudflare Access app — the auth gate is account-side state this
       # repo cannot express or verify. Adding an ingress line here (plus
-      # `make route-health-dns`, which mints a CNAME for every hostname in this
+      # `make route-homelab-dns`, which mints a CNAME for every hostname in this
       # ConfigMap) publishes the origin to the internet with whatever auth the
-      # Access dashboard happens to have. See influxdb-mcp.yaml's header.
+      # Access dashboard happens to have. See homelab/health/influxdb-mcp.yaml.
       - hostname: hae.cynexia.com
         service: http://apple-health-ingester.health.svc.cluster.local:8080
       - hostname: mcp.cynexia.com
@@ -47,13 +47,17 @@ data:
       # connection. It fails open, like every app named in this block.
       - hostname: proxy.cynexia.com
         service: tcp://tinyproxy.proxy.svc.cluster.local:8888
+      # Homepage has no origin auth. The home.cynexia.com Access app with only
+      # allow_cynexia_com is its gate; deleting that app exposes the page.
+      - hostname: home.cynexia.com
+        service: http://homepage.homepage.svc.cluster.local:3000
       - service: http_status:404
 ---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: cloudflared
-  namespace: health
+  namespace: cloudflared
   annotations:
     keel.sh/policy: force
     keel.sh/match-tag: "true"
@@ -61,10 +65,10 @@ metadata:
     keel.sh/pollSchedule: "@every 6h"
 spec:
   replicas: 1
-  selector: { matchLabels: { app: health-cloudflared } }
+  selector: { matchLabels: { app: homelab-cloudflared } }
   template:
     metadata:
-      labels: { app: health-cloudflared }
+      labels: { app: homelab-cloudflared }
     spec:
       containers:
         - name: cloudflared
@@ -72,6 +76,7 @@ spec:
           imagePullPolicy: Always
           args: [tunnel, --config, /etc/cloudflared/config.yaml, run]
           volumeMounts:
+            # A later route edit needs kubectl -n cloudflared rollout restart deploy/cloudflared.
             - { name: config, mountPath: /etc/cloudflared/config.yaml, subPath: config.yaml }
             - { name: creds, mountPath: /etc/cloudflared/creds, readOnly: true }
           livenessProbe:
@@ -93,6 +98,6 @@ spec:
             limits: { memory: 256Mi }
       volumes:
         - name: config
-          configMap: { name: health-cloudflared-config }
+          configMap: { name: homelab-cloudflared-config }
         - name: creds
-          secret: { secretName: health-cloudflared-credentials }
+          secret: { secretName: homelab-cloudflared-credentials }

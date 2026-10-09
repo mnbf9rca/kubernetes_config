@@ -3,7 +3,7 @@
 # sites block Hetzner's address ranges, so those fetches leave from the home
 # connection instead: the VPS dials its `homelab-proxy` Service (a
 # `cloudflared access tcp` client), which reaches proxy.cynexia.com on the
-# homelab cloudflared tunnel (`cynexia-health`, run from the `health`
+# homelab cloudflared tunnel (run from the `cloudflared`
 # namespace), which lands here. The `proxy` namespace is declared
 # in homelab/bootstrap/namespaces.yaml and must exist before this file is
 # applied.
@@ -26,7 +26,7 @@ data:
     Port 8888
     Listen 0.0.0.0
     # The only intended client is the cloudflared pod serving the homelab
-    # cloudflared tunnel from the `health` namespace, which dials from the
+    # cloudflared tunnel from the `cloudflared` namespace, which dials from the
     # homelab pod CIDR.
     # NetworkPolicy is inert on this cluster (flannel enforces nothing), so
     # this line is the only in-cluster restriction, and it is coarse: any pod

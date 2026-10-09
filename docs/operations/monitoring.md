@@ -99,6 +99,7 @@ Defaults, unless a service's entry below says otherwise:
 |---|---|---|
 | influxdb-mcp | liveness and readiness `tcpSocket` | The MCP server exposes no health endpoint. TCP detects process death, not a wedged handler |
 | cloudflared tunnel connectors (both clusters) | liveness and readiness `/ready` (:2000) | Neither of those two Deployments has a Service — unlike the VPS `homelab-proxy` cloudflared above, which does — so readiness gates the rolling update and shows connector state. It routes nothing |
+| homepage | readiness `/api/healthcheck` (:3000), with `Host: home.cynexia.com` | Shallow process check; the endpoint does not validate `services.yaml`. No liveness probe |
 | influxdb | `/health` | — |
 | apple-health-ingester | `tcpSocket` | No HTTP health endpoint upstream |
 | sonarr, radarr, sabnzbd, emby, hydra2 | `/` on the app port; startup, liveness and readiness | Readiness stops Traefik routing to them while they boot |
@@ -651,10 +652,10 @@ Every branch in *this* script is determinate — its only peer is a ClusterIP, s
 **The message is short, deliberately.** kuma stores one line per heartbeat, so the alert carries `verdict=`, `polls_delta=` and `images=n/floor` and nothing else.
 The rest — the metric names, the stored state, the resolved endpoint — is in the pod log.
 
-**The image floors are exact counts: `IMAGE_FLOOR=20` on homelab and `IMAGE_FLOOR=12` on VPS.**
+**The image floors are exact counts: `IMAGE_FLOOR=21` on homelab and `IMAGE_FLOOR=12` on VPS.**
 They count distinct floating image references across every container, including sidecars and initContainers, in keel-annotated workloads.
 A shared image counts once even when several workloads use it.
-The homelab count of 20 matched the live Keel gauge after the printer services were applied on 2026-10-08.
+The prior homelab count of 20 matched the live Keel gauge after the printer services were applied on 2026-10-08; Homepage adds one distinct image.
 Recompute both floors when the keel-managed image set changes.
 Compare each floor with its cluster's live `poll_trigger_tracked_images` after apply.
 
@@ -692,7 +693,7 @@ Probes fix hung request paths, not silently stopped background work — often th
 | **update-watch (Renovate silence)** | A readable dashboard without recognised lookup-failure markers reports `ok` even if Renovate stopped running; unreported or reworded lookup failures can therefore escape detection, while `make check-renovate-scope` proves only structural image coverage |
 | **update-watch (pending updates)** | Open PRs and dashboard-held updates are outside this signal; their existence or age never changes its verdict |
 | **update-watch (merged but not applied)** | The watcher reads repository lookup warnings, not deployed image versions; a successful dashboard read does not prove that a change reached either cluster |
-| **the residential egress chain** | Nothing detects a broken chain — tinyproxy in the homelab `proxy` namespace, the `cynexia-health` tunnel, the Cloudflare Access application, or the `homelab-proxy` client on the VPS — before a proxied changedetection watch errors. The spec accepts that: the watch error is the detector, and recovery is the rollout restart named in [vps.md](vps.md#residential-egress-through-the-homelab). The `proxy.cynexia.com` monitor asserts the Access challenge only, so it stays green through every fault below it |
+| **the residential egress chain** | Nothing detects a broken chain — tinyproxy in the homelab `proxy` namespace, the shared homelab tunnel in `cloudflared`, the Cloudflare Access application, or the `homelab-proxy` client on the VPS — before a proxied changedetection watch errors. The spec accepts that: the watch error is the detector, and recovery is the rollout restart named in [vps.md](vps.md#residential-egress-through-the-homelab). The `proxy.cynexia.com` monitor asserts the Access challenge only, so it stays green through every fault below it |
 
 The three VPS expansion gaps above stay accepted gaps rather than becoming checks.
 The natural home for an etcd-member-count and a node-spread assertion is the `vps-keel-fresh` CronJob, but both need cluster-read credentials that job does not have, and the estate's standing rule is that a new noticer must not introduce a new credential — the same reason the Omni-side check was refused.

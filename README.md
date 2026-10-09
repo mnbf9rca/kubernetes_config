@@ -8,7 +8,7 @@ three-node VPS control plane:
 |---|---|---|
 | Runs on | Proxmox VM at home | Three Hetzner cloud instances |
 | Domain | `*.cynexia.net` (Route53) | `*.cynexia.com` (Cloudflare) |
-| Exposure | Private — LAN and Tailscale only | Public, via a cloudflared tunnel behind Cloudflare Access |
+| Exposure | Private `*.cynexia.net` apps; selected `*.cynexia.com` origins through a shared cloudflared tunnel | Public, via a cloudflared tunnel behind Cloudflare Access |
 | Ingress | Traefik + cert-manager wildcard | cloudflared only |
 | Workloads | Media stack, personal health-data pipeline, backups | RSS, bookmarks, automation, uptime monitoring, analytics |
 

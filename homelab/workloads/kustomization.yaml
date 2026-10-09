@@ -19,3 +19,4 @@ resources:
   - spoolman.yaml
   - filabridge.yaml
   - printguard.yaml
+  - homepage.yaml

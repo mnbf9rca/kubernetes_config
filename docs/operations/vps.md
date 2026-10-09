@@ -258,7 +258,7 @@ Use `dgtlmoon/sockpuppetbrowser`.
 
 Several watched sites answer a fetch from Hetzner's address ranges with 403, so those watches leave from the operator's home connection instead.
 
-The chain is: changedetection — or chrome inside `sockpuppetbrowser`, for a Playwright watch — dials the `homelab-proxy` Service on port 8888; that pod runs `cloudflared access tcp`, which presents a Cloudflare Access service token and reaches `proxy.cynexia.com` on the homelab's `cynexia-health` tunnel; the tunnel's connector dials tinyproxy in the homelab `proxy` namespace, which opens the outbound connection over the home connection's default route.
+The chain is: changedetection — or chrome inside `sockpuppetbrowser`, for a Playwright watch — dials the `homelab-proxy` Service on port 8888; that pod runs `cloudflared access tcp`, which presents a Cloudflare Access service token and reaches `proxy.cynexia.com` on the homelab tunnel (connector in `cloudflared`); the tunnel's connector dials tinyproxy in the homelab `proxy` namespace, which opens the outbound connection over the home connection's default route.
 For an HTTPS watch the TLS session is end to end between changedetection and the target site, so no hop in the chain sees plaintext.
 
 Assign the proxy per watch, in changedetection's own proxy settings, as an entry named `homelab`:
@@ -272,7 +272,7 @@ An environment proxy routes every fetch through the cross-cluster chain, includi
 
 A watch with the proxy assigned **errors** when any pod in the chain is down; it does not fall back to direct egress.
 Unproxied watches are unaffected, so proxied-only failures point at the chain rather than at the internet.
-Recovery is `kubectl rollout restart` on the pod the error points at: `deploy/homelab-proxy` in `vps`, `deploy/cloudflared` in the homelab's `health` namespace, or `deploy/tinyproxy` in the homelab's `proxy` namespace.
+Recovery is `kubectl rollout restart` on the pod the error points at: `deploy/homelab-proxy` in `vps`, `deploy/cloudflared` in the homelab's `cloudflared` namespace, or `deploy/tinyproxy` in the homelab's `proxy` namespace.
 Every proxied watch failing at once, with unproxied ones fine, is the Access service token instead — read the `homelab-proxy` pod log, which records the refusal on every dial.
 
 The Access application is the whole gate, and it fails open: tinyproxy authenticates nobody, so a deleted or disabled application publishes an open HTTP proxy egressing from the home address rather than closing the path.

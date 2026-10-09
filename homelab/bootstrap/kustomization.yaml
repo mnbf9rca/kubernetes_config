@@ -11,3 +11,4 @@ resources:
   - cert-manager
   - traefik
   - keel
+  - cloudflared

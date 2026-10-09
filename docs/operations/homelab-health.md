@@ -24,7 +24,6 @@ Restoration can lose changes since the selected backup.
 | InfluxDB | `influxdb:2` |
 | Apple Health ingester | `irvinlim/apple-health-ingester:latest` |
 | Garmin fetcher | `thisisarpanghosh/garmin-fetch-data:latest` |
-| Health tunnel | `cloudflare/cloudflared:latest` |
 | PDC agent | `grafana/pdc-agent:latest` |
 | InfluxDB MCP | `ghcr.io/mnbf9rca/influxdb-mcp-server:stable` |
 | Cloudflare analytics and Withings CronJobs | `python:latest` |
@@ -54,18 +53,8 @@ The Garmin `latest` channel includes the main-branch fix for the `client.profile
 
 ## Ingress
 
-A dedicated `cloudflared` Deployment runs the **`cynexia-health`** tunnel — separate from the VPS cluster's `cynexia-vps` tunnel.
-Credentials are in 1Password as the **DOCUMENT** item `health-cloudflared`: use `op document get`, not `op read` (document items don't expose a plain field).
-
-Public `*.cynexia.com` hostnames on this tunnel:
-
-| Hostname | Purpose |
-|---|---|
-| `hae.cynexia.com` | Health Auto Export ingest → `apple-health-ingester` |
-| `mcp.cynexia.com` | Claude/Hermes MCP connector, via Cloudflare Access (Managed OAuth) |
-| `hermes.cynexia.com` | Hermes agent dashboard on the hermes VM (`hermes.cynexia.net:9119`, off-cluster), via Cloudflare Access (karakeep-style email policy) |
-| `hermes-app.cynexia.com` | `hermes-webui` on the same VM (`hermes.cynexia.net:8787`, off-cluster) — the server the Hermex iOS app talks to, via Cloudflare Access (Service Auth + the same email policy) |
-| `proxy.cynexia.com` | Residential egress proxy for changedetection on the VPS — see [vps.md](vps.md#residential-egress-through-the-homelab) |
+The health, proxy and Hermes routes discussed here use the [shared homelab Cloudflare tunnel](homelab.md#shared-cloudflare-tunnel).
+The connector and its credentials live in the `cloudflared` namespace.
 
 `proxy.cynexia.com` is the only **TCP** origin in the ingress block — `tcp://tinyproxy.proxy.svc.cluster.local:8888`, not an HTTP service — and, like `mcp.cynexia.com`, it has an origin that authenticates nobody.
 The whole gate is its Access application, `homelab-proxy`, which carries one app-scoped Service Auth policy and nothing else: deleting or disabling that application publishes an open forward proxy on the operator's home connection rather than closing the path.
@@ -117,14 +106,6 @@ That stale flow is in-memory only and self-expires after 15 minutes (`_MCP_DASHB
 Grafana Cloud serves the dashboards now, so no cluster Service backs that hostname.
 The Cloudflare Access application `grafana` and the DNS record are retired by hand; the tunnel rule and the private Traefik hostname `grafana-health.cynexia.net` are gone.
 
-After changing hostnames in `homelab/health/cloudflared.yaml`, every hostname needs a proxied CNAME to `1a4245a3-5264-420c-9893-b45ff25a0214.cfargotunnel.com`.
-`make route-health-dns` mints them all, but it shells out to `cloudflared tunnel route dns`, which needs an **origin certificate** at `~/.cloudflared/cert.pem`.
-On a machine that has never run `cloudflared tunnel login` that file does not exist, the target aborts under `set -euo pipefail` on the *first* hostname, and a newly added one is never reached — `cloudflared` is not in `make check-tools`, so nothing warns first.
-Either run `cloudflared tunnel login` once, or create the single record through the Cloudflare API (zone `2bf4553c3f994e36202b5f574577d2e5`), which is also the only way to set the record comment this zone uses as its provenance note.
-`hermes-app.cynexia.com` was created that way.
-
-To recreate the credentials Secret, `make create-health-cloudflared-secret`.
-
 ## MCP behind Cloudflare Access
 
 Since 2026-08-22 the InfluxDB MCP server is a plain single-container Deployment + Service (`influxdb-mcp`, port 3000) and **auth lives entirely at the Cloudflare edge**: an Access app on `mcp.cynexia.com` with Managed OAuth — RFC 8414/9728 metadata served by Access, dynamic client registration enabled, 15m access tokens against a 336h (2-week) grant session.
@@ -160,7 +141,7 @@ The tunnel is the only path in from the internet, and Access gates the hostname.
 
 **RESIDUAL RISK — the gate fails OPEN.**
 The old gate was committed here and failed closed (no Pomerium → 502).
-The new gate is Access dashboard/API state tracked nowhere in this repo: delete or disable the app and cloudflared serves the authless origin raw to the internet, silently — and a rebuild from this repo (`make apply-homelab` + `make route-health-dns`) republishes the hostname with no guarantee the app still exists.
+The new gate is Access dashboard/API state tracked nowhere in this repo: delete or disable the app and cloudflared serves the authless origin raw to the internet, silently — and a rebuild from this repo (`make apply-homelab` + `make route-homelab-dns`) republishes the hostname with no guarantee the app still exists.
 After any rollback, rebuild or account-side change, `curl -s -o /dev/null -D - https://mcp.cynexia.com/mcp` must return 401 before the hostname is trusted; the `Data MCP` uptime-kuma monitor is pinned to exactly `["401"]` so a naked origin alarms ([uptime-kuma.md](uptime-kuma.md)).
 
 In-cluster exposure is unchanged in kind from the 2026-08 sidecar era: flannel does not enforce NetworkPolicy, and `ghcr.io/mnbf9rca/influxdb-mcp-server` (built here from source for **`linux/amd64` only** — there is no official image, and the workflow's single `platforms: linux/amd64` publishes a single-platform manifest, so an arm64 node would fail to pull it) binds `0.0.0.0` with no `--bind` flag, so pod-IP:3000 was reachable from any pod even as a sidecar; the restored Service only re-adds DNS discoverability.

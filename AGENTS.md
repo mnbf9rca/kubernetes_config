@@ -32,7 +32,7 @@ Design documents and implementation plans are local-only under the gitignored `d
 | kubectl context | `cynexia-homelab` | `cynexia-vps` |
 | Omni cluster name | `homelab` | `vps` |
 | Domain | `*.cynexia.net` (Route53) | `*.cynexia.com` (Cloudflare) |
-| Exposure | Private — LAN/Tailscale only, except the `cynexia-health` cloudflared tunnel, run from the `health` namespace | Public, through the `cynexia-vps` cloudflared tunnel + Cloudflare Access |
+| Exposure | Private for `*.cynexia.net`; the shared `*.cynexia.com` cloudflared tunnel runs in the `cloudflared` namespace | Public, through the `cynexia-vps` cloudflared tunnel + Cloudflare Access |
 | Ingress | Traefik hostNetwork DaemonSet + cert-manager wildcard | cloudflared only (no Traefik, no cert-manager) |
 | Apply | `make apply-homelab` | `make apply-vps` |
 
@@ -53,7 +53,7 @@ kubernetes_config/
 ├── homelab/                  # Talos homelab cluster
 │   ├── kustomization.yaml    # top-level: bootstrap + secrets + workloads + backup + health + hindsight
 │   ├── talos/                # Omni ConfigPatches resources (applied via `make apply-talos`)
-│   ├── bootstrap/            # platform: namespaces (with PSA labels), local-path, NFS CSI, cert-manager, traefik, keel
+│   ├── bootstrap/            # platform: namespaces (with PSA labels), local-path, NFS CSI, cert-manager, traefik, keel, cloudflared
 │   ├── workloads/            # application workloads (one file per service, --- separated, no ns override)
 │   ├── secrets/              # Secret manifests with ${VAR} envsubst placeholders
 │   ├── health/               # health-data pipeline (floating except the alpine/k8s backup toolbox)

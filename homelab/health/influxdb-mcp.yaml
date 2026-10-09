@@ -20,7 +20,7 @@
 # (Cloudflare's docs say the MCP server "must" validate it; ours cannot —
 # accepted, because Pomerium likewise fronted this same authless origin, which
 # ignored Pomerium's injected identity too). From the internet the only path
-# here is the cynexia-health cloudflared tunnel, and Access gates the hostname.
+# here is the shared homelab cloudflared tunnel, and Access gates the hostname.
 # Edge enforcement was the real boundary in the old design as well.
 #
 # RESIDUAL RISK — THE GATE IS UNVERSIONED EXTERNAL STATE AND FAILS OPEN. This is
@@ -33,7 +33,7 @@
 # or disable the app (or its policy) and cloudflared serves this origin raw to
 # the internet, silently. `git revert` + `apply-homelab` can restore everything
 # about the old design EXCEPT this; and a cluster rebuild from this repo
-# (`make apply-homelab` + `make route-health-dns`, which upserts a CNAME for
+# (`make apply-homelab` + `make route-homelab-dns`, which upserts a CNAME for
 # EVERY hostname in the cloudflared ConfigMap) republishes mcp.cynexia.com with
 # no guarantee the Access app survived account-side changes. Both mitigations
 # are mandatory:

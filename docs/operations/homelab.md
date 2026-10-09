@@ -1,7 +1,7 @@
 # Homelab cluster reference
 
 Single-node Talos Linux VM on Proxmox (`pve3`), managed by Omni, serving the media / downloads stack and the health-data pipeline.
-Not exposed to the public internet — remote access is through Tailscale.
+Private `*.cynexia.net` apps use Tailscale; selected `*.cynexia.com` origins use the shared Cloudflare tunnel.
 Kubectl context: `cynexia-homelab`.
 
 ## Platform stack
@@ -61,9 +61,11 @@ Verify keel's permissions with a SelfSubjectAccessReview issued with keel's own 
 | `traefik` | Ingress | Traefik DaemonSet (PSA privileged — hostNetwork) |
 | `keel` | Auto-updates | keel controller |
 | `backup` | Backup | restic init Job + nightly CronJob (PSA privileged — hostPath) |
-| `health` | Personal health data pipeline | influxdb, apple-health-ingester, garmin-grafana, influxdb-mcp (behind Cloudflare Access), pdc-agent (the Grafana Cloud Private Datasource Connect tunnel), cloudflared, backup + freshness CronJobs — see [homelab-health.md](homelab-health.md) |
+| `health` | Personal health data pipeline | influxdb, apple-health-ingester, garmin-grafana, influxdb-mcp (behind Cloudflare Access), pdc-agent (the Grafana Cloud Private Datasource Connect tunnel), backup + freshness CronJobs — see [homelab-health.md](homelab-health.md) |
 | `hindsight` | Memory backend for the Hermes profiles | hindsight API, its PostgreSQL, the nightly `pg_dump` and the 15-minute canary — see [hindsight.md](hindsight.md) |
 | `printing` | Core One+ printer services | Spoolman inventory, FilaBridge filament accounting, PrintGuard failure detection — see below |
+| `cloudflared` | Shared homelab Cloudflare tunnel | Connector for health, Hermes, proxy and Homepage routes — `homelab/bootstrap/cloudflared/` |
+| `homepage` | Service directory | 33-link Homepage at `home.cynexia.com` behind Cloudflare Access |
 | `ops` | Cluster-wide operational jobs | `update-watch` and `keel-fresh` CronJobs — see below |
 | `proxy` | Residential egress for changedetection on the VPS | tinyproxy — see [vps.md](vps.md#residential-egress-through-the-homelab) |
 
@@ -72,7 +74,41 @@ Ingress hostnames are `*.cynexia.net` (Route53), Traefik-fronted, LAN/Tailscale 
 
 Retired in the rebuild: immich, ollama, open-webui, komga, jellyfin, mylar3, lazylibrarian, caddy, postgresql.
 tinyproxy was on that list until September 2, 2026, when it returned in its own `proxy` namespace to serve changedetection on the VPS — see [vps.md](vps.md#residential-egress-through-the-homelab).
-cloudflared was retired from the downloads-era stack but is not retired homelab-wide — the `health` namespace runs the `cynexia-health` tunnel, separate from the VPS cluster's `cynexia-vps` tunnel. It is the whole cluster's tunnel rather than the namespace's own: `proxy.cynexia.com` fronts an origin in the `proxy` namespace.
+
+### Shared Cloudflare tunnel
+
+cloudflared was retired from the downloads-era stack but remains in `homelab/bootstrap/cloudflared/` for the whole homelab.
+The connector runs in the `cloudflared` namespace with tunnel UUID `1a4245a3-5264-420c-9893-b45ff25a0214`, separate from the VPS `cynexia-vps` tunnel.
+Its Cloudflare display name is `cynexia-homelab`; the 2026-10-09 name change kept the UUID and credentials.
+The legacy 1Password **DOCUMENT** item `health-cloudflared` is retrieved by ID through `make create-homelab-cloudflared-secret` (`op document get`, not `op read`).
+The tunnel serves origins in `health`, `proxy`, `homepage` and the Hermes VM.
+After editing its ConfigMap routes, restart `deploy/cloudflared` in the `cloudflared` namespace because the config uses a `subPath` mount.
+
+Public `*.cynexia.com` hostnames on this tunnel:
+
+| Hostname | Purpose |
+|---|---|
+| `hae.cynexia.com` | Health Auto Export ingest → `apple-health-ingester` |
+| `mcp.cynexia.com` | Claude/Hermes MCP connector, via Cloudflare Access (Managed OAuth) |
+| `hermes.cynexia.com` | Hermes agent dashboard on the hermes VM (`hermes.cynexia.net:9119`, off-cluster), via Cloudflare Access (karakeep-style email policy) |
+| `hermes-app.cynexia.com` | `hermes-webui` on the same VM (`hermes.cynexia.net:8787`, off-cluster) — the server the Hermex iOS app talks to, via Cloudflare Access (Service Auth + the same email policy) |
+| `proxy.cynexia.com` | Residential egress proxy for changedetection on the VPS — see [vps.md](vps.md#residential-egress-through-the-homelab) |
+| `home.cynexia.com` | Static service directory in the `homepage` namespace; Access app uses only `allow_cynexia_com` |
+
+After changing hostnames in `homelab/bootstrap/cloudflared/cloudflared.yaml`, every hostname needs a proxied CNAME to `1a4245a3-5264-420c-9893-b45ff25a0214.cfargotunnel.com`.
+`make route-homelab-dns` mints them all, but it shells out to `cloudflared tunnel route dns`, which needs an **origin certificate** at `~/.cloudflared/cert.pem`.
+On a machine that has never run `cloudflared tunnel login` that file does not exist, the target aborts under `set -euo pipefail` on the *first* hostname, and a newly added one is never reached — `cloudflared` is not in `make check-tools`, so nothing warns first.
+Either run `cloudflared tunnel login` once, or create the single record through the Cloudflare API (zone `2bf4553c3f994e36202b5f574577d2e5`), which is also the only way to set the record comment this zone uses as its provenance note.
+`hermes-app.cynexia.com` was created that way.
+
+To recreate the credentials Secret, `make create-homelab-cloudflared-secret`.
+
+`homelab/workloads/homepage.yaml` serves a grouped directory of 33 links at `home.cynexia.com`, including local device interfaces and cloud consoles.
+Its origin has no login, so the Cloudflare Access application for that hostname, with only the reusable `allow_cynexia_com` policy, is the public gate.
+Deleting that application exposes the page.
+The Buddy3D camera card opens `rtsp://192.168.17.103/live` in a registered RTSP player; browsers do not render that stream themselves.
+Local IP links need LAN or tailnet reachability from the browser.
+Later edits to the ConfigMap need `kubectl -n homepage rollout restart deploy/homepage` because its files use `subPath` mounts.
 
 ### The `ops` namespace
 
@@ -85,7 +121,7 @@ cloudflared was retired from the downloads-era stack but is not retired homelab-
   Full behaviour and every cause of DOWN: [monitoring.md](monitoring.md#the-update-watcher).
 - **`keel-fresh`**, at 07:15Z daily, makes one request to keel's own `/metrics` — a single ClusterIP endpoint, `keel.keel.svc.cluster.local:9300`, reached across the namespace boundary from `ops`; it scrapes nothing else and holds no cluster-wide read — and pushes the `homelab-keel-fresh` uptime-kuma monitor.
   It is the only thing that would notice keel's registry poll loop had wedged: keel's own probes hit `/healthz`, which stays green while the poll goroutine is dead.
-  The configured `IMAGE_FLOOR` is 20, derived from the rendered floating controller images.
+  The configured `IMAGE_FLOOR` is 21, derived from the rendered floating controller images.
   Verdict enum and why there is no `/start`: [monitoring.md](monitoring.md#the-keel-dead-mans-switch).
 
 The half-hour gap is deliberate: the two update-path checks should not alert in the same minute.
@@ -179,7 +215,7 @@ aws route53 change-resource-record-sets --hosted-zone-id Z3409TNW35PGSS \
 
 TTL is 60s, so after a change browsers need a hard refresh (Cmd+Shift+R) to stop using the cached target.
 
-`cynexia.com` is a **different** zone on Cloudflare, used by the VPS cluster and by the homelab cloudflared tunnel (Cloudflare name `cynexia-health`, run from the `health` namespace).
+`cynexia.com` is a **different** zone on Cloudflare, used by the VPS cluster and by the homelab cloudflared tunnel (tunnel UUID `1a4245a3-5264-420c-9893-b45ff25a0214`, run from the `cloudflared` namespace).
 It has nothing to do with Route53.
 
 ## Encryption at rest
@@ -411,7 +447,7 @@ That file is inside `~/.hermes`, so unlike the unit it **is** in the nightly zip
 
 ### Hermes WebUI on the VM
 
-`hermes-webui` ([github.com/nesquena/hermes-webui](https://github.com/nesquena/hermes-webui)) runs on port 8787 as the `hermes-webui` systemd user unit, published at `https://hermes-app.cynexia.com` through the `cynexia-health` tunnel ([homelab-health.md](homelab-health.md#ingress)).
+`hermes-webui` ([github.com/nesquena/hermes-webui](https://github.com/nesquena/hermes-webui)) runs on port 8787 as the `hermes-webui` systemd user unit, published at `https://hermes-app.cynexia.com` through the homelab tunnel (see [the shared tunnel](#shared-cloudflare-tunnel)).
 
 **One instance serves every profile.**
 It reads `~/.hermes/profiles/<name>` off disk and switches per client on a `hermes_profile` cookie, so every profile under that directory shares one process and clients get an in-app switcher.
