@@ -545,6 +545,25 @@ def local_group_times(influx_cfg: dict, grpid: str) -> list[int]:
     return sorted({parse_influx_ns(row["_time"]) // 1_000_000_000 for row in rows})
 
 
+def local_sibling_ids(influx_cfg: dict, grpid: str) -> list[str]:
+    grpid = canonical_grpid(grpid)
+    flux = (
+        'from(bucket:"%s")\n'
+        '  |> range(start: 1970-01-01T00:00:00Z, stop: %s)\n'
+        '  |> filter(fn: (r) => r._measurement == "%s")\n'
+        '  |> keep(columns: ["grpid", "_time", "deviceid"])\n'
+        % (influx_cfg["bucket"], FUTURE_STOP, MEASUREMENT)
+    )
+    rows = query_influx_rows(influx_cfg, flux, ("grpid", "_time", "deviceid"))
+    anchors = {(parse_influx_ns(row["_time"]), row["deviceid"])
+               for row in rows if row["grpid"] == grpid}
+    if not anchors:
+        raise IngestFailed("flagged group has no local time/device anchor")
+    return sorted({canonical_grpid(row["grpid"]) for row in rows
+                   if row["grpid"] != grpid and row["deviceid"] != "unknown"
+                   and (parse_influx_ns(row["_time"]), row["deviceid"]) in anchors})
+
+
 def influx_write(cfg, lines):
     if not lines:
         return
@@ -771,6 +790,19 @@ def resolve_flag(flags_cfg: dict, grpid: str, timestamp_ns: int) -> None:
         raise IngestFailed("flag status write http %d" % status)
 
 
+def delete_and_confirm_group(influx_cfg: dict, grpid: str, times: list[int]) -> None:
+    try:
+        delete_group(influx_cfg, grpid, max(times) + 1)
+    except IngestFailed:
+        raise IngestFailed("verify grpid %s: delete failed" % grpid)
+    try:
+        remaining = local_group_times(influx_cfg, grpid)
+    except IngestFailed:
+        raise IngestFailed("verify grpid %s: confirmation failed" % grpid)
+    if remaining:
+        raise IngestFailed("verify grpid %s: local points remain" % grpid)
+
+
 def reconcile_flags(influx_cfg: dict, flags_cfg: dict, access_token: str) -> None:
     pending = pending_flags(flags_cfg)
     if not pending:
@@ -791,15 +823,25 @@ def reconcile_flags(influx_cfg: dict, flags_cfg: dict, access_token: str) -> Non
             continue
         if times:
             try:
-                delete_group(influx_cfg, grpid, max(times) + 1)
+                siblings = local_sibling_ids(influx_cfg, grpid)
             except IngestFailed:
-                raise IngestFailed("verify grpid %s: delete failed" % grpid)
-            try:
-                remaining = local_group_times(influx_cfg, grpid)
-            except IngestFailed:
-                raise IngestFailed("verify grpid %s: confirmation failed" % grpid)
-            if remaining:
-                raise IngestFailed("verify grpid %s: local points remain" % grpid)
+                raise IngestFailed("verify grpid %s: sibling lookup failed" % grpid)
+            for sibling in siblings:
+                try:
+                    sibling_times = local_group_times(influx_cfg, sibling)
+                except IngestFailed:
+                    raise IngestFailed("verify grpid %s: local query failed" % sibling)
+                if not sibling_times:
+                    raise IngestFailed("verify grpid %s: local points disappeared" % sibling)
+                if sibling in ids:
+                    log("verify: sibling grpid %s still at source" % sibling)
+                    continue
+                if not (dates[0] < min(sibling_times) and max(sibling_times) < dates[-1]):
+                    log("verify: sibling grpid %s lacks source neighbours" % sibling)
+                    continue
+                delete_and_confirm_group(influx_cfg, sibling, sibling_times)
+                log("verify: deleted sibling grpid %s" % sibling)
+            delete_and_confirm_group(influx_cfg, grpid, times)
             log("verify: deleted grpid %s" % grpid)
         for marker in markers:
             try:

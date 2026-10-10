@@ -78,7 +78,7 @@ McpServer.prototype.connect = function (...args) {
       content: [{ type: "text", text: await readFile(GUIDE_PATH, "utf8") }],
     }));
     this.tool("flag-suspect-withings-group",
-      "Flag a locally stored Withings group that looks wrong. Ingest checks it each run until Withings stops returning it.",
+      "Flag a locally stored Withings group that looks wrong. Ingest may also remove absent, bracketed siblings at the same time and device.",
       { grpid: z.string() }, async ({ grpid }) => {
         if (typeof grpid !== "string" || grpid.length > 20 ||
             !/^[1-9][0-9]*$/.test(grpid) || BigInt(grpid) > 18446744073709551615n) {
@@ -107,7 +107,8 @@ McpServer.prototype.connect = function (...args) {
         return { content: [{ type: "text", text:
           "Queued for the next scheduled Withings ingest, normally within 15 minutes. " +
           "The group remains visible. It stays pending while Withings still returns it; " +
-          "the operator must correct the source." }] };
+          "the operator must correct the source. Absent, bracketed siblings at the same " +
+          "time and device may be removed with it." }] };
       });
   }
   return connect.apply(this, args);

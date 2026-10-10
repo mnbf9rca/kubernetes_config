@@ -730,6 +730,42 @@ class Points(unittest.TestCase):
                         "measures": [{"type": 1, "value": 1, "unit": 0}]}])
 
 
+class SiblingQueries(unittest.TestCase):
+    def test_siblings_require_exact_nanosecond_time_and_real_device(self):
+        body = (",result,table,_time,deviceid,grpid\r\n"
+                ",_result,0,2026-10-06T12:00:00.123456789Z,scale,12\r\n"
+                ",_result,0,2026-10-06T12:00:00.123456789Z,scale,13\r\n"
+                ",_result,0,2026-10-06T12:00:00.123456789Z,scale,13\r\n"
+                ",_result,0,2026-10-06T12:00:00.123456789Z,scale,14\r\n"
+                ",_result,0,2026-10-06T12:00:00.123456789Z,other,15\r\n"
+                ",_result,0,2026-10-06T12:00:00.123456788Z,scale,16\r\n"
+                ",_result,0,2026-10-06T12:00:00.123456789Z,unknown,18\r\n"
+                ",_result,0,2026-10-06T12:00:00.123456789Z,unknown,19\r\n")
+        calls = []
+        def post(_url, flux, _headers, timeout=None):
+            calls.append(flux.decode())
+            return 200, body
+        with patch.object(wi, "http_post", side_effect=post):
+            self.assertEqual(wi.local_sibling_ids(CFG, "12"), ["13", "14"])
+            self.assertEqual(wi.local_sibling_ids(CFG, "18"), [])
+        self.assertIn('keep(columns: ["grpid", "_time", "deviceid"])', calls[0])
+        self.assertIn('stop: 2262-04-11T23:47:16Z', calls[0])
+        self.assertNotIn("_value", calls[0])
+
+    def test_missing_anchor_or_invalid_matching_id_fails_closed(self):
+        for body in (
+            ",result,table,_time,deviceid,grpid\r\n"
+            ",_result,0,2026-10-06T12:00:00Z,scale,13\r\n",
+            ",result,table,_time,deviceid,grpid\r\n"
+            ",_result,0,2026-10-06T12:00:00Z,scale,12\r\n"
+            ",_result,0,2026-10-06T12:00:00Z,scale,01\r\n",
+        ):
+            with self.subTest(body=body), patch.object(
+                    wi, "http_post", return_value=(200, body)):
+                with self.assertRaises(wi.IngestFailed):
+                    wi.local_sibling_ids(CFG, "12")
+
+
 class Reconcile(unittest.TestCase):
     def setUp(self):
         self.flags = {"url": CFG["url"], "org": CFG["org"],
@@ -768,12 +804,18 @@ class Reconcile(unittest.TestCase):
             self.assertEqual(grpid, "12")
             self.assertEqual(stop, max(self.times) + 1)
 
+        def siblings(_cfg, grpid):
+            self.assertEqual(grpid, "12")
+            self.events.append("siblings")
+            return []
+
         def resolve(_cfg, grpid, timestamp):
             self.events.append(("resolve", grpid, timestamp))
 
         with patch.object(wi, "pending_flags", pending), \
              patch.object(wi, "fetch_measures", fetch), \
              patch.object(wi, "local_group_times", local), \
+             patch.object(wi, "local_sibling_ids", side_effect=siblings), \
              patch.object(wi, "delete_group", delete), \
              patch.object(wi, "resolve_flag", resolve):
             wi.reconcile_flags(CFG, self.flags, "access-token")
@@ -796,7 +838,7 @@ class Reconcile(unittest.TestCase):
     def test_bracketed_absence_deletes_confirms_then_resolves_captured_markers(self):
         self.pending["12"].append(1791288001000000001)
         self.run_gate()
-        self.assertEqual(self.events, ["flags", "full_fetch", "local", "delete",
+        self.assertEqual(self.events, ["flags", "full_fetch", "local", "siblings", "delete",
                                        "local", ("resolve", "12", 1791288000123456789),
                                        ("resolve", "12", 1791288001000000001)])
 
@@ -833,7 +875,7 @@ class Reconcile(unittest.TestCase):
                 self.assertNotIn("delete", self.events)
 
     def test_faults_leave_markers_unresolved_at_verify_stage(self):
-        for faulty in ("pending_flags", "fetch_measures", "local_group_times", "delete_group",
+        for faulty in ("pending_flags", "fetch_measures", "local_group_times", "local_sibling_ids", "delete_group",
                        "resolve_flag"):
             with self.subTest(faulty=faulty):
                 wi.STAGE[0] = "verify"
@@ -842,6 +884,7 @@ class Reconcile(unittest.TestCase):
                 with patch.object(wi, "pending_flags", return_value=self.pending), \
                      patch.object(wi, "fetch_measures", return_value=self.groups), \
                      patch.object(wi, "local_group_times", side_effect=lambda *_: next(local_reads)), \
+                     patch.object(wi, "local_sibling_ids", return_value=[]), \
                      patch.object(wi, "delete_group", side_effect=lambda *a: events.append("delete")), \
                      patch.object(wi, "resolve_flag", side_effect=lambda *a: events.append("resolve")), \
                      patch.object(wi, faulty, side_effect=wi.IngestFailed("fault")):
@@ -849,7 +892,7 @@ class Reconcile(unittest.TestCase):
                         wi.reconcile_flags(CFG, self.flags, "access-token")
                 self.assertNotIn("resolve", events)
                 self.assertEqual(wi.STAGE[0], "verify")
-                if faulty in ("local_group_times", "delete_group", "resolve_flag"):
+                if faulty in ("local_group_times", "local_sibling_ids", "delete_group", "resolve_flag"):
                     self.assertIn("grpid 12", str(caught.exception))
                     self.assertNotIn("fault", str(caught.exception))
 
@@ -889,6 +932,113 @@ class Reconcile(unittest.TestCase):
         self.assertEqual(sent[0][1],
                          'withings_suspect,grpid=12 status="resolved" 1791288000123456789')
         self.assertEqual(sent[0][2]["Authorization"], "Token flags-token")
+
+
+class SiblingReconcile(unittest.TestCase):
+    def setUp(self):
+        self.events = []
+        self.deleted = set()
+        self.fault = None
+        self.pending = {"12": [1791288000123456789]}
+        self.groups = [{"grpid": 1, "date": 100}, {"grpid": 2, "date": 200}]
+        self.times = {"12": [150], "13": [150], "14": [150]}
+        self.logs = []
+        self.real_log = wi.log
+        self.old_stage = wi.STAGE[0]
+        wi.log = self.logs.append
+        wi.STAGE[0] = "verify"
+
+    def tearDown(self):
+        wi.log = self.real_log
+        wi.STAGE[0] = self.old_stage
+
+    def run_gate(self):
+        def fetch(_token, _since):
+            self.events.append(("fetch",))
+            return self.groups
+
+        def siblings(_cfg, grpid):
+            self.events.append(("siblings", grpid))
+            if self.fault == "lookup":
+                raise wi.IngestFailed("fault")
+            return [g for g in ("13", "14") if g not in self.deleted]
+
+        def local(_cfg, grpid):
+            self.events.append(("local", grpid))
+            if self.fault == "local13" and grpid == "13":
+                raise wi.IngestFailed("fault")
+            if grpid in self.deleted:
+                if self.fault == "confirm13" and grpid == "13":
+                    raise wi.IngestFailed("fault")
+                return []
+            return self.times[grpid]
+
+        def delete(_cfg, grpid, stop):
+            self.events.append(("delete", grpid, stop))
+            if self.fault == "delete14" and grpid == "14":
+                raise wi.IngestFailed("fault")
+            self.deleted.add(grpid)
+
+        def resolve(_cfg, grpid, marker):
+            self.events.append(("resolve", grpid, marker))
+
+        with patch.object(wi, "pending_flags", return_value=self.pending), \
+             patch.object(wi, "fetch_measures", side_effect=fetch), \
+             patch.object(wi, "local_sibling_ids", side_effect=siblings), \
+             patch.object(wi, "local_group_times", side_effect=local), \
+             patch.object(wi, "delete_group", side_effect=delete), \
+             patch.object(wi, "resolve_flag", side_effect=resolve):
+            wi.reconcile_flags(CFG, CFG, "access-token")
+
+    def test_three_siblings_delete_by_own_id_before_one_marker_resolves(self):
+        self.run_gate()
+        self.assertEqual(self.events.count(("fetch",)), 1)
+        self.assertEqual([event[1] for event in self.events if event[0] == "delete"],
+                         ["13", "14", "12"])
+        for index, event in enumerate(self.events):
+            if event[0] == "delete":
+                self.assertEqual(self.events[index + 1], ("local", event[1]))
+                self.assertEqual(event[2], 151)
+        self.assertEqual([event for event in self.events if event[0] == "resolve"],
+                         [("resolve", "12", 1791288000123456789)])
+        self.assertEqual(self.deleted, {"12", "13", "14"})
+
+    def test_source_present_or_unbracketed_sibling_is_kept_with_reason(self):
+        self.groups.append({"grpid": 13, "date": 150})
+        self.times["14"] = [250]
+        self.run_gate()
+        self.assertEqual(self.deleted, {"12"})
+        self.assertIn("verify: sibling grpid 13 still at source", self.logs)
+        self.assertIn("verify: sibling grpid 14 lacks source neighbours", self.logs)
+        self.assertEqual([event for event in self.events if event[0] == "resolve"],
+                         [("resolve", "12", 1791288000123456789)])
+
+    def test_sibling_fault_fails_verify_before_flagged_delete_or_resolution(self):
+        for fault in ("lookup", "local13", "delete14", "confirm13"):
+            with self.subTest(fault=fault):
+                self.fault = fault
+                self.events = []
+                self.deleted = set()
+                with self.assertRaises(wi.IngestFailed) as caught:
+                    self.run_gate()
+                self.assertEqual(wi.STAGE[0], "verify")
+                self.assertIn("grpid", str(caught.exception))
+                self.assertNotIn("fault", str(caught.exception))
+                self.assertNotIn("12", self.deleted)
+                self.assertFalse(any(event[0] == "resolve" for event in self.events))
+
+    def test_retry_after_partial_sibling_delete_keeps_flagged_anchor(self):
+        self.fault = "delete14"
+        with self.assertRaises(wi.IngestFailed):
+            self.run_gate()
+        self.assertEqual(self.deleted, {"13"})
+        self.events = []
+        self.fault = None
+        self.run_gate()
+        self.assertEqual([event[1] for event in self.events if event[0] == "delete"],
+                         ["14", "12"])
+        self.assertEqual([event for event in self.events if event[0] == "resolve"],
+                         [("resolve", "12", 1791288000123456789)])
 
 
 class RunOrder(StateDir):
