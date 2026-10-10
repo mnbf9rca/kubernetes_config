@@ -480,6 +480,8 @@ def query_influx_rows(cfg: dict, flux: str, required: tuple[str, ...]) -> list[d
     status, body = http_post(url, flux.encode(), headers, timeout=60)
     if status < 200 or status >= 300:
         raise IngestFailed("flag query http %d" % status)
+    if not body.strip():
+        return []
     if body.lstrip().startswith(("{", "[")):
         raise IngestFailed("flag query returned JSON")
     rows = []

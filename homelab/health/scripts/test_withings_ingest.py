@@ -213,6 +213,9 @@ class FlagQueries(unittest.TestCase):
     def test_empty_annotated_csv_is_an_empty_queue(self):
         self.stub(200, ",result,table,_time,grpid,_value\r\n")
         self.assertEqual(wi.pending_flags(CFG), {})
+        # InfluxDB may return no table at all for a valid empty query.
+        self.stub(200, "\r\n")
+        self.assertEqual(wi.pending_flags(CFG), {})
 
     def test_flag_query_errors_are_not_empty(self):
         for status, body in ((200, '{"code":"invalid"}'),
