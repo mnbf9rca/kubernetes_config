@@ -78,7 +78,7 @@ McpServer.prototype.connect = function (...args) {
       content: [{ type: "text", text: await readFile(GUIDE_PATH, "utf8") }],
     }));
     this.tool("flag-suspect-withings-group",
-      "Queue one locally stored Withings group for source verification after the operator corrects Withings.",
+      "Flag a locally stored Withings group that looks wrong. Ingest checks it each run until Withings stops returning it.",
       { grpid: z.string() }, async ({ grpid }) => {
         if (typeof grpid !== "string" || grpid.length > 20 ||
             !/^[1-9][0-9]*$/.test(grpid) || BigInt(grpid) > 18446744073709551615n) {

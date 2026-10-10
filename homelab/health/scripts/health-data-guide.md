@@ -108,16 +108,16 @@ Keying on `grpid` returns one row per group instead, and the extra rows are empt
 
 ### Flag a suspect Withings group
 
-First identify the specific `grpid` and its field keys without reading body values. Adjust the time range to the suspect reading:
+Find the suspect value and its specific `grpid`. Adjust the time range and field filter to the reading in question:
 
 ```flux
 from(bucket: "withings")
   |> range(start: 2026-10-06T00:00:00Z, stop: 2026-10-07T00:00:00Z)
-  |> filter(fn: (r) => r._measurement == "withings_measure_group")
-  |> keep(columns: ["_time", "grpid", "deviceid", "_field"])
+  |> filter(fn: (r) => r._measurement == "withings_measure_group" and r._field == "weight")
+  |> keep(columns: ["_time", "grpid", "deviceid", "_field", "_value"])
 ```
 
-Several `grpid` values can share one weigh-in time, so inspect the siblings and flag only the wrong group. Call `flag-suspect-withings-group` with that ID after the operator corrects the reading in Withings. The flag records a request; it does **not** hide or immediately delete any local point. The next Withings ingest checks the whole account and removes that group's local points only when the source answer proves it absent and brackets every local point time. A group still at Withings stays pending. The agent cannot correct the source or cancel a mistaken flag; ask the operator to use the health runbook for either action.
+Several `grpid` values can share one weigh-in time. Remove the field filter to inspect sibling IDs and field keys at that time, then flag only the wrong group. Call `flag-suspect-withings-group` as soon as you identify it, and tell the operator which group needs correction or reassignment in Withings. The flag records a request; it does **not** hide or immediately delete any local point. The next Withings ingest checks the whole account and removes that group's local points only when the source answer proves it absent and brackets every local point time. A group still at Withings stays pending until the operator fixes the source. The agent cannot correct the source or cancel a mistaken flag; ask the operator to use the health runbook for either action.
 
 ### Residue
 
