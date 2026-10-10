@@ -40,6 +40,8 @@ same field key and same timestamp replaces. Every run rewinds OVERLAP_SECONDS
 behind the resume point, so re-running the job is always safe.
 """
 
+import csv
+import io
 import json
 import os
 import re
@@ -89,6 +91,7 @@ MAX_PAGES = 200
 # Where an empty bucket seeds from. Withings predates this by nothing that
 # matters; the first run pages the whole account once and never again.
 FIRST_RUN_START = "2009-01-01"
+FUTURE_STOP = "2262-04-11T23:47:16Z"  # Influx nanosecond timestamp ceiling.
 
 # user.activity is requested so sleep and activity can be added later without a
 # second browser round trip. No endpoint here calls either.
@@ -441,6 +444,104 @@ def esc_tag(value):
 
 
 # --- InfluxDB ---------------------------------------------------------------
+
+def canonical_grpid(value: object) -> str:
+    if isinstance(value, bool) or not isinstance(value, (str, int)):
+        raise IngestFailed("invalid grpid")
+    text = str(value)
+    if not re.fullmatch(r"[1-9][0-9]*", text) or int(text) > 2**64 - 1:
+        raise IngestFailed("invalid grpid")
+    return text
+
+
+def parse_influx_ns(value: str) -> int:
+    match = re.fullmatch(
+        r"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d{1,9}))?(Z|[+-]\d{2}:\d{2})",
+        value,
+    )
+    if not match:
+        raise IngestFailed("invalid Influx timestamp")
+    try:
+        zone = "+00:00" if match[3] == "Z" else match[3]
+        parsed = datetime.fromisoformat(match[1] + zone)
+        seconds = (parsed - datetime(1970, 1, 1, tzinfo=timezone.utc)) // timedelta(seconds=1)
+    except ValueError:
+        raise IngestFailed("invalid Influx timestamp")
+    return seconds * 1_000_000_000 + int((match[2] or "").ljust(9, "0") or "0")
+
+
+def query_influx_rows(cfg: dict, flux: str, required: tuple[str, ...]) -> list[dict[str, str]]:
+    url = "%s/api/v2/query?org=%s" % (cfg["url"], cfg["org"])
+    headers = {
+        "Authorization": "Token %s" % cfg["token"],
+        "Content-Type": "application/vnd.flux",
+        "Accept": "application/csv",
+    }
+    status, body = http_post(url, flux.encode(), headers, timeout=60)
+    if status < 200 or status >= 300:
+        raise IngestFailed("flag query http %d" % status)
+    if body.lstrip().startswith(("{", "[")):
+        raise IngestFailed("flag query returned JSON")
+    rows = []
+    columns = None
+    saw_header = False
+    try:
+        for cells in csv.reader(io.StringIO(body), strict=True):
+            if not cells or (len(cells) == 1 and not cells[0]):
+                continue
+            if cells[0].startswith("#"):
+                continue
+            if len(cells) > 1 and cells[0] == "" and cells[1] == "result":
+                columns = cells
+                saw_header = True
+                if len(set(columns)) != len(columns) or any(c not in columns for c in required):
+                    raise IngestFailed("flag query missing column")
+                continue
+            if columns is None or len(cells) != len(columns) or cells[0] != "":
+                raise IngestFailed("malformed flag query CSV")
+            row = dict(zip(columns, cells))
+            if any(not row[c] for c in required):
+                raise IngestFailed("flag query has empty column")
+            rows.append(row)
+    except csv.Error:
+        raise IngestFailed("malformed flag query CSV")
+    if not saw_header:
+        raise IngestFailed("flag query has no table header")
+    return rows
+
+
+def pending_flags(flags_cfg: dict) -> dict[str, list[int]]:
+    flux = (
+        'from(bucket:"%s")\n'
+        '  |> range(start: 1970-01-01T00:00:00Z, stop: %s)\n'
+        '  |> filter(fn: (r) => r._measurement == "withings_suspect" and '
+        'r._field == "status" and r._value == "pending")\n'
+        '  |> keep(columns: ["grpid", "_time", "_value"])\n'
+        % (flags_cfg["bucket"], FUTURE_STOP)
+    )
+    pending = {}
+    for row in query_influx_rows(flags_cfg, flux, ("grpid", "_time", "_value")):
+        grpid = canonical_grpid(row["grpid"])
+        if row["_value"] != "pending":
+            raise IngestFailed("flag query returned nonpending marker")
+        pending.setdefault(grpid, []).append(parse_influx_ns(row["_time"]))
+    return pending
+
+
+def local_group_times(influx_cfg: dict, grpid: str) -> list[int]:
+    grpid = canonical_grpid(grpid)
+    flux = (
+        'from(bucket:"%s")\n'
+        '  |> range(start: 1970-01-01T00:00:00Z, stop: %s)\n'
+        '  |> filter(fn: (r) => r._measurement == "%s" and r.grpid == "%s")\n'
+        '  |> keep(columns: ["grpid", "_time"])\n'
+        % (influx_cfg["bucket"], FUTURE_STOP, MEASUREMENT, grpid)
+    )
+    rows = query_influx_rows(influx_cfg, flux, ("grpid", "_time"))
+    if any(row["grpid"] != grpid for row in rows):
+        raise IngestFailed("local query returned another grpid")
+    return sorted({parse_influx_ns(row["_time"]) // 1_000_000_000 for row in rows})
+
 
 def influx_write(cfg, lines):
     if not lines:

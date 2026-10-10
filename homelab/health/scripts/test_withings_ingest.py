@@ -8,7 +8,7 @@ needed installing would not get run.
 
     python3 homelab/health/scripts/test_withings_ingest.py
 
-Seven groups, one per way this run can be wrong in a way that costs data or a
+Each group covers a way this run can be wrong in a way that costs data or a
 browser trip. The functions copied verbatim from cloudflare-analytics-ingest.py
 are NOT re-tested here: `esc_tag`, `env` and `http_post` carry their own suites
 in test_cloudflare_analytics_ingest.py, and a second copy of those assertions
@@ -161,6 +161,88 @@ CSV_EMPTY = (
 
 CFG = {"url": "http://influx.example", "org": "cynexia",
        "bucket": "withings", "token": "influx-token"}
+
+
+class FlagQueries(unittest.TestCase):
+    def setUp(self):
+        self.real_post = wi.http_post
+        self.calls = []
+
+    def tearDown(self):
+        wi.http_post = self.real_post
+
+    def stub(self, status, body):
+        def post(url, data, headers, timeout=None):
+            self.calls.append((url, data.decode(), headers))
+            return status, body
+        wi.http_post = post
+
+    def test_canonical_grpid_accepts_only_positive_uint64(self):
+        self.assertEqual(wi.canonical_grpid("1"), "1")
+        self.assertEqual(wi.canonical_grpid(18446744073709551615),
+                         "18446744073709551615")
+        for bad in (0, "0", "01", "-1", " 1", "1 ",
+                    "18446744073709551616", True, None):
+            with self.subTest(bad=bad), self.assertRaises(wi.IngestFailed):
+                wi.canonical_grpid(bad)
+        self.assertEqual(self.calls, [])
+
+    def test_marker_time_preserves_all_nine_fractional_digits(self):
+        self.assertEqual(wi.parse_influx_ns("2026-10-06T12:00:00.123456789Z"),
+                         1791288000123456789)
+        with self.assertRaises(wi.IngestFailed):
+            wi.parse_influx_ns("not-a-time")
+
+    def test_pending_flags_reads_repeated_tables_and_exact_markers(self):
+        self.stub(200, (
+            "#group,false,false,false,false,false\r\n"
+            "#datatype,string,long,dateTime:RFC3339,string,string\r\n"
+            ",result,table,_time,grpid,_value\r\n"
+            ",_result,0,2026-10-06T12:00:00.123456789Z,12,pending\r\n"
+            "#group,false,false,false,false,false\r\n"
+            "#datatype,string,long,dateTime:RFC3339,string,string\r\n"
+            ",result,table,_time,grpid,_value\r\n"
+            ",_result,1,2026-10-06T12:00:01.000000001Z,12,pending\r\n"
+        ))
+        self.assertEqual(wi.pending_flags(CFG),
+                         {"12": [1791288000123456789, 1791288001000000001]})
+        self.assertIn('r._field == "status"', self.calls[0][1])
+        self.assertIn('r._value == "pending"', self.calls[0][1])
+        self.assertIn('from(bucket:"withings")', self.calls[0][1])
+
+    def test_empty_annotated_csv_is_an_empty_queue(self):
+        self.stub(200, ",result,table,_time,grpid,_value\r\n")
+        self.assertEqual(wi.pending_flags(CFG), {})
+
+    def test_flag_query_errors_are_not_empty(self):
+        for status, body in ((200, '{"code":"invalid"}'),
+                             (200, 'broken csv'),
+                             (200, ",result,table,_time,grpid\r\n"),
+                             (200, ",result,table,_time,grpid,_value\r\n"
+                                   ",_result,0,2026-10-06T12:00:00Z,12\r\n"),
+                             (503, "unavailable")):
+            with self.subTest(status=status, body=body):
+                self.stub(status, body)
+                with self.assertRaises(wi.IngestFailed):
+                    wi.pending_flags(CFG)
+
+    def test_local_group_times_include_future_points_without_body_values(self):
+        self.stub(200, (
+            ",result,table,_time,grpid\r\n"
+            ",_result,0,2026-10-06T12:00:00Z,12\r\n"
+            ",_result,0,2030-10-06T12:00:00Z,12\r\n"
+            ",_result,0,2030-10-06T12:00:00Z,12\r\n"
+        ))
+        self.assertEqual(wi.local_group_times(CFG, "12"),
+                         [1791288000, 1917518400])
+        flux = self.calls[0][1]
+        self.assertIn('stop: 2262-04-11T23:47:16Z', flux)
+        self.assertIn('r.grpid == "12"', flux)
+        self.assertIn('keep(columns: ["grpid", "_time"])', flux)
+        self.assertNotIn("_value", flux)
+        with self.assertRaises(wi.IngestFailed):
+            wi.local_group_times(CFG, "01")
+        self.assertEqual(len(self.calls), 1)
 
 
 class ResumePoint(unittest.TestCase):
