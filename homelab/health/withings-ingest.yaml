@@ -141,6 +141,8 @@ spec:
                 # writes. Scoped to that one bucket, like the cloudflare token.
                 - name: INFLUX_TOKEN
                   valueFrom: { secretKeyRef: { name: health-influxdb, key: withings-token } }
+                - name: INFLUX_FLAGS_TOKEN
+                  valueFrom: { secretKeyRef: { name: health-influxdb, key: withings-flags-token } }
               volumeMounts:
                 - { name: script, mountPath: /app, readOnly: true }
                 - { name: state, mountPath: /state }

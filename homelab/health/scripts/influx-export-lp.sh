@@ -27,7 +27,7 @@ DATE=$1
 
 START=$(date -d "8 days ago" +%FT%TZ 2>/dev/null || date -v-8d +%FT%TZ)
 
-for B in apple_metrics apple_workouts garmin cloudflare withings; do
+for B in apple_metrics apple_workouts garmin cloudflare withings withings_flags; do
   # A pipeline exits with its LAST command status, so a failed
   # `influx bucket list` leaves BID empty and sails past set -e. The explicit
   # test is what turns "bucket does not exist" into a named failure instead of

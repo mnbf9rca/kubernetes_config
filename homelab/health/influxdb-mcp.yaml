@@ -103,6 +103,10 @@ spec:
                                               # their calls with this token. Mandatory hardening.
                 secretKeyRef: { name: health-influxdb, key: read-token }
             - { name: INFLUXDB_ORG, value: cynexia }
+            # Only the local flag tool uses this token; the upstream MCP
+            # connection above remains read-only on health data.
+            - name: INFLUX_FLAGS_TOKEN
+              valueFrom: { secretKeyRef: { name: health-influxdb, key: withings-flags-token } }
             # The guidance the `how-to-use-health-data` tool returns. Read FROM
             # DISK ON EVERY CALL, not once at startup: a guide edit then needs
             # no image rebuild, the ConfigMap's content-hash suffix rolls this
