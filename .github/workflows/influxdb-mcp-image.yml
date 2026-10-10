@@ -167,25 +167,24 @@ jobs:
           push: false
           tags: ${{ env.IMAGE }}
 
-      # The one failure mode the guidance hook has: the SDK moved and the patch
-      # no longer registers. Nothing in this repository can run a JavaScript
-      # test, so this build is the hook's only check. stdio, not --http, because
-      # that needs no session id and no SSE parsing. The InfluxDB environment is
-      # dummy: the assertion is the tool list, not a query.
-      - name: Assert the guidance tool is registered
+      # Stdio needs no session id or SSE parsing. Dummy Influx credentials
+      # make the invalid-ID call prove that validation precedes all I/O.
+      - name: Assert the health tools and invalid-ID guard
         run: |
           set -euo pipefail
           printf '%s\n' \
             '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"ci","version":"0"}}}' \
             '{"jsonrpc":"2.0","method":"notifications/initialized","params":{}}' \
             '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}' \
+            '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"flag-suspect-withings-group","arguments":{"grpid":"0"}}}' \
             | timeout 60 docker run -i --rm \
                 -e INFLUXDB_URL=http://127.0.0.1:8086 \
                 -e INFLUXDB_TOKEN=not-a-real-token \
                 -e INFLUXDB_ORG=ci \
                 "$IMAGE" > tools.json || true
           cat tools.json
-          grep -q 'how-to-use-health-data' tools.json
+          jq -e 'select(.id == 2) | .result.tools | any(.name == "how-to-use-health-data") and any(.name == "flag-suspect-withings-group")' tools.json
+          jq -e 'select(.id == 3) | .result | .isError == true and (.content | any(.type == "text" and (.text | contains("invalid grpid"))))' tools.json
 
       # A fork's pull request has a read-only GITHUB_TOKEN, so it builds and
       # asserts but cannot push or sign - and its merge then fails in `promote`,

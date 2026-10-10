@@ -6,11 +6,12 @@ Read this before writing any Flux against this instance.
 
 ## Connection
 
-Organization `cynexia`. Five buckets:
+Organization `cynexia`. Six buckets:
 
 | Bucket | Holds |
 |---|---|
 | `withings` | Body composition, height and blood pressure from two Withings scales and a cuff |
+| `withings_flags` | Internal suspect-group queue state (`pending` or `resolved`), not body measurements |
 | `apple_metrics` | Everything Health Auto Export sends from Apple Health, one measurement per metric-and-unit |
 | `apple_workouts` | Apple workout records |
 | `garmin` | Garmin device data, including a wide `BodyComposition` measurement |
@@ -104,6 +105,19 @@ So group or pivot on `_time` and `deviceid` when you want one row per weigh-in.
 Keying on `grpid` returns one row per group instead, and the extra rows are empty in every column the first one filled.
 
 `grpid` is still exactly right for asking about group structure, which is what pattern 9 does.
+
+### Flag a suspect Withings group
+
+First identify the specific `grpid` and its field keys without reading body values. Adjust the time range to the suspect reading:
+
+```flux
+from(bucket: "withings")
+  |> range(start: 2026-10-06T00:00:00Z, stop: 2026-10-07T00:00:00Z)
+  |> filter(fn: (r) => r._measurement == "withings_measure_group")
+  |> keep(columns: ["_time", "grpid", "deviceid", "_field"])
+```
+
+Several `grpid` values can share one weigh-in time, so inspect the siblings and flag only the wrong group. Call `flag-suspect-withings-group` with that ID after the operator corrects the reading in Withings. The flag records a request; it does **not** hide or immediately delete any local point. The next Withings ingest checks the whole account and removes that group's local points only when the source answer proves it absent and brackets every local point time. A group still at Withings stays pending. The agent cannot correct the source or cancel a mistaken flag; ask the operator to use the health runbook for either action.
 
 ### Residue
 
