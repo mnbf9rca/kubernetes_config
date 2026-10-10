@@ -29,6 +29,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 from urllib.parse import parse_qsl as urllib_parse_qsl
 
 # The script is named with hyphens (it is a kubectl-mounted file, not a module),
@@ -426,6 +427,15 @@ class Fetch(unittest.TestCase):
             wi.fetch_measures("access", 1000)
         self.assertEqual(len(self.calls), 2)
 
+    def test_rate_limit_and_malformed_offset_are_fatal(self):
+        wi.http_post = lambda url, body, headers, timeout=None: (429, "rate limited")
+        with self.assertRaises(wi.IngestFailed):
+            wi.fetch_measures("access", 1000)
+        self.stub_pages([{"status": 0, "body": {"measuregrps": [],
+                                               "more": 1, "offset": "bad"}}])
+        with self.assertRaises(wi.IngestFailed):
+            wi.fetch_measures("access", 1000)
+
 
 class FieldName(unittest.TestCase):
     """The field key is built from the group's own shape, never from a
@@ -720,6 +730,167 @@ class Points(unittest.TestCase):
                         "measures": [{"type": 1, "value": 1, "unit": 0}]}])
 
 
+class Reconcile(unittest.TestCase):
+    def setUp(self):
+        self.flags = {"url": CFG["url"], "org": CFG["org"],
+                      "bucket": "withings_flags", "token": "flags-token"}
+        self.events = []
+        self.pending = {"12": [1791288000123456789]}
+        self.groups = [{"grpid": 1, "date": 100, "measures": []},
+                       {"grpid": 2, "date": 200, "measures": []}]
+        self.times = [150]
+        self.after_delete = []
+        self.late_marker = None
+        self.real_log = wi.log
+        wi.log = lambda msg: None
+
+    def tearDown(self):
+        wi.log = self.real_log
+
+    def run_gate(self):
+        def pending(_cfg):
+            self.events.append("flags")
+            return {key: value[:] for key, value in self.pending.items()}
+
+        def fetch(_token, since):
+            self.events.append("full_fetch")
+            self.assertEqual(since, 1230768000)
+            if self.late_marker is not None:
+                self.pending["12"].append(self.late_marker)
+            return self.groups
+
+        def local(_cfg, grpid):
+            self.events.append("local")
+            return self.after_delete if "delete" in self.events else self.times
+
+        def delete(_cfg, grpid, stop):
+            self.events.append("delete")
+            self.assertEqual(grpid, "12")
+            self.assertEqual(stop, max(self.times) + 1)
+
+        def resolve(_cfg, grpid, timestamp):
+            self.events.append(("resolve", grpid, timestamp))
+
+        with patch.object(wi, "pending_flags", pending), \
+             patch.object(wi, "fetch_measures", fetch), \
+             patch.object(wi, "local_group_times", local), \
+             patch.object(wi, "delete_group", delete), \
+             patch.object(wi, "resolve_flag", resolve):
+            wi.reconcile_flags(CFG, self.flags, "access-token")
+
+    def test_no_flags_makes_no_second_withings_call(self):
+        self.pending = {}
+        self.run_gate()
+        self.assertEqual(self.events, ["flags"])
+
+    def test_every_local_time_must_be_bracketed(self):
+        self.times = [150, 250]
+        self.run_gate()
+        self.assertEqual(self.events, ["flags", "full_fetch", "local"])
+
+    def test_tombstone_like_group_is_present(self):
+        self.groups.append({"grpid": 12, "date": 150, "measures": []})
+        self.run_gate()
+        self.assertEqual(self.events, ["flags", "full_fetch", "local"])
+
+    def test_bracketed_absence_deletes_confirms_then_resolves_captured_markers(self):
+        self.pending["12"].append(1791288001000000001)
+        self.run_gate()
+        self.assertEqual(self.events, ["flags", "full_fetch", "local", "delete",
+                                       "local", ("resolve", "12", 1791288000123456789),
+                                       ("resolve", "12", 1791288001000000001)])
+
+    def test_empty_or_one_sided_response_cannot_delete(self):
+        for groups in ([], self.groups[:1], self.groups[1:]):
+            with self.subTest(groups=groups):
+                self.groups = groups
+                self.events = []
+                self.run_gate()
+                self.assertNotIn("delete", self.events)
+                self.assertFalse(any(isinstance(e, tuple) for e in self.events))
+
+    def test_no_local_points_resolves_only_if_absent_in_nonempty_source(self):
+        self.times = []
+        self.run_gate()
+        self.assertNotIn("delete", self.events)
+        self.assertIn(("resolve", "12", 1791288000123456789), self.events)
+        self.events = []
+        self.groups.append({"grpid": 12, "date": 150, "measures": []})
+        self.run_gate()
+        self.assertFalse(any(isinstance(e, tuple) for e in self.events))
+
+    def test_source_index_validates_every_group_before_any_absence(self):
+        for bad in ({"grpid": "01", "date": 150},
+                    {"grpid": 3, "date": "bad"},
+                    {"grpid": 3, "date": 1.5}, None):
+            with self.subTest(bad=bad):
+                self.groups = [{"grpid": 1, "date": 100}, bad,
+                               {"grpid": 2, "date": 200}]
+                self.events = []
+                with self.assertRaises(wi.IngestFailed):
+                    self.run_gate()
+                self.assertNotIn("local", self.events)
+                self.assertNotIn("delete", self.events)
+
+    def test_faults_leave_markers_unresolved_at_verify_stage(self):
+        for faulty in ("pending_flags", "fetch_measures", "local_group_times", "delete_group",
+                       "resolve_flag"):
+            with self.subTest(faulty=faulty):
+                wi.STAGE[0] = "verify"
+                events = []
+                local_reads = iter([self.times, []])
+                with patch.object(wi, "pending_flags", return_value=self.pending), \
+                     patch.object(wi, "fetch_measures", return_value=self.groups), \
+                     patch.object(wi, "local_group_times", side_effect=lambda *_: next(local_reads)), \
+                     patch.object(wi, "delete_group", side_effect=lambda *a: events.append("delete")), \
+                     patch.object(wi, "resolve_flag", side_effect=lambda *a: events.append("resolve")), \
+                     patch.object(wi, faulty, side_effect=wi.IngestFailed("fault")):
+                    with self.assertRaises(wi.IngestFailed) as caught:
+                        wi.reconcile_flags(CFG, self.flags, "access-token")
+                self.assertNotIn("resolve", events)
+                self.assertEqual(wi.STAGE[0], "verify")
+                if faulty in ("local_group_times", "delete_group", "resolve_flag"):
+                    self.assertIn("grpid 12", str(caught.exception))
+                    self.assertNotIn("fault", str(caught.exception))
+
+    def test_failed_zero_point_confirmation_never_resolves(self):
+        self.after_delete = [150]
+        with self.assertRaises(wi.IngestFailed):
+            self.run_gate()
+        self.assertNotIn(("resolve", "12", 1791288000123456789), self.events)
+
+    def test_new_flag_during_run_stays_pending(self):
+        self.pending = {"12": [1791288000123456789]}
+        self.late_marker = 1791288001000000001
+        self.run_gate()
+        self.assertEqual(len(self.pending["12"]), 2)
+        self.assertEqual([e for e in self.events if isinstance(e, tuple)],
+                         [("resolve", "12", 1791288000123456789)])
+
+    def test_delete_group_uses_measurement_and_validated_tag(self):
+        sent = []
+        with patch.object(wi, "http_post", side_effect=lambda url, body, headers: (
+                sent.append((url, json.loads(body))), (204, ""))[1]):
+            wi.delete_group(CFG, "12", 251)
+            with self.assertRaises(wi.IngestFailed):
+                wi.delete_group(CFG, "01", 251)
+        self.assertEqual(len(sent), 1)
+        self.assertEqual(sent[0][1]["predicate"],
+                         '_measurement="withings_measure_group" AND grpid="12"')
+        self.assertEqual(sent[0][1]["start"], "1970-01-01T00:00:00Z")
+        self.assertEqual(sent[0][1]["stop"], "1970-01-01T00:04:11Z")
+
+    def test_resolve_preserves_nanoseconds(self):
+        sent = []
+        with patch.object(wi, "http_post", side_effect=lambda url, body, headers: (
+                sent.append((url, body.decode(), headers)), (204, ""))[1]):
+            wi.resolve_flag(self.flags, "12", 1791288000123456789)
+        self.assertIn("precision=ns", sent[0][0])
+        self.assertEqual(sent[0][1],
+                         'withings_suspect,grpid=12 status="resolved" 1791288000123456789')
+        self.assertEqual(sent[0][2]["Authorization"], "Token flags-token")
+
+
 class RunOrder(StateDir):
     """The sequencing rules from the design's data flow.
 
@@ -731,6 +902,7 @@ class RunOrder(StateDir):
         self.order = []
         self.real_env = dict(os.environ)
         os.environ["INFLUX_TOKEN"] = "influx-token"
+        os.environ["INFLUX_FLAGS_TOKEN"] = "flags-token"
         os.environ["WITHINGS_CLIENT_ID"] = "client-id"
         os.environ["WITHINGS_CLIENT_SECRET"] = "client-secret"
         wi.SUMMARY[0] = DEFAULT_SUMMARY
@@ -748,6 +920,9 @@ class RunOrder(StateDir):
         """Stub every call, recording the order they arrive in."""
         def _post(url, body, headers, timeout=None):
             if "/api/v2/query" in url:
+                if 'from(bucket:"withings_flags")' in body.decode():
+                    self.order.append("flags")
+                    return 200, ""
                 self.order.append("resume")
                 return 200, CSV_ONE_ROW
             if url == wi.WITHINGS_TOKEN_URL:
@@ -782,7 +957,8 @@ class RunOrder(StateDir):
         self.assertEqual(wi.main(), 0)
         self.assertEqual(self.order,
                          ["resume", "refresh", "write_state", "getmeas",
-                          "write"])
+                          "write", "flags"])
+        self.assertEqual(wi.STAGE[0], "verify")
 
     def test_a_failed_persist_stops_the_run_before_any_getmeas(self):
         # The new access token must not be used: the OLD refresh token is still
