@@ -90,6 +90,7 @@ HEALTH_INFLUX_INGESTER_TOKEN=op://Homelab/health-influxdb/ingester-token
 HEALTH_INFLUX_READ_TOKEN=op://Homelab/health-influxdb/read-token
 HEALTH_INFLUX_CLOUDFLARE_TOKEN=op://Homelab/health-influxdb/cloudflare-token
 HEALTH_INFLUX_WITHINGS_TOKEN=op://Homelab/health-influxdb/withings-token
+HEALTH_INFLUX_WITHINGS_FLAGS_TOKEN=op://Homelab/health-influxdb/withings_flags-token
 
 # health namespace — Withings OAuth2 client ("Public API integration",
 # Development environment). The client id is an identifier rather than a

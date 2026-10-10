@@ -207,7 +207,7 @@ Token extraction uses `--json | jq -r .token`, not `--hide-headers` plus awk col
 Three choices the target makes, which its comment no longer has room for:
 
 - **Retention is `-r 0`, infinite.** These buckets exist to outlive the source they copy from — Cloudflare's 8-day analytics window is the sharpest case — so expiring the copy would defeat the pipeline.
-- **The ingest token reads as well as writes.** Each job's resume point is `max(_time)` read back out of its own bucket, not a stored cursor, so it reads before it writes. Three of the four ingest tokens need that; the apple ingester is the exception and no flow re-mints it.
+- **The ingest token reads as well as writes.** Each polling job's resume point is `max(_time)` read back out of its own bucket, not a stored cursor, so it reads before it writes. The Apple ingester is the exception and no flow re-mints it. The `withings_flags` token also reads and writes its queue, shared only by MCP and ingest.
 - **The shared read token is not touched.** It reads every bucket in the organization, present and future, so a new bucket is visible to Grafana Cloud and the MCP connector with no re-mint.
 
 **A new bucket is three edits, not one.** Create it with the target, add its name to the explicit `for B in ...` list in `homelab/health/scripts/influx-export-lp.sh`, and raise `LP_EXPECTED` in `homelab/health/scripts/influx-backup.sh`. A bucket missing from the export list is silently never exported; a bucket in that list that does not exist fails the nightly job by name, so create it **before** the apply that adds it; and a stale `LP_EXPECTED` shows up as a visibly wrong `buckets=n/m` in the `health-influx-backup` heartbeat and nothing worse. Nothing mechanical enforces this rule — the target's last line prints it at the moment it applies.
@@ -239,6 +239,7 @@ If it is ever replaced, the ordering is not a preference: paste over the existin
 | Apple ingester | `op://Homelab/health-influxdb/ingester-token` | write-only on `apple_metrics` and `apple_workouts` |
 | Cloudflare ingest | `op://Homelab/health-influxdb/cloudflare-token` | read **and** write on `cloudflare` |
 | Withings ingest | `op://Homelab/health-influxdb/withings-token` | read **and** write on `withings` |
+| Withings flag queue (MCP and ingest) | `op://Homelab/health-influxdb/withings_flags-token` | read **and** write on `withings_flags` only |
 
 **`--read-buckets` covers `_monitoring` and `_tasks` as well.** Those hold InfluxDB's own task and check logs and no user data, and nothing in this estate writes tasks or checks. No action; it is recorded so nobody rediscovers it as a surprise.
 
@@ -264,7 +265,7 @@ influx auth create -o cynexia --write-bucket <apple_metrics id> --write-bucket <
   -d "apple ingester write-only"
 ```
 
-Buckets themselves need no record here: `make health-influx-bucket-bootstrap BUCKET=<name>` makes any of the five.
+Buckets themselves need no record here: `make health-influx-bucket-bootstrap BUCKET=<name>` makes any of the six.
 
 ## Backups and restore
 
@@ -272,7 +273,7 @@ The `influx-backup` CronJob runs at 02:30 daily, ahead of the 03:00 restic sweep
 It writes two things:
 
 - a native `influx backup` (14 generations), and
-- a per-bucket, 8-day-windowed line-protocol export (60 generations, gzip), over an **explicit** bucket list: `apple_metrics apple_workouts garmin cloudflare withings`
+- a per-bucket, 8-day-windowed line-protocol export (60 files, 10 nights at six buckets, gzip), over an **explicit** bucket list: `apple_metrics apple_workouts garmin cloudflare withings withings_flags`
 
 to the `health-dumps` PVC on `local-path`.
 It took a third, a copy of the self-hosted Grafana's SQLite database, until September 6, 2026.
@@ -291,7 +292,7 @@ Consequence for ordering: run `make health-influx-bucket-bootstrap BUCKET=cloudf
 **A new bucket is three edits, not two.**
 Create it, add it to the `for B in ...` list in `influx-export-lp.sh`, **and** raise `LP_EXPECTED` in `homelab/health/scripts/influx-backup.sh`.
 That last one is the denominator of the `buckets=n/m` the `health-influx-backup` heartbeat carries, and it is a literal because the bucket list lives in the other pod's script and cannot be read from the driver.
-Nothing breaks if it drifts — the export already fails by name on a bucket it cannot find, so on the success path n always equals the real count — but a `buckets=5/4` in the heartbeat is the visible tell that somebody edited one and not the other.
+Nothing breaks if it drifts — the export already fails by name on a bucket it cannot find, so on the success path n always equals the real count — but a `buckets=7/6` in the heartbeat is the visible tell that somebody edited one and not the other.
 
 **InfluxDB restore drill:** `influx restore --full` self-defeats — it clobbers its own auth mid-restore.
 Use scoped `influx restore --bucket <name>` instead.
@@ -790,6 +791,60 @@ There is no `make` target for this: it needs a browser, a 30-second code window 
 
 Losing the file costs the credential and nothing else: the resume point is in the bucket, so a re-authorization picks up where the data ends rather than replaying the account.
 
+### Suspect group flags
+
+The MCP tool `flag-suspect-withings-group` accepts one canonical positive decimal `grpid` and writes `withings_suspect,grpid=<id> status="pending"` to the infinite-retention `withings_flags` bucket. InfluxDB assigns the timestamp. The group remains visible. The agent flags it when it spots the suspect reading and tells the operator which group to correct or reassign in Withings; a source-present group remains pending across runs, even when its local points have disappeared. Each captured marker becomes `status="resolved"` at its original nanosecond timestamp only after safe reconciliation.
+
+Normal ingest still writes its 15-minute delta first. With pending flags, it makes one full-account Withings `getmeas` request from 2009, plus pages if needed, against the application's 120-requests/minute limit. It validates the whole answer, then requires source dates strictly before and after **every** local time for an absent ID. An empty, malformed, short, or one-sided answer cannot delete; a documented future retention floor would also rule out IDs at or before that floor. Once the flagged ID passes, ingest checks local siblings sharing its exact `_time` and real `deviceid` against the same complete source response; `deviceid=unknown` does not identify siblings. It deletes each absent, bracketed sibling by its own `withings_measure_group` and `grpid` predicate with a zero-point confirmation, before deleting the flagged ID; source-present or unbracketed siblings remain, with fixed reasons in the pod log. Siblings get no flag markers, and only the flagged ID's captured markers resolve. No flags means no full-account request.
+
+**Operator gates:** Before the first `op run` render, diff, or apply for this change, the operator runs `make health-influx-bucket-bootstrap BUCKET=withings_flags` in a plain terminal and stores its printed token at `op://Homelab/health-influxdb/withings_flags-token`. Agents do not run that command or inspect token values; check only that the field and bucket exist. Before hand-writing a pending marker or forcing a reconciliation Job for a real group, show the operator every local sibling's `grpid`, `deviceid`, and field keys at the target time, without values. Obtain separate approval naming the flagged `grpid` and covering its exact-time, same-device siblings **only if each independently passes the source gate**. The rollout's specific approval and read-only sibling listing are recorded in the implementation plan and ledger.
+
+`failure=verify` means queue read, full Withings check, local or sibling query, delete, confirmation, or status write failed; read the pod log's fixed reason and ID. Each deleted or kept sibling is named there, so the pod log records what that run removed. A repeat failure on every run can be a malformed marker, which requires manual queue cleanup while ingest is suspended. The commands below take a canonical ID; do not interpolate a malformed tag into them. A log saying `INFLUX_FLAGS_TOKEN is unset` is Secret wiring after the ordinary ingest write, rather than a source fault. A source-present or safely unbracketed ID is an ordinary pending result and leaves the monitor up.
+
+### Remove a mistaken flag
+
+A mistaken flag may already be absent at Withings, so prevent an overlapping reconciliation before touching the queue. Confirm `deploy/influxdb` still names the InfluxDB workload, set `GRPID` to the observed canonical ID, then suspend ingest and wait until `ACTIVE` is zero:
+
+```bash
+GRPID='REPLACE_WITH_CANONICAL_GRPID'
+kubectl -n health get deploy influxdb
+kubectl -n health patch cronjob withings-ingest -p '{"spec":{"suspend":true}}'
+kubectl -n health get cronjob withings-ingest
+```
+
+Query that exact ID. The command prints only flag status and time, never body measurements or the admin token; its token expands inside the pod's single-quoted shell:
+
+```bash
+kubectl -n health exec deploy/influxdb -- sh -c '
+  influx query -o cynexia -t "$DOCKER_INFLUXDB_INIT_ADMIN_TOKEN" --raw \
+    "from(bucket: \"withings_flags\") |> range(start: 1970-01-01T00:00:00Z, stop: 2262-04-11T23:47:16Z) |> filter(fn: (r) => r._measurement == \"withings_suspect\" and r.grpid == \"$1\") |> keep(columns: [\"grpid\", \"_time\", \"_value\"])"' sh "$GRPID"
+```
+
+Confirm the ID in the output. Delete only the queue measurement and tag:
+
+```bash
+kubectl -n health exec deploy/influxdb -- sh -c '
+  influx delete -o cynexia --bucket withings_flags \
+    --start 1970-01-01T00:00:00Z --stop 2262-04-11T23:47:16Z \
+    --predicate "_measurement=\"withings_suspect\" AND grpid=\"$1\"" \
+    -t "$DOCKER_INFLUXDB_INIT_ADMIN_TOKEN"' sh "$GRPID"
+```
+
+Repeat the exact query above and require zero rows. Only then unsuspend:
+
+```bash
+kubectl -n health patch cronjob withings-ingest -p '{"spec":{"suspend":false}}'
+kubectl -n health get cronjob withings-ingest
+```
+
+`SUSPEND` must read `False`. The flag delete never targets the health measurement. Removing a source-present flag with no local points uses this same procedure.
+
+### Recover from a bad group delete
+
+Suspend ingest and choose a **native backup taken before the bad delete**; it holds the full flag bucket. Stage `withings` and `withings_flags` from that **same backup set** under new bucket names, because `influx restore --bucket` cannot write into existing buckets. For one wrongly deleted group, first filter the staged `withings_measure_group` points by the exact `grpid` and copy only that group's fields, times, and tags back to the live `withings` bucket with Flux `to(bucket: "withings")`; check the restored point count before resuming ingest. This keeps the live bucket ID and tokens. For broader loss, plan bucket replacement with the operator: replacing either live bucket changes its ID and requires a fresh scoped token in 1Password and an apply. A line-protocol export covers only eight days, so it is not the primary recovery copy for old points or flags. [InfluxDB's scoped restore rules](https://docs.influxdata.com/influxdb/v2/reference/cli/influx/restore/) explain the existing-bucket refusal.
+
+Only if no pre-delete native backup remains may the operator choose the last resort: delete the entire `withings_measure_group` measurement and let the empty resume query re-backfill from `FIRST_RUN_START`. That **permanently loses every locally kept group no longer at Withings**. After recovery, check resolved flag IDs against restored `withings` points and re-flag any overlap for a fresh source check. Do not combine `withings` and `withings_flags` copies from different backup times.
+
 ## Garmin re-authentication
 
 The `garmin-grafana` Deployment logs in to Garmin Connect with the token cache on the `garmin-tokens` PVC.
@@ -991,7 +1046,7 @@ Put its token and ids on the `op://Homelab/health-pdc` item before you apply the
    Route it to the stack's default contact point.
 
 Both datasources reproduce the self-hosted ones exactly, so existing queries port unchanged.
-Available buckets: `apple_metrics`, `apple_workouts`, `garmin`, `cloudflare`, `withings`.
+Available buckets: `apple_metrics`, `apple_workouts`, `garmin`, `cloudflare`, `withings`, `withings_flags` (internal queue state).
 
 ## Monitoring
 
@@ -1022,7 +1077,7 @@ Roster and per-monitor settings: [uptime-kuma.md](uptime-kuma.md#push-monitors).
   The pod log carries the full per-bucket verdict and keeps "stale" apart from "query failed", which the monitor's one bit cannot.
 - `cloudflare-analytics` (hourly) is Python and pushes `up` on rc 0 and `down` otherwise, the unrecoverable-gap path included, so a failure is distinguishable from a never-scheduled run without waiting for the silence bound.
   Pushes are best-effort and can never fail the job.
-- `withings-ingest` (every 15 minutes) is Python on the same contract: `up` on rc 0, `down` otherwise, one push per run, never silent. `msg` carries `verdict=` from `ok|failed`, `groups=`, `points=` and, on a failure, `failure=` from a five-member enum naming the stage that died — `resume` and `write` are InfluxDB, `refresh` and `fetch` are Withings, `token_persist` is the volume — plus `exception=` after it on an unhandled error.
+- `withings-ingest` (every 15 minutes) is Python on the same contract: `up` on rc 0, `down` otherwise, one push per run, never silent. `msg` carries `verdict=` from `ok|failed`, `groups=`, `points=` and, on a failure, `failure=` from a six-member enum naming the stage that died — `resume` and `write` are InfluxDB, `refresh` and `fetch` are Withings, `token_persist` is the volume, and `verify` is suspect-flag reconciliation — plus `exception=` after it on an unhandled error.
 
 **There is no `/start` equivalent on the push API, and none of these four has one.**
 A push is a heartbeat carrying a status, so `activeDeadlineSeconds` is the whole of the hang bound and the monitor's interval plus retry is the silence bound.

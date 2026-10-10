@@ -6,11 +6,12 @@ Read this before writing any Flux against this instance.
 
 ## Connection
 
-Organization `cynexia`. Five buckets:
+Organization `cynexia`. Six buckets:
 
 | Bucket | Holds |
 |---|---|
 | `withings` | Body composition, height and blood pressure from two Withings scales and a cuff |
+| `withings_flags` | Internal suspect-group queue state (`pending` or `resolved`), not body measurements |
 | `apple_metrics` | Everything Health Auto Export sends from Apple Health, one measurement per metric-and-unit |
 | `apple_workouts` | Apple workout records |
 | `garmin` | Garmin device data, including a wide `BodyComposition` measurement |
@@ -104,6 +105,19 @@ So group or pivot on `_time` and `deviceid` when you want one row per weigh-in.
 Keying on `grpid` returns one row per group instead, and the extra rows are empty in every column the first one filled.
 
 `grpid` is still exactly right for asking about group structure, which is what pattern 9 does.
+
+### Flag a suspect Withings group
+
+Find the suspect value and its specific `grpid`. Adjust the time range and field filter to the reading in question:
+
+```flux
+from(bucket: "withings")
+  |> range(start: 2026-10-06T00:00:00Z, stop: 2026-10-07T00:00:00Z)
+  |> filter(fn: (r) => r._measurement == "withings_measure_group" and r._field == "weight")
+  |> keep(columns: ["_time", "grpid", "deviceid", "_field", "_value"])
+```
+
+Several `grpid` values can share one weigh-in time. Remove the field filter to inspect sibling IDs and field keys at that time, then flag the identified suspect group. Call `flag-suspect-withings-group` as soon as you identify it, and tell the operator which group needs correction or reassignment in Withings. The flag records a request; it does **not** hide or immediately delete any local point. The next Withings ingest checks the whole account and removes the flagged group's local points only when the source answer proves it absent and brackets every local point time. It also checks siblings at the exact same time and device, removing each only if that sibling is also absent and bracketed. A group still at Withings stays pending or untouched until the operator fixes the source. The agent cannot correct the source or cancel a mistaken flag; ask the operator to use the health runbook for either action.
 
 ### Residue
 

@@ -8,7 +8,7 @@ needed installing would not get run.
 
     python3 homelab/health/scripts/test_withings_ingest.py
 
-Seven groups, one per way this run can be wrong in a way that costs data or a
+Each group covers a way this run can be wrong in a way that costs data or a
 browser trip. The functions copied verbatim from cloudflare-analytics-ingest.py
 are NOT re-tested here: `esc_tag`, `env` and `http_post` carry their own suites
 in test_cloudflare_analytics_ingest.py, and a second copy of those assertions
@@ -29,6 +29,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 from urllib.parse import parse_qsl as urllib_parse_qsl
 
 # The script is named with hyphens (it is a kubectl-mounted file, not a module),
@@ -161,6 +162,91 @@ CSV_EMPTY = (
 
 CFG = {"url": "http://influx.example", "org": "cynexia",
        "bucket": "withings", "token": "influx-token"}
+
+
+class FlagQueries(unittest.TestCase):
+    def setUp(self):
+        self.real_post = wi.http_post
+        self.calls = []
+
+    def tearDown(self):
+        wi.http_post = self.real_post
+
+    def stub(self, status, body):
+        def post(url, data, headers, timeout=None):
+            self.calls.append((url, data.decode(), headers))
+            return status, body
+        wi.http_post = post
+
+    def test_canonical_grpid_accepts_only_positive_uint64(self):
+        self.assertEqual(wi.canonical_grpid("1"), "1")
+        self.assertEqual(wi.canonical_grpid(18446744073709551615),
+                         "18446744073709551615")
+        for bad in (0, "0", "01", "-1", " 1", "1 ",
+                    "18446744073709551616", True, None):
+            with self.subTest(bad=bad), self.assertRaises(wi.IngestFailed):
+                wi.canonical_grpid(bad)
+        self.assertEqual(self.calls, [])
+
+    def test_marker_time_preserves_all_nine_fractional_digits(self):
+        self.assertEqual(wi.parse_influx_ns("2026-10-06T12:00:00.123456789Z"),
+                         1791288000123456789)
+        with self.assertRaises(wi.IngestFailed):
+            wi.parse_influx_ns("not-a-time")
+
+    def test_pending_flags_reads_repeated_tables_and_exact_markers(self):
+        self.stub(200, (
+            "#group,false,false,false,false,false\r\n"
+            "#datatype,string,long,dateTime:RFC3339,string,string\r\n"
+            ",result,table,_time,grpid,_value\r\n"
+            ",_result,0,2026-10-06T12:00:00.123456789Z,12,pending\r\n"
+            "#group,false,false,false,false,false\r\n"
+            "#datatype,string,long,dateTime:RFC3339,string,string\r\n"
+            ",result,table,_time,grpid,_value\r\n"
+            ",_result,1,2026-10-06T12:00:01.000000001Z,12,pending\r\n"
+        ))
+        self.assertEqual(wi.pending_flags(CFG),
+                         {"12": [1791288000123456789, 1791288001000000001]})
+        self.assertIn('r._field == "status"', self.calls[0][1])
+        self.assertIn('r._value == "pending"', self.calls[0][1])
+        self.assertIn('from(bucket:"withings")', self.calls[0][1])
+
+    def test_empty_annotated_csv_is_an_empty_queue(self):
+        self.stub(200, ",result,table,_time,grpid,_value\r\n")
+        self.assertEqual(wi.pending_flags(CFG), {})
+        # InfluxDB may return no table at all for a valid empty query.
+        self.stub(200, "\r\n")
+        self.assertEqual(wi.pending_flags(CFG), {})
+
+    def test_flag_query_errors_are_not_empty(self):
+        for status, body in ((200, '{"code":"invalid"}'),
+                             (200, 'broken csv'),
+                             (200, ",result,table,_time,grpid\r\n"),
+                             (200, ",result,table,_time,grpid,_value\r\n"
+                                   ",_result,0,2026-10-06T12:00:00Z,12\r\n"),
+                             (503, "unavailable")):
+            with self.subTest(status=status, body=body):
+                self.stub(status, body)
+                with self.assertRaises(wi.IngestFailed):
+                    wi.pending_flags(CFG)
+
+    def test_local_group_times_include_future_points_without_body_values(self):
+        self.stub(200, (
+            ",result,table,_time,grpid\r\n"
+            ",_result,0,2026-10-06T12:00:00Z,12\r\n"
+            ",_result,0,2030-10-06T12:00:00Z,12\r\n"
+            ",_result,0,2030-10-06T12:00:00Z,12\r\n"
+        ))
+        self.assertEqual(wi.local_group_times(CFG, "12"),
+                         [1791288000, 1917518400])
+        flux = self.calls[0][1]
+        self.assertIn('stop: 2262-04-11T23:47:16Z', flux)
+        self.assertIn('r.grpid == "12"', flux)
+        self.assertIn('keep(columns: ["grpid", "_time"])', flux)
+        self.assertNotIn("_value", flux)
+        with self.assertRaises(wi.IngestFailed):
+            wi.local_group_times(CFG, "01")
+        self.assertEqual(len(self.calls), 1)
 
 
 class ResumePoint(unittest.TestCase):
@@ -340,6 +426,15 @@ class Fetch(unittest.TestCase):
         with self.assertRaises(wi.IngestFailed):
             wi.fetch_measures("access", 1000)
         self.assertEqual(len(self.calls), 2)
+
+    def test_rate_limit_and_malformed_offset_are_fatal(self):
+        wi.http_post = lambda url, body, headers, timeout=None: (429, "rate limited")
+        with self.assertRaises(wi.IngestFailed):
+            wi.fetch_measures("access", 1000)
+        self.stub_pages([{"status": 0, "body": {"measuregrps": [],
+                                               "more": 1, "offset": "bad"}}])
+        with self.assertRaises(wi.IngestFailed):
+            wi.fetch_measures("access", 1000)
 
 
 class FieldName(unittest.TestCase):
@@ -635,6 +730,317 @@ class Points(unittest.TestCase):
                         "measures": [{"type": 1, "value": 1, "unit": 0}]}])
 
 
+class SiblingQueries(unittest.TestCase):
+    def test_siblings_require_exact_nanosecond_time_and_real_device(self):
+        body = (",result,table,_time,deviceid,grpid\r\n"
+                ",_result,0,2026-10-06T12:00:00.123456789Z,scale,12\r\n"
+                ",_result,0,2026-10-06T12:00:00.123456789Z,scale,13\r\n"
+                ",_result,0,2026-10-06T12:00:00.123456789Z,scale,13\r\n"
+                ",_result,0,2026-10-06T12:00:00.123456789Z,scale,14\r\n"
+                ",_result,0,2026-10-06T12:00:00.123456789Z,other,15\r\n"
+                ",_result,0,2026-10-06T12:00:00.123456788Z,scale,16\r\n"
+                ",_result,0,2026-10-06T12:00:00.123456789Z,unknown,18\r\n"
+                ",_result,0,2026-10-06T12:00:00.123456789Z,unknown,19\r\n")
+        calls = []
+        def post(_url, flux, _headers, timeout=None):
+            calls.append(flux.decode())
+            return 200, body
+        with patch.object(wi, "http_post", side_effect=post):
+            self.assertEqual(wi.local_sibling_ids(CFG, "12"), ["13", "14"])
+            self.assertEqual(wi.local_sibling_ids(CFG, "18"), [])
+        self.assertIn('keep(columns: ["grpid", "_time", "deviceid"])', calls[0])
+        self.assertIn('stop: 2262-04-11T23:47:16Z', calls[0])
+        self.assertNotIn("_value", calls[0])
+
+    def test_missing_anchor_or_invalid_matching_id_fails_closed(self):
+        for body in (
+            ",result,table,_time,deviceid,grpid\r\n"
+            ",_result,0,2026-10-06T12:00:00Z,scale,13\r\n",
+            ",result,table,_time,deviceid,grpid\r\n"
+            ",_result,0,2026-10-06T12:00:00Z,scale,12\r\n"
+            ",_result,0,2026-10-06T12:00:00Z,scale,01\r\n",
+        ):
+            with self.subTest(body=body), patch.object(
+                    wi, "http_post", return_value=(200, body)):
+                with self.assertRaises(wi.IngestFailed):
+                    wi.local_sibling_ids(CFG, "12")
+
+
+class Reconcile(unittest.TestCase):
+    def setUp(self):
+        self.flags = {"url": CFG["url"], "org": CFG["org"],
+                      "bucket": "withings_flags", "token": "flags-token"}
+        self.events = []
+        self.pending = {"12": [1791288000123456789]}
+        self.groups = [{"grpid": 1, "date": 100, "measures": []},
+                       {"grpid": 2, "date": 200, "measures": []}]
+        self.times = [150]
+        self.after_delete = []
+        self.late_marker = None
+        self.real_log = wi.log
+        wi.log = lambda msg: None
+
+    def tearDown(self):
+        wi.log = self.real_log
+
+    def run_gate(self):
+        def pending(_cfg):
+            self.events.append("flags")
+            return {key: value[:] for key, value in self.pending.items()}
+
+        def fetch(_token, since):
+            self.events.append("full_fetch")
+            self.assertEqual(since, 1230768000)
+            if self.late_marker is not None:
+                self.pending["12"].append(self.late_marker)
+            return self.groups
+
+        def local(_cfg, grpid):
+            self.events.append("local")
+            return self.after_delete if "delete" in self.events else self.times
+
+        def delete(_cfg, grpid, stop):
+            self.events.append("delete")
+            self.assertEqual(grpid, "12")
+            self.assertEqual(stop, max(self.times) + 1)
+
+        def siblings(_cfg, grpid):
+            self.assertEqual(grpid, "12")
+            self.events.append("siblings")
+            return []
+
+        def resolve(_cfg, grpid, timestamp):
+            self.events.append(("resolve", grpid, timestamp))
+
+        with patch.object(wi, "pending_flags", pending), \
+             patch.object(wi, "fetch_measures", fetch), \
+             patch.object(wi, "local_group_times", local), \
+             patch.object(wi, "local_sibling_ids", side_effect=siblings), \
+             patch.object(wi, "delete_group", delete), \
+             patch.object(wi, "resolve_flag", resolve):
+            wi.reconcile_flags(CFG, self.flags, "access-token")
+
+    def test_no_flags_makes_no_second_withings_call(self):
+        self.pending = {}
+        self.run_gate()
+        self.assertEqual(self.events, ["flags"])
+
+    def test_every_local_time_must_be_bracketed(self):
+        self.times = [150, 250]
+        self.run_gate()
+        self.assertEqual(self.events, ["flags", "full_fetch", "local"])
+
+    def test_tombstone_like_group_is_present(self):
+        self.groups.append({"grpid": 12, "date": 150, "measures": []})
+        self.run_gate()
+        self.assertEqual(self.events, ["flags", "full_fetch", "local"])
+
+    def test_bracketed_absence_deletes_confirms_then_resolves_captured_markers(self):
+        self.pending["12"].append(1791288001000000001)
+        self.run_gate()
+        self.assertEqual(self.events, ["flags", "full_fetch", "local", "siblings", "delete",
+                                       "local", ("resolve", "12", 1791288000123456789),
+                                       ("resolve", "12", 1791288001000000001)])
+
+    def test_empty_or_one_sided_response_cannot_delete(self):
+        for groups in ([], self.groups[:1], self.groups[1:]):
+            with self.subTest(groups=groups):
+                self.groups = groups
+                self.events = []
+                self.run_gate()
+                self.assertNotIn("delete", self.events)
+                self.assertFalse(any(isinstance(e, tuple) for e in self.events))
+
+    def test_no_local_points_resolves_only_if_absent_in_nonempty_source(self):
+        self.times = []
+        self.run_gate()
+        self.assertNotIn("delete", self.events)
+        self.assertIn(("resolve", "12", 1791288000123456789), self.events)
+        self.events = []
+        self.groups.append({"grpid": 12, "date": 150, "measures": []})
+        self.run_gate()
+        self.assertFalse(any(isinstance(e, tuple) for e in self.events))
+
+    def test_source_index_validates_every_group_before_any_absence(self):
+        for bad in ({"grpid": "01", "date": 150},
+                    {"grpid": 3, "date": "bad"},
+                    {"grpid": 3, "date": 1.5}, None):
+            with self.subTest(bad=bad):
+                self.groups = [{"grpid": 1, "date": 100}, bad,
+                               {"grpid": 2, "date": 200}]
+                self.events = []
+                with self.assertRaises(wi.IngestFailed):
+                    self.run_gate()
+                self.assertNotIn("local", self.events)
+                self.assertNotIn("delete", self.events)
+
+    def test_faults_leave_markers_unresolved_at_verify_stage(self):
+        for faulty in ("pending_flags", "fetch_measures", "local_group_times", "local_sibling_ids", "delete_group",
+                       "resolve_flag"):
+            with self.subTest(faulty=faulty):
+                wi.STAGE[0] = "verify"
+                events = []
+                local_reads = iter([self.times, []])
+                with patch.object(wi, "pending_flags", return_value=self.pending), \
+                     patch.object(wi, "fetch_measures", return_value=self.groups), \
+                     patch.object(wi, "local_group_times", side_effect=lambda *_: next(local_reads)), \
+                     patch.object(wi, "local_sibling_ids", return_value=[]), \
+                     patch.object(wi, "delete_group", side_effect=lambda *a: events.append("delete")), \
+                     patch.object(wi, "resolve_flag", side_effect=lambda *a: events.append("resolve")), \
+                     patch.object(wi, faulty, side_effect=wi.IngestFailed("fault")):
+                    with self.assertRaises(wi.IngestFailed) as caught:
+                        wi.reconcile_flags(CFG, self.flags, "access-token")
+                self.assertNotIn("resolve", events)
+                self.assertEqual(wi.STAGE[0], "verify")
+                if faulty in ("local_group_times", "local_sibling_ids", "delete_group", "resolve_flag"):
+                    self.assertIn("grpid 12", str(caught.exception))
+                    self.assertNotIn("fault", str(caught.exception))
+
+    def test_failed_zero_point_confirmation_never_resolves(self):
+        self.after_delete = [150]
+        with self.assertRaises(wi.IngestFailed):
+            self.run_gate()
+        self.assertNotIn(("resolve", "12", 1791288000123456789), self.events)
+
+    def test_new_flag_during_run_stays_pending(self):
+        self.pending = {"12": [1791288000123456789]}
+        self.late_marker = 1791288001000000001
+        self.run_gate()
+        self.assertEqual(len(self.pending["12"]), 2)
+        self.assertEqual([e for e in self.events if isinstance(e, tuple)],
+                         [("resolve", "12", 1791288000123456789)])
+
+    def test_delete_group_uses_measurement_and_validated_tag(self):
+        sent = []
+        with patch.object(wi, "http_post", side_effect=lambda url, body, headers: (
+                sent.append((url, json.loads(body))), (204, ""))[1]):
+            wi.delete_group(CFG, "12", 251)
+            with self.assertRaises(wi.IngestFailed):
+                wi.delete_group(CFG, "01", 251)
+        self.assertEqual(len(sent), 1)
+        self.assertEqual(sent[0][1]["predicate"],
+                         '_measurement="withings_measure_group" AND grpid="12"')
+        self.assertEqual(sent[0][1]["start"], "1970-01-01T00:00:00Z")
+        self.assertEqual(sent[0][1]["stop"], "1970-01-01T00:04:11Z")
+
+    def test_resolve_preserves_nanoseconds(self):
+        sent = []
+        with patch.object(wi, "http_post", side_effect=lambda url, body, headers: (
+                sent.append((url, body.decode(), headers)), (204, ""))[1]):
+            wi.resolve_flag(self.flags, "12", 1791288000123456789)
+        self.assertIn("precision=ns", sent[0][0])
+        self.assertEqual(sent[0][1],
+                         'withings_suspect,grpid=12 status="resolved" 1791288000123456789')
+        self.assertEqual(sent[0][2]["Authorization"], "Token flags-token")
+
+
+class SiblingReconcile(unittest.TestCase):
+    def setUp(self):
+        self.events = []
+        self.deleted = set()
+        self.fault = None
+        self.pending = {"12": [1791288000123456789]}
+        self.groups = [{"grpid": 1, "date": 100}, {"grpid": 2, "date": 200}]
+        self.times = {"12": [150], "13": [150], "14": [150]}
+        self.logs = []
+        self.real_log = wi.log
+        self.old_stage = wi.STAGE[0]
+        wi.log = self.logs.append
+        wi.STAGE[0] = "verify"
+
+    def tearDown(self):
+        wi.log = self.real_log
+        wi.STAGE[0] = self.old_stage
+
+    def run_gate(self):
+        def fetch(_token, _since):
+            self.events.append(("fetch",))
+            return self.groups
+
+        def siblings(_cfg, grpid):
+            self.events.append(("siblings", grpid))
+            if self.fault == "lookup":
+                raise wi.IngestFailed("fault")
+            return [g for g in ("13", "14") if g not in self.deleted]
+
+        def local(_cfg, grpid):
+            self.events.append(("local", grpid))
+            if self.fault == "local13" and grpid == "13":
+                raise wi.IngestFailed("fault")
+            if grpid in self.deleted:
+                if self.fault == "confirm13" and grpid == "13":
+                    raise wi.IngestFailed("fault")
+                return []
+            return self.times[grpid]
+
+        def delete(_cfg, grpid, stop):
+            self.events.append(("delete", grpid, stop))
+            if self.fault == "delete14" and grpid == "14":
+                raise wi.IngestFailed("fault")
+            self.deleted.add(grpid)
+
+        def resolve(_cfg, grpid, marker):
+            self.events.append(("resolve", grpid, marker))
+
+        with patch.object(wi, "pending_flags", return_value=self.pending), \
+             patch.object(wi, "fetch_measures", side_effect=fetch), \
+             patch.object(wi, "local_sibling_ids", side_effect=siblings), \
+             patch.object(wi, "local_group_times", side_effect=local), \
+             patch.object(wi, "delete_group", side_effect=delete), \
+             patch.object(wi, "resolve_flag", side_effect=resolve):
+            wi.reconcile_flags(CFG, CFG, "access-token")
+
+    def test_three_siblings_delete_by_own_id_before_one_marker_resolves(self):
+        self.run_gate()
+        self.assertEqual(self.events.count(("fetch",)), 1)
+        self.assertEqual([event[1] for event in self.events if event[0] == "delete"],
+                         ["13", "14", "12"])
+        for index, event in enumerate(self.events):
+            if event[0] == "delete":
+                self.assertEqual(self.events[index + 1], ("local", event[1]))
+                self.assertEqual(event[2], 151)
+        self.assertEqual([event for event in self.events if event[0] == "resolve"],
+                         [("resolve", "12", 1791288000123456789)])
+        self.assertEqual(self.deleted, {"12", "13", "14"})
+
+    def test_source_present_or_unbracketed_sibling_is_kept_with_reason(self):
+        self.groups.append({"grpid": 13, "date": 150})
+        self.times["14"] = [250]
+        self.run_gate()
+        self.assertEqual(self.deleted, {"12"})
+        self.assertIn("verify: sibling grpid 13 still at source", self.logs)
+        self.assertIn("verify: sibling grpid 14 lacks source neighbours", self.logs)
+        self.assertEqual([event for event in self.events if event[0] == "resolve"],
+                         [("resolve", "12", 1791288000123456789)])
+
+    def test_sibling_fault_fails_verify_before_flagged_delete_or_resolution(self):
+        for fault in ("lookup", "local13", "delete14", "confirm13"):
+            with self.subTest(fault=fault):
+                self.fault = fault
+                self.events = []
+                self.deleted = set()
+                with self.assertRaises(wi.IngestFailed) as caught:
+                    self.run_gate()
+                self.assertEqual(wi.STAGE[0], "verify")
+                self.assertIn("grpid", str(caught.exception))
+                self.assertNotIn("fault", str(caught.exception))
+                self.assertNotIn("12", self.deleted)
+                self.assertFalse(any(event[0] == "resolve" for event in self.events))
+
+    def test_retry_after_partial_sibling_delete_keeps_flagged_anchor(self):
+        self.fault = "delete14"
+        with self.assertRaises(wi.IngestFailed):
+            self.run_gate()
+        self.assertEqual(self.deleted, {"13"})
+        self.events = []
+        self.fault = None
+        self.run_gate()
+        self.assertEqual([event[1] for event in self.events if event[0] == "delete"],
+                         ["14", "12"])
+        self.assertEqual([event for event in self.events if event[0] == "resolve"],
+                         [("resolve", "12", 1791288000123456789)])
+
+
 class RunOrder(StateDir):
     """The sequencing rules from the design's data flow.
 
@@ -646,6 +1052,7 @@ class RunOrder(StateDir):
         self.order = []
         self.real_env = dict(os.environ)
         os.environ["INFLUX_TOKEN"] = "influx-token"
+        os.environ["INFLUX_FLAGS_TOKEN"] = "flags-token"
         os.environ["WITHINGS_CLIENT_ID"] = "client-id"
         os.environ["WITHINGS_CLIENT_SECRET"] = "client-secret"
         wi.SUMMARY[0] = DEFAULT_SUMMARY
@@ -663,6 +1070,9 @@ class RunOrder(StateDir):
         """Stub every call, recording the order they arrive in."""
         def _post(url, body, headers, timeout=None):
             if "/api/v2/query" in url:
+                if 'from(bucket:"withings_flags")' in body.decode():
+                    self.order.append("flags")
+                    return 200, ""
                 self.order.append("resume")
                 return 200, CSV_ONE_ROW
             if url == wi.WITHINGS_TOKEN_URL:
@@ -697,7 +1107,8 @@ class RunOrder(StateDir):
         self.assertEqual(wi.main(), 0)
         self.assertEqual(self.order,
                          ["resume", "refresh", "write_state", "getmeas",
-                          "write"])
+                          "write", "flags"])
+        self.assertEqual(wi.STAGE[0], "verify")
 
     def test_a_failed_persist_stops_the_run_before_any_getmeas(self):
         # The new access token must not be used: the OLD refresh token is still

@@ -40,6 +40,8 @@ same field key and same timestamp replaces. Every run rewinds OVERLAP_SECONDS
 behind the resume point, so re-running the job is always safe.
 """
 
+import csv
+import io
 import json
 import os
 import re
@@ -89,6 +91,7 @@ MAX_PAGES = 200
 # Where an empty bucket seeds from. Withings predates this by nothing that
 # matters; the first run pages the whole account once and never again.
 FIRST_RUN_START = "2009-01-01"
+FUTURE_STOP = "2262-04-11T23:47:16Z"  # Influx nanosecond timestamp ceiling.
 
 # user.activity is requested so sleep and activity can be added later without a
 # second browser round trip. No endpoint here calls either.
@@ -255,7 +258,7 @@ BODY_LINES = []
 # classified by where it died. A one-element list for the same reason SUMMARY is
 # one. It starts at `refresh` because the token file IS the refresh credential:
 # a missing or unparseable one has the same remedy as a rejected refresh.
-STAGES = ("resume", "refresh", "fetch", "write", "token_persist")
+STAGES = ("resume", "refresh", "fetch", "write", "token_persist", "verify")
 STAGE = ["refresh"]
 
 
@@ -442,6 +445,125 @@ def esc_tag(value):
 
 # --- InfluxDB ---------------------------------------------------------------
 
+def canonical_grpid(value: object) -> str:
+    if isinstance(value, bool) or not isinstance(value, (str, int)):
+        raise IngestFailed("invalid grpid")
+    text = str(value)
+    if not re.fullmatch(r"[1-9][0-9]*", text) or int(text) > 2**64 - 1:
+        raise IngestFailed("invalid grpid")
+    return text
+
+
+def parse_influx_ns(value: str) -> int:
+    match = re.fullmatch(
+        r"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d{1,9}))?(Z|[+-]\d{2}:\d{2})",
+        value,
+    )
+    if not match:
+        raise IngestFailed("invalid Influx timestamp")
+    try:
+        zone = "+00:00" if match[3] == "Z" else match[3]
+        parsed = datetime.fromisoformat(match[1] + zone)
+        seconds = (parsed - datetime(1970, 1, 1, tzinfo=timezone.utc)) // timedelta(seconds=1)
+    except ValueError:
+        raise IngestFailed("invalid Influx timestamp")
+    return seconds * 1_000_000_000 + int((match[2] or "").ljust(9, "0") or "0")
+
+
+def query_influx_rows(cfg: dict, flux: str, required: tuple[str, ...]) -> list[dict[str, str]]:
+    url = "%s/api/v2/query?org=%s" % (cfg["url"], cfg["org"])
+    headers = {
+        "Authorization": "Token %s" % cfg["token"],
+        "Content-Type": "application/vnd.flux",
+        "Accept": "application/csv",
+    }
+    status, body = http_post(url, flux.encode(), headers, timeout=60)
+    if status < 200 or status >= 300:
+        raise IngestFailed("flag query http %d" % status)
+    if not body.strip():
+        return []
+    if body.lstrip().startswith(("{", "[")):
+        raise IngestFailed("flag query returned JSON")
+    rows = []
+    columns = None
+    saw_header = False
+    try:
+        for cells in csv.reader(io.StringIO(body), strict=True):
+            if not cells or (len(cells) == 1 and not cells[0]):
+                continue
+            if cells[0].startswith("#"):
+                continue
+            if len(cells) > 1 and cells[0] == "" and cells[1] == "result":
+                columns = cells
+                saw_header = True
+                if len(set(columns)) != len(columns) or any(c not in columns for c in required):
+                    raise IngestFailed("flag query missing column")
+                continue
+            if columns is None or len(cells) != len(columns) or cells[0] != "":
+                raise IngestFailed("malformed flag query CSV")
+            row = dict(zip(columns, cells))
+            if any(not row[c] for c in required):
+                raise IngestFailed("flag query has empty column")
+            rows.append(row)
+    except csv.Error:
+        raise IngestFailed("malformed flag query CSV")
+    if not saw_header:
+        raise IngestFailed("flag query has no table header")
+    return rows
+
+
+def pending_flags(flags_cfg: dict) -> dict[str, list[int]]:
+    flux = (
+        'from(bucket:"%s")\n'
+        '  |> range(start: 1970-01-01T00:00:00Z, stop: %s)\n'
+        '  |> filter(fn: (r) => r._measurement == "withings_suspect" and '
+        'r._field == "status" and r._value == "pending")\n'
+        '  |> keep(columns: ["grpid", "_time", "_value"])\n'
+        % (flags_cfg["bucket"], FUTURE_STOP)
+    )
+    pending = {}
+    for row in query_influx_rows(flags_cfg, flux, ("grpid", "_time", "_value")):
+        grpid = canonical_grpid(row["grpid"])
+        if row["_value"] != "pending":
+            raise IngestFailed("flag query returned nonpending marker")
+        pending.setdefault(grpid, []).append(parse_influx_ns(row["_time"]))
+    return pending
+
+
+def local_group_times(influx_cfg: dict, grpid: str) -> list[int]:
+    grpid = canonical_grpid(grpid)
+    flux = (
+        'from(bucket:"%s")\n'
+        '  |> range(start: 1970-01-01T00:00:00Z, stop: %s)\n'
+        '  |> filter(fn: (r) => r._measurement == "%s" and r.grpid == "%s")\n'
+        '  |> keep(columns: ["grpid", "_time"])\n'
+        % (influx_cfg["bucket"], FUTURE_STOP, MEASUREMENT, grpid)
+    )
+    rows = query_influx_rows(influx_cfg, flux, ("grpid", "_time"))
+    if any(row["grpid"] != grpid for row in rows):
+        raise IngestFailed("local query returned another grpid")
+    return sorted({parse_influx_ns(row["_time"]) // 1_000_000_000 for row in rows})
+
+
+def local_sibling_ids(influx_cfg: dict, grpid: str) -> list[str]:
+    grpid = canonical_grpid(grpid)
+    flux = (
+        'from(bucket:"%s")\n'
+        '  |> range(start: 1970-01-01T00:00:00Z, stop: %s)\n'
+        '  |> filter(fn: (r) => r._measurement == "%s")\n'
+        '  |> keep(columns: ["grpid", "_time", "deviceid"])\n'
+        % (influx_cfg["bucket"], FUTURE_STOP, MEASUREMENT)
+    )
+    rows = query_influx_rows(influx_cfg, flux, ("grpid", "_time", "deviceid"))
+    anchors = {(parse_influx_ns(row["_time"]), row["deviceid"])
+               for row in rows if row["grpid"] == grpid}
+    if not anchors:
+        raise IngestFailed("flagged group has no local time/device anchor")
+    return sorted({canonical_grpid(row["grpid"]) for row in rows
+                   if row["grpid"] != grpid and row["deviceid"] != "unknown"
+                   and (parse_influx_ns(row["_time"]), row["deviceid"]) in anchors})
+
+
 def influx_write(cfg, lines):
     if not lines:
         return
@@ -613,12 +735,120 @@ def fetch_measures(access_token, lastupdate):
         # offset re-sends page 1 until the cap, so the same groups arrive up to
         # MAX_PAGES times; raising here says what went wrong instead.
         next_offset = body.get("offset") or 0
-        if next_offset <= offset:
+        if (isinstance(next_offset, bool) or not isinstance(next_offset, int)
+                or next_offset <= offset):
             raise IngestFailed(
                 "getmeas page %d set more without advancing the offset "
                 "(%s -> %s)" % (page, offset, next_offset))
         offset = next_offset
     raise IngestFailed("more flag still set after %d pages" % MAX_PAGES)
+
+
+# --- suspect flag reconciliation --------------------------------------------
+
+def source_index(groups: list[dict]) -> tuple[set[str], list[int]]:
+    """Validate the entire completed source response before judging absence."""
+    ids, dates = set(), []
+    for group in groups:
+        if not isinstance(group, dict):
+            raise IngestFailed("invalid source group")
+        ids.add(canonical_grpid(group.get("grpid")))
+        date = group.get("date")
+        if isinstance(date, bool) or not isinstance(date, int) or date <= 0:
+            raise IngestFailed("invalid source date")
+        dates.append(date)
+    return ids, sorted(dates)
+
+
+def delete_group(influx_cfg: dict, grpid: str, stop_s: int) -> None:
+    grpid = canonical_grpid(grpid)
+    url = "%s/api/v2/delete?org=%s&bucket=%s" % (
+        influx_cfg["url"], influx_cfg["org"], influx_cfg["bucket"])
+    body = json.dumps({
+        "start": "1970-01-01T00:00:00Z",
+        "stop": iso(datetime.fromtimestamp(stop_s, timezone.utc)),
+        "predicate": '_measurement="%s" AND grpid="%s"' % (MEASUREMENT, grpid),
+    }).encode()
+    headers = {"Authorization": "Token %s" % influx_cfg["token"],
+               "Content-Type": "application/json"}
+    status, _ = http_post(url, body, headers)
+    if status < 200 or status >= 300:
+        raise IngestFailed("group delete http %d" % status)
+
+
+def resolve_flag(flags_cfg: dict, grpid: str, timestamp_ns: int) -> None:
+    grpid = canonical_grpid(grpid)
+    if not isinstance(timestamp_ns, int) or timestamp_ns < 0 or timestamp_ns > 2**63 - 1:
+        raise IngestFailed("invalid flag timestamp")
+    url = "%s/api/v2/write?org=%s&bucket=%s&precision=ns" % (
+        flags_cfg["url"], flags_cfg["org"], flags_cfg["bucket"])
+    line = 'withings_suspect,grpid=%s status="resolved" %d' % (grpid, timestamp_ns)
+    headers = {"Authorization": "Token %s" % flags_cfg["token"],
+               "Content-Type": "text/plain; charset=utf-8"}
+    status, _ = http_post(url, line.encode(), headers)
+    if status < 200 or status >= 300:
+        raise IngestFailed("flag status write http %d" % status)
+
+
+def delete_and_confirm_group(influx_cfg: dict, grpid: str, times: list[int]) -> None:
+    try:
+        delete_group(influx_cfg, grpid, max(times) + 1)
+    except IngestFailed:
+        raise IngestFailed("verify grpid %s: delete failed" % grpid)
+    try:
+        remaining = local_group_times(influx_cfg, grpid)
+    except IngestFailed:
+        raise IngestFailed("verify grpid %s: confirmation failed" % grpid)
+    if remaining:
+        raise IngestFailed("verify grpid %s: local points remain" % grpid)
+
+
+def reconcile_flags(influx_cfg: dict, flags_cfg: dict, access_token: str) -> None:
+    pending = pending_flags(flags_cfg)
+    if not pending:
+        return
+    since = int(datetime.fromisoformat(FIRST_RUN_START).replace(
+        tzinfo=timezone.utc).timestamp())
+    ids, dates = source_index(fetch_measures(access_token, since))
+    for grpid, markers in pending.items():
+        try:
+            times = local_group_times(influx_cfg, grpid)
+        except IngestFailed:
+            raise IngestFailed("verify grpid %s: local query failed" % grpid)
+        if grpid in ids:
+            log("verify: grpid %s still at source" % grpid)
+            continue
+        if not dates or (times and not (dates[0] < min(times) and max(times) < dates[-1])):
+            log("verify: grpid %s lacks source neighbours" % grpid)
+            continue
+        if times:
+            try:
+                siblings = local_sibling_ids(influx_cfg, grpid)
+            except IngestFailed:
+                raise IngestFailed("verify grpid %s: sibling lookup failed" % grpid)
+            for sibling in siblings:
+                try:
+                    sibling_times = local_group_times(influx_cfg, sibling)
+                except IngestFailed:
+                    raise IngestFailed("verify grpid %s: local query failed" % sibling)
+                if not sibling_times:
+                    raise IngestFailed("verify grpid %s: local points disappeared" % sibling)
+                if sibling in ids:
+                    log("verify: sibling grpid %s still at source" % sibling)
+                    continue
+                if not (dates[0] < min(sibling_times) and max(sibling_times) < dates[-1]):
+                    log("verify: sibling grpid %s lacks source neighbours" % sibling)
+                    continue
+                delete_and_confirm_group(influx_cfg, sibling, sibling_times)
+                log("verify: deleted sibling grpid %s" % sibling)
+            delete_and_confirm_group(influx_cfg, grpid, times)
+            log("verify: deleted grpid %s" % grpid)
+        for marker in markers:
+            try:
+                resolve_flag(flags_cfg, grpid, marker)
+            except IngestFailed:
+                raise IngestFailed("verify grpid %s: status write failed" % grpid)
+        log("verify: resolved grpid %s" % grpid)
 
 
 # --- shaping ----------------------------------------------------------------
@@ -914,9 +1144,8 @@ def main():
     groups_total = len(groups)
     hc_emit("groups=%d" % groups_total)
 
-    # 6. WRITE. There is no watermark to persist, so there is no step after it:
-    # a run either stored points, which moves the resume point by itself, or it
-    # did not, and the next run asks the same question.
+    # 6. WRITE. There is no watermark to persist: stored points move the resume
+    # point by themselves, and a failed run retries the same window.
     lines = points(groups)
     # THE STAGE MOVES AFTER points() RETURNS, not before it. points() raises on
     # a malformed getmeas body - a group with no usable date, a measure missing
@@ -927,6 +1156,11 @@ def main():
     points_written = len(lines)
     hc_emit("points=%d" % points_written)
     influx_write(influx, lines)
+
+    # 7. VERIFY pending suspect flags only after the ordinary write succeeds.
+    STAGE[0] = "verify"
+    flags = dict(influx, bucket="withings_flags", token=env("INFLUX_FLAGS_TOKEN"))
+    reconcile_flags(influx, flags, body["access_token"])
 
     if groups_total == 0:
         # A real answer, unlike the Cloudflare job's empty result: Withings
