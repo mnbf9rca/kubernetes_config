@@ -11,6 +11,7 @@ data:
     color: teal
     headerStyle: clean
     fullWidth: true
+    target: _blank
     layout:
       Media: { style: row, columns: 4, icon: emby.svg }
       Reading and automation: { style: row, columns: 4, icon: freshrss.svg }
@@ -26,6 +27,8 @@ data:
                   #0b1220 !important;
       background-attachment: fixed !important;
     }
+  bookmarks.yaml: |
+    []
   services.yaml: |
     - Media:
         - Emby:
@@ -104,6 +107,10 @@ data:
             href: https://printguard.cynexia.net
             description: Print monitoring
     - Network:
+        - OPNsense:
+            icon: opnsense.svg
+            href: https://gw.cynexia.net/
+            description: 192.168.17.1 · firewall and gateway
         - MikroTik Loft:
             icon: mikrotik.svg
             href: http://192.168.17.14/
@@ -122,8 +129,20 @@ data:
             description: 192.168.17.10
         - GS1900 Garage:
             icon: zyxel-networks.svg
-            href: https://192.168.17.13/
+            href: http://192.168.17.13/
             description: 192.168.17.13 · Zyxel switch
+        - GS1900-lounge:
+            icon: zyxel-networks.svg
+            href: http://192.168.17.72/
+            description: Zyxel switch · lounge
+        - NetAlertX:
+            icon: mdi-lan
+            href: https://netalertx.cynexia.net
+            description: Device inventory and presence
+        - Netdisco:
+            icon: mdi-map-marker-path
+            href: https://netdisco.cynexia.net
+            description: Find devices by switch port
     - Infrastructure:
         - Proxmox FS:
             icon: proxmox.svg
@@ -133,6 +152,22 @@ data:
             icon: proxmox.svg
             href: https://pve3.cynexia.net:8006/
             description: Virtualization host
+        - Server UPS:
+            icon: apc.svg
+            href: http://10.100.0.6/logon.htm
+            description: 10.100.0.6 · APC power
+        - FS iLO:
+            icon: ilo.svg
+            href: https://10.100.0.7/
+            description: 10.100.0.7 · storage host management
+        - JetKVM pve3:
+            icon: jetkvm.svg
+            href: http://10.100.0.110/
+            description: 10.100.0.110 · virtualization host console
+        - JetKVM FS:
+            icon: jetkvm.svg
+            href: http://10.100.0.111/
+            description: 10.100.0.111 · storage host console
         - Hetzner Console:
             icon: hetzner.svg
             href: https://console.hetzner.com/
@@ -205,6 +240,7 @@ spec:
           volumeMounts:
             # Later ConfigMap edits need kubectl -n homepage rollout restart deploy/homepage.
             - { name: config, mountPath: /app/config/services.yaml, subPath: services.yaml, readOnly: true }
+            - { name: config, mountPath: /app/config/bookmarks.yaml, subPath: bookmarks.yaml, readOnly: true }
             - { name: config, mountPath: /app/config/settings.yaml, subPath: settings.yaml, readOnly: true }
             - { name: config, mountPath: /app/config/custom.css, subPath: custom.css, readOnly: true }
       volumes:

@@ -1,0 +1,88 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: netalertx-data
+  namespace: netalertx
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 2Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: netalertx
+  namespace: netalertx
+  annotations:
+    keel.sh/policy: force
+    keel.sh/match-tag: "true"
+    keel.sh/trigger: poll
+    keel.sh/pollSchedule: "@every 6h"
+spec:
+  replicas: 1
+  strategy: { type: Recreate }
+  selector: { matchLabels: { app: netalertx } }
+  template:
+    metadata:
+      labels: { app: netalertx }
+    spec:
+      containers:
+        - name: netalertx
+          image: ghcr.io/netalertx/netalertx:latest
+          imagePullPolicy: Always
+          command: ["/bin/sh", "/scripts/netalertx-bootstrap.sh"]
+          env:
+            - { name: LOADED_PLUGINS, value: "['RSTIMPRT','ICMP','NBTSCAN','INTRNT','NMAP']" }
+            - name: OPNSENSE_API_KEY
+              valueFrom: { secretKeyRef: { name: netalertx-opnsense, key: api-key } }
+            - name: OPNSENSE_API_SECRET
+              valueFrom: { secretKeyRef: { name: netalertx-opnsense, key: api-secret } }
+          securityContext:
+            capabilities:
+              add: [NET_RAW, NET_ADMIN, NET_BIND_SERVICE]
+          ports:
+            - { name: http, containerPort: 20211 }
+          readinessProbe:
+            httpGet: { path: /, port: http }
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          volumeMounts:
+            - { name: data, mountPath: /data }
+            - { name: bootstrap, mountPath: /scripts, readOnly: true }
+      volumes:
+        - name: data
+          persistentVolumeClaim: { claimName: netalertx-data }
+        - name: bootstrap
+          configMap: { name: netalertx-bootstrap }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: netalertx
+  namespace: netalertx
+spec:
+  selector: { app: netalertx }
+  ports:
+    - { name: http, port: 20211, targetPort: http }
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: netalertx
+  namespace: netalertx
+spec:
+  ingressClassName: traefik
+  rules:
+    - host: netalertx.cynexia.net
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: netalertx
+                port:
+                  number: 20211

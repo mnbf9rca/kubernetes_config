@@ -20,3 +20,15 @@ resources:
   - filabridge.yaml
   - printguard.yaml
   - homepage.yaml
+  - netalertx.yaml
+  - netdisco.yaml
+
+configMapGenerator:
+  - name: netalertx-bootstrap
+    namespace: netalertx
+    files:
+      - netalertx-bootstrap.sh=scripts/netalertx-bootstrap.sh
+  - name: netdisco-scripts
+    namespace: netdisco
+    files:
+      - netdisco-pg-dump.sh=scripts/netdisco-pg-dump.sh

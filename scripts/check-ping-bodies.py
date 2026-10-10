@@ -92,6 +92,7 @@ REQUIRED_TARGETS = (
     "homelab/ops/scripts/update-watch.py",
     "homelab/ops/scripts/keel-fresh.sh",
     "homelab/hindsight/scripts/hindsight-pg-dump.sh",
+    "homelab/workloads/scripts/netdisco-pg-dump.sh",
     "homelab/hindsight/scripts/hindsight-canary.sh",
     "vps/backup/scripts/restic-backup.sh",
     "hermes-vm/scripts/hermes-app-alive.sh",

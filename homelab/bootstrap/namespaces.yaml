@@ -87,6 +87,22 @@ metadata:
 apiVersion: v1
 kind: Namespace
 metadata:
+  name: netalertx
+  labels:
+    # The image needs NET_RAW and NET_ADMIN; PSA baseline forbids NET_ADMIN.
+    pod-security.kubernetes.io/enforce: privileged
+    pod-security.kubernetes.io/audit: privileged
+    pod-security.kubernetes.io/warn: privileged
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: netdisco
+  # Default baseline PSA; the pod needs no host access.
+---
+apiVersion: v1
+kind: Namespace
+metadata:
   name: printing
   # PSA baseline (cluster default). The printer services need no hostPath,
   # hostNetwork, ServiceAccount, or RBAC.

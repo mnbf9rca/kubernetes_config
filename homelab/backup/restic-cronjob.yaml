@@ -280,9 +280,11 @@ spec:
                   withings-tokens:/data/pvc-*_health_withings-tokens/withings_tokens.json:64
                   hermes-zip:/data/pvc-*_backup_hermes-dumps/hermes-*.zip:16777216
                   hindsight-dump:/data/pvc-*_hindsight_hindsight-dumps/hindsight-*.sql.gz:4096
+                  netdisco-dump:/data/pvc-*_netdisco_netdisco-dumps/netdisco-*.sql.gz:360000
                   spoolman-db:/data/pvc-*_printing_spoolman-data/spoolman.db:12697
                   filabridge-db:/data/pvc-*_printing_filabridge-data/filabridge.db:409
                   printguard-state:/data/pvc-*_printing_printguard-data/state.json:195
+                  netalertx-db:/data/pvc-*_netalertx_netalertx-data/db/app.db:232243
                   "
 
                   # label:glob - existence AND freshness.
@@ -291,6 +293,7 @@ spec:
                   influx-lp-export:/data/pvc-*_health_health-dumps/lp/*.lp.gz
                   hermes-zip:/data/pvc-*_backup_hermes-dumps/hermes-*.zip
                   hindsight-dump:/data/pvc-*_hindsight_hindsight-dumps/hindsight-*.sql.gz
+                  netdisco-dump:/data/pvc-*_netdisco_netdisco-dumps/netdisco-*.sql.gz
                   "
 
                   # Populated by measure_tree; initialised here so `set -u` cannot bite if

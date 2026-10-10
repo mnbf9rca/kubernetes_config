@@ -21,8 +21,8 @@ Kubectl context: `cynexia-homelab`.
 Workloads run on the single node because Omni's own system patch `400-homelab-control-planes-untaint` sets `cluster.allowSchedulingOnControlPlanes: true` — the mirror of the VPS twin described in [vps.md](vps.md), labelled `omni.sidero.dev/system-patch:`, so Omni owns it and it must never be copied into a file under `homelab/talos/`.
 
 PSA: the cluster enforces `baseline` by default.
-`traefik` (hostNetwork/hostPort) and `backup` (hostPath) are elevated to `privileged` by labels in `homelab/bootstrap/namespaces.yaml`.
-Any new hostPath/hostNetwork workload needs the same treatment.
+`traefik` (hostNetwork/hostPort), `backup` (hostPath), and `netalertx` (NET_ADMIN) are elevated to `privileged` by labels in `homelab/bootstrap/namespaces.yaml`; check that file for the current list.
+Any new workload requiring capabilities beyond PSA baseline needs the same treatment.
 
 `cert-manager` and `local-path-storage` namespaces are created by their upstream manifests, so they are deliberately absent from `namespaces.yaml` (kustomize rejects duplicates).
 **Those three upstream bases stay unwatched, and the 2026-08-26 Renovate widening did not change that.**
@@ -65,11 +65,12 @@ Verify keel's permissions with a SelfSubjectAccessReview issued with keel's own 
 | `hindsight` | Memory backend for the Hermes profiles | hindsight API, its PostgreSQL, the nightly `pg_dump` and the 15-minute canary — see [hindsight.md](hindsight.md) |
 | `printing` | Core One+ printer services | Spoolman inventory, FilaBridge filament accounting, PrintGuard failure detection — see below |
 | `cloudflared` | Shared homelab Cloudflare tunnel | Connector for health, Hermes, proxy and Homepage routes — `homelab/bootstrap/cloudflared/` |
-| `homepage` | Service directory | 33-link Homepage at `home.cynexia.com` behind Cloudflare Access |
+| `homepage` | Service directory | Homepage at `home.cynexia.com` behind Cloudflare Access; current card count: `/api/services` |
+| `netalertx` | Private device inventory | Resolved OPNsense ARP import, ICMP, NBTSCAN, INTRNT and daily NMAP; see [NetAlertX](#netalertx) |
 | `ops` | Cluster-wide operational jobs | `update-watch` and `keel-fresh` CronJobs — see below |
 | `proxy` | Residential egress for changedetection on the VPS | tinyproxy — see [vps.md](vps.md#residential-egress-through-the-homelab) |
 
-Ingress hostnames are `*.cynexia.net` (Route53), Traefik-fronted, LAN/Tailscale only: `sonarr`, `radarr`, `sab`, `hydra`, `emby`, `hindsight`, `hindsight-ui`, `spoolman`, `filabridge`, `printguard`.
+Ingress hostnames are `*.cynexia.net` (Route53), Traefik-fronted, LAN/Tailscale only: `sonarr`, `radarr`, `sab`, `hydra`, `emby`, `hindsight`, `hindsight-ui`, `spoolman`, `filabridge`, `printguard`, `netalertx`, `netdisco`.
 `grafana-health.cynexia.net` was one of them until September 6, 2026, when the self-hosted Grafana was removed.
 
 Retired in the rebuild: immich, ollama, open-webui, komga, jellyfin, mylar3, lazylibrarian, caddy, postgresql.
@@ -103,12 +104,60 @@ Either run `cloudflared tunnel login` once, or create the single record through 
 
 To recreate the credentials Secret, `make create-homelab-cloudflared-secret`.
 
-`homelab/workloads/homepage.yaml` serves a grouped directory of 33 links at `home.cynexia.com`, including local device interfaces and cloud consoles.
+`homelab/workloads/homepage.yaml` serves a grouped directory at `home.cynexia.com`, including local device interfaces and cloud consoles. Read its live `/api/services` response for the current card count.
 Its origin has no login, so the Cloudflare Access application for that hostname, with only the reusable `allow_cynexia_com` policy, is the public gate.
 Deleting that application exposes the page.
 The Buddy3D camera card opens `rtsp://192.168.17.103/live` in a registered RTSP player; browsers do not render that stream themselves.
 Local IP links need LAN or tailnet reachability from the browser.
 Later edits to the ConfigMap need `kubectl -n homepage rollout restart deploy/homepage` because its files use `subPath` mounts.
+
+### NetAlertX
+
+`https://netalertx.cynexia.net` is a private Traefik UI.
+Its Route53 `A` record in zone `Z3409TNW35PGSS` points to `10.100.0.100` with TTL 60 (see [DNS](#dns-route53)).
+Keep it off the public Cloudflare tunnel.
+The operator chose no UI password. Anyone on the private LAN or tailnet who can reach the UI can change its settings, so do not expose the Ingress publicly.
+Manual device labels, locks, groups and network-tree assignments live on `netalertx-data` and survive pod restarts.
+
+`homelab/workloads/scripts/netalertx-bootstrap.sh` owns one authenticated REST Import, five-minute REST/ICMP schedules, three scan subnets, 90-day device history and `LOG_LEVEL=minimal` through `APP_CONF_OVERRIDE`; `LOADED_PLUGINS` includes REST Import, ICMP, NBTSCAN, INTRNT and NMAP.
+Do not edit those settings in the UI: the next start reapplies them.
+The override explicitly schedules NBTSCAN, INTRNT and daily 02:00 NMAP in NetAlertX's configured timezone (Europe/London on 2026-10-09), and disables ARPSCAN, AVAHISCAN, DIGSCAN and NSLOOKUP; `LOADED_PLUGINS` alone does not stop an upstream plugin whose `*_RUN` default is active.
+NBTSCAN looks for NetBIOS names, while INTRNT tracks WAN reachability; neither supplies a LAN MAC inventory.
+NMAP uses the image default ports 1–10,000; the gateway will log this traffic and IoT devices may react badly, so exclude a sensitive device by appending `--exclude <device IP>` to `NMAP_ARGS` in Settings (keep the default `-p -10000`).
+The first 96-device pass took 24 minutes; NetAlertX runs plugins serially, so REST and ICMP cycles wait during NMAP.
+The import reads OPNsense's resolved ARP snapshot (`mac`, `ip`, `hostname`, `manufacturer`) through `search_arp?resolve=yes`.
+Dnsmasq serves DHCPv4 names, and Unbound forwards `lan.cynexia.net` and reverse lookups to it, so active ARP rows with PTR records carry hostnames across all three VLANs.
+The NetAlertX key and secret come from `op://Homelab/netalertx/opnsense-key` and `/opnsense-secret`; its OPNsense user has only `Diagnostics: ARP Table`.
+Keep `/data`, app configuration, logs and restic restores private because the effective config contains reversibly encoded credentials.
+Never raise `LOG_LEVEL` above `minimal`, even briefly for debugging: NetAlertX then writes the reversibly encoded OPNsense credentials to pod logs and `/tmp/log/app.log`.
+If that happens, record the disclosure in `secrets-to-rotate.md` and rotate the gateway API key.
+
+ICMP sweeps Home (`192.168.17.0/24`), Servers (`10.100.0.0/24`) and IoT (`10.0.2.0/24`) every five minutes.
+The three `/24` sweeps exceeded the image's 10-second default timeout, so the override bounds each ICMP run at 120 seconds, below the five-minute schedule.
+The pod uses routed pings, not layer-2 discovery on each VLAN.
+The import uses the gateway ARP snapshot, which is cached for 30 seconds; quiet devices without an ARP row may be absent.
+The gateway retains an ARP entry for about 20 minutes after contact (`net.link.ether.inet.max_age=1200` on 2026-10-09), so a departed device can linger in the import for that long.
+Dnsmasq leases last 4000 seconds, so a departed DHCP client may retain a DNS name for up to 66 minutes 40 seconds after its last renewal.
+ICMP-silent devices may be slow to change presence state.
+The gateway mDNS repeater is enabled on all three VLANs, but the image's Avahi lookup resolved zero names from a normal pod; `AVAHISCAN` stays off.
+Add or lock names manually for static-address devices.
+MAC is the identity key: randomized MACs create new records, and several IPs sharing one MAC can collapse into one device.
+The network tree needs manual parent/type assignments; it does not discover switch ports.
+
+The existing nightly restic job backs up the entire `netalertx-data` local-path PVC and checks for `/data/db/app.db`.
+To restore, stop the Deployment, restore the whole PVC directory including any `app.db-wal` and `app.db-shm`, restart, and check the UI and database.
+A live-file restic copy can capture inconsistent SQLite state despite a passing file-size gate; use a different snapshot if SQLite will not open.
+No separate backup Job or freshness check exists for this mostly idle database.
+
+### Netdisco
+
+`https://netdisco.cynexia.net` is a private Traefik route to the login-protected Netdisco UI. Its Homepage card is under Network. Search by device name, IP or MAC for the learned switch port; movement history appears after a later natural change. Netdisco polls six switches (`192.168.17.10`–`.14`, `.72`) and the OPNsense Servers address `10.100.0.1` only. The two read-only SNMP communities are scoped per address in the Secret-backed `deployment.yml`; no write community or OPNsense API key is in the pod. The first admin was created interactively; its login is at `op://Homelab/netdisco/admin-username` and `/admin-password`. After a `deployment.yml` Secret change, restart the Deployment: its `subPath` mount does not update in place.
+
+OPNsense has `os-net-snmp` enabled on `10.100.0.1:161` with `l3visibility=1` (`sysServices=76`). It is not listening on Home `192.168.17.1`; the Servers policy already allows the Talos node through. The gateway's ARP table supplies IP-to-MAC mapping across Home, Servers and IoT. Dnsmasq/Unbound PTR records supply names when present. An ARP entry, name or move can lag the live link until the next Netdisco collection; do not use it as an instantaneous reachability test. To roll gateway SNMP back, disable Net-SNMP in Services or remove `os-net-snmp`; retain the saved gateway config `config-1791562068.9104.xml`.
+
+Four manual links are recorded in Netdisco: gateway `ix0`/`ix1` to CRS309 `opnsense (5)`/`opnsense (6)`, CRS309 `Study` to Study `Uplink`, and CRS309 `loft` to Loft `SFP+2`. The CRS309 `POE` port leads to the unpolled Instant On access point at `192.168.17.209`; the polled lounge GS1900 hangs off one of the AP's built-in LAN ports. Do not invent a direct POE-to-lounge link or pseudo-device. Marantz is located at lounge `GigabitEthernet2` and Prusa at Study `Port4`; APC and iLO are on CRS326 `Port18`/`Port24`, and fox-watch is on garage GS1900 `GigabitEthernet6`. The Secret-backed `deployment.yml` sets `macsuck_no_deviceports` for only CRS309 `POE`, so its upstream MAC rows cannot displace the polled edge locations after discovery. At publication, 60 stale POE node rows were archived with `active=false`; none were deleted. Devices wired directly to the AP's LAN ports and Wi-Fi clients associated with that AP have no switch-port location while this exclusion is active; devices on the polled lounge GS1900 still locate at its own ports. Do not use Netdisco `expire-nodes -d 192.168.17.11 -p POE` for this cleanup: it also archives valid edge rows sharing those MACs. Devices behind an unpolled access point elsewhere show at its nearest polled uplink. The garage LAG is established as a logical link, but its individual member-port pairing is unverified; confirm it at the switches before adding member links. SwOS does not expose LLDP or map the observed LAG bridge-port IDs to ifIndex, so bonded-host ports may be absent. The `is_uplink` database flag on CRS309 POE is reset by `discover`; the persistent MAC exclusion, rather than that flag, prevents false endpoint placement.
+
+PostgreSQL 18 stores data under `/var/lib/postgresql/18/docker` on `netdisco-postgres-data`. The `netdisco-pg-dump` CronJob writes an atomic gzip SQL dump to `netdisco-dumps` at 02:25Z, keeps seven files, and pushes to the `netdisco-pg-dump` uptime-kuma monitor. The 03:00 restic sweep copies that PVC; its expected/fresh gate requires ≥360,000 B and <30h. To restore, recover one `netdisco-*.sql.gz` from a restic snapshot to the workstation. In a shell with `set -o pipefail`, run `gzip -dc <dump> | kubectl --context cynexia-homelab -n netdisco exec -i deployment/netdisco -c postgres -- psql -v ON_ERROR_STOP=1 -U netdisco -d netdisco`. The in-pod socket authenticates locally without printing a password. Then `kubectl --context cynexia-homelab -n netdisco rollout restart deployment/netdisco` and verify the login and device count. The dump uses `--clean --if-exists`, so it replaces database objects.
 
 ### The `ops` namespace
 
@@ -121,7 +170,7 @@ Later edits to the ConfigMap need `kubectl -n homepage rollout restart deploy/ho
   Full behaviour and every cause of DOWN: [monitoring.md](monitoring.md#the-update-watcher).
 - **`keel-fresh`**, at 07:15Z daily, makes one request to keel's own `/metrics` — a single ClusterIP endpoint, `keel.keel.svc.cluster.local:9300`, reached across the namespace boundary from `ops`; it scrapes nothing else and holds no cluster-wide read — and pushes the `homelab-keel-fresh` uptime-kuma monitor.
   It is the only thing that would notice keel's registry poll loop had wedged: keel's own probes hit `/healthz`, which stays green while the poll goroutine is dead.
-  The configured `IMAGE_FLOOR` is 21, derived from the rendered floating controller images.
+  The configured `IMAGE_FLOOR` is 25, derived from the rendered floating controller images.
   Verdict enum and why there is no `/start`: [monitoring.md](monitoring.md#the-keel-dead-mans-switch).
 
 The half-hour gap is deliberate: the two update-path checks should not alert in the same minute.
@@ -201,7 +250,17 @@ Talos v1.12's controller-runtime DHCP4 client can NAK-loop on renewal if the boo
 The resulting retry storm also trips RFC 5905 KoD rate-limiting on the gateway's NTP, which surfaces as `time.SyncController` errors that look like a clock problem and send you debugging the wrong subsystem.
 
 `homelab/talos/machineconfig-patches/305-homelab-lan-network.yaml` therefore puts `ens18` on a static address and moves NTP to public servers (time.cloudflare.com, time.google.com, pool.ntp.org), so the cluster depends on the gateway for neither.
-The OPNsense Kea reservation is kept as defense in depth.
+The OPNsense Dnsmasq reservation is kept as defense in depth.
+
+### Gateway DHCP and local names
+
+OPNsense Dnsmasq serves DHCPv4 on Home, Servers and IoT with 4000-second leases.
+Unbound forwards `lan.cynexia.net` and the three reverse /24 zones to Dnsmasq on `127.0.0.1:53053`.
+Kea DHCPv4 and its Control Agent are disabled; the Kea subnets and 30 reservations remain for rollback.
+
+A Dnsmasq reconfigure restarts the daemon and empties `/var/etc/dnsmasq-leases`, its supplemental DNS `addn-hosts` file.
+The actual DHCP lease database is `/var/db/dnsmasq.leases` and survived the 2026-10-09 reconfigure.
+After any reconfigure, check a live lease on each VLAN and forward/PTR answers through Unbound.
 
 ## DNS (Route53)
 
