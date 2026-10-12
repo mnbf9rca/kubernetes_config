@@ -131,6 +131,7 @@ Filter the device table by network name through the VLAN column or the search bo
 The override shows these device-table columns through `UI_device_columns`: icon, name, type, first seen, last seen, last IP, VLAN, status, full MAC, source plugin and custom properties.
 A device seen only by ICMP, with no ARP row, has no VLAN.
 The gateway's single MAC appears on several VLANs, so its device carries whichever row the import saw last.
+`NEWDEV_ignored_IPs` holds the SQL `LIKE` pattern `10.244.%` so the pod's own address in the Kubernetes pod network creates no device row after each restart.
 Dnsmasq serves DHCPv4 names, and Unbound forwards `lan.cynexia.net` and reverse lookups to it, so active ARP rows with PTR records carry hostnames across all three VLANs.
 The NetAlertX key and secret come from `op://Homelab/netalertx/opnsense-key` and `/opnsense-secret`; its OPNsense user has only `Diagnostics: ARP Table`.
 Keep `/data`, app configuration, logs and restic restores private because the effective config contains reversibly encoded credentials.
