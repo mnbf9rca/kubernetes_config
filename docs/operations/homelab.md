@@ -119,15 +119,15 @@ Keep it off the public Cloudflare tunnel.
 The operator chose no UI password. Anyone on the private LAN or tailnet who can reach the UI can change its settings, so do not expose the Ingress publicly.
 Manual device labels, locks, groups and network-tree assignments live on `netalertx-data` and survive pod restarts.
 
-`homelab/workloads/scripts/netalertx-bootstrap.sh` owns one authenticated REST Import, five-minute REST/ICMP schedules, three scan subnets, 90-day device history and `LOG_LEVEL=minimal` through `APP_CONF_OVERRIDE`; `LOADED_PLUGINS` includes REST Import, ICMP, NBTSCAN, INTRNT and NMAP.
+`homelab/workloads/scripts/netalertx-bootstrap.sh` owns one authenticated REST Import, five-minute REST/ICMP schedules, three scan subnets, 90-day device history, `LOG_LEVEL=minimal`, the device-table columns and filters (`UI_device_columns`, `UI_columns_filters`) and the ignored pod network (`NEWDEV_ignored_IPs`) through `APP_CONF_OVERRIDE`; `LOADED_PLUGINS` includes REST Import, ICMP, NBTSCAN, INTRNT and NMAP.
 Do not edit those settings in the UI: the next start reapplies them.
 The override explicitly schedules NBTSCAN, INTRNT and daily 02:00 NMAP in NetAlertX's configured timezone (Europe/London on 2026-10-09), and disables ARPSCAN, AVAHISCAN, DIGSCAN and NSLOOKUP; `LOADED_PLUGINS` alone does not stop an upstream plugin whose `*_RUN` default is active.
 NBTSCAN looks for NetBIOS names, while INTRNT tracks WAN reachability; neither supplies a LAN MAC inventory.
 NMAP uses the image default ports 1–10,000; the gateway will log this traffic and IoT devices may react badly, so exclude a sensitive device by appending `--exclude <device IP>` to `NMAP_ARGS` in Settings (keep the default `-p -10000`).
 The first 96-device pass took 24 minutes; NetAlertX runs plugins serially, so REST and ICMP cycles wait during NMAP.
 The import reads OPNsense's resolved ARP snapshot (`mac`, `ip`, `hostname`, `manufacturer`) through `search_arp?resolve=yes`.
-It also maps the row's `intf_description` (the OPNsense interface name, such as LAN, iot, servers or mgmt) to the device VLAN field.
-Filter the device table by network name through the VLAN column or the search box.
+It also maps the row's `intf_description` (the OPNsense interface name, such as LAN, iot, servers, WAN or LAN3backupport) to the device VLAN field.
+Filter the device table by network name with the VLAN filter dropdown (`UI_columns_filters`) or the search box; the VLAN column only sorts.
 The override shows these device-table columns through `UI_device_columns`: icon, name, type, first seen, last seen, last IP, VLAN, status, full MAC, source plugin and custom properties.
 A device seen only by ICMP, with no ARP row, has no VLAN.
 The gateway's single MAC appears on several VLANs, so its device carries whichever row the import saw last.
