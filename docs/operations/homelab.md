@@ -138,7 +138,7 @@ The first 96-device pass took 24 minutes; NetAlertX runs plugins serially, so RE
 The import reads OPNsense's resolved ARP snapshot (`mac`, `ip`, `hostname`, `manufacturer`) through `search_arp?resolve=yes`.
 It also maps the row's `intf_description` (the OPNsense interface name, such as LAN, iot, servers, WAN or LAN3backupport) to the device VLAN field.
 Filter the device table by network name with the VLAN filter dropdown (`UI_columns_filters`) or the search box; the VLAN column only sorts.
-The override shows these device-table columns through `UI_device_columns`: icon, name, type, first seen, last seen, last IP, VLAN, status, full MAC, source plugin and custom properties.
+The override shows these device-table columns through `UI_device_columns`: icon, name, type, MAC vendor, first seen, last seen, last IP, VLAN, status, full MAC, source plugin and custom properties.
 The default device view excludes archived devices; the Archived tile still shows them.
 A device seen only by ICMP, with no ARP row, has no VLAN.
 The gateway's single MAC appears on several VLANs, so its device carries whichever row the import saw last.

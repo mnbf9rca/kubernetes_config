@@ -40,7 +40,7 @@ APP_CONF_OVERRIDE=$(jq -nc --arg arp "$arp" '{
   NEWDEV_ignored_IPs:["10.244.%"],
   UI_MY_DEVICES:["online","offline","new","down"],
   UI_columns_filters:["Device_TableHead_Type","Device_TableHead_SyncHubNodeName","Device_TableHead_SourcePlugin","Device_TableHead_Vlan"],
-  UI_device_columns:["Device_TableHead_Icon","Device_TableHead_Name","Device_TableHead_Type","Device_TableHead_FirstSession","Device_TableHead_LastSession","Device_TableHead_LastIP","Device_TableHead_Vlan","Device_TableHead_Status","Device_TableHead_MAC_full","Device_TableHead_SourcePlugin","Device_TableHead_CustomProps"]
+  UI_device_columns:["Device_TableHead_Icon","Device_TableHead_Name","Device_TableHead_Type","Device_TableHead_Vendor","Device_TableHead_FirstSession","Device_TableHead_LastSession","Device_TableHead_LastIP","Device_TableHead_Vlan","Device_TableHead_Status","Device_TableHead_MAC_full","Device_TableHead_SourcePlugin","Device_TableHead_CustomProps"]
 }')
 export APP_CONF_OVERRIDE
 exec /root-entrypoint.sh
