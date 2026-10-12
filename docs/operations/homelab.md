@@ -126,6 +126,11 @@ NBTSCAN looks for NetBIOS names, while INTRNT tracks WAN reachability; neither s
 NMAP uses the image default ports 1–10,000; the gateway will log this traffic and IoT devices may react badly, so exclude a sensitive device by appending `--exclude <device IP>` to `NMAP_ARGS` in Settings (keep the default `-p -10000`).
 The first 96-device pass took 24 minutes; NetAlertX runs plugins serially, so REST and ICMP cycles wait during NMAP.
 The import reads OPNsense's resolved ARP snapshot (`mac`, `ip`, `hostname`, `manufacturer`) through `search_arp?resolve=yes`.
+It also maps the row's `intf_description` (the OPNsense interface name, such as LAN, iot, servers or mgmt) to the device VLAN field.
+Filter the device table by network name through the VLAN column or the search box.
+The override shows these device-table columns through `UI_device_columns`: icon, name, type, first seen, last seen, last IP, VLAN, status, full MAC, source plugin and custom properties.
+A device seen only by ICMP, with no ARP row, has no VLAN.
+The gateway's single MAC appears on several VLANs, so its device carries whichever row the import saw last.
 Dnsmasq serves DHCPv4 names, and Unbound forwards `lan.cynexia.net` and reverse lookups to it, so active ARP rows with PTR records carry hostnames across all three VLANs.
 The NetAlertX key and secret come from `op://Homelab/netalertx/opnsense-key` and `/opnsense-secret`; its OPNsense user has only `Diagnostics: ARP Table`.
 Keep `/data`, app configuration, logs and restic restores private because the effective config contains reversibly encoded credentials.
