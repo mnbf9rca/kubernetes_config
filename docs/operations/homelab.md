@@ -118,6 +118,16 @@ Its Route53 `A` record in zone `Z3409TNW35PGSS` points to `10.100.0.100` with TT
 Keep it off the public Cloudflare tunnel.
 The operator chose no UI password. Anyone on the private LAN or tailnet who can reach the UI can change its settings, so do not expose the Ingress publicly.
 Manual device labels, locks, groups and network-tree assignments live on `netalertx-data` and survive pod restarts.
+Device types use exactly ten values.
+Gateway covers the OPNsense interfaces and the ISP router, and Switch and AP are as named.
+Server covers hypervisors, VMs, the Talos node, Raspberry Pis running a service, iLO and JetKVM.
+Computer is a desktop or laptop, and Mobile covers phones, tablets and watches.
+Media covers speakers, receivers, consoles and streamers, and Camera covers cameras and doorbells.
+Printer is as named, and IoT covers sensors, plugs, hubs, meters, appliances, the UPS and the scales.
+The type field is free text and the filter dropdown lists every value in use, so a new device typed with any other word lengthens the dropdown.
+New devices arrive with a blank type, so type them by hand.
+The network tree accepts only parents whose type is in `NETWORK_DEVICE_TYPES`, and that list does not include Server.
+To hang VMs under their host, add Server to `NETWORK_DEVICE_TYPES` through the override.
 
 `homelab/workloads/scripts/netalertx-bootstrap.sh` owns one authenticated REST Import, five-minute REST/ICMP schedules, three scan subnets, 90-day device history, `LOG_LEVEL=minimal`, the device-table columns and filters (`UI_device_columns`, `UI_columns_filters`), the default view (`UI_MY_DEVICES`) and the ignored pod network (`NEWDEV_ignored_IPs`) through `APP_CONF_OVERRIDE`; `LOADED_PLUGINS` includes REST Import, ICMP, NBTSCAN, INTRNT and NMAP.
 Do not edit those settings in the UI: the next start reapplies them.
