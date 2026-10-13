@@ -32,3 +32,4 @@ configMapGenerator:
     namespace: netdisco
     files:
       - netdisco-pg-dump.sh=scripts/netdisco-pg-dump.sh
+      - netdisco-exporter.py=scripts/netdisco-exporter.py
