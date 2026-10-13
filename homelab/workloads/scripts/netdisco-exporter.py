@@ -5,6 +5,7 @@ import base64
 import json
 import os
 import subprocess
+import sys
 import urllib.request
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
@@ -116,6 +117,8 @@ def merge_rows(arp_rows, nodes):
 
 
 class Handler(BaseHTTPRequestHandler):
+    timeout = 10
+
     def do_GET(self):
         if self.path != "/":
             self.send_error(404)
@@ -129,7 +132,12 @@ class Handler(BaseHTTPRequestHandler):
             return
         try:
             nodes = fetch_nodes()
-        except (OSError, ValueError, KeyError, subprocess.SubprocessError):
+        except (OSError, ValueError, KeyError, subprocess.SubprocessError) as error:
+            detail = type(error).__name__
+            if isinstance(error, subprocess.CalledProcessError):
+                detail += " exit=%s" % error.returncode
+            print("netdisco-exporter: Netdisco query failed: " + detail,
+                  file=sys.stderr, flush=True)
             nodes = []
         body = json.dumps(merge_rows(rows, nodes)).encode()
         self.send_response(200)

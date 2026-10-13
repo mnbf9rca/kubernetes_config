@@ -76,7 +76,7 @@ class MergeRows(unittest.TestCase):
         result = exporter.merge_rows([], [node(parent=None)])
         self.assertIsNone(result[0]["switch_mac"])
 
-    def test_duplicate_node_sightings_emit_one_mac(self):
+    def test_duplicate_node_rows_use_last_row_once(self):
         result = exporter.merge_rows([], [node(port="Port4"), node(port="Port5")])
         self.assertEqual(len(result), 1)
         self.assertEqual(result[0]["switch_port"], "Port5")

@@ -66,7 +66,7 @@ Verify keel's permissions with a SelfSubjectAccessReview issued with keel's own 
 | `printing` | Core One+ printer services | Spoolman inventory, FilaBridge filament accounting, PrintGuard failure detection — see below |
 | `cloudflared` | Shared homelab Cloudflare tunnel | Connector for health, Hermes, proxy and Homepage routes — `homelab/bootstrap/cloudflared/` |
 | `homepage` | Service directory | Homepage at `home.cynexia.com` behind Cloudflare Access; current card count: `/api/services` |
-| `netalertx` | Private device inventory | Resolved OPNsense ARP import, ICMP, NBTSCAN, INTRNT and daily NMAP; see [NetAlertX](#netalertx) |
+| `netalertx` | Private device inventory | Merged OPNsense ARP and Netdisco access-port import, ICMP, NBTSCAN, INTRNT and daily NMAP; see [NetAlertX](#netalertx) |
 | `ops` | Cluster-wide operational jobs | `update-watch` and `keel-fresh` CronJobs — see below |
 | `proxy` | Residential egress for changedetection on the VPS | tinyproxy — see [vps.md](vps.md#residential-egress-through-the-homelab) |
 
@@ -129,37 +129,42 @@ New devices arrive with a blank type, so type them by hand.
 The network tree accepts only parents whose type is in `NETWORK_DEVICE_TYPES`, and that list does not include Server.
 To hang VMs under their host, add Server to `NETWORK_DEVICE_TYPES` through the override.
 
-`homelab/workloads/scripts/netalertx-bootstrap.sh` owns one authenticated REST Import, five-minute REST/ICMP schedules, three scan subnets, 90-day device history, `LOG_LEVEL=minimal`, the device-table columns and filters (`UI_device_columns`, `UI_columns_filters`), the default view (`UI_MY_DEVICES`) and the ignored pod network (`NEWDEV_ignored_IPs`) through `APP_CONF_OVERRIDE`; `LOADED_PLUGINS` includes REST Import, ICMP, NBTSCAN, INTRNT and NMAP.
+`homelab/workloads/scripts/netalertx-bootstrap.sh` owns one no-auth REST Import from the in-cluster Netdisco exporter, five-minute REST/ICMP schedules, three scan subnets, 90-day device history, `LOG_LEVEL=minimal`, the device-table columns and filters (`UI_device_columns`, `UI_columns_filters`), the default view (`UI_MY_DEVICES`) and the ignored pod network (`NEWDEV_ignored_IPs`) through `APP_CONF_OVERRIDE`; `LOADED_PLUGINS` includes REST Import, ICMP, NBTSCAN, INTRNT and NMAP.
 Do not edit those settings in the UI: the next start reapplies them.
 The override explicitly schedules NBTSCAN, INTRNT and daily 02:00 NMAP in NetAlertX's configured timezone (Europe/London on 2026-10-09), and disables ARPSCAN, AVAHISCAN, DIGSCAN and NSLOOKUP; `LOADED_PLUGINS` alone does not stop an upstream plugin whose `*_RUN` default is active.
 NBTSCAN looks for NetBIOS names, while INTRNT tracks WAN reachability; neither supplies a LAN MAC inventory.
 NMAP uses the image default ports 1–10,000; the gateway will log this traffic and IoT devices may react badly, so exclude a sensitive device by appending `--exclude <device IP>` to `NMAP_ARGS` in Settings (keep the default `-p -10000`).
 The first 96-device pass took 24 minutes; NetAlertX runs plugins serially, so REST and ICMP cycles wait during NMAP.
-The import reads OPNsense's resolved ARP snapshot (`mac`, `ip`, `hostname`, `manufacturer`) through `search_arp?resolve=yes`.
+The exporter fetches OPNsense's resolved ARP snapshot (`mac`, `ip`, `hostname`, `manufacturer`) through `search_arp?resolve=yes` and merges Netdisco's active access-port MACs into one JSON array.
+Every gateway row remains separate, even when the same MAC appears on several interfaces; matching rows all gain the Netdisco switch MAC and port without replacing their gateway IP or interface name.
+A Netdisco-only MAC is imported with its latest active Netdisco IP, or no IP if none is known, plus its switch and port.
 It also maps the row's `intf_description` (the OPNsense interface name, such as LAN, iot, servers, WAN or LAN3backupport) to the device VLAN field.
+The exporter's raw `netdisco_vlan` stays in the JSON for inspection; it is not mapped to NetAlertX's VLAN field.
 Filter the device table by network name with the VLAN filter dropdown (`UI_columns_filters`) or the search box; the VLAN column only sorts.
 The override shows these device-table columns through `UI_device_columns`: icon, name, type, MAC vendor, first seen, last seen, last IP, VLAN, status, full MAC, source plugin and custom properties.
 The default device view excludes archived devices; the Archived tile still shows them.
 A device seen only by ICMP, with no ARP row, has no VLAN.
-The gateway's single MAC appears on several VLANs, so its device carries whichever row the import saw last.
+The gateway's single MAC appears on several VLANs, so NetAlertX may show any one of those interface names for that device.
 `NEWDEV_ignored_IPs` holds the SQL `LIKE` pattern `10.244.%` so the pod's own address in the Kubernetes pod network creates no device row after each restart.
 Dnsmasq serves DHCPv4 names, and Unbound forwards `lan.cynexia.net` and reverse lookups to it, so active ARP rows with PTR records carry hostnames across all three VLANs.
-The NetAlertX key and secret come from `op://Homelab/netalertx/opnsense-key` and `/opnsense-secret`; its OPNsense user has only `Diagnostics: ARP Table`.
-Keep `/data`, app configuration, logs and restic restores private because the effective config contains reversibly encoded credentials.
-Never raise `LOG_LEVEL` above `minimal`, even briefly for debugging: NetAlertX then writes the reversibly encoded OPNsense credentials to pod logs and `/tmp/log/app.log`.
-If that happens, record the disclosure in `secrets-to-rotate.md` and rotate the gateway API key.
+The ARP-only OPNsense key and secret still come from `op://Homelab/netalertx/opnsense-key` and `/opnsense-secret`; they now enter the `netdisco` Secret and exporter container, not NetAlertX's configuration.
+Its OPNsense user has only `Diagnostics: ARP Table`.
+Keep the Netdisco Secret and pod environment private; older `netalertx-data` backups can still contain the previous import's encoded credentials.
 
 ICMP sweeps Home (`192.168.17.0/24`), Servers (`10.100.0.0/24`) and IoT (`10.0.2.0/24`) every five minutes.
 The three `/24` sweeps exceeded the image's 10-second default timeout, so the override bounds each ICMP run at 120 seconds, below the five-minute schedule.
 The pod uses routed pings, not layer-2 discovery on each VLAN.
-The import uses the gateway ARP snapshot, which is cached for 30 seconds; quiet devices without an ARP row may be absent.
+The exporter uses the gateway ARP snapshot, which is cached for 30 seconds, and Netdisco's access-port view, which refreshes through five-minute `macwalk` runs.
+If the Netdisco query fails, the import still returns gateway rows without parent enrichment; if the gateway call fails, it returns 503 with no partial inventory.
+During a Netdisco pod restart the whole REST feed is unavailable until the pod returns. ICMP continues checking known IPs, but MAC-only devices may briefly show Down or Disconnected.
 The gateway retains an ARP entry for about 20 minutes after contact (`net.link.ether.inet.max_age=1200` on 2026-10-09), so a departed device can linger in the import for that long.
 Dnsmasq leases last 4000 seconds, so a departed DHCP client may retain a DNS name for up to 66 minutes 40 seconds after its last renewal.
+An access-port row asserts presence until Netdisco marks it inactive on a later macsuck, so a departed device's Down alert can lag switch MAC aging plus a five-minute collection interval and the five-minute import interval.
 ICMP-silent devices may be slow to change presence state.
 The gateway mDNS repeater is enabled on all three VLANs, but the image's Avahi lookup resolved zero names from a normal pod; `AVAHISCAN` stays off.
 Add or lock names manually for static-address devices.
 MAC is the identity key: randomized MACs create new records, and several IPs sharing one MAC can collapse into one device.
-The network tree needs manual parent/type assignments; it does not discover switch ports.
+The network tree receives parent switch and port from Netdisco for active access-port MACs; device types and other parent assignments remain manual.
 
 The existing nightly restic job backs up the entire `netalertx-data` local-path PVC and checks for `/data/db/app.db`.
 To restore, stop the Deployment, restore the whole PVC directory including any `app.db-wal` and `app.db-shm`, restart, and check the UI and database.
@@ -168,7 +173,13 @@ No separate backup Job or freshness check exists for this mostly idle database.
 
 ### Netdisco
 
-`https://netdisco.cynexia.net` is a private Traefik route to the login-protected Netdisco UI. Its Homepage card is under Network. Search by device name, IP or MAC for the learned switch port; movement history appears after a later natural change. Netdisco polls six switches (`192.168.17.10`–`.14`, `.72`) and the OPNsense Servers address `10.100.0.1` only. The two read-only SNMP communities are scoped per address in the Secret-backed `deployment.yml`; no write community or OPNsense API key is in the pod. The first admin was created interactively; its login is at `op://Homelab/netdisco/admin-username` and `/admin-password`. After a `deployment.yml` Secret change, restart the Deployment: its `subPath` mount does not update in place.
+`https://netdisco.cynexia.net` is a private Traefik route to the login-protected Netdisco UI. Its Homepage card is under Network. Search by device name, IP or MAC for the learned switch port; movement history appears after a later natural change. Netdisco polls six switches (`192.168.17.10`–`.14`, `.72`) and the OPNsense Servers address `10.100.0.1` only.
+
+The two read-only SNMP communities are scoped per address in the Secret-backed `deployment.yml`; there is no write community. A separate ARP-only OPNsense API key and secret in the same Kubernetes Secret feed the exporter on port 5001, reached through the in-cluster Service. The Ingress still points at the UI on port 5000. The first admin was created interactively; its login is at `op://Homelab/netdisco/admin-username` and `/admin-password`.
+
+After a `deployment.yml` Secret change, restart the Deployment with `kubectl --context cynexia-homelab -n netdisco rollout restart deploy/netdisco`: its `subPath` mount does not update in place.
+
+`schedule.macwalk.when` in that Secret is `*/5 * * * *`, replacing the packaged default of minute 20 each hour. A macwalk queues collection of access-port locations; a device that leaves can remain present until the switch ages its MAC and the next collection and NetAlertX import run. This interval is an inventory cadence, not an instantaneous reachability signal.
 
 OPNsense has `os-net-snmp` enabled on `10.100.0.1:161` with `l3visibility=1` (`sysServices=76`). It is not listening on Home `192.168.17.1`; the Servers policy already allows the Talos node through. The gateway's ARP table supplies IP-to-MAC mapping across Home, Servers and IoT. Dnsmasq/Unbound PTR records supply names when present. An ARP entry, name or move can lag the live link until the next Netdisco collection; do not use it as an instantaneous reachability test. To roll gateway SNMP back, disable Net-SNMP in Services or remove `os-net-snmp`; retain the saved gateway config `config-1791562068.9104.xml`.
 
