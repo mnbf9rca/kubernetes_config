@@ -83,6 +83,24 @@ spec:
             timeoutSeconds: 5
             failureThreshold: 3
           volumeMounts: *netdisco-config-mount
+        - name: netdisco-exporter
+          image: netdisco/netdisco:latest-web
+          imagePullPolicy: Always
+          command: [python3, /scripts/netdisco-exporter.py]
+          env:
+            - { name: NETDISCO_DB_HOST, value: localhost }
+            - { name: NETDISCO_DB_NAME, value: netdisco }
+            - { name: NETDISCO_DB_USER, value: netdisco }
+            - name: NETDISCO_DB_PASS
+              valueFrom: { secretKeyRef: { name: netdisco, key: pg-password } }
+            - name: GATEWAY_ARP_USER
+              valueFrom: { secretKeyRef: { name: netdisco, key: arp-key } }
+            - name: GATEWAY_ARP_PASS
+              valueFrom: { secretKeyRef: { name: netdisco, key: arp-secret } }
+          ports:
+            - { name: exporter, containerPort: 5001 }
+          volumeMounts:
+            - { name: scripts, mountPath: /scripts, readOnly: true }
         - name: netdisco-backend
           image: netdisco/netdisco:latest-backend
           imagePullPolicy: Always
@@ -95,6 +113,8 @@ spec:
           secret:
             secretName: netdisco
             defaultMode: 0444
+        - name: scripts
+          configMap: { name: netdisco-scripts }
 ---
 apiVersion: v1
 kind: Service
@@ -103,6 +123,7 @@ spec:
   selector: { app: netdisco }
   ports:
     - { name: http, port: 5000, targetPort: http }
+    - { name: exporter, port: 5001, targetPort: exporter }
 ---
 apiVersion: v1
 kind: Service
