@@ -588,7 +588,8 @@ curl -sS -H "X-Api-Key: $(op read 'op://Homelab/healthchecks.io/read-only-api-ke
   https://healthchecks.io/api/v3/checks/ | grep -o '"name": *"[^"]*"'
 ```
 
-**`upsd.cynexia.net` has `n_pings=0`**: never pinged, so wire it up or delete it.
+`upsd.cynexia.net` receives unattended-upgrades report mail through `hc-mail` on the [NUT UPS Pi](nut-pi.md).
+The 2026-10-14 report-mail test changed `n_pings` from zero to one and the check to `up`.
 
 A seventh non-repo check existed until 2026-08-26: the orphaned `homelab-keel-fresh` described in the migration paragraph above.
 It is worth remembering as a shape.
