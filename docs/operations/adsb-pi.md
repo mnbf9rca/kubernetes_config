@@ -12,7 +12,7 @@ The server allows public-key login only and disconnects after six rejected keys,
 | Component | Installed from | Updates | Notes |
 |---|---|---|---|
 | readsb (decoder) | wiedehopf `readsb-install.sh` | re-run the script | Feeds every client on port 30005 |
-| tar1090 (map) | wiedehopf script, pulled in by the above | re-run the script | Served by lighttpd on port 80; nothing else uses lighttpd |
+| tar1090 (map) | wiedehopf script, pulled in by the above | re-run the script | Served by lighttpd at `http://adsb.lan.cynexia.net/tar1090/`; the site root is only lighttpd's placeholder page, and nothing else uses lighttpd |
 | autogain1090 | wiedehopf `autogain-install.sh` | re-run the script | A systemd timer adjusts readsb's gain, so `/etc/default/readsb` carries `--gain -10` |
 | piaware (FlightAware) | FlightAware apt repository, `piaware-repository` package | apt | MLAT on |
 | fr24feed (Flightradar24) | Flightradar24 apt repository via wiedehopf `fr24-nopackage.sh` | its own cron in `/etc/cron.d/fr24feed_updater`, plus apt | MLAT off by configuration, so `fr24feed-status` always reports "MLAT: failed"; that is expected |
@@ -65,7 +65,7 @@ Use a new card and keep the old one until step 9 passes.
 2. Flash Raspberry Pi OS Lite 64-bit (bookworm) with Raspberry Pi Imager: hostname `adsb`, user `pi`, SSH with the m4 public key, locale and timezone set.
 3. Swap the card, boot, and confirm `ssh pi@adsb.lan.cynexia.net` works and the address is still 192.168.17.136.
 4. `sudo apt update && sudo apt full-upgrade -y && sudo reboot`.
-5. readsb then autogain, each as `sudo bash -c "$(wget -O - https://github.com/wiedehopf/adsb-scripts/raw/master/<script>)"` with `readsb-install.sh` (which installs tar1090 and lighttpd as well) and then `autogain-install.sh`. Restore latitude, longitude and `--max-range 450` in `/etc/default/readsb`, then check the map on port 80 shows aircraft.
+5. readsb then autogain, each as `sudo bash -c "$(wget -O - https://github.com/wiedehopf/adsb-scripts/raw/master/<script>)"` with `readsb-install.sh` (which installs tar1090 and lighttpd as well) and then `autogain-install.sh`. Restore latitude, longitude and `--max-range 450` in `/etc/default/readsb`, then check the map at `/tar1090/` on port 80 shows aircraft.
 6. piaware: install FlightAware's `piaware-repository` package for bookworm, `sudo apt install piaware`, then `sudo piaware-config feeder-id <saved id>`, `sudo piaware-config allow-mlat yes`, `sudo systemctl restart piaware`, and confirm `sudo piaware-status` says connected.
 7. fr24feed: run `fr24-nopackage.sh` from the same wiedehopf repository, copy the saved `fr24key` into `/etc/fr24feed.ini` with `receiver="beast-tcp"`, `host="127.0.0.1:30005"` and `mlat="no"`, restart it, and confirm `fr24feed-status` says connected with radar T-EGTR38.
 8. ADS-B Exchange: write the saved UUID to `/usr/local/share/adsbexchange/adsbx-uuid` first, then run `feed.sh` and `stats.sh` from adsbexchange.com with the saved user, latitude, longitude and altitude, and confirm `adsbexchange-feed` logs "Connection established".
