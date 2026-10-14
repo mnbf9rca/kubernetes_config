@@ -1,0 +1,8 @@
+// Keep the Pi's daily update and report settings with its reboot policy.
+APT::Periodic::Update-Package-Lists "1";
+APT::Periodic::Unattended-Upgrade "1";
+Unattended-Upgrade::Origins-Pattern { "origin=*"; };
+Unattended-Upgrade::Mail "${NUT_HEALTHCHECKS_EMAIL}";
+Unattended-Upgrade::MailReport "always";
+Unattended-Upgrade::Automatic-Reboot "true";
+Unattended-Upgrade::Automatic-Reboot-Time "04:45";

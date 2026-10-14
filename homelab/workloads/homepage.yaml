@@ -174,10 +174,10 @@ data:
             icon: apc.svg
             href: http://10.100.0.6/logon.htm
             description: 10.100.0.6 · APC power
-        - 10.100.0.4:
+        - NUT UPS:
             icon: apc.svg
             href: http://10.100.0.4/cgi-bin/nut/upsstats.cgi
-            description: NUT UPS status
+            description: 10.100.0.4 · NUT status page
         - FS iLO:
             icon: ilo.svg
             href: https://10.100.0.7/

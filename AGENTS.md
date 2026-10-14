@@ -23,7 +23,7 @@ Cluster-specific detail, runbooks and procedures live under `docs/`, referenced 
 | `docs/operations/github-mirror.md` | GitHub mirrors and JSON exports, B2 key separation, heartbeat verdicts, initialization, restore, cutover and unhide runbooks |
 | `docs/operations/agent-teams.md` | **Read before dispatching any agent or subagent.** Agent-team roles, loop limits, escalation, access and Herdr commands |
 | `docs/operations/adsb-pi.md` | The ADS-B feeder Pi, outside both clusters: what runs on it, the feeder identity files, backup, the rebuild runbook and the heartbeat wiring |
-| `docs/operations/nut-pi.md` | The NUT UPS Pi: SNMP polling, CGI status page, configuration backup, rebuild, upgrade heartbeat, monitor authentication and automatic reboot |
+| `docs/operations/nut-pi.md` | The NUT UPS Pi: SNMP polling, CGI status page, canonical configuration and 1Password references, rebuild, upgrade heartbeat, monitor authentication and automatic reboot |
 
 Design documents and implementation plans are local-only under the gitignored `docs/superpowers/` tree (`specs/2026-04-11-talos-homelab-rebuild-design.md`, `plans/2026-04-11-talos-homelab-rebuild.md`).
 
@@ -73,6 +73,9 @@ kubernetes_config/
 │   ├── plugins/              # canonical copies of the profile-scoped Hermes plugins (safer-reader-broker + its test)
 │   ├── profiles/             # canonical copies of the per-profile SOUL.md personas
 │   └── skills/               # canonical copies of promoted Hermes skills (untrusted-web-content-analysis)
+├── nut-pi/                   # canonical NUT Pi configuration; secrets resolved from its own .env.tpl
+│   ├── etc/                  # NUT configuration, update/report/reboot policy and the two apt timer drop-ins
+│   └── scripts/              # hc-mail sendmail replacement and its routing test
 ├── scripts/                  # repo-level helpers (karakeep tags, FreshRSS WebSub status, the check-* guards, reauth.sh)
 ├── legacy-microk8s/          # frozen reference copies of the old microk8s manifests
 └── no_longer_used/           # retired manifests kept for reference
@@ -318,7 +321,8 @@ The rules that must not be broken:
   **Nothing mechanical guards runbook prose**, which is why its disclosure rules are written into the steps they govern rather than referenced.
   The files that remain under `hermes-vm/` are not rendered by kustomize, so `make check-script-lint` cannot see them — `make check-vm-scripts` is their guard, and it is `shellcheck -s sh` over every `*.sh` under `hermes-vm/scripts/` (the daily alive check; since 2026-08-29 the weekly docker-sandbox refresh; and since 2026-08-31 `hermes-profile-docker-setup.sh`, which is run by hand per new profile and is on no schedule) plus `scripts/check-ping-bodies.py hermes-vm`.
   It runs in **no** preflight, and the one workflow this repository has covers `homelab/health/mcp/` alone, so nothing runs it automatically: it is step 1 of the install procedure in `docs/operations/hermes-vm.md`.
-  Run it by hand after touching anything under `hermes-vm/`, and before copying any of it to the VM.
+  The same target also checks `nut-pi/scripts/`, including the `hc-mail` routing test.
+  Run it by hand after touching machine scripts, and before copying them to their host.
 - **A new InfluxDB bucket in the `health` namespace means three edits, not one:** create it (a `make health-influx-*-bootstrap` target), add it to the explicit `for B in ...` list in `homelab/health/scripts/influx-export-lp.sh`, **and** raise `LP_EXPECTED` in `homelab/health/scripts/influx-backup.sh`, which is the denominator of the `buckets=n/m` the heartbeat carries.
   A bucket missing from the export list is silently never exported; a bucket in that list that does not exist fails the nightly job by name; and a stale `LP_EXPECTED` shows up as a visibly wrong `buckets=` and nothing worse.
   Bootstrap before applying (`docs/operations/homelab-health.md`).
