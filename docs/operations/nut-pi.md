@@ -68,6 +68,11 @@ After reloading both services, the same login assertion passed and `upsd` logged
 All three TCP clients remained connected and telemetry stayed fresh.
 Working login and readings verify monitoring; no forced shutdown or UPS power-off test was performed.
 
+On battery plus low battery, primary `upsmon` sets forced shutdown (FSD), waits up to `HOSTSYNC 15` seconds for logged-in secondary monitors, writes `/etc/killpower`, and halts the Pi with `/sbin/shutdown -h +0`.
+The shutdown hook then runs `upsdrvctl shutdown`; [snmp-ups first attempts `shutdown.return`](https://github.com/networkupstools/nut/blob/v2.8.0/drivers/snmp-ups.c#L308-L340), requesting an output cut after the reported `ups.delay.shutdown` of 60 seconds and restoration when mains power returns.
+NetAlertX identifies 10.100.0.107 as `pve3`; it and Home Assistant hold reader connections without monitor logins, so the primary does not wait for their shutdown, and pve3's physical power feed was not verified.
+An output cut removes power from every device supplied by this UPS, potentially including a still-running pve3; the APC card's SNMP write access and actual load-off behavior were not tested.
+
 At check-in, the Pi had run kernel `6.12.75+rpt-rpi-v8` for 180 days while `linux-image-rpi-v8` was `1:6.12.109-1+rpt1`.
 It had 9.6 GB free on its 15 GB root filesystem and 3.5 GiB available RAM.
 The operator approved one reboot after the authentication repair and heartbeat test.
