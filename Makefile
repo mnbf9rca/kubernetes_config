@@ -139,8 +139,8 @@ help:
 	@echo "                     the diff-*/apply-* preflight; the first five per cluster, this one whole)"
 	@echo "  check-workflows - actionlint (with shellcheck) over .github/workflows/ — not in the preflight"
 	@echo ""
-	@echo "Hermes VM targets (not cluster-applied):"
-	@echo "  check-vm-scripts - shellcheck + ping-body scan the hermes VM's alive-check script"
+	@echo "Machine script targets (not cluster-applied):"
+	@echo "  check-vm-scripts - lint Hermes and NUT Pi scripts and check heartbeat bodies"
 	@echo ""
 	@echo "VPS cluster targets:"
 	@echo "  check-vps-context - assert kubectl current-context matches VPS_CONTEXT ($(VPS_CONTEXT))"
@@ -407,7 +407,7 @@ check-renovate-scope-vps:
 	@scripts/check-renovate-scope.py vps
 
 # ---- check-vm-scripts ------------------------------------------------------
-# The hermes VM's files are not rendered by kustomize, so check-script-lint
+# The Hermes VM and NUT Pi files are not rendered by kustomize, so check-script-lint
 # cannot see them: it extracts shell from the RENDER. hermes-app-alive.sh still
 # ships real logic, and it still posts an uptime-kuma push message, so it gets
 # the same two guarantees through its own target — shellcheck as POSIX sh, and
@@ -430,12 +430,13 @@ check-renovate-scope-vps:
 # gating a cluster apply on it would be noise. That is a real cost — nothing
 # runs it on a schedule and the one CI workflow here builds and lints only
 # itself, so it can rot unnoticed. What keeps it honest is that it is run
-# by hand before anything under hermes-vm/ is copied to the VM.
+# by hand before scripts under hermes-vm/ or nut-pi/ are copied to a machine.
 .PHONY: check-vm-scripts
 check-vm-scripts:
-	@shellcheck -s sh hermes-vm/scripts/*.sh
-	@scripts/check-ping-bodies.py hermes-vm
-	@echo "OK: hermes-vm scripts lint clean and ping-body safe"
+	@shellcheck -s sh hermes-vm/scripts/*.sh nut-pi/scripts/*.sh
+	@scripts/check-ping-bodies.py hermes-vm nut-pi
+	@python3 nut-pi/scripts/test_hc_mail.py
+	@echo "OK: Hermes and NUT Pi scripts lint clean and ping-body safe"
 
 # ---- check-workflows -------------------------------------------------------
 # The shell inside a workflow's `run:` blocks is rendered by nothing here, so
