@@ -80,7 +80,7 @@ Install each vendor package before restoring its config file: `fr24feed` and `pf
     ```
 
     The ping shows that the daily upgrade job ran and the Pi reached the internet. It does not show that the upgrade succeeded, because `apt.systemd.daily` exits 0 when `unattended-upgrade` fails; read `/var/log/unattended-upgrades/` for that. Confirm with `sudo systemctl start apt-daily-upgrade.service` and a fresh ping on the check's page.
-11. Add the FlightAware and Flightradar24 origins to `Unattended-Upgrade::Origins-Pattern` in `/etc/apt/apt.conf.d/50unattended-upgrades` so piaware and fr24feed update with everything else; the origin strings are in `apt-cache policy`. Check with `sudo unattended-upgrade --dry-run -d 2>&1 | grep -i allowed`.
+11. Add `"site=apt.svc.flightaware.com";` and `"site=repo-feed.flightradar24.com";` inside the `Unattended-Upgrade::Origins-Pattern` block of `/etc/apt/apt.conf.d/50unattended-upgrades` so piaware and fr24feed update with everything else. Match on site, not origin: the Flightradar24 release file carries no Origin or Suite field. Every entry in that block is a quoted string ending in a semicolon; an unquoted line breaks every apt command on the box. Check with `sudo unattended-upgrade --dry-run -d 2>&1 | grep -i "allowed origins"`.
 12. Check each site's station page shows the same station receiving, NetAlertX shows the Pi with its old name and address, and the healthchecks.io check is green the next morning. Then put the old card in a drawer.
 
 Expect the healthchecks.io check to miss one run on the day of the swap.
