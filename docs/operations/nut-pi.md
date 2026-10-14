@@ -28,7 +28,7 @@ The Homepage card therefore uses the IP address.
 | NUT server and client 2.8.0-7 | Debian `nut-server`, `nut-client` | unattended-upgrades | `MODE=netserver`; UPS name `apcups` |
 | `snmp-ups` driver | `nut-server` | unattended-upgrades | `nut-driver@apcups.service`; `apcc` MIB; polls 10.100.0.6 every second |
 | `upsd` | `nut-server` | unattended-upgrades | `nut-server.service`; listens on all IPv4 interfaces, TCP 3493 |
-| `upsmon` | `nut-client` | unattended-upgrades | `nut-monitor.service`; running, but its authentication is broken; see below |
+| `upsmon` | `nut-client` | unattended-upgrades | `nut-monitor.service`; authenticates as `monuser`, with the `primary` role |
 | NUT CGI and Apache 2.4.68 | Debian `nut-cgi`, `apache2` | unattended-upgrades | Status page: `http://10.100.0.4/cgi-bin/nut/upsstats.cgi` |
 | unattended-upgrades 2.9.1+nmu3 | Debian | apt | Daily package-list and upgrade timers; report mail drives the existing `upsd.cynexia.net` healthchecks.io check |
 | Exim4 and bsd-mailx | Debian | unattended-upgrades | Local mail is retained through the diverted sendmail; no SMTP daemon was removed |
@@ -57,19 +57,25 @@ upsc apcups@localhost
 systemctl status nut-server nut-monitor nut-driver@apcups
 ```
 
-### Unresolved monitor authentication and pending reboot
+### Monitor authentication and kernel maintenance
 
-`/etc/nut/upsmon.conf` uses username `admin`, while `/etc/nut/upsd.users` defines `[monuser]` and contains `admin master` rather than an `upsmon` role assignment.
-Read-only protocol login tests for both names returned `ERR ACCESS-DENIED`, and `GET NUMLOGINS apcups` returned zero.
-A running `nut-monitor` process and working readings do not establish working shutdown coordination.
-No NUT configuration, UPS settings, shutdown behavior or remote clients were changed during this task.
-Repair requires a separate operator decision because shutdown behavior was outside the approved scope.
+Before repair, `/etc/nut/upsmon.conf` used username `admin`, while `/etc/nut/upsd.users` defined `[monuser]` with an invalid `admin master` directive.
+Both login tests returned `ERR ACCESS-DENIED`, and `GET NUMLOGINS apcups` returned zero.
+The operator approved correcting this on 2026-10-14.
+The local monitor now uses `monuser` and its existing password, with the [documented `upsmon primary` role](https://networkupstools.org/historic/v2.8.0/docs/man/upsd.users.html) on the server.
+All existing server passwords were preserved; neither remote client configuration changed.
+After reloading both services, the same login assertion passed and `upsd` logged the local monitor login.
+All three TCP clients remained connected and telemetry stayed fresh.
+Working login and readings verify monitoring; no forced shutdown or UPS power-off test was performed.
 
-A reboot is pending: the Pi runs kernel `6.12.75+rpt-rpi-v8`, while `linux-image-rpi-v8` is `1:6.12.109-1+rpt1`.
-At check-in it had 180 days uptime, 9.6 GB free on its 15 GB root filesystem, and 3.5 GiB available RAM.
-`/var/run/reboot-required` lists the intervening kernel upgrades.
-A reboot interrupts the NUT readers at 10.100.0.107 and 192.168.17.102, as well as the local monitor.
-The operator chooses when to reboot.
+At check-in, the Pi had run kernel `6.12.75+rpt-rpi-v8` for 180 days while `linux-image-rpi-v8` was `1:6.12.109-1+rpt1`.
+It had 9.6 GB free on its 15 GB root filesystem and 3.5 GiB available RAM.
+The operator approved one reboot after the authentication repair and heartbeat test.
+After that reboot, the running kernel was `6.12.109+rpt-rpi-v8` and `/var/run/reboot-required` was absent.
+NUT and Apache started successfully, `upsc` returned `OL`, and all three clients reconnected.
+The CGI page answered with live UPS data, and current-boot logs contained no `ACCESS-DENIED`.
+A reboot briefly interrupts the NUT readers at 10.100.0.107 and 192.168.17.102, as well as the local monitor.
+Automatic reboot is enabled for 04:45 local time after future upgrades require it; the timer schedule is below.
 
 ## Identity and configuration files
 
@@ -80,11 +86,12 @@ The heartbeat address is a spam-target identifier; keep its value out of this pu
 | Purpose | Files | Notes |
 |---|---|---|
 | NUT mode and UPS connection | `/etc/nut/nut.conf`, `/etc/nut/ups.conf` | `netserver`, `apcups`, SNMP target, community and poll interval |
-| NUT server and monitor | `/etc/nut/upsd.conf`, `/etc/nut/upsd.users`, `/etc/nut/upsmon.conf`, `/etc/nut/upssched.conf` | Preserve credentials and existing behavior; the authentication defect above remains unresolved |
+| NUT server and monitor | `/etc/nut/upsd.conf`, `/etc/nut/upsd.users`, `/etc/nut/upsmon.conf`, `/etc/nut/upssched.conf` | Preserve credentials, matching `monuser` configuration and primary role |
 | CGI | `/etc/nut/hosts.conf`, `/etc/nut/upsset.conf`, `/etc/nut/upsstats.html`, `/etc/nut/upsstats-single.html` | UPS display name, templates and CGI configuration |
 | Web server | `/etc/apache2/` | Enabled site, CGI alias, modules and access settings |
 | Host access | `/etc/hostname`, `/home/rob/.ssh/authorized_keys` | Hostname `upsd` and accepted public keys |
-| Updates | `/etc/apt/apt.conf.d/20auto-upgrades`, `/etc/apt/apt.conf.d/50unattended-upgrades` | Daily schedule, allowed origins and heartbeat recipient |
+| Updates | `/etc/apt/apt.conf.d/20auto-upgrades`, `/etc/apt/apt.conf.d/50unattended-upgrades`, `/etc/apt/apt.conf.d/52unattended-upgrades-local` | Daily enablement, allowed origins, heartbeat recipient and automatic reboot |
+| Update schedule | `/etc/systemd/system/apt-daily.timer.d/override.conf`, `/etc/systemd/system/apt-daily-upgrade.timer.d/override.conf` | Refresh and upgrade before the reboot window |
 | Heartbeat transport | `/usr/local/sbin/hc-mail` | Local sendmail replacement; delegates other mail to `/usr/sbin/sendmail.exim4` |
 
 The `nut-driver-enumerator` generates the drop-ins under `/etc/systemd/system/nut-driver@*.service.d/` from `ups.conf`.
@@ -99,7 +106,7 @@ The archive contains real credentials; its private destination is deliberate.
 umask 077
 B="$HOME/nut-pi-backup-$(date +%F)"
 mkdir -p "$B"
-ssh -o IdentitiesOnly=yes -i /private/tmp/nut-pi-m3.pub rob@10.100.0.4 'sudo tar czf - /etc/nut /etc/apache2 /etc/hostname /home/rob/.ssh/authorized_keys /etc/apt/apt.conf.d/20auto-upgrades /etc/apt/apt.conf.d/50unattended-upgrades /usr/local/sbin/hc-mail /boot/firmware/config.txt /boot/firmware/cmdline.txt' > "$B/nut-identities.tar.gz"
+ssh -o IdentitiesOnly=yes -i /private/tmp/nut-pi-m3.pub rob@10.100.0.4 'sudo tar czf - /etc/nut /etc/apache2 /etc/hostname /home/rob/.ssh/authorized_keys /etc/apt/apt.conf.d/20auto-upgrades /etc/apt/apt.conf.d/50unattended-upgrades /etc/apt/apt.conf.d/52unattended-upgrades-local /etc/systemd/system/apt-daily.timer.d /etc/systemd/system/apt-daily-upgrade.timer.d /usr/local/sbin/hc-mail /boot/firmware/config.txt /boot/firmware/cmdline.txt' > "$B/nut-identities.tar.gz"
 gzip -t "$B/nut-identities.tar.gz"
 tar -tzf "$B/nut-identities.tar.gz"
 ```
@@ -118,25 +125,30 @@ Keep the original card until NUT readings, clients, the web page and the heartbe
 2. Create user `rob`, hostname `upsd`, and SSH access with the saved authorized keys.
 3. Restore the reserved address 10.100.0.4 in the network configuration.
 4. Install `nut-server`, `nut-client`, `nut-cgi`, `apache2`, `unattended-upgrades`, `curl` and `exim4` with apt.
-5. Restore `/etc/nut/`, `/etc/apache2/`, and both apt configuration files from the private backup.
+5. Restore `/etc/nut/`, `/etc/apache2/`, the three apt configuration files and both timer overrides from the private backup.
 6. Preserve owner `root:nut` and mode `0640` on the NUT files that contain credentials.
 7. Enable Apache's CGI module with `sudo a2enmod cgid`.
-8. Enable `nut-server`, `nut-monitor`, `apache2`, `unattended-upgrades`, `apt-daily.timer` and `apt-daily-upgrade.timer` with systemctl.
-9. Restart the restored services and check `upsc apcups@localhost` returns fresh readings.
-10. Check `http://10.100.0.4/cgi-bin/nut/upsstats.cgi` displays `apcups`.
-11. Restore the heartbeat helper and diversion as described below.
-12. Verify client readings and monitor authentication before relying on automatic shutdown.
+8. Reload systemd with `sudo systemctl daemon-reload`.
+9. Enable `nut-server`, `nut-monitor`, `apache2`, `unattended-upgrades`, `apt-daily.timer` and `apt-daily-upgrade.timer` with systemctl.
+10. Restart the restored services and check `upsc apcups@localhost` returns fresh readings.
+11. Check `http://10.100.0.4/cgi-bin/nut/upsstats.cgi` displays `apcups`.
+12. Restore the heartbeat helper and diversion as described below.
+13. Verify client readings and monitor authentication before relying on automatic shutdown.
 
-Restoring the recorded NUT files also restores the authentication defect; a rebuild alone does not fix it.
+Use a backup taken after the authentication repair; an older backup restores the broken monitor configuration.
 The UPS uses SNMP over the network, so there is no USB-device identity to recreate.
 
 ## Updates and heartbeat
 
 `20auto-upgrades` enables daily package-list refresh and unattended upgrades.
-Both apt timers were enabled and active; the last scheduled upgrade completed successfully at 06:20 BST on 2026-10-14.
+Both apt timers are enabled and active; the last scheduled upgrade before the check-in completed successfully at 06:20 BST.
 The package indexes were current that day, and `apt list --upgradable` reported no pending updates.
 The existing origins include `origin=*`, so Raspberry Pi repository packages are eligible too.
-Automatic reboot remains disabled.
+`52unattended-upgrades-local` enables automatic reboot at 04:45 Europe/London time when `/var/run/reboot-required` exists.
+The timer overrides schedule package-list refresh at 03:30 and upgrades at 04:00, each with up to ten minutes fixed jitter.
+They clear the vendor `OnCalendar` entries before assigning the new schedule.
+The observed next runs were 03:35:49 and 04:04:08 BST.
+The earlier schedule matters: handing a reboot time that has already passed to `shutdown` schedules it for tomorrow.
 
 The existing `Unattended-Upgrade::Mail` recipient selects the operator-owned `upsd.cynexia.net` check.
 `Unattended-Upgrade::MailReport "always";` requests a report even when no packages change.

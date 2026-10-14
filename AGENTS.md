@@ -23,7 +23,7 @@ Cluster-specific detail, runbooks and procedures live under `docs/`, referenced 
 | `docs/operations/github-mirror.md` | GitHub mirrors and JSON exports, B2 key separation, heartbeat verdicts, initialization, restore, cutover and unhide runbooks |
 | `docs/operations/agent-teams.md` | **Read before dispatching any agent or subagent.** Agent-team roles, loop limits, escalation, access and Herdr commands |
 | `docs/operations/adsb-pi.md` | The ADS-B feeder Pi, outside both clusters: what runs on it, the feeder identity files, backup, the rebuild runbook and the heartbeat wiring |
-| `docs/operations/nut-pi.md` | The NUT UPS Pi: SNMP polling, CGI status page, configuration backup, rebuild, upgrade heartbeat, pending reboot and unresolved monitor authentication |
+| `docs/operations/nut-pi.md` | The NUT UPS Pi: SNMP polling, CGI status page, configuration backup, rebuild, upgrade heartbeat, monitor authentication and automatic reboot |
 
 Design documents and implementation plans are local-only under the gitignored `docs/superpowers/` tree (`specs/2026-04-11-talos-homelab-rebuild-design.md`, `plans/2026-04-11-talos-homelab-rebuild.md`).
 
