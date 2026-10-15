@@ -82,7 +82,7 @@ Its own Access app, `hermes-app`, deliberately does **not** reuse the `hermes` a
 
 That gate is load-bearing in a way the dashboard's is not: hermes-webui serves `/share`, `/share/*`, `/api/share/*` and `/static/*` with no authentication of its own, so "the WebUI's password is the second gate" holds for the app but not for every path.
 The VM-side unit and security posture are in [homelab.md](homelab.md#hermes-webui-on-the-vm).
-Updates use the WebUI's **Update Now** button; recovery is in [Rollback](hermes-vm.md#rollback).
+Updates cover core, bundled dashboard and external stable WebUI through [the Hermes runbook](hermes-vm.md#application-updates); recovery is in [Rollback](hermes-vm.md#rollback).
 
 Both hostnames' Access apps **fail open** if the app is deleted; after any Cloudflare rebuild, verify the edge challenges an unauthenticated client before trusting either.
 

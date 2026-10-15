@@ -419,7 +419,7 @@ check-renovate-scope-vps:
 # checked nothing, but the ping-body guard on the next line hard-fails if
 # hermes-app-alive.sh goes missing (it is in that guard's REQUIRED_TARGETS), so
 # the tree cannot silently move out from under this target. The operator updates
-# the Hermes app stack with the WebUI's Update Now button; see
+# core with the upstream updater and hermes-webui on stable; see
 # docs/operations/hermes-vm.md.
 # The update wrapper that used to live beside the alive check, along with its
 # two test harnesses, its systemd unit and its root-owned entry point, was

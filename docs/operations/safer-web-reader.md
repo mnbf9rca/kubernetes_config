@@ -1,12 +1,14 @@
 # safer_web_reader: the quarantined web-reader profile
 
+Current limitation: the 5575a08 managed worker loses the profile deny-list. The broker remains unchanged and refuses the widened surface; the operator accepts [issue 146](https://github.com/mnbf9rca/kubernetes_config/issues/146). The passing August verification below is historical.
+
 `safer_web_reader` is a Hermes profile on VM 103 that reads untrusted web pages on behalf of other agents.
 A requester files a task carrying an instruction and one or more URLs; the reader fetches, reasons and returns one JSON envelope as the task result.
 It exists because release notes, changelogs and arbitrary pages can carry instructions aimed at whatever model reads them, and the agents that want those pages read hold exactly the capabilities such an instruction would be aiming for.
 
-The containment is not a filter and not a prompt.
-It is that the profile has almost no tools: four, none of which can touch a file, a shell, the LAN or another task.
-Everything else about the VM, including the WebUI's Update Now button, is in [hermes-vm.md](hermes-vm.md).
+The intended containment is a four-tool capability boundary: none can touch a file, shell, LAN or another task.
+Issue 146 currently violates that intended surface on dispatched workers; the broker refuses it.
+Everything else about the VM, including stable application updates, is in [hermes-vm.md](hermes-vm.md).
 
 ## What is running
 
@@ -18,10 +20,10 @@ Everything else about the VM, including the WebUI's Update Now button, is in [he
 | The broker plugin | `<profile home>/plugins/safer-reader-broker/` | Two tools; canonical copy at `hermes-vm/plugins/safer-reader-broker/` |
 | Worker logs | `~/.hermes/kanban/boards/safer_web_reader/logs/<task>.log`, or `hermes kanban --board safer_web_reader log <task>` | Where every failure is read. Both spellings were exercised live in the verification battery on 2026-08-30 |
 
-The profile's own gateway is **stopped, deliberately**.
-The kanban dispatcher runs inside a gateway under a machine-global advisory lock at `~/.hermes/kanban/.dispatcher.lock`, held by `hermes-gateway-emh.service`, and it enumerates every non-archived board on each 60-second tick.
+The profile has no messaging adapters or separate gateway unit; its owner context is served by the shared multiplexer.
+The kanban dispatcher runs inside a gateway under a machine-global advisory lock at `~/.hermes/kanban/.dispatcher.lock`, held by the shared `hermes-gateway.service`, and it enumerates every non-archived board on each 60-second tick.
 So a task on this board is picked up by an existing gateway, and the worker's toolset pin is resolved from the profile config on disk at dispatch time — a config edit takes effect on the next dispatch, with no restart of anything.
-Starting a fourth gateway for this profile would add nothing and would re-run the lock race; `fuser -v ~/.hermes/kanban/.dispatcher.lock` names the current holder if that ever needs re-checking.
+Starting a separate gateway for this profile would add nothing and would re-run the lock race; `fuser -v ~/.hermes/kanban/.dispatcher.lock` names the current holder if that ever needs re-checking.
 
 ## The tool surface, which is the whole of the containment
 
@@ -258,6 +260,12 @@ A plugin load failure logs one warning line carrying the exception text and no t
 
 The battery below is run live against the VM, and each check records its result here.
 Every one is runtime-failable, and the tool list in check 1 is the recorded baseline that later updates diff against.
+**October 15, 2026: the old verification below is historical, not a current passing containment claim.**
+At 5575a08 the managed-worker constructor loses `agent.disabled_toolsets:[kanban]`; public task `t_d80f1ad7` exposed unexpected Kanban tools and the unchanged broker refused both lifecycle calls, leaving no result.
+A briefly approved two-line source patch passed its regression test, then was reversed on the operator's instruction; the follow-up public diagnostic was archived. No core patch/test or reapply procedure remains.
+The operator accepts the limitation as [repo issue 146](https://github.com/mnbf9rca/kubernetes_config/issues/146): leave the broker intact and do not seek another approach during this maintenance. The reader is expected to refuse on the affected path.
+The unchanged broker’s 45 local tests pass; they do not prove the new dispatcher honors the profile deny-list.
+
 It was run in full on **2026-08-30** against Hermes `v0.20.6 (2026.8.27)`, on seven dispatched tasks left on the board as evidence; all nine checks passed.
 
 | # | Check | Result |

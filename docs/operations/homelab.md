@@ -364,7 +364,7 @@ They were learned while wiring hindsight (2026-08-24), and they bind any future 
   It also persists too much, writing an API key into the plugin's `config.json` as **cleartext**, which defeats the 1Password integration and puts a live credential in the nightly backup zip.
   After any GUI session, read the config file back and delete any secret value you find there.
   Because the file wins over the environment, a stored key shadows the 1Password-backed variable until it is removed.
-  To change a value reliably, edit the file and restart the affected gateway (`systemctl --user restart hermes-gateway-<profile>`).
+  To change a value reliably, edit the file and restart the affected gateway (`systemctl --user restart hermes-gateway`).
 - **Never disable a toolset that shares its name with a provider plugin's feature.**
   `hermes tools disable memory` is the live case: `memory` names both a built-in tool and a toolset, and the toolset gates every memory provider's tools as well.
   Disabling it removes the provider's tools with no warning.
@@ -487,14 +487,14 @@ Type=simple
 # expanding the value, so the password never reaches sh's argv.
 ExecStartPre=/bin/sh -c 'case "$${HERMES_WEBUI_PASSWORD}" in *[![:space:]]*) exit 0 ;; *) echo "hermes-webui: HERMES_WEBUI_PASSWORD is empty, blank or misspelt in /home/hermes/.hermes/webui.env - refusing to start unauthenticated" >&2 ; exit 1 ;; esac'
 
-ExecStart=/home/hermes/.hermes/hermes-agent/venv/bin/python /home/hermes/hermes-webui/server.py
+ExecStart=/usr/bin/python3 /home/hermes/hermes-webui/server.py
 WorkingDirectory=/home/hermes/hermes-webui
 
-Environment="PATH=/home/hermes/.hermes/hermes-agent/venv/bin:/home/hermes/.hermes/hermes-agent/node_modules/.bin:/home/hermes/.hermes/node/bin:/home/hermes/.hermes/node:/home/hermes/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
-Environment="VIRTUAL_ENV=/home/hermes/.hermes/hermes-agent/venv"
+Environment="PATH=/home/hermes/.local/bin:/usr/local/bin:/usr/bin:/bin"
 Environment="HERMES_HOME=/home/hermes/.hermes"
 Environment="HERMES_WEBUI_AGENT_DIR=/home/hermes/.hermes/hermes-agent"
-Environment="HERMES_WEBUI_PYTHON=/home/hermes/.hermes/hermes-agent/venv/bin/python"
+Environment="HERMES_SUPERVISED_CHILD=1"
+UnsetEnvironment=VIRTUAL_ENV HERMES_WEBUI_PYTHON
 Environment="HERMES_WEBUI_HOST=0.0.0.0"
 Environment="HERMES_WEBUI_PORT=8787"
 Environment="HERMES_WEBUI_SECURE=1"
@@ -546,108 +546,42 @@ The Hermex iOS app ([github.com/uzairansaruzi/hermex](https://github.com/uzairan
 The app forces https, appends no port and no path, and probes `GET /health` then `GET /api/auth/status` before login, which is why the hostname has to serve the WebUI at the root on 443.
 It streams over SSE, never websockets.
 
-**It runs out of the agent venv.**
-`server.py` needs only `pyyaml` and `cryptography`, but everything it calls into (`openai`, `httpx`, the agent itself) lives in `/home/hermes/.hermes/hermes-agent/venv`, which system python does not have.
-The unit runs `server.py` directly under an explicit environment rather than `bootstrap.py` or `start.sh`: both of those load `REPO_ROOT/.env` and auto-discover paths, which would make what the service runs depend on files systemd cannot see.
+**Stable WebUI activates the agent's PM runtime itself.**
+The unit starts `server.py` directly through system Python; stable v0.52.458’s native startup re-enters the selected PM Python 3.14 environment before API imports.
+Its YAML compatibility module uses PM's existing ruamel fallback, so this source deployment needs no PyYAML supplement and no WebUI venv.
+Do not persist a PM generation path in `HERMES_WEBUI_PYTHON`; the actual serving interpreter and a read-only WebUI gateway-status action are the checks.
 
 **Do not give it a venv of its own.**
-The cohabitation looks like an accident worth tidying up.
-It is not.
-`api/agent_runtime.py` imports `run_agent.AIAgent` into the server process, and `api/streaming.py` instantiates that class for every chat turn, so the WebUI needs hermes-agent's whole dependency tree rather than the two packages its own `requirements.txt` names.
-Splitting the venvs fails, and it fails silently.
-Measured on 2026-08-25: a `/home/hermes/hermes-webui/venv` built from system python 3.13 with `requirements.txt` installed returns `None` from `get_ai_agent_class()`, because `run_agent` imports `dotenv`, `httpx` and `openai` and that venv holds none of them.
-The unit still reaches `active`.
-`/health` still returns `status: ok` and `/api/auth/status` still reports `password_auth_enabled: true`.
-Every check in this document passes while the iOS app answers every message with `AIAgent not available`.
-Upstream reaches the same conclusion in `bootstrap.py`, where `ensure_python_has_webui_deps` prefers the agent venv and creates a local `.venv` only when no agent venv can run both.
-
-The WebUI and `hindsight-client` therefore share the agent venv.
-It is also why `hermes-app-alive.sh` imports `run_agent` every day at 05:45 UTC: that import is the cheapest assertion that catches the failure documented above, and no HTTP check on any of the three services can catch it.
+The WebUI imports `run_agent` and needs the complete agent dependency surface. HTTP health alone can remain green while chat imports fail.
+The daily alive check therefore deep-imports WebUI YAML/profile APIs and `run_agent` through the guarded PM helper; it isolates import-time settings writes.
 
 #### Updates
 
-Use the WebUI's **Update Now** button to update Hermes.
-There is no scheduled updater or separate weekly update runbook.
-See [hermes-vm.md](hermes-vm.md) for VM operation.
+Update core, its bundled dashboard and external WebUI together. Core uses upstream `hermes update` with implicit stable/forward-only behavior; external WebUI uses stable and its WebUI-only Update Now action.
+Follow [the application update runbook](hermes-vm.md#application-updates), including managed terminal policy mirroring and the accepted reader limitation.
 
 #### Rollback when an update breaks the app
 
-**Nothing rolls back on its own.**
-Rollback is a manual, judgement-bearing procedure, and the full form — agent, WebUI, `hindsight-client` and the six units, in the order that matters — is [Rollback](hermes-vm.md#rollback).
-Read the rollback caveat before starting.
-A code and dependency rollback cannot undo forward-only configuration or `state.db` migrations.
-State comes back only from the `--backup` snapshot, and only by discarding everything since.
-
-The retired runbook recorded `agent_sha`, `agent_branch`, `webui_sha` and `client_version` in `~/.hermes/hermes-update.pre-run`.
-A historical copy may also contain `target_sha` and `webui_target_sha`.
-WebUI updates do not maintain that record.
-It is plain text, mode 0644, and every value in it is an ordinary identifier.
-It lives inside `~/.hermes`, so the nightly zip can preserve an old rollback target.
-Confirm its revisions exist and identify the intended recovery point before using it.
-
-Use a validated historical record to roll back the WebUI alone:
-
-```sh
-SHA=$(sed -n 's/^webui_sha=//p' /home/hermes/.hermes/hermes-update.pre-run)
-git -C /home/hermes/hermes-webui checkout -f -B master "$SHA"
-systemctl --user restart hermes-webui
-```
-
-That form leaves the checkout on a branch rather than detached, which is the state the next update expects.
-It moves the WebUI alone.
-Use it only when the agent side is known good.
-Otherwise, follow [Rollback](hermes-vm.md#rollback).
-
-Second resort, if the record is missing or names a revision that is itself broken: the Hermex repo publishes the upstream commit the app was last validated against as `UPSTREAM_TESTED_SHA`.
-The branch is `master`, not `main`.
-Validate the value before it reaches `git` — a 404 returns an HTML error page, and `git checkout ""` on an empty variable fails with a confusing pathspec error:
-
-```sh
-SHA=$(curl -fsS https://raw.githubusercontent.com/uzairansaruzi/hermex/master/UPSTREAM_TESTED_SHA | tr -d '[:space:]')
-case "$SHA" in
-  [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]*) ;;
-  *) echo "refusing: UPSTREAM_TESTED_SHA did not look like a SHA" >&2; exit 1 ;;
-esac
-git -C /home/hermes/hermes-webui fetch origin
-git -C /home/hermes/hermes-webui checkout "$SHA"
-```
-
-Prefer the `webui_sha` in the pre-run record.
-`UPSTREAM_TESTED_SHA` advances only when the app's own contract tests are re-run, so it drifts: on 2026-08-24 it pointed at a commit from 2026-05-17 while upstream `master` was three months further on.
-Rolling back that far runs May code against an August `~/.hermes/webui` state directory and an agent that has moved underneath it, and upstream documents no backwards state compatibility.
-
-Return to tracking with `git checkout master && git pull --ff-only`.
-A rollback is a signal to open a Hermex issue, not a new steady state.
+Restore matching source, environments, units and stores into **emptied destinations** using [Rollback](hermes-vm.md#rollback).
+Keep moved-aside newer trees, the private recovery archive and the reboot hold; forward-only schema/pruning changes cannot be undone by a Git reset.
 
 #### What is and is not backed up
 
-- **Backed up** (inside `~/.hermes`, so in the nightly zip): `~/.hermes/webui` — sessions, `settings.json`, the session DB — and `~/.hermes/webui.env`, the password.
-- **Not backed up, deliberately**: the checkout at `/home/hermes/hermes-webui` and the workspace at `/home/hermes/workspace`.
-  The checkout is rebuild territory for the same reason `hermes-agent` is; it would otherwise add about 70 MB to a zip that already measures 203 MB compressed and is pulled over SSH nightly.
-  `HERMES_WEBUI_DEFAULT_WORKSPACE` is pinned in the unit precisely so this is a decision rather than a default — left unset, the server **creates** `~/workspace` at first start and quietly accumulates every file an app session writes, outside the backup and with nothing bounding its size.
-  **Treat `/home/hermes/workspace` as expendable**: anything worth keeping goes into a git remote or into the profile.
+Only paths under `~/.hermes` are covered by the nightly Hermes zip.
+The WebUI unit pins `HERMES_WEBUI_DEFAULT_WORKSPACE=/home/hermes/workspace`, which is **outside that backup**.
+Treat files there as expendable; put durable work in a Git remote or a profile workspace under `~/.hermes`.
+The private full recovery archive taken for maintenance is separate from the nightly zip.
 
-The liveness and OS-patching machinery adds more VM-side state, and **only the entries under `~/.hermes` are inside the nightly zip**:
-
-| Path | In the zip? |
+| Path | In the nightly zip? |
 |---|---|
-| `~/.hermes/scripts/hermes-app-alive.sh` | Yes |
-| `/etc/apt/apt.conf.d/{20auto-upgrades,52unattended-upgrades-local}` | No |
-| `/etc/systemd/system/apt-daily{,-upgrade}.timer.d/override.conf` | No |
-| `~/.hermes/config.yaml` — the `HERMES_APP_ALIVE_PUSH_TOKEN` injection | Yes |
-| The agent's cron store — the `hermes-app-alive` job itself | Yes |
-| `/home/hermes/.hermes/hermes-update.pre-run` (mode 0644) | Yes |
-
-The script moved into `~/.hermes/scripts/` on August 27, 2026, and so moved **into** the zip: `hermes cron create --script` takes a bare filename resolved under that directory and rejects an absolute path, so the old `/home/hermes/bin` copy could not be scheduled at all.
-It now restores alongside the cron store that names it, which is the pairing that matters — the store references the script by filename, so recovering one without the other leaves a job pointing at nothing.
-
-The canonical copy of the script lives in `hermes-vm/` in this repository, not inline in this document.
-The liveness check has no systemd unit and no environment file: it runs as a `no_agent` cron job inside `hermes-gateway`, and its push token is injected from 1Password at gateway start.
-**Everything outside `~/.hermes` must be reinstalled by hand after a rebuild** — the install runbook is [hermes-vm.md](hermes-vm.md#installing-or-reinstalling).
-
-The entries inside `~/.hermes` come back with the restored archive, and **two of them need checking rather than trusting**.
-Run `hermes cron list` after a restore: a liveness job that failed to come back looks exactly like a healthy day until the monitor's heartbeat lapses about 30 hours later.
-And a rebuilt VM inherits whatever rollback target the last update wrote into `hermes-update.pre-run`, so confirm the revisions it names still exist in both checkouts before trusting it.
+| `~/.hermes/webui/` sessions/settings and `~/.hermes/webui.env` | Yes |
+| Profile state, env/config, workspaces and durable sandbox homes under `~/.hermes` | Yes |
+| `~/.hermes/scripts/` and profile cron stores | Yes |
+| `/home/hermes/workspace` | **No; expendable WebUI default workspace** |
+| `/home/hermes/hermes-webui` | No; restore the reviewed source checkout separately |
+| `~/.config/systemd/user/` units and drop-ins | No |
+| `/etc/hermes`, apt configuration and apt timer drop-ins | No; reinstall canonical files |
+| `/var/lib/docker` images and container layers | No; durable host mounts live under `~/.hermes` |
 
 #### Rebuild step
 
@@ -656,9 +590,7 @@ After `hermes import` (step 6 of the restore runbook), re-clone and re-create th
 
 ```sh
 git clone https://github.com/nesquena/hermes-webui.git /home/hermes/hermes-webui
-V=/home/hermes/.hermes/hermes-agent/venv/bin
-"$V/pip" freeze --local | grep -E '^[A-Za-z0-9._-]+==' > /tmp/webui-constraints.txt
-"$V/pip" install -q -r /home/hermes/hermes-webui/requirements.txt -c /tmp/webui-constraints.txt
+# Select the reviewed stable WebUI release and prove native PM imports first.
 # unit file: copy from this document
 loginctl enable-linger hermes
 systemctl --user daemon-reload
@@ -666,7 +598,7 @@ systemctl --user enable --now hermes-webui
 ```
 
 **`loginctl enable-linger hermes` is not optional and is easy to miss.**
-Without it the `hermes` user manager stops when the last session ends, so all six user units die at the next reboot, which is now automatic and can happen any night at 04:45 UTC.
+Without it the `hermes` user manager stops when the last session ends, so all three user units die at the next reboot, which is now automatic and can happen any night at 04:45 UTC.
 Part of the failure hides itself: the daily liveness check runs as a cron job inside `hermes-gateway`, so the thing that would push a `down` dies with everything else. uptime-kuma sees silence and that monitor stays green until its heartbeat lapses about 30 hours later.
 The existing `hermes API` HTTP monitor does catch it sooner, because the dashboard it probes is one of the units that died.
 Confirm lingering with `loginctl show-user hermes -p Linger`, which must print `Linger=yes`.
@@ -727,8 +659,7 @@ Rebuild the OS; restore the state.
 3. On the VM, stop the services first (the hermes docs require it for import):
 
    ```
-   systemctl --user stop hermes-dashboard hermes-gateway hermes-gateway-emh \
-     hermes-gateway-hal hermes-gateway-web_watcher hermes-webui
+   systemctl --user stop hermes-dashboard hermes-gateway hermes-webui
    ```
 
 4. Import and verify (`~/.local/bin` is not on the non-login PATH):
