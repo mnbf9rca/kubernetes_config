@@ -8,6 +8,7 @@ fail() { echo "FAIL: $*" >&2; exit 1; }
 root=/opt/hermes-reviewer
 for tool in shellcheck bandit gitleaks semgrep ruff yamllint; do
   [[ $(command -v "$tool") == "/usr/local/bin/$tool" ]] || fail "login-shell command path: $tool"
+  [[ $(stat -Lc '%u:%g' "/usr/local/bin/$tool") == 0:0 ]] || fail "tool must be root-owned: $tool"
 done
 [[ -r /etc/hermes-reviewer-tools.txt ]] || fail 'missing tool manifest'
 for file in rules/semgrep-rules.yml ruff.toml yamllint.yml requirements.txt; do

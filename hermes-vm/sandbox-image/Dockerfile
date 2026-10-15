@@ -11,8 +11,8 @@ RUN set -eu; \
     curl -fsSL "https://github.com/koalaman/shellcheck/releases/download/${SHELLCHECK_VERSION}/shellcheck-${SHELLCHECK_VERSION}.linux.x86_64.tar.xz" -o /tmp/shellcheck.tar.xz; \
     curl -fsSL "https://github.com/gitleaks/gitleaks/releases/download/${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION#v}_linux_x64.tar.gz" -o /tmp/gitleaks.tar.gz; \
     printf '%s  %s\n' "$SHELLCHECK_SHA256" /tmp/shellcheck.tar.xz "$GITLEAKS_SHA256" /tmp/gitleaks.tar.gz | sha256sum -c -; \
-    tar -xJf /tmp/shellcheck.tar.xz -C /opt/hermes-reviewer/bin --strip-components=1 "shellcheck-${SHELLCHECK_VERSION}/shellcheck"; \
-    tar -xzf /tmp/gitleaks.tar.gz -C /opt/hermes-reviewer/bin gitleaks; \
+    tar --no-same-owner -xJf /tmp/shellcheck.tar.xz -C /opt/hermes-reviewer/bin --strip-components=1 "shellcheck-${SHELLCHECK_VERSION}/shellcheck"; \
+    tar --no-same-owner -xzf /tmp/gitleaks.tar.gz -C /opt/hermes-reviewer/bin gitleaks; \
     rm /tmp/shellcheck.tar.xz /tmp/gitleaks.tar.gz; \
     ln -s /opt/hermes-reviewer/bin/shellcheck /usr/local/bin/shellcheck; \
     ln -s /opt/hermes-reviewer/bin/gitleaks /usr/local/bin/gitleaks; \
