@@ -1,0 +1,6 @@
+name: reviewer-tooling-request
+version: 1.0.0
+author: cynexia
+description: Additive blocked, unassigned operator tooling requests from a bound reviewer worker.
+provides_tools:
+  - reviewer_tooling_request
