@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Unit tests for the safer-reader-broker envelope validator.
+"""Unit tests for safer-reader-broker validation, handlers and registration.
 
     python3 hermes-vm/plugins/safer-reader-broker/test_validate.py
 
@@ -19,7 +19,7 @@ Hermes imports is that it can be tested off the VM, and the path load is what
 cashes that in.
 
 What these lock down is the four rules of the broker spec's "Validation, in
-trusted code" section, plus the containment guard's four branches. Both fail
+trusted code" section, plus the containment guard, lifecycle handlers and override registration. They fail
 INVISIBLY if they regress: a validator that accepts everything, and a guard
 that always passes, look exactly like a validator and a guard that are never
 given anything bad. The rules are the only thing standing between a
@@ -49,8 +49,7 @@ _SPEC.loader.exec_module(validate)
 def _load_broker_against_stubs():
     """Load `__init__.py` with the Hermes modules it imports stubbed out.
 
-    This exists for the containment-guard tests and for nothing else. The guard
-    is the plugin's only other piece of real logic, and three of its four
+    This supports guard, handler and registration tests. Three of the guard's four
     branches are soft fails that look identical to success from outside -- a
     regression in any of them is a guard that has silently stopped guarding, so
     they need a test, and a test that only runs on the VM is a test nobody runs.
@@ -90,6 +89,7 @@ def _load_broker_against_stubs():
     stubs["tools.kanban_tools"] = kanban_tools
 
     registry = types.ModuleType("tools.registry")
+    registry.registry = types.SimpleNamespace()
     registry.tool_error = lambda message, **extra: json.dumps(
         dict({"error": message}, **extra)
     )
@@ -589,6 +589,68 @@ class TestRejectionFraming(unittest.TestCase):
         self.assertIn("still in-flight", message)
         self.assertIn("no state change", message)
         self.assertIn("safer_reader_complete again", message)
+
+
+class TestKanbanOverrides(unittest.TestCase):
+    """Plugin wiring adapters; the live gate exercises Hermes's real scoped registry."""
+
+    def setUp(self):
+        self.saved = getattr(broker, 'registry', None)
+        self.original_calls = []
+        def original(args):
+            self.original_calls.append(args)
+            return '{"ok": true}'
+        self.entries = {name: types.SimpleNamespace(
+            schema={'name': name, 'parameters': {'type': 'object', 'properties': {}}},
+            handler=original, check_fn=None)
+            for name in ('kanban_show', 'kanban_complete', 'kanban_future_tool')}
+        self.overlay = {}
+        broker.registry = types.SimpleNamespace(
+            get_tool_names_for_toolset=lambda toolset: list(self.entries),
+            get_entry=self.entries.__getitem__)
+        self.granted = True
+        def register_tool(**kw):
+            if kw.get('override') and not self.granted:
+                raise PermissionError('tools.override not granted')
+            self.overlay[kw['name']] = types.SimpleNamespace(**kw)
+            return object()
+        self.ctx = types.SimpleNamespace(register_tool=register_tool)
+
+    def tearDown(self):
+        if self.saved is None:
+            del broker.registry
+        else:
+            broker.registry = self.saved
+
+    def test_all_runtime_kanban_schemas_are_hidden(self):
+        broker.register(self.ctx)
+        for name in self.entries:
+            self.assertIn(name, self.overlay)
+            self.assertTrue(self.overlay[name].override)
+            self.assertEqual(self.overlay[name].toolset, 'kanban')
+            self.assertFalse(self.overlay[name].check_fn())
+        self.assertIn('safer_reader_task', self.overlay)
+        self.assertIn('safer_reader_complete', self.overlay)
+
+    def test_guessed_direct_calls_do_not_reach_original_handlers(self):
+        broker.register(self.ctx)
+        for name in self.entries:
+            entry = self.overlay.get(name, self.entries[name])
+            self.assertIn('error', json.loads(entry.handler({})))
+        self.assertEqual(self.original_calls, [])
+
+    def test_another_profile_keeps_global_registrations(self):
+        before = dict(self.entries)
+        broker.register(self.ctx)
+        self.assertEqual(self.entries, before)
+        self.assertTrue(json.loads(self.entries['kanban_show'].handler({}))['ok'])
+        self.assertEqual(len(self.original_calls), 1)
+
+    def test_missing_grant_refuses_registration(self):
+        self.granted = False
+        with self.assertRaisesRegex(PermissionError, 'tools.override'):
+            broker.register(self.ctx)
+        self.assertEqual(self.overlay, {})
 
 
 if __name__ == "__main__":

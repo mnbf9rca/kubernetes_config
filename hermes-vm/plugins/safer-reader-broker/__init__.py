@@ -1,12 +1,9 @@
 """safer-reader-broker: the two tools the quarantined reader profile keeps.
 
-The ``safer_web_reader`` profile disables the whole ``kanban`` toolset, because
-Hermes has no per-tool disable for built-ins and the dispatcher force-appends
-the toolset to every worker it spawns. That disable costs the worker both its
-completion path and its ability to read its own instruction -- the dispatcher's
-prompt is ``work kanban task <id>`` and nothing else, and the task body reaches
-the model only through a tool call. This plugin gives back exactly those two
-capabilities and nothing else:
+The ``safer_web_reader`` profile hides and refuses built-in kanban tools with
+profile-scoped registry overrides. Its deny-list alone is insufficient: the
+managed dispatcher force-appends kanban and loses the profile subtraction.
+This plugin supplies only the two lifecycle capabilities the reader needs:
 
   ``safer_reader_task()``            title and body of this worker's own task.
   ``safer_reader_complete(envelope)`` completion, with one string parameter.
@@ -40,18 +37,14 @@ from tools.kanban_tools import (
     _stamp_worker_session_metadata,
     _worker_run_id,
 )
-from tools.registry import tool_error
+from tools.registry import registry, tool_error
 
 from . import validate
 
 logger = logging.getLogger(__name__)
 
-# The reader's whole intended surface. Containment rests on
-# ``agent.disabled_toolsets: [kanban]`` and on nothing else --
-# ``platform_toolsets.cli: [web]`` is not an allowlist, because
-# ``_get_platform_tools`` adds every non-configurable toolset back afterwards
-# and ``kanban`` is not configurable. So the guard below checks that one
-# mechanism, in process, before either tool does anything.
+# The reader's whole intended surface. Scoped registry overrides hide kanban;
+# the unchanged guard below detects any other widening before broker operations.
 EXPECTED_TOOLS = frozenset(
     {
         "web_search",
@@ -361,6 +354,15 @@ def handle_complete(args, **kwargs):
     return json.dumps({"ok": True, "task_id": tid, "run_id": run_id})
 
 
+
+def _kanban_unavailable():
+    return False
+
+
+def _refuse_kanban(args, **kwargs):
+    return tool_error("safer-reader-broker: kanban tools are disabled in this profile")
+
+
 def register(ctx) -> None:
     """Register both tools into the existing ``web`` toolset.
 
@@ -377,6 +379,19 @@ def register(ctx) -> None:
     normally, the plugin would report healthy with one tool instead of two, and
     the diagnosis path would show green.
     """
+    # Availability removes schemas; the handler also refuses guessed direct calls.
+    for name in registry.get_tool_names_for_toolset("kanban"):
+        entry = registry.get_entry(name)
+        registered = ctx.register_tool(
+            name=name,
+            toolset="kanban",
+            schema=entry.schema,
+            handler=_refuse_kanban,
+            check_fn=_kanban_unavailable,
+            override=True,
+        )
+        if registered is None:
+            raise RuntimeError("safer-reader-broker: kanban override was refused")
     task = ctx.register_tool(
         name="safer_reader_task",
         toolset="web",

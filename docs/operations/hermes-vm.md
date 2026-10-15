@@ -128,7 +128,7 @@ There is no scheduled application updater.
     Keep shared attachments until the deployed per-profile-upload fix is independently proven.
     CLI `cron run` can use a different secret environment.
 14. Close the window.
-    1. Record the accepted [reader limitation](#accepted-reader-limitation-issue-146).
+    1. Verify the [reader tool surface](safer-web-reader.md#verification-record) with a dispatched public diagnostic.
     2. Check stores with selected store SQLite.
     3. Check reboot-required while the hold remains installed.
     4. Perform an owed reboot under supervision.
@@ -169,15 +169,18 @@ The three `sessions.auto_prune:false` overrides were removed while retention 90 
 Stable WebUI [native PM startup](https://github.com/nesquena/hermes-webui/blob/fd0141fa196fe832171c9c0551bbb8205b6412d4/server.py#L112) and [YAML fallback](https://github.com/nesquena/hermes-webui/blob/fd0141fa196fe832171c9c0551bbb8205b6412d4/api/yaml_compat.py) admit existing ruamel/cryptography. No PyYAML supplement or separate venv was installed.
 [Issue #8113](https://github.com/nesquena/hermes-webui/issues/8113) concerns the Docker Python 3.12 dependency-marker failure; this VM's source deployment uses PM 3.14 and the shipped source fix. It does not establish that the Docker issue was fixed.
 
-### Accepted reader limitation: issue 146
+### Reader managed-worker defect and local repair: issue 146
 
 At 5575a08, `agent/managed_worker.py` passes only `WORKER_DISABLED_TOOLSETS=('delegation',)` to the agent and loses the profile's `agent.disabled_toolsets:[kanban]`.
 Public diagnostic task `t_d80f1ad7` exposed thirteen unexpected Kanban tools; the unchanged broker refused both lifecycle operations and the task blocked without a result.
 A two-line constructor patch was briefly applied under ruling 7 and its fake-factory regression test went red then green.
 The operator then overruled ruling 7: the patch was reversed, its repository patch/test files removed, the follow-up public diagnostic archived, and the broker left unchanged.
 Core's tracked tree again matches 5575a08; only the two pre-existing untracked directories remain. There is **no local core patch or reapply step**.
-The safer reader is expected to refuse on this path; its intended four-tool containment is not established under this runtime.
-The operator accepts this low risk and tracks it as [repo issue 146](https://github.com/mnbf9rca/kubernetes_config/issues/146). Do not seek another workaround as part of this upgrade.
+The later reader-fix ruling approved broker-local profile-scoped overrides, with an explicit `tools.override` grant only in the reader.
+Broker 1.1.0 enumerates every runtime kanban registration, hides its schema and refuses guessed calls without invoking the original handler.
+The strict four-tool guard and envelope validation remain unchanged.
+The deployment and five-part live verification are recorded in [safer-web-reader.md](safer-web-reader.md#verification-record); [issue 146](https://github.com/mnbf9rca/kubernetes_config/issues/146) retains the upstream defect history.
+After an update or restore, verify the dispatched surface before relying on this plugin workaround.
 
 ### Dashboard Migrate config
 
@@ -219,7 +222,7 @@ Do not erase ledgers, restore only Git, shrink disks, or roll back remote Hindsi
 ## Topology: what runs where
 
 Verified live on October 15, 2026. Profiles own their personas, secrets, mailboxes, memories and sessions; the **single gateway** serves all five profile contexts.
-Four profiles receive messages: default, emh, hal and web_watcher. safer_web_reader has no messaging adapter and stays worker-only, with the accepted limitation above.
+Four profiles receive messages: default, emh, hal and web_watcher. safer_web_reader has no messaging adapter and stays worker-only, with the broker boundary described above.
 
 ### The processes
 
@@ -922,7 +925,7 @@ It makes **no chat turn**, memory write, adapter login or reader-containment tes
 A secondary profile can fail while the shared process remains active; neither a unit count nor the aggregate runtime record proves each mailbox works.
 A fresh import can succeed while a long-lived process has stale modules: restart affected serving processes after repair and use actual authenticated panels.
 Hindsight's backend canary checks the backend, not every profile's admission/bank credentials or asynchronous retain path.
-The accepted reader issue 146 can leave research refusing with every scheduled monitor green.
+A failed reader plugin or changed dispatch surface can leave research unavailable or widen its capabilities with every scheduled monitor green.
 Detection is daily; a missing heartbeat alarms only after its 24-hour interval and 6-hour retry. The external dashboard monitor catches a dead VM sooner.
 Losing either cron job is agent-state loss: the alive job eventually alarms by silence, while refresh has no heartbeat. Read the actual cron store after restore.
 The daily check says nothing about apt timer age, Docker images, busy sandboxes or the weekly refresh's success; its run history remains the diagnostic record.
