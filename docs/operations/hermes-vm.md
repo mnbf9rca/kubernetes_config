@@ -1,11 +1,11 @@
 # The Hermes VM
 
-VM 103 (`hermes.cynexia.net`) runs the Hermes agent, its four always-on gateway profiles, the dashboard and the WebUI the Hermex iOS app talks to.
+VM 103 (`hermes.cynexia.net`) runs the Hermes agent, one multiplexed gateway serving four messaging profiles, the dashboard and the WebUI the Hermex iOS app talks to.
 It is not a Kubernetes cluster, so none of this repository's cluster machinery reaches it.
 What it has instead lives in `hermes-vm/`: a daily liveness check, a weekly docker-sandbox refresh, a hand-run helper that finishes a new profile's docker setup, the managed-scope Hermes config and the `unattended-upgrades` configuration.
 
 This page covers that machinery — how to read it, how to install it — and the VM facts that keep being rediscovered.
-The operator updates the application with the WebUI's **Update Now** button.
+Update core, its bundled dashboard and external hermes-webui together using [Application updates](#application-updates).
 There is no update timer or update-estate step.
 
 The canonical copy of every file named here is in `hermes-vm/`.
@@ -20,8 +20,68 @@ The `hal` profile also carries four agent-authored systemd timers that this repo
 
 ## Application updates
 
-Press **Update Now** in the WebUI.
-Application updates use the upstream UI, without a repository update runbook or an additional verification procedure.
+“Update Hermes” includes **core, the bundled dashboard and external hermes-webui**.
+Use the upstream `hermes update` route for core; keep its official-install **implicit stable** default.
+This install is ahead of stable v0.22.0, so path B waits for a later stable release instead of rolling back to v0.22.0.
+Do not set an explicit stable channel or advance core with `git pull`.
+Update external WebUI on **stable**; its **Update Now** is WebUI-only and `ignore_agent_updates: true` hides agent offers.
+There is no scheduled application updater.
+
+1. Record both source commits, the actual install stamp/pending path, PM state and unit states. Use `HERMES_DISABLE_LAZY_INSTALLS=1` for preparatory Hermes commands. An ordinary command from a cron worker can complete a pending update without the operator: that happened at **02:01:22Z on October 15**. A checkout commit alone is not the running version.
+2. Install a temporary final-sorting apt drop-in containing `Unattended-Upgrade::Automatic-Reboot "false";` and verify the effective setting with `apt-config dump`. Keep it through verification and any controlled reboot. Disable serving units while maintenance would make an unattended start unsafe.
+3. Stop the shared gateway, dashboard and WebUI and all profile writers. Stop the four hal observer timers/services without changing enablement. Inspect user/system `hermes-worker-*` scopes and open store/WAL handles with root visibility. Stop an orphan only after proving it has no Hermes/Python work or store handles. Check sandbox background tasks separately.
+4. Stream a stopped-state recovery archive off-host, including `~/.hermes`, `~/hermes-webui`, user units/drop-ins, launchers, external interpreter targets, `/etc/hermes` and every unit EnvironmentFile. Use a private 0700 directory and 0600 files. Verify gzip/tar and copied SQLite stores, then remove the disposable plaintext extraction. Retain the archive until the operator accepts recovery coverage and explicitly deletes it; it contains credentials.
+5. Before the next source advance, compare `skills/security/untrusted-web-content-analysis/` with the canonical promoted skill and the installed profile/shared copies; establish ownership and a recoverable home. Move `hermes_cli/.web_dist-build-vZVavf/` to private recovery storage. Preserve both until then; never `git clean` them. They were archived and left in place on October 15.
+6. Update external WebUI on stable and core through its updater, reviewing the proposed source target first. Preserve profile `op://` references, mail pins, plugin selections and bank identities. Never reinstall the Hindsight backend as part of this procedure. For a stopped WebUI source update, require a clean tracked tree and verified tag, then fast-forward to that tag without starting it prematurely.
+7. Require a matching built install stamp without `adoptedAt`, absent upstream `completion_pending_path`, safe selected SQLite, current PM environment and passing `hermes pm status`/`hermes pm doctor`. Distinguish actual update receipts from PM-sync receipts. Do not rerun completion merely because the original update receipt failed: gate the stamp and real pending/follow-up state. Leave lock files/markers to upstream; check kernel-lock ownership and owed restart predicates.
+8. Mirror the four managed terminal keys into every profile using the helper's `--policy-only` mode, including default, and verify `build_profile_terminal_scope` rather than only `hermes config get`. See [the managed-scope gap](#managed-scope-gap-at-5575a08). Preserve profile mounts and secrets.
+9. Let upstream maintain the PM-aware gateway launcher and multiplex topology. Restart the dashboard and external WebUI explicitly. The WebUI service runs `/usr/bin/python3 /home/hermes/hermes-webui/server.py`; remove `VIRTUAL_ENV`, any persisted `HERMES_WEBUI_PYTHON`, and the legacy venv PATH prefix. Keep authentication, ports and other settings. Use base PATH `/home/hermes/.local/bin:/usr/local/bin:/usr/bin:/bin`, `HERMES_WEBUI_AGENT_DIR` and `HERMES_SUPERVISED_CHILD=1`. Upstream `server.py` re-enters PM itself; require the actual serving process on store Python 3.14 and a successful authenticated WebUI gateway-status action.
+10. Run the installed `hermes-webui-runtime.py --check-import` through `/usr/bin/python3` from `/`. It uses upstream runtime selection, guards lazy completion, and imports `api.yaml_compat`, `api.profiles` and `run_agent` with disposable WebUI state. It serves nothing. Stable WebUI's ruamel fallback works without PyYAML; install no supplement when this gate passes. If a later release fails specifically for missing PyYAML, ruling 4 permits ordinary `uv pip install` of `pyyaml==6.0.3` into the current PM generation when PM tolerates it, otherwise an owned WebUI target directory. Diagnose first; use no hand-rolled extraction or core lock edits, and recheck after each generation change.
+11. Authenticate normally to the actual dashboard Memory and Plugins panels using `op://hermes/hermes-dashboard/password` inside the verification process; never print passwords, cookies or memory text. Require default/emh/hal Hindsight available/configured/ready and Plugins hub runtime_status enabled. Use `/api/dashboard/plugins/hub`, not `/api/plugins`. Read existing expected-bank memory once, with no repeat diagnostic write; check the existing scheduled backend canary. Verify used HA calls read-only, keep hal `watch_all:false`/empty watch lists, and preserve emh settings.
+12. Require three enabled/active units, four messaging profiles connected once, and worker-only safer_web_reader. The shared runtime record alone omits secondary mailbox connections: check profile connection logs. Check WebUI health and one normal authenticated diagnostic chat. Restore observer timers to their previous active/enabled states; do not silently repair their existing failures.
+13. Pull desktop and refresh only stale containers proven idle by both platform status and Docker process checks. Prove a new terminal sees its existing durable home/workspace. Keep the shared attachments mount until the deployed per-profile-upload fix is independently proven. Preserve cron IDs/schedules/model pins/delivery. Queue the existing alive job with `cron.jobs.trigger_job('36f76a55200c')` after checking enabled/no_agent; verify the **gateway-owned** run and uptime-kuma's `verdict=ok units=3/3 webui_http=200`. CLI `cron run` can use a different secret environment.
+14. Record the accepted [reader limitation](#accepted-reader-limitation-issue-146); do not patch core or weaken the broker. Check stores with the **selected store SQLite**, not system Python. Check reboot-required while the hold remains installed and perform an owed reboot under supervision; verify services/panels/chat afterwards. Remove the temporary apt hold as the **last VM mutation** and require automatic reboot true, WithUsers true and 04:45. Keep the hold if required gates fail.
+
+### Completion record: October 15, 2026
+
+Core HEAD is `5575a0859d6278bfcef79c28189a24594952efd3`; external WebUI stable **v0.52.458** is `fd0141fa196fe832171c9c0551bbb8205b6412d4`.
+The interrupted October 14 update receipt ended **failed** at 22:56Z; successful 23:26–23:28 receipts were PM syncs.
+An ordinary emh cron worker apparently triggered completion at 02:01Z (timing evidence; caller attribution is not proven), writing the built source stamp and clearing pending state without a new update receipt.
+The old serving units still had September 30 code loaded. The maintenance archived completed source/config 51/stores 30 first and **did not run a second completion**.
+After controlled migration/start all five configs remain schema 51 and all five stores are schema 31, passing quick_check with PM Python 3.14.7 / SQLite 3.53.1.
+System SQLite 3.46.1 can falsely report the newer FTS5 trigram index malformed; do not use it to diagnose these stores.
+
+The private recovery archive is `/Users/rob/Downloads/hermes-recovery-20261015/pre-completion.tar.gz`, 6,265,279,065 bytes, SHA256 `d4d974289b1f6fa367532241e761a56835473e604bfe9ae5005c2639b2ad5795`.
+Full extraction verified 214,826 entries and five profile plus 34 other SQLite stores; the 9.9 GiB plaintext verification copy was removed.
+The archive retains both untracked paths and the external legacy interpreter for recovery.
+Root grew once from 25 GiB to 50 GiB online; Docker remained 125 GiB on `/dev/sdb`. Proxmox uses thick LVM, with the pre-existing pending SSD flag retained and its pending size corrected to 50 GiB.
+
+Authenticated live Memory panels changed from inactive/unavailable to ready on default/emh/hal after the runtime restart; installed Plugin hubs show enabled Hindsight 1.2.2 at catalog commit `f843f173bb41f001e322cc83c917371639e47fbf`.
+Existing-memory readbacks returned 23/53/136 results respectively, without another write. The earlier repair's round-trip remains the write/read evidence.
+The new process/runtime fixed availability; the exact exception hidden by the old long-lived process was not established.
+All three serving processes run store Python 3.14.7; WebUI health, its read-only gateway-status action and a fresh normal chat passed.
+The actual uptime-kuma heartbeat at 07:43:48Z is `verdict=ok units=3/3 webui_http=200`.
+Mail pins are `EMAIL_AUTHSERV_ID=purelymail.com` in default/emh/hal/web_watcher; the first three had header evidence. web_watcher's inbox was still empty: confirm its first permitted message's topmost Authentication-Results before calling that mailbox pin verified.
+The three `sessions.auto_prune:false` overrides were removed while retention 90 was preserved; no manual purge or VACUUM ran.
+
+Stable WebUI [native PM startup](https://github.com/nesquena/hermes-webui/blob/fd0141fa196fe832171c9c0551bbb8205b6412d4/server.py#L112) and [YAML fallback](https://github.com/nesquena/hermes-webui/blob/fd0141fa196fe832171c9c0551bbb8205b6412d4/api/yaml_compat.py) admit existing ruamel/cryptography. No PyYAML supplement or separate venv was installed.
+[Issue #8113](https://github.com/nesquena/hermes-webui/issues/8113) concerns the Docker Python 3.12 dependency-marker failure; this VM's source deployment uses PM 3.14 and the shipped source fix. It does not establish that the Docker issue was fixed.
+
+### Accepted reader limitation: issue 146
+
+At 5575a08, `agent/managed_worker.py` passes only `WORKER_DISABLED_TOOLSETS=('delegation',)` to the agent and loses the profile's `agent.disabled_toolsets:[kanban]`.
+Public diagnostic task `t_d80f1ad7` exposed thirteen unexpected Kanban tools; the unchanged broker refused both lifecycle operations and the task blocked without a result.
+A two-line constructor patch was briefly applied under ruling 7 and its fake-factory regression test went red then green.
+The operator then overruled ruling 7: the patch was reversed, its repository patch/test files removed, the follow-up public diagnostic archived, and the broker left unchanged.
+Core's tracked tree again matches 5575a08; only the two pre-existing untracked directories remain. There is **no local core patch or reapply step**.
+The safer reader is expected to refuse on this path; its intended four-tool containment is not established under this runtime.
+The operator accepts this low risk and tracks it as [repo issue 146](https://github.com/mnbf9rca/kubernetes_config/issues/146). Do not seek another workaround as part of this upgrade.
+
+### Dashboard Migrate config
+
+At this commit, [the System action](https://github.com/NousResearch/hermes-agent/blob/5575a0859d6278bfcef79c28189a24594952efd3/hermes_cli/web_routers/status.py#L793) spawns `hermes config migrate` for the selected profile.
+Startup/update maintenance already ran the schema migration; all five profiles are at the current version 51.
+Pressing it adds no schema upgrade, but the implementation still checks `.env` formatting and suspicious MCP entries. It is not a button needed to finish this maintenance.
 
 ### Repair record: September 11, 2026
 
@@ -39,81 +99,47 @@ The `default`, `emh` and `hal` sandboxes retain the read-only `/home/hermes/.her
 The removal condition is that uploads use the profile's own `cache/documents/webui-attachments/<session>/` directory and work through its existing mount.
 Remove the shared mount from those profiles, the sandbox table below, and `hermes-vm/scripts/hermes-profile-docker-setup.sh` when that condition holds.
 Keep every other profile mount.
-Restart the affected gateways and WebUI after removing the shared mount.
+Restart the shared gateway and WebUI after removing the shared mount.
 
 ## Rollback
 
-The updater takes a pre-update snapshot under `~/.hermes/backups/`.
-Restore that snapshot to roll back; changes made after it are lost.
+Restore a matching stopped-state archive: source, PM generations/interpreter targets, launchers, configs, clients, units/drop-ins, stores and WALs together.
+Stop all serving units, observer timers/services, worker scopes and sandbox writers first; retain the reboot hold.
+Create private failed-state parents outside every archived tree and outside the archive location, on the destination filesystems.
+Move each non-overlapping archived top-level destination into them; require the original destinations absent before extraction.
+**Never overlay a newer tree**: leftover PM state, migration manifests, drop-ins or WALs can make the restored combination incoherent.
+Restore original ownership/modes; run user daemon-reload. Keep failed-state trees intact and services disabled until the recovery start is chosen.
+Keep the live false reboot hold unchanged: exclude its archived reference leaf from extraction and never move the whole apt configuration directory.
+The October 15 archive is completed source/config 51/stores 30, not the older pending installation or a known healthy serving stack; restarting the original six units blindly is unsafe.
+Forward-only schema changes and pruning require the matching stores, and restoring loses writes since the recovery point.
+Do not erase ledgers, restore only Git, shrink disks, or roll back remote Hindsight banks.
 
 ## Topology: what runs where
 
-Verified live on September 8, 2026.
-Upstream describes the software; this section describes this VM.
-For the software, read hermes-agent's [Architecture](https://hermes-agent.nousresearch.com/docs/developer-guide/architecture), [Gateway Internals](https://hermes-agent.nousresearch.com/docs/developer-guide/gateway-internals) and [Running Many Gateways at Once](https://hermes-agent.nousresearch.com/docs/user-guide/multi-profile-gateways), and hermes-webui's [ARCHITECTURE.md](https://github.com/nesquena/hermes-webui/blob/master/ARCHITECTURE.md).
-
-Three words carry the whole picture.
-A **profile** is one agent identity — its own persona, secrets, mailbox, memories and sessions — kept in a directory of its own.
-A **gateway** is one long-running process that serves exactly one profile and connects it to the outside world.
-An **MCP server** is a small helper program a Hermes process starts and talks to over a pipe, to give the agent tools it does not have built in.
-
-There are five profiles and only four gateways: `safer_web_reader` has no gateway, because nothing messages it ([safer-web-reader.md](safer-web-reader.md)).
+Verified live on October 15, 2026. Profiles own their personas, secrets, mailboxes, memories and sessions; the **single gateway** serves all five profile contexts.
+Four profiles receive messages: default, emh, hal and web_watcher. safer_web_reader has no messaging adapter and stays worker-only, with the accepted limitation above.
 
 ### The processes
 
-```
-  operator's browser       Hermex iOS app        Telegram       Purelymail IMAP
-          |                       |                  |                |
-  hermes.cynexia.com     hermes-app.cynexia.com      |                |
-          |        both behind Cloudflare Access     |                |
-          +-----------+-----------+                  |                |
-                      |                              |                |
-      cloudflared, which runs in the HOMELAB CLUSTER (`cloudflared`    |
-      namespace) and NOT on this VM; its origins are the ports below   |
-                      |                              |                |
-          :9119 <-----+-----> :8787                  |                |
-==== VM 103 hermes.cynexia.net == the six units this page tracks, under lingering ==
-          |                 |                        |                |
- +--------v--------+ +------v-------------+ +--------v----------------v--------+
- | hermes-dashboard| | hermes-webui       | | hermes-gateway   profile: default |
- | profile: default| | ALL FIVE profiles  | |  Telegram + email adapters,       |
- | admin panel     | | one process, :8787 | |  the two cron jobs,               |
- |  |              | | server.py imports  | |  api_server on :8642 (LAN only)   |
- |  +- mcp-email-  | | hermes-agent and   | |  +- mcp-email-server              |
- |     server      | | calls the model    | +-----------------------------------+
- +-----------------+ | itself             | | hermes-gateway-emh  profile: emh  |
-                     |  |                 | |  email; +- mcp-email-server       |
-                     |  +- MCP servers,   | +-----------------------------------+
-                     |     started lazily | | hermes-gateway-hal  profile: hal  |
-                     +--------------------+ |  email, Home Assistant            |
-                                            |  +- mcp-email-server              |
-                                            +-----------------------------------+
-                                            | hermes-gateway-web_watcher        |
-                                            |  profile: web_watcher; email only |
-                                            +-----------------------------------+
-  All six run from ONE venv, ~/.hermes/hermes-agent/venv, and all six are in the
-  host `docker` group, so each starts its own terminal sandboxes the same way.
-          |                          |                        |
-          v                          v                        v
-   1Password, once per         chatgpt.com/backend-api      docker daemon:
-   process at start, for       /codex, for every            hermes-<hex> containers
-   `secrets.onepassword.env`   model call                   labelled hermes-profile=
-```
+| Unit | Role | Port |
+|---|---|---|
+| `hermes-gateway` | Multiplexed messaging, cron, dispatcher and profile owners |8642 API, where configured|
+| `hermes-dashboard` | Profile administration and Memory/Plugins panels |9119|
+| `hermes-webui` | External browser/Hermex chat runtime, serving all profiles |8787|
 
-The three ports also answer directly on the LAN, because this VM runs no host firewall: `http://hermes.cynexia.net:8787` reaches the WebUI with only its own password in the way, and 9119 and 8642 are the same shape ([Facts about this VM](#facts-about-this-vm)).
-Cloudflare Access gates the two published hostnames and nothing else.
-
-Four more `hermes` user units exist and are outside that picture: the `hal-ha-observer-*.timer` set, agent-authored for the `hal` profile's Home Assistant collection, running scripts out of `hal`'s own workspace rather than through its gateway.
-No unit list on this page names them, so the daily check neither counts nor exercises them.
+The homelab cloudflared tunnel publishes dashboard `hermes.cynexia.com` and WebUI `hermes-app.cynexia.com`, behind Cloudflare Access.
+All three ports also answer on the trusted LAN; the VM has no host firewall. The published Access gate is separate from each application's authentication.
+The three enabled user units run under lingering and use upstream PM Python 3.14. Their former three secondary gateway unit files were removed by upstream migration.
+The four `hal-ha-observer-{analyze,health,inventory,logbook}.timer` units are agent-authored, outside repository management, and were restored active/enabled. Their pre-existing failures were not repaired; their legacy interpreter needs separate investigation before any change that could write profile stores.
 
 ### The state tree
 
 ```
 ~/.hermes/                       the DEFAULT profile's home, and the shared root
-  hermes-agent/                  the one checkout and venv every process runs from
+  hermes-agent/                  the shared checkout; PM selects dependency environments
   config.yaml  .env  auth.json   default profile: settings, environment, provider tokens
   shared/nous_auth.json          provider tokens, shared by every profile on purpose
-  scripts/                       the two cron job scripts
+  scripts/                       cron scripts and the guarded deep-import helper
   webui/attachments/             WebUI chat uploads: ONE directory for all profiles
   sandboxes/docker/<task-id>/home   each sandbox's writable /root
   workspace/                     the default profile's sandbox /workspace
@@ -121,28 +147,28 @@ No unit list on this page names them, so the daily check neither counts nor exer
     emh/               config.yaml  .env  auth.json  workspace/  logs/  state.db  ...
     hal/               the same three files, the same shape
     web_watcher/       the same
-    safer_web_reader/  the same, and no gateway unit
+    safer_web_reader/  the same; worker-only, no separate gateway unit
 ```
 
 ### The three roles
 
-A **gateway** is the always-on half of a profile: it holds the connections that arrive unprompted.
+The **gateway** is the shared always-on owner for the profiles: it holds the connections that arrive unprompted.
 It runs the platform adapters (a Telegram bot connection, an email adapter polling IMAP), it runs that profile's cron jobs, and it starts that profile's MCP servers as child processes.
-The default profile's gateway is the one that runs the daily alive check and the weekly sandbox refresh ([step 5](#5-create-the-daily-checks-cron-job), [step 6](#6-install-the-sandbox-refresh-job)).
+The shared gateway runs the default profile’s the daily alive check and the weekly sandbox refresh ([step 5](#5-create-the-daily-checks-cron-job), [step 6](#6-install-the-sandbox-refresh-job)).
 
 The **dashboard** is an administration panel for the default profile: configuration, credentials, sessions, logs and cron.
 It is reached at `https://hermes.cynexia.com`, and it starts a mail MCP server of its own.
 
 The **WebUI is a second runtime, not a front end for a gateway.**
 This is the piece that surprises people.
-`hermes-webui` is a separate program from a separate repository, but it runs out of the agent's own venv, imports hermes-agent, and calls `run_agent` inside its own process.
+`hermes-webui` is a separate program from a separate repository, but upstream activates the agent’s selected PM environment, imports hermes-agent, and calls `run_agent` inside its own process.
 So a chat in the browser makes its own model calls and starts its own MCP servers, and the gateway for that profile is not involved at all.
 It serves every profile from that one process, switching `HERMES_HOME` per request, which is why there is one unit and one port rather than five.
-Restarting `hermes-gateway-<profile>` therefore changes nothing about a browser conversation — the fact recorded under [Facts about this VM](#facts-about-this-vm) about MCP tool discovery is a consequence of exactly this.
+Restarting `hermes-gateway` therefore changes nothing about a browser conversation — the fact recorded under [Facts about this VM](#facts-about-this-vm) about MCP tool discovery is a consequence of exactly this.
 
 ### What is shared and what is per profile
 
-Shared: the checkout and venv, the host, the docker daemon and its sandboxes, the WebUI attachments directory, and the provider credentials.
+Shared: the checkout and PM tool store, the host, the docker daemon and its sandboxes, the WebUI attachments directory, and the provider credentials.
 Per profile: `config.yaml`, `.env`, `auth.json`, workspace, logs, sessions, memories, skills and cron store.
 The rule for reading any path is that a profile is just a different `HERMES_HOME`, which is the contract set out in [homelab.md](homelab.md#hermes-vm-configuration-layout-and-secrets).
 
@@ -187,7 +213,7 @@ The monitor's heartbeat is 24 hours with one retry at 6 hours, so **a missing he
 | `verdict=` | What it means | First thing to do |
 |---|---|---|
 | `units-down` | Not every hermes user unit is active. `units=<active>/<expected>` carries both counts, and the expected one is derived from the `UNITS` list in the script, so it follows the list rather than a number written down here | `systemctl --user status` each unit in that list. If none are up, check `loginctl show-user hermes -p Linger` first |
-| `import-failed` | The shared venv cannot import `run_agent`. **This is the silent failure the whole design exists for**: every unit is still active and `/health` still answers `status: ok`, while the iOS app answers `AIAgent not available` | Read [homelab.md, "Do not give it a venv of its own"](homelab.md#hermes-webui-on-the-vm), then use [Rollback](#rollback). The Python traceback in the journal names which import failed |
+| `import-failed` | The selected PM runtime cannot import WebUI YAML/profile APIs and `run_agent`. **This is the silent failure the whole design exists for**: every unit is still active and `/health` still answers `status: ok`, while the iOS app answers `AIAgent not available` | Read [homelab.md, "Do not give it a venv of its own"](homelab.md#hermes-webui-on-the-vm), then use [Rollback](#rollback). The Python traceback in the journal names which import failed |
 | `webui-unreachable` | The WebUI's own `/health` did not answer 2xx. `webui_http=` carries the status; `000` means no connection | `journalctl --user -u hermes-webui`. Note the unit's `StartLimitIntervalSec=60`/`StartLimitBurst=5` parking behaviour — a repeatedly failing start parks in `failed` rather than looping invisibly |
 | **No beat at all** | The VM is off, the user manager is not running, lingering was lost, `hermes-gateway` is down, the cron job was deleted from the agent's store, the push token stopped being injected, or the Cloudflare Access bypass on `/api/push/*` was removed | `journalctl --user -u hermes-gateway` carries the run and its stderr — every one of those fails loudly there. Then `hermes cron list`, then the bypass. **A bypass regression turns every push monitor in the estate red at once, which is the tell** |
 
@@ -217,15 +243,15 @@ make check-vm-scripts
 
 This is the **only** thing that ever lints these files: it runs in no preflight, the repository's one workflow builds the InfluxDB MCP image from `homelab/health/mcp/` and covers nothing under `hermes-vm/`, and nothing runs it on a schedule.
 Run this guard before installing repository-owned VM scripts.
-It covers all three scripts under `hermes-vm/scripts/` — `hermes-app-alive.sh` from step 2, `hermes-sandbox-refresh.sh` from step 6, and `hermes-profile-docker-setup.sh` from [step 7](#7-pin-the-docker-terminal-backend).
+It shellchecks all shell scripts under `hermes-vm/scripts/` — `hermes-app-alive.sh` from step 2, `hermes-sandbox-refresh.sh` from step 6, and `hermes-profile-docker-setup.sh` from [step 7](#7-pin-the-docker-terminal-backend).
 
 ### 2. Install the daily check's script
 
-One file; the other two this install copies to the VM are the refresh script in [step 6](#6-install-the-sandbox-refresh-job) and the profile helper in [step 7](#7-pin-the-docker-terminal-backend).
+Install the shell script and its Python deep-import helper; the other copies are the refresh script in [step 6](#6-install-the-sandbox-refresh-job) and the profile helper in [step 7](#7-pin-the-docker-terminal-backend).
 
 ```sh
-scp hermes-vm/scripts/hermes-app-alive.sh \
-  hermes@hermes.cynexia.net:/home/hermes/.hermes/scripts/hermes-app-alive.sh
+scp hermes-vm/scripts/hermes-app-alive.sh hermes-vm/scripts/hermes-webui-runtime.py \
+  hermes@hermes.cynexia.net:/home/hermes/.hermes/scripts/
 ssh hermes@hermes.cynexia.net 'chmod 0755 /home/hermes/.hermes/scripts/hermes-app-alive.sh'
 ```
 
@@ -381,10 +407,21 @@ scp hermes-vm/scripts/hermes-profile-docker-setup.sh \
 ssh hermes@hermes.cynexia.net 'chmod 0755 /home/hermes/.hermes/scripts/hermes-profile-docker-setup.sh'
 ```
 
-**The managed scope wins, and that is the point.**
-`/etc/hermes/config.yaml` pins `terminal.backend`, `terminal.docker_image`, `terminal.docker_run_as_host_user` and `terminal.cwd` for every profile on this VM, including profiles that do not exist yet.
-Its values beat a per-profile `config.yaml`, and `hermes config set` refuses to write any key it holds, so changing one means editing that file with `sudo` and restarting the gateways.
-A profile created tomorrow therefore runs its terminal tool in a container without anybody remembering to configure it — which is why the pin is here rather than repeated per profile.
+### Managed-scope gap at 5575a08
+
+Managed scope is **still an upstream feature**, not deprecated in favour of per-profile config.
+The installed [user guide](https://github.com/NousResearch/hermes-agent/blob/5575a0859d6278bfcef79c28189a24594952efd3/website/docs/user-guide/managed-scope.md) documents `/etc/hermes/config.yaml`, leaf precedence and CLI write refusal; [managed_scope.py](https://github.com/NousResearch/hermes-agent/blob/5575a0859d6278bfcef79c28189a24594952efd3/hermes_cli/managed_scope.py) implements it.
+The reviewed v0.21.x/v0.22.0 release notes contain no managed-scope deprecation notice.
+However, [build_profile_terminal_scope](https://github.com/NousResearch/hermes-agent/blob/5575a0859d6278bfcef79c28189a24594952efd3/tools/terminal_scope.py#L114) reads defaults, profile env and raw profile YAML without the managed layer.
+We observed a fresh emh container using the old image while `hermes config get` correctly reported desktop.
+
+`/etc/hermes/config.yaml` remains the source of record. Until upstream's actual terminal scope honors it, mirror its backend, image, run-as-host-user and cwd into each profile through upstream atomic round-trip YAML writes.
+The existing setup helper now does that and asserts actual scope parity, preserving unrelated config/comments and mounts.
+After a managed policy change, run it with `--policy-only` for **default and every directory under profiles/**; isolated workers must use that mode to avoid shared attachment mounts.
+A new trusted profile can use the ordinary helper to copy policy and add its standard mounts together.
+Bulk config saves can strip managed leaves from profile files; re-run the policy-only helper after such a save and verify actual scopes.
+These copies are a temporary duplicate; remove the copying code and duplicate keys only after an updated upstream `build_profile_terminal_scope` demonstrably reads managed scope for each profile.
+Do not file or draft an upstream bug report for this gap (operator ruling).
 
 **The repository copy is the only durable record.**
 The nightly `hermes backup` zip covers `~/.hermes` and nothing under `/etc`, and `hermes update` never touches `/etc` either, so this file survives a rebuild only by being copied back from `hermes-vm/etc/hermes/config.yaml`.
@@ -474,30 +511,15 @@ Every one of them fails silently if it is wrong.
    hermes cron list
    ```
 
-7. **The token actually reaches the script.**
-   This is the one step that catches a sanitiser name collision, a typo in the `op://` reference and a gateway that was never restarted, and none of the three is visible any other way.
-   Run the job once with `hermes cron run <job_id>`, taking the id from `hermes cron list`, and confirm the `hermes-app-alive` monitor turns green in uptime-kuma.
-
-   **A passing `cron run` does not prove the scheduled run will pass**, and on the day you create the vault item it usually does not.
-   `cron run` executes in the CLI's process, and the CLI resolves `secrets.onepassword.env` at its own startup — so it picks up a token created moments ago.
-   The **gateway** resolved its copy when it last started, and holds whatever existed then.
-   Until the gateway is restarted the two disagree, the manual run succeeds, and the 05:45 scheduled run still fails its first line.
-   Confirm the gateway's own view instead: `journalctl --user -u hermes-gateway` should show `applied N secrets` with **no** `op read failed` line beside it, and N should have risen by one.
-   This trap was walked into on August 27, 2026.
-
-   **A hand-triggered run does not reach the gateway's journal.**
-   `cron run` executes the script in the CLI's own process — the run record calls it `source=direct` — so its exit code and stderr land in `hermes cron runs <job_id>` and nowhere else.
-   Read that when triaging a manual trigger.
-   A *scheduled* run is the gateway's subprocess and does go to the journal, which is what the table at the top of this page assumes.
-
-   Note too that the scheduler runs a `.sh` file through **bash**, while `make check-vm-scripts` lints it as POSIX `sh`.
-   The lint is the stricter of the two, which is the safe direction, but it means one failure reports two exit codes: 2 by hand under dash, 1 under the scheduler.
-
-   A **scheduled** run that fails on its first line prints `HERMES_APP_ALIVE_PUSH_TOKEN: not injected …` to the gateway's journal, which is the tell for all three; the same failure from `cron run` prints it into the run record instead.
+7. **The token actually reaches the gateway-owned script.**
+   Check the existing job is enabled and no_agent, then call selected-runtime `cron.jobs.trigger_job('36f76a55200c')`.
+   Read its gateway-owned result and the existing uptime-kuma heartbeat; require `verdict=ok units=3/3 webui_http=200`.
+   Do not substitute CLI `cron run`: it can resolve a fresh secret environment while the scheduled gateway still holds the old one.
+   The scheduler uses bash for `.sh` files; lint remains POSIX sh.
 
 8. **Every profile resolves its terminal backend to `docker`.**
    A missing or misplaced `/etc/hermes/config.yaml` leaves the backend at its default and every terminal call then runs on the host, which nothing else on this page detects.
-   Ask each profile what it resolved, rather than reading the file back:
+   Check both effective config and `build_profile_terminal_scope`: the CLI alone missed the managed-scope bypass. Mirror policy using the helper before this check:
 
    ```sh
    /home/hermes/.local/bin/hermes config get terminal.backend
@@ -512,7 +534,7 @@ So the first 04:45 window clears that backlog — correct behaviour, not a fault
 
 Adding a Hermes profile to this VM, in order.
 Worked end to end on `web_watcher` on August 31, 2026; every hazard below is one that run met or would have met.
-Only one ordering constraint is real, and it is step 3: **disable the platforms the profile will not use before its gateway starts for the first time.**
+**Stop the shared gateway before creating/configuring a profile**, because its rescan can admit a newly created profile automatically. Configure terminal policy, platform disables and credentials first; restart it in step 8.
 
 Steps 4 to 8 are conditional, and a profile that only answers kanban tasks or WebUI chats needs none of them.
 
@@ -522,23 +544,25 @@ Create it in the WebUI, choosing a **clean** profile rather than one inheriting 
 `hermes profile create <name>` works too, and seeds every bundled skill pack into `<profile home>/skills/` — 14 of them on August 31, 2026, so read the directory rather than that number.
 Delete the directories the profile does not need, and **keep `<profile home>/skills/.bundled_manifest`** — that file is how `skills_sync` remembers a deletion, so a pack removed with the manifest intact stays removed instead of being restored on the next sync.
 
-### 2. The terminal backend needs nothing
+### 2. Copy the terminal policy
 
-`/etc/hermes/config.yaml` already pins `terminal.backend`, `terminal.docker_image`, `terminal.docker_run_as_host_user` and `terminal.cwd` for every profile, this one included ([step 7 of the install](#7-pin-the-docker-terminal-backend)).
-There is no per-profile terminal setting to copy, and `hermes config set` would refuse it anyway.
+Run `/home/hermes/.hermes/scripts/hermes-profile-docker-setup.sh <name> --policy-only` before any work is admitted.
+This copies the four managed terminal keys without adding any shared mount; it is required for isolated workers too.
+See [the managed-scope gap](#managed-scope-gap-at-5575a08).
+The live multiplexer discovers new profiles on create/delete and periodic rescan, so establish platform disables and credentials before letting a new profile receive work.
 
 ### 3. Disable the platforms this profile will not use
 
-**Before the first gateway start:**
+**Before restarting the shared gateway:**
 
 ```sh
 /home/hermes/.local/bin/hermes -p <name> config set platforms.telegram.enabled false
 /home/hermes/.local/bin/hermes -p <name> config set platforms.api_server.enabled false
 ```
 
-**A profile gateway inherits the base `~/.hermes/.env`**, so a profile that has configured nothing still starts with the default profile's platform credentials.
+**A new profile can inherit base platform credentials from `~/.hermes/.env`**, so a profile that has configured nothing still starts with the default profile's platform credentials.
 Left enabled, it connects Telegram with the default profile's token, which the API rejects as `token already in use`, and it binds the default `api_server` port 8642, which fails as `address already in use`.
-Disabling them afterwards fixes it, but the gateway loops on those collisions until you do.
+Disabling them afterwards fixes it, but the shared gateway may encounter those collisions until you do.
 
 ### 4. The mailbox, if the profile will use email
 
@@ -629,6 +653,8 @@ Nothing consumes it — it is the renamed remains of the pre-fix `MAIL_PASSWORD`
 **A restart is what applies any of this**, because the 1Password provider resolves the map at start.
 Restart the profile's own gateway first, then `hermes-dashboard`, then `hermes-webui`, and read `1Password: applied N secrets` in each journal — `N` must equal the number of entries in the map the unit loaded.
 
+Mail profiles also need an explicit `EMAIL_AUTHSERV_ID` pin established from the topmost Authentication-Results header using read-only IMAP sampling. The current Purelymail profiles use `purelymail.com`; an empty mailbox remains unverified until its first permitted message.
+
 ### 6. The email platform, if wanted
 
 The email adapter reads **`.env` only**.
@@ -654,41 +680,12 @@ Skip it for an isolated worker, which is the `safer_web_reader` pattern ([safer-
 The helper then finds all three present and writes nothing, which is the intended outcome rather than a sign it failed.
 The `.env` line the WebUI writes is double-quoted, which the WebUI's own parser then cannot read — see [The docker terminal sandboxes](#the-docker-terminal-sandboxes).
 
-### 8. An always-on gateway, for any messaging platform
+### 8. Shared gateway admission
 
-A profile with a messaging platform needs a systemd user unit; without one, a gateway started by hand dies at the next reboot, and this VM reboots at 04:45 whenever `unattended-upgrades` installs a kernel.
-
-**The hermes CLI owns these unit files.**
-`refresh_systemd_unit_if_needed` regenerates the unit whenever the installed text differs from what the current install would write, and it runs on `gateway start`, on `gateway restart` and on **every gateway boot** (`hermes_cli/gateway.py`, read on August 31, 2026).
-So a hand edit does not stick, and none should be attempted: `TimeoutStopSec` in particular is derived, not written — `max(60, max(restart_drain_timeout, cron_drain_timeout + 10) + 30)` — so gateways differ from each other because their profiles' drain settings differ, and the CLI's value is the correct one.
-`hermes-gateway-web_watcher.service` carries `TimeoutStopSec=70` against the other three gateways' `210` for exactly that reason, and it stays as the CLI wrote it (operator ruling, August 31, 2026).
-
-Check whether the CLI has already created the unit, because starting a gateway once is enough to make one:
-
-```sh
-ls ~/.config/systemd/user/hermes-gateway-<name>.service
-```
-
-If it exists, there is nothing to write — go straight to enabling it:
-
-```sh
-systemctl --user enable --now hermes-gateway-<name>
-```
-
-If it does not, seed one from an existing gateway's unit, and let the CLI correct it on the first start:
-
-```sh
-sed 's/emh/<name>/g' ~/.config/systemd/user/hermes-gateway-emh.service \
-  > ~/.config/systemd/user/hermes-gateway-<name>.service
-systemctl --user daemon-reload
-systemctl --user enable --now hermes-gateway-<name>
-```
-
-**A new gateway unit is a new thing to watch, and nothing notices that on its own.**
-Add its name to the `UNITS` list in `hermes-vm/scripts/hermes-app-alive.sh`, then re-run `make check-vm-scripts` and reinstall the script ([step 2](#2-install-the-daily-checks-script)) — the expected count is derived from that list, so a unit missing from it is a gateway whose death the daily check reports as healthy.
-Keep the daily liveness check's unit inventory current when adding a gateway.
-
-A kanban or WebUI-only worker needs no unit at all: its work runs inside a gateway that already exists.
+Do not create a `hermes-gateway-<name>` unit. Upstream multiplexing discovers profiles automatically; the one `hermes-gateway` unit serves messaging and worker contexts.
+Configure only the intended adapters, restart the shared gateway, then verify profile connection logs. A worker-only profile has no messaging adapters and needs no separate unit.
+Restart the shared gateway if a change needs fresh startup discovery; browser runtime changes also require restarting WebUI.
+The alive check continues to track the final three units, not one unit per profile.
 
 ### 9. Verify
 
@@ -757,47 +754,16 @@ The VM has no MTA, so `unattended-upgrades` mail would be a silent failure; the 
 
 ## What the daily check does not watch
 
-- **Nothing continuous.**
-  Detection latency for an application fault is up to about a day, and a missing heartbeat alarms about 30 hours after the last good one.
-  **Accepted by the operator on August 26, 2026 — "homelab not NASA."**
-  The `hermes` uptime-kuma monitor still catches a VM that is off or unreachable, faster, through the dashboard on `hermes.cynexia.com`.
-- **No chat turn is monitored at all.**
-  The daily check makes none, by design.
-  A fault that preserves imports, health responses and active units but breaks chat is noticed during normal use.
-- **The daily import runs in a fresh interpreter, not the WebUI's process.**
-  So a venv repaired without restarting `hermes-webui` reports `verdict=ok` while the live process still cannot serve — the very failure that check exists to catch.
-  After any venv repair, restart the unit.
-- **Three of the five units are only counted, never exercised.**
-  The daily check asserts something real about `hermes-webui` through its `/health`, about the shared venv through the import, and — since the check became a cron job inside it — about **`hermes-gateway`**, the default gateway, by running at all: a beat arriving means its scheduler executed a subprocess, so the old wedged-but-running-gateway blind spot is closed for that one unit.
-  `hermes-gateway-emh`, `hermes-gateway-hal` and `hermes-dashboard` still contribute nothing but a `systemctl --user is-active` result.
-  The gap is smaller for the dashboard: the `hermes` uptime-kuma monitor probes it externally on `hermes.cynexia.com/api/health`.
-  **Nothing external probes the two remaining gateways.**
-- **A gateway unit that is not in the check's `UNITS` list.**
-  The expected count is derived from that list, so a unit missing from it is not half-watched but unwatched, and the check reports `ok` while it is dead.
-  `hermes-gateway-web_watcher` sat in that position for the hours between its creation and the list being extended on August 31, 2026, and the list now names all six units.
-  Adding a gateway means adding its name, which is [step 8 of Creating a profile](#8-an-always-on-gateway-for-any-messaging-platform).
-- **Per-profile state.**
-  The check exercises the shared venv and the default profile.
-  A fault confined to `emh` or `hal` profile state is invisible to it.
-- **Memory writes.**
-  Nothing here detects a Hindsight write that fails: the write is on a background path a chat response does not wait for, so a profile can retain nothing while every check on this page passes.
-  That is not hypothetical — from August 23 to August 27, 2026 the `default` profile's writes all returned `401 Invalid API key` and no check in this estate noticed ([hindsight.md](hindsight.md#monitoring)).
-  The journal remains available for diagnosis, but no application-update procedure checks it.
-
-- **A dead apt timer.**
-  No dedicated timer-age alarm detects it.
-- **Its own cron job going missing.**
-  The job is agent state rather than a file this repository installs, so a rebuild, a restore or a hand edit can drop it.
-  Nothing notices until the monitor's heartbeat lapses about 30 hours later, and the report then reads as "no beat at all" — indistinguishable from a VM that is off.
-  `hermes cron list` is the only positive proof it is still there.
-- **The docker sandboxes, and the image they are running.**
-  The check runs on the host and says nothing about the containers any profile's terminal works inside, including whether their image is still the one the pinned tag now resolves to.
-  `hermes-sandbox-refresh` moves them but pushes to no monitor; its run history is the diagnostic record.
-  Detection latency for a stale sandbox image is unbounded; the host kernel remains the containment boundary and receives nightly security updates.
-  A check on the age of the running image was considered and rejected — a healthy refresh job against a quiet upstream reads identically to a dead one.
-- **The refresh job going missing.**
-  The job uses the same store as the daily check, but has no heartbeat; losing it causes no alert.
-  `hermes cron list` remains the only positive proof the job exists.
+The daily check verifies the final three units, fresh PM WebUI/agent imports and WebUI `/health`; its arrival proves the shared gateway scheduler executed.
+It makes **no chat turn**, memory write, adapter login or reader-containment test.
+A secondary profile can fail while the shared process remains active; neither a unit count nor the aggregate runtime record proves each mailbox works.
+A fresh import can succeed while a long-lived process has stale modules: restart affected serving processes after repair and use actual authenticated panels.
+Hindsight's backend canary checks the backend, not every profile's admission/bank credentials or asynchronous retain path.
+The accepted reader issue 146 can leave research refusing with every scheduled monitor green.
+Detection is daily; a missing heartbeat alarms only after its 24-hour interval and 6-hour retry. The external dashboard monitor catches a dead VM sooner.
+Losing either cron job is agent-state loss: the alive job eventually alarms by silence, while refresh has no heartbeat. Read the actual cron store after restore.
+The daily check says nothing about apt timer age, Docker images, busy sandboxes or the weekly refresh's success; its run history remains the diagnostic record.
+No extra monitors were added.
 
 ## What moving the check inside hermes traded
 
@@ -825,20 +791,19 @@ Recorded so nobody rediscovers them.
 
 **`hermes` is not on the non-interactive ssh PATH.**
 That PATH is `/usr/local/bin:/usr/bin:/bin:/usr/games`, and `~/.local/bin` is not on it, so `ssh hermes@… 'hermes …'` fails with "command not found".
-Call `/home/hermes/.local/bin/hermes` — a three-line shim that unsets `PYTHONPATH` and `PYTHONHOME` and execs the venv's own `hermes`.
+Call `/home/hermes/.local/bin/hermes` — the published PM-aware launcher.
 A `systemd-run --user` unit gets the same clean environment and needs the same absolute path.
 
-**`uv` is at `$HERMES_HOME/bin/uv` and is resolved by absolute path** (`hermes_cli/managed_uv.py:53-63`, whose docstring says "no PATH probing, no conda guards, no multi-location resolution chains").
-It is on no PATH on this VM and does not need to be.
-That is why the units set `HERMES_HOME` rather than extending PATH: a wrong or absent `HERMES_HOME`, not a short PATH, is what would stop `hermes update` finding its own tooling.
+**PM owns interpreter and dependency selection.**
+Do not hardcode a store generation or revive the legacy venv. Resolve the current project interpreter through upstream's PM APIs when running diagnostics; use the guarded canonical helper for deep imports.
 
-**`hermes update` restarts the three gateway units itself** — `hermes update --plan` says so — and does **not** restart `hermes-webui` or `hermes-dashboard`, because neither runs the `hermes` entry point.
-Without a deliberate restart of those two, the WebUI keeps serving the module already resident in memory, and the break surfaces at the next restart or the 04:45 reboot.
+**Updater restart coverage is not a substitute for explicit runtime verification.**
+After a core update, verify the shared gateway and explicitly restart/check dashboard and external WebUI; a source update can leave old modules resident until a later reboot.
 
 **A Hermes process discovers an MCP server's tools once, when it connects, so a tool added to a server is invisible to every already-running Hermes process until that process restarts.**
 Nothing re-lists tools on a live connection, and neither the server's own restart nor a reconnect re-runs discovery, so the stale process keeps serving the tool list it captured — which is how the `how-to-use-health-data` tool added to the health MCP server on September 4, 2026 stayed missing on September 5.
-**A WebUI chat does not run in the profile gateway**, it runs in `hermes-webui`, so restarting `hermes-gateway-<profile>` fixes the profile's cron and messaging turns and changes nothing about the conversation in the browser.
-Restart all three — `hermes-gateway-<profile>`, `hermes-webui` and `hermes-dashboard` — and prove each one by its `tools.mcp_tool` registration line, `MCP server '<name>' (HTTP): registered N tool(s): …`, which names every tool and so carries the new count: a profile gateway writes it to `~/.hermes/profiles/<profile>/logs/agent.log`, while `hermes-webui` and `hermes-dashboard` run under the base `HERMES_HOME` and write it to `~/.hermes/logs/agent.log`.
+**A WebUI chat does not run in the profile gateway**, it runs in `hermes-webui`, so restarting the shared `hermes-gateway` fixes the profile's cron and messaging turns and changes nothing about the conversation in the browser.
+Restart the shared `hermes-gateway`, `hermes-webui` and `hermes-dashboard` — and prove each one by its `tools.mcp_tool` registration line, `MCP server '<name>' (HTTP): registered N tool(s): …`, which names every tool and so carries the new count: a profile gateway writes it to `~/.hermes/profiles/<profile>/logs/agent.log`, while `hermes-webui` and `hermes-dashboard` run under the base `HERMES_HOME` and write it to `~/.hermes/logs/agent.log`.
 Those two connect **lazily**, on the first turn that uses the server rather than at start — the WebUI process that served the stale list had been up since 17:56 on September 3 and registered the server at 22:46 that evening — so the line appears only after a chat in that profile touches the server, and its absence straight after a restart is not a fault.
 
 **Update snapshots live in `~/.hermes/backups/`**, not `~/.hermes/pre_update_backups/` — an earlier draft of this design named the second path and it does not exist.
@@ -849,12 +814,11 @@ Retention is five snapshots, pruned after each write and floored at one, at roug
 [homelab.md's security posture section](homelab.md#security-posture--read-before-fixing-any-of-it) records what actually holds: the VM runs no host firewall, the LAN is a trusted zone, and the only gate an agent cannot forge is the Cloudflare Access service token on the published hostnames.
 Firewalling 8787, 9119 and 8642 down to the cluster egress address is the obvious hardening and is a change of its own.
 
-**`/p/<profile>/` routing exists but is inert.**
-The routes are registered unconditionally, and the prefix is **discarded** while `gateway.multiplex_profiles` is off — which it is.
-So `/p/anything/…` reaches the default profile, and anything probing a gateway should use the unprefixed path.
+**Profile-prefixed webhook routing now follows multiplex mode.**
+Only verify `/p/<profile>/` callers where that adapter is actually configured; do not assume the aggregate gateway state lists secondary mailbox connections.
 
 **`/var/lib/docker` is a disk of its own, and nothing backs it up.**
-A second 125 GiB thin-provisioned virtio-scsi disk (SCSI 1, discard and SSD emulation on) was added to VM 103 on August 29, 2026, formatted `mkfs.ext4 -m 0 -L dockerdata` and mounted at `/var/lib/docker` from `/etc/fstab` by UUID, with `defaults,nofail,x-systemd.device-timeout=30s 0 2`.
+A second 125 GiB virtio-scsi disk on the thick-LVM vmdata pool (SCSI 1, discard and SSD emulation on) was added to VM 103 on August 29, 2026, formatted `mkfs.ext4 -m 0 -L dockerdata` and mounted at `/var/lib/docker` from `/etc/fstab` by UUID, with `defaults,nofail,x-systemd.device-timeout=30s 0 2`.
 Three of those choices are deliberate and should survive a rebuild.
 `nofail` with the 30-second device timeout keeps a dead data disk from hanging the boot: the VM must come back without docker rather than not come back.
 `-m 0` drops the 5% root reserve, which exists to keep a full root filesystem usable and buys nothing on a disk holding only images and containers.
@@ -870,28 +834,24 @@ There is no rootless install and no second context.
 
 ### The docker terminal sandboxes
 
-Verified live on August 29, 2026; the managed scope and the attachments mount were added on August 31, 2026.
+Updated October 15, 2026: root 50 GiB, separate Docker disk 125 GiB; desktop image is floating and pulled weekly.
 
-**All four profiles run their terminal tool inside docker containers rather than on the host**, and a profile created tomorrow will too.
-`default` and `emh` switched on August 29; `hal` followed the same day once its long-running task finished.
-`safer_web_reader` was still on the default backend until the managed scope pinned it on August 31; all four were read back as `docker` that day, so the refresh job's next run reports `profiles=4` rather than the `profiles=3` it used to.
+All five profiles resolve the terminal backend to docker after the managed-key mirror. The reader still cannot use terminal because its capability boundary is separate.
 
-Four settings come from the managed scope at `/etc/hermes/config.yaml` and apply to every profile; the fifth is written per profile:
-
-| Setting | Value | Set where |
+| Setting | Value | Source |
 |---|---|---|
-| `terminal.backend` | `docker` | Managed scope |
-| `terminal.docker_image` | `mcr.microsoft.com/devcontainers/python:3.14-trixie` | Managed scope |
-| `terminal.docker_run_as_host_user` | `true`, so the exec runs as uid 1000, the host `hermes` user | Managed scope |
-| `terminal.cwd` | `/workspace` | Managed scope |
-| `terminal.docker_volumes` | Three entries on `default`, `emh` and `hal`; unset on `safer_web_reader` | Per profile, by `hermes -p <profile> config set` or [step 7](#7-pin-the-docker-terminal-backend)'s helper |
+|`terminal.backend`|`docker`|Managed config plus temporary profile copy|
+|`terminal.docker_image`|`nousresearch/hermes-sandbox:desktop`|Same|
+|`terminal.docker_run_as_host_user`|`true`, uid1000|Same|
+|`terminal.cwd`|`/workspace`|Same|
+|`terminal.docker_volumes`|Profile-specific workspaces/identity/attachments mounts|Profile only|
 
-A managed key beats the same key in a profile's own `config.yaml`, and `hermes config set` refuses to write one, so those four move only through a `sudo` edit of `/etc/hermes/config.yaml`.
-A **bulk** write — the setup wizard, or the dashboard's raw YAML editor — is not refused: `save_config` strips every managed leaf out of it first and prints a `managed setting(s) were not saved` note on stderr, so the rest of the document lands and the pinned keys do not (read in `hermes_cli/config.py` on August 31, 2026).
-The file is root-owned `0644` in a `0755` directory, and it is outside the nightly backup — see [step 7](#7-pin-the-docker-terminal-backend).
+The managed file is root-owned 0644 in a 0755 directory. Its CLI precedence still works, but multiplex terminal scope bypasses it: [workaround and removal condition](#managed-scope-gap-at-5575a08).
+Desktop digest observed October 15: `sha256:c7d8607d076f26a64e0bd6828f74e1764af43fe3281368188459bb693bfa7567`, image 3,050,982,704 bytes.
+The existing refresh removed only idle old containers. A fresh hal terminal used desktop with the previous home/workspace mounts and a successful host→container→host diagnostic file round-trip; the diagnostic file was removed.
 
 The default profile's workspace is `/home/hermes/.hermes/workspace`, created for this; every other profile's is `workspace` inside its own profile home.
-A settings change takes effect when that profile's gateway is restarted.
+A settings change takes effect on the next admitted profile turn or after restarting the shared gateway when startup discovery is involved.
 
 **`default`, `emh` and `hal` mount three volumes each, and two of them are identity mounts** — the same host path inside the container as outside:
 
@@ -939,7 +899,7 @@ The next terminal call builds a new container from the local image, with no gate
 That is also the whole of the image-update mechanism: a `docker pull` never touches an existing container, so **removal and recreation is the update**, which is what `hermes-sandbox-refresh` exists to do.
 
 **The pin is a tag rather than a digest, deliberately.**
-Microsoft rebuilds `3.14-trixie` with security patches, and the weekly pull-and-replace is how those arrive.
+Upstream rebuilds the floating `desktop` image, and the weekly pull-and-replace is how those arrive.
 The sandbox userland is hygiene, not the containment boundary — the boundary is the host kernel and runc, patched nightly by `unattended-upgrades`.
 
 **`no_agent` cron scripts are unaffected by any of this.**

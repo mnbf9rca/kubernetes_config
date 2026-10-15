@@ -2,7 +2,7 @@
 # Daily liveness check for the Hermes VM's app stack. ZERO MODEL TOKENS.
 #
 # Three assertions, all local, all free: the agent package deep-imports from the
-# shared venv, the WebUI answers its own /health on loopback, and all five user
+# current PM environment, the WebUI answers /health on loopback, and all three user
 # units are active. The verdict is pushed to ONE uptime-kuma push monitor.
 #
 # Canonical copy: hermes-vm/scripts/hermes-app-alive.sh in
@@ -29,44 +29,13 @@
 set -eu
 
 HERMES_HOME=/home/hermes/.hermes
-AGENT_DIR=$HERMES_HOME/hermes-agent
-VENV=$AGENT_DIR/venv/bin
+IMPORT_CHECK=$HERMES_HOME/scripts/hermes-webui-runtime.py
 WEBUI_HEALTH=http://127.0.0.1:8787/health
-UNITS="hermes-gateway hermes-gateway-emh hermes-gateway-hal hermes-gateway-web_watcher hermes-dashboard hermes-webui"
-# DERIVED from UNITS, never written beside it.
-#
-# WHAT DERIVING BUYS is the one direction a hand-written count gets wrong in
-# silence: add a sixth unit to the list above, leave a literal 5 here, and a
-# machine with five of six units up reports a healthy `ok`. A derived count
-# cannot go stale that way.
-#
-# WHAT IT DOES NOT BUY, and what the floor below is for: deriving from the list
-# means an EMPTY list derives 0, and 0 active out of 0 expected compares equal.
-# The check would then push `verdict=ok units=0/0` from a machine on which
-# nothing whatsoever was verified. A literal 5 failed that loudly; a derived
-# count does not, so the derivation traded one silent desync for another. A
-# monitor reporting `ok` having checked nothing is the worst answer it can give.
-# shellcheck disable=SC2086 # the word split IS the measurement
+UNITS="hermes-gateway hermes-dashboard hermes-webui"
+# Derive the expected count from the same list that the loop checks.
+# shellcheck disable=SC2086 # unit names intentionally split into words
 UNIT_COUNT=$(set -- $UNITS; printf '%s\n' "$#")
-# check-ping-bodies: untaint UNIT_COUNT - the word count of the literal UNITS list above, computed by this script with `set --`; no external command runs and nothing outside this file reaches it
-
-# The floor is 1, not 5: the invariant is "there is something to check", not
-# "there are exactly five things", so adding or removing a unit needs no edit
-# here.
-#
-# THIS DOES NOT PUSH, and that is correct. It sits at top level, above main and
-# above the traps, because an empty UNITS is a defect in this file rather than a
-# condition of the machine - it cannot arise without somebody editing the line
-# above and committing it. The journal line plus a `failed` unit is the right
-# report for a broken check; a `down` push would say the VM is unhealthy, which
-# would be a lie.
-#
-# It does NOT re-arm the pathname-expansion half of the SC2086 disable above,
-# and it was measured rather than assumed: with `hermes-*` in UNITS and three
-# matching files in the working directory the count derives 3 and this floor
-# passes. Glob inflation stays inert for the reasons it always was - no unit
-# name holds a metacharacter, and the `for _u in $UNITS` loop below expands
-# identically, so the count and the loop cannot disagree.
+# check-ping-bodies: untaint UNIT_COUNT - word count of the literal UNITS list above; no external input
 if [ "$UNIT_COUNT" -lt 1 ]; then
   echo "ERROR: UNITS is empty, so this check would verify nothing and report ok" >&2
   exit 1
@@ -120,8 +89,8 @@ push_kuma() {
 }
 
 # ---- verdict enum ----------------------------------------------------------
-#   units-down          fewer than five hermes user units are active
-#   import-failed       the shared venv cannot import run_agent
+#   units-down          fewer than the expected hermes user units are active
+#   import-failed       the shared PM environment cannot import the WebUI and run_agent
 #   webui-unreachable   the WebUI's own /health did not answer 200
 #   ok                  all three passed
 VERDICT=units-down
@@ -184,34 +153,13 @@ main() {
     exit 1
   fi
 
-  # THE DEEP IMPORT IS THE POINT. `run_agent` is what the WebUI's
-  # api/agent_runtime.py imports and what api/streaming.py instantiates for
-  # every chat turn, and it pulls in dotenv, httpx and openai. A venv missing
-  # any of them leaves every unit `active` and /health answering `status: ok`
-  # while the iOS app answers `AIAgent not available` (homelab.md, "Do not give
-  # it a venv of its own"). Importing hermes_cli.main instead would NOT catch
-  # that: it is the CLI entry point, not the WebUI's dependency path.
+  # Health alone misses a broken agent import. Use upstream's selected PM
+  # environment for the same WebUI APIs and run_agent used by serving chat.
+  # The helper guards lazy completion and isolates import-time UI settings.
+  # Keep stderr for local diagnosis; the push carries only the verdict enum.
   VERDICT=import-failed
-  # STDOUT is discarded because it is only a sentinel - a successful import
-  # prints nothing. STDERR IS DELIBERATELY NOT DISCARDED: python writes the
-  # traceback there, and WHICH import failed is the whole answer to "what
-  # broke". It used to be thrown away, leaving the journal with only the
-  # generic line below. There is no disclosure question - the traceback goes to
-  # the journal and never near the pushed message, which carries the fixed
-  # `verdict=import-failed` and nothing else.
-  #
-  # THE `cd /` IS LOAD-BEARING, and it is here because the systemd unit that used
-  # to carry it was deleted. `python -c` puts the CURRENT WORKING DIRECTORY on
-  # sys.path. Run from inside the agent checkout, this import resolves
-  # `run_agent` from the checkout's own source rather than from the venv, so the
-  # assertion passes on a venv in which the agent package is not installed at
-  # all - which is exactly the failure this check exists to catch. The unit
-  # pinned WorkingDirectory=/home/hermes; a cron subprocess inherits the
-  # gateway's working directory instead, and nothing says what that is. So the
-  # pin moved into the script, where it holds however the script is started.
-  # The subshell keeps it from leaking into the rest of the run.
-  if ! (cd / && "$VENV/python" -c 'import run_agent') >/dev/null; then
-    echo "ERROR: the agent venv cannot import run_agent" >&2
+  if ! (cd / && /usr/bin/python3 "$IMPORT_CHECK" --check-import) >/dev/null; then
+    echo "ERROR: the PM environment cannot import the WebUI and agent" >&2
     exit 1
   fi
 

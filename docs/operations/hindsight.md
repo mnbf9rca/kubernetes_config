@@ -157,33 +157,20 @@ Select the known-good image version and remove that workload's keel annotations 
 
 ## The client on the hermes VM
 
-**Ruling, August 27, 2026: `hindsight-client` on VM 103 is never pinned by this estate.**
-The version installed there is whatever hermes-agent's own `pyproject.toml` asks for, and this repository neither records it nor moves it.
-Nothing on the VM reads the server's reported version to choose a client, and no file here carries a client pin to keep in step with the server tag.
+**The estate follows upstream's catalog-client dependency policy; it does not independently pin the SDK to match the backend.**
+At core 5575a08, Hindsight is a catalog plugin, version1.2.2 at `f843f173bb41f001e322cc83c917371639e47fbf`, installed and selected for default/emh/hal.
+Its own authored project dependencies are admitted into PM; an installed plugin directory alone does not prove admission or a live provider.
+Client and server still move independently. The backend remains floating under keel and its existing backup/canary policy is unchanged.
 
-Four facts support that:
+Update core, bundled dashboard and external stable WebUI together using [the Hermes runbook](hermes-vm.md#application-updates).
+After restart, authenticate to the **actual** dashboard Memory and Plugins hub panels: require ready/available/configured and enabled for each of the three profiles, then read existing expected-bank memory without printing content.
+A successful helper in a fresh interpreter does not establish that the running dashboard loaded the client.
+The October 15 maintenance cleared the demonstrated installed/inactive condition by replacing the old serving processes with PM 3.14; no backend reinstall or migration was performed.
+URL, bank selectors/templates, additional banks and `op://` references matched the stopped-state archive; existing-memory reads passed and the earlier write/read round-trip was retained as evidence.
+Do not repeat diagnostic writes or add backend Jobs just to reconfirm an existing scheduled canary.
 
-1. **Upstream's `hindsight-client==0.6.1` is a supply-chain policy, not a compatibility statement.**
-   NousResearch exact-pin every dependency and age each one 14 days before adopting it.
-   The pin says "this version has been vetted", not "this version is what the server needs".
-2. **The wire surface is additive across the gap.**
-   Comparing 0.6.1 against 0.9.x, all 49 paths 0.6.1 calls are still present and the authentication scheme is unchanged.
-   Nothing the old client sends has been removed or renamed.
-3. **The plugin's version check is a floor, not an equality.**
-   It refuses a client below its minimum and accepts anything at or above it, so a client older than the server is a supported configuration rather than an accident.
-4. **The server is the side that must stay current, and it does.**
-   The homelab manifests select `latest` for the API and control plane under keel.
-   The liveness endpoint requires API version 0.9.1 or later.
-   Client-to-server skew is therefore bounded by the server moving forward, and it is accepted.
-
-**What would overturn this.**
-Any one of the four failing: the upstream pin moving for a stated compatibility reason rather than an aging one; a release removing or renaming a path the installed client calls; the authentication scheme changing; or the plugin raising its floor above the client the agent installs.
-Hermes updates use the WebUI's **Update Now** button, including its upstream-selected client dependency.
-There is no estate updater that independently changes the client version.
-
-**Bumping upstream's pin is the operator's, by hand.**
-The pull request goes to NousResearch under the operator's name, so no agent opens it.
-This estate carries no local override in the meantime.
+If upstream changes the SDK floor, wire routes or authentication, check the concrete compatibility change before upgrading. Do not override client dependencies merely to equal the server's version.
+No estate updater independently changes the SDK.
 
 ## Restoring
 
@@ -257,7 +244,7 @@ The tenant key is one value with four consumers: the API validates against it, t
 | Vault item | Read by | How |
 |---|---|---|
 | `op://Homelab/hindsight/tenant-api-key` | The cluster apply, from the operator's laptop | `${HINDSIGHT_TENANT_API_KEY}` in `homelab/secrets/hindsight.yaml`, resolved by `op run` at apply time |
-| `op://hermes/hindsight/tenant-api-key` | The three gateways on VM 103 | hermes's own 1Password secrets provider, resolved into each gateway process's environment at startup |
+| `op://hermes/hindsight/tenant-api-key` | Profile-scoped contexts in the shared gateway on VM 103 | hermes's own 1Password secrets provider, resolved through each profile’s own secret scope |
 
 The VM's 1Password service account can see the `hermes` vault and nothing else, so it cannot read the `Homelab` copy; the operator's laptop credential reads either.
 Both copies and the live cluster Secret held the same value when they were last compared, on August 27, 2026.
@@ -269,7 +256,7 @@ Rotating means:
 1. Generate a new value and update **both** vault items in the table above.
    Updating one splits the key, and the side that was missed stops authenticating at its next restart.
 2. `make apply-homelab`, then `kubectl -n hindsight rollout restart deploy/hindsight` — a Secret change does not restart a Pod on its own.
-3. **Restart the three gateways on VM 103** — `hermes-gateway`, `hermes-gateway-emh` and `hermes-gateway-hal`.
+3. **Restart the shared gateway on VM 103** — `hermes-gateway`; restart dashboard and WebUI when their provider state also needs refreshing.
    The provider resolves the reference once, at process start, so a running gateway keeps presenting the old key indefinitely.
    The key is in no file on the VM, so there is nothing to edit.
 4. **Confirm the outcome, not the inputs.**
@@ -383,7 +370,7 @@ A reply that no such tool exists is the only meaningful negative.
 ### Trap 3: the dashboard GUI writes secrets to disk in cleartext
 
 The field the dashboard **fails to save** is the API server URL: it reports saved and silently is not (observed 2026-08-24).
-Set `api_url` by editing the file, then restart the gateway (`systemctl --user restart hermes-gateway-<profile>`).
+Set `api_url` by editing the file, then restart the gateway (`systemctl --user restart hermes-gateway`).
 
 What it **saves too much** of is the API key: the literal value lands in the profile's `hindsight/config.json` as cleartext, which defeats the 1Password integration and puts a live credential into the nightly backup zip.
 Delete `api_key` from the file and let `HINDSIGHT_API_KEY` supply it.

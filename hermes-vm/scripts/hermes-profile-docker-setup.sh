@@ -1,11 +1,10 @@
 #!/bin/sh
 # Finish the docker terminal setup for ONE named Hermes profile.
 #
-# Everything a profile needs for the docker terminal backend is already pinned
-# for every profile by /etc/hermes/config.yaml (the managed scope): backend,
-# image, run-as-host-user and cwd. The one thing that stays per profile is
-# terminal.docker_volumes, and this script adds the three entries the default,
-# emh and hal profiles carry:
+# Copy the four terminal policy keys from /etc/hermes/config.yaml, then add
+# the three durable mounts used by the trusted default, emh and hal profiles.
+# shortcut: multiplex terminal scopes ignore managed config at 5575a08; remove
+# the profile copies when upstream build_profile_terminal_scope honors it.
 #
 #   <workspace>:/workspace                 the sandbox's working directory
 #   <attachments>:<attachments>:ro         the shared WebUI upload inbox, read
@@ -33,6 +32,7 @@
 # github.com/mnbf9rca/kubernetes_config. Installed on the VM at
 # /home/hermes/.hermes/scripts/ beside the two cron scripts, for the same
 # reason they live there: that directory rides the nightly `hermes backup` zip.
+# --policy-only copies policy without adding shared mounts, for isolated workers.
 # THIS ONE IS NOT A CRON JOB. It is run by hand, once, per new profile, and it
 # pushes to no monitor and reports to nothing.
 set -eu
@@ -42,24 +42,66 @@ HERMES_HOME=/home/hermes/.hermes
 ATTACHMENTS=$HERMES_HOME/webui/attachments
 
 profile=${1:-}
+policy_only=${2:-}
+case "$policy_only" in ''|--policy-only) ;; *) echo "unknown option: $policy_only" >&2; exit 2 ;; esac
 
 if [ -z "$profile" ]; then
-  echo "usage: hermes-profile-docker-setup.sh <profile-name>" >&2
+  echo "usage: hermes-profile-docker-setup.sh <profile-name> [--policy-only]" >&2
   exit 2
 fi
 
-# The default profile is already configured, and its workspace is not under
-# profiles/ at all, so the paths below would be wrong for it.
-if [ "$profile" = default ]; then
-  echo "default is already configured; nothing to do." >&2
+# The default workspace is not under profiles/; only its policy can be copied.
+if [ "$profile" = default ] && [ "$policy_only" != --policy-only ]; then
+  echo "default mounts are already configured; use --policy-only for its policy." >&2
   exit 2
 fi
 
 profile_dir=$HERMES_HOME/profiles/$profile
+if [ "$profile" = default ]; then profile_dir=$HERMES_HOME; fi
 if [ ! -d "$profile_dir" ]; then
   echo "no profile directory at $profile_dir" >&2
   echo "create the profile first: $HERMES_BIN profile create $profile" >&2
   exit 1
+fi
+
+# Use upstream's current PM runtime without allowing pending core completion.
+/usr/bin/python3 - "$profile_dir" <<'PYTHON'
+from pathlib import Path
+import os
+import subprocess
+import sys
+
+agent = Path('/home/hermes/.hermes/hermes-agent')
+sys.path.insert(0, str(agent))
+from hermes_cli._launchers import runtime_command
+
+code = "home = " + repr(sys.argv[1]) + "\n" + r'''
+import copy
+from pathlib import Path
+from utils import load_yaml_file_readonly, atomic_roundtrip_yaml_update
+from tools.terminal_scope import build_profile_terminal_scope
+managed = load_yaml_file_readonly('/etc/hermes/config.yaml')['terminal']
+keys = {'backend': 'TERMINAL_ENV', 'docker_image': 'TERMINAL_DOCKER_IMAGE',
+        'docker_run_as_host_user': 'TERMINAL_DOCKER_RUN_AS_HOST_USER', 'cwd': 'TERMINAL_CWD'}
+path = Path(home) / 'config.yaml'
+before = load_yaml_file_readonly(path)
+expected = copy.deepcopy(before)
+expected.setdefault('terminal', {}).update({key: managed[key] for key in keys})
+for key in keys:
+    if before.get('terminal', {}).get(key) != managed[key]:
+        atomic_roundtrip_yaml_update(path, 'terminal.' + key, managed[key])
+assert load_yaml_file_readonly(path) == expected, 'unrelated profile config changed'
+scope = build_profile_terminal_scope(home)
+for key, variable in keys.items():
+    assert str(scope[variable]).lower() == str(managed[key]).lower(), key
+'''
+subprocess.run(runtime_command(agent, code=code, home=sys.argv[1]),
+               env=dict(os.environ, HERMES_DISABLE_LAZY_INSTALLS='1'), check=True)
+PYTHON
+
+if [ "$policy_only" = --policy-only ]; then
+  echo "Managed terminal policy copied; profile mounts unchanged."
+  exit 0
 fi
 
 workspace=$profile_dir/workspace
@@ -113,12 +155,12 @@ cat <<EOF
 
 Done: $profile now mounts its workspace and the shared WebUI attachments inbox.
 
-  terminal.backend, docker_image, docker_run_as_host_user and cwd are pinned
-  for every profile by /etc/hermes/config.yaml. Nothing to set here, and
-  \`hermes config set\` refuses to change them - edit that file with sudo.
+  The four terminal policy keys were copied from /etc/hermes/config.yaml.
+  That root-owned file remains the source of record; the profile copies
+  work around multiplex terminal scopes bypassing the managed layer.
 
-  Restart the profile's gateway (or the WebUI, if the profile is served
-  through it) before the volumes take effect.
+  Restart the shared hermes-gateway (and the WebUI when it serves this
+  profile) before the volumes take effect.
 
   The attachments mount comes out when hermes-webui ships the fix for
   upstream issue #6939.

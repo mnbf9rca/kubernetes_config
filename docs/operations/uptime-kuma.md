@@ -245,13 +245,13 @@ A 200 proves edge, tunnel, cloudflared and the dashboard process end to end.
 The homelab cloudflared tunnel also publishes `hermes-app.cynexia.com` (hermes-webui, for the Hermex iOS app).
 **That hostname still has no monitor, by decision.**
 What changed on August 26, 2026 is that the service behind it is now checked from *inside* the VM instead, once a day, by the `hermes-app-alive` push monitor below.
-Hermes updates use the WebUI's **Update Now** button; the existing daily alive check remains independent of updates.
+Hermes core/dashboard use the upstream updater and external WebUI follows stable ([runbook](hermes-vm.md#application-updates)); the existing daily alive check remains independent of updates.
 
 **Do not "improve" that push monitor into a GET against this hostname.**
 An HTTP monitor is the wrong instrument here for two independent reasons.
 `GET /health` returns `status: ok` straight through the broken-venv failure worth catching — the unit stays `active` and the endpoint stays green while every chat turn answers `AIAgent not available` — so the check would be green over the outage it exists for.
 And the chat path needs a login session, which a monitor cannot perform.
-The daily check sidesteps both by running on the VM: it deep-imports `run_agent` from the shared venv, the assertion the HTTP surface cannot make.
+The daily check sidesteps both by running on the VM: it deep-imports WebUI APIs and `run_agent` from the selected PM runtime, the assertion the HTTP surface cannot make.
 
 If a monitor is ever added here anyway, it is not a copy of the `hermes API` monitor: this Access app authenticates every request with Service Auth, so the monitor must send the service-token headers and set `maxredirects: 0`.
 Residuals are in [monitoring.md](monitoring.md#what-this-does-not-catch); the check's own triage is in [hermes-vm.md](hermes-vm.md#reading-a-down-hermes-app-alive).

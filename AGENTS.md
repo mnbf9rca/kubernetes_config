@@ -314,7 +314,10 @@ The rules that must not be broken:
   Every runner prints the full detail to the pod log, where triage starts.
   Either one travels with the alert to every notification transport its destination has configured, a list nobody has enumerated on either side.
   Policy, the accepted residuals and that open item: `docs/operations/monitoring.md`.
-- **Update Hermes only with the web UI's Update Now button.**
+- **Update Hermes as one application: core agent, bundled dashboard and external hermes-webui.**
+  Use upstream `hermes update` for core updates on stable; official installs ahead of a release keep the implicit forward-only default.
+  Update external hermes-webui on its stable channel; its Update Now button is WebUI-only, and `ignore_agent_updates` hides agent offers.
+  Complete the maintenance and runtime verification in `docs/operations/hermes-vm.md` together; do not advance core with a raw git pull.
   Everything else about the VM — lingering, the daily liveness check, the install, `unattended-upgrades` — is in `docs/operations/hermes-vm.md`.
   **Nothing under `hermes-vm/` is scheduled by systemd any more**: the `systemd/` directory was deleted on 2026-08-27, and both scheduled scripts — the daily liveness check and, since 2026-08-29, the weekly docker-sandbox refresh — run as hermes `no_agent` cron jobs inside the default gateway.
   The liveness check is read-only; the sandbox refresh pulls the pinned terminal image and removes idle stale containers.
