@@ -173,8 +173,8 @@ Loading it through `skill_view` registers that one name for profile-scoped termi
 No `docker_env`, `docker_forward_env`, managed-scope change or egress proxy is needed.
 The skill uses `DEMO_KEY` when the variable is absent; a missing reference leaves successful existing 1Password lookups intact.
 A live gateway keeps its secret-source snapshot.
-Use `/reload` in an emh CLI chat after changing the map.
-That profile-scoped reload does not require restarting the shared gateway.
+After changing the map or rotating the key, run `systemctl --user restart hermes-gateway` on the VM to refresh the shared gateway owner; this interrupts all gateway profiles.
+The classic CLI's `/reload` only refreshes that client's `.env`; it does not refresh the gateway's 1Password snapshot.
 Never print the key or enable shell tracing around USDA requests.
 
 Verification on October 15 used a fresh emh chat through the shared gateway, not an independent CLI agent.
@@ -185,6 +185,8 @@ USDA returned a banana result with FDC ID `173945`; wger returned exercise ID `9
 **The skill's wger name-search example is stale.**
 [wger 2.5 removed `/api/v2/exercise/search/`](https://github.com/wger-project/wger/releases/tag/2.5); that example returns HTTP 404.
 Use `/api/v2/exerciseinfo/` for exercise lookup; the gateway chat verified its JSON list with HTTP 200.
+**Pass `M` or `F` to `tdee` and `bodyfat`.**
+Any other sex value, including `male`, silently selects the female formula; `bodyfat` can also fail if the hip measurement is missing.
 The installed skill remains byte-identical to upstream; no local patch was added.
 
 ### What is shared and what is per profile
