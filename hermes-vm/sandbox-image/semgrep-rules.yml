@@ -1,0 +1,12 @@
+# Locally authored for this repository; static checks only, no registry or builds.
+rules:
+  - id: reviewer.python-shell-true
+    languages: [python]
+    severity: WARNING
+    message: Shell execution needs a review of input provenance and quoting.
+    pattern: subprocess.$FUNC(..., shell=True, ...)
+  - id: reviewer.shell-pipe-installer
+    languages: [generic]
+    severity: WARNING
+    message: Inspect and verify the downloaded script before running it.
+    pattern-regex: '(curl|wget)[^\n|]*\|\s*(sudo\s+)?(ba)?sh\b'

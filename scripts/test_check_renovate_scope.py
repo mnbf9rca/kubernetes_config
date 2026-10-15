@@ -36,6 +36,37 @@ FULL_KEEL = {
 }
 
 
+class TestDockerfileScope(unittest.TestCase):
+    def test_sandbox_dockerfile_scope_and_age(self):
+        path = "hermes-vm/sandbox-image/Dockerfile"
+        source = [(path, "FROM nousresearch/hermes-sandbox:v0.21.6-desktop@sha256:" + "a" * 64)]
+        config = {"enabledManagers": ["dockerfile"],
+                  "dockerfile": {"managerFilePatterns": ["/^hermes-vm/sandbox-image/Dockerfile$/"]},
+                  "minimumReleaseAge": "3 days",
+                  "packageRules": [{"matchFileNames": ["hermes-vm/sandbox-image/**", ".github/workflows/hermes-security-reviewer-image.yml"],
+                                    "minimumReleaseAge": "7 days", "minimumReleaseAgeBehaviour": "timestamp-required"}]}
+        self.assertEqual(crs.analyse_dockerfiles(config, source), [])
+        import copy
+        for mutation in ("manager", "disabled", "rule-disabled", "pattern", "ignore", "dead", "age", "narrow", "timestamp", "later"):
+            broken = copy.deepcopy(config)
+            if mutation == "manager": broken["enabledManagers"] = []
+            if mutation == "disabled": broken["dockerfile"]["enabled"] = False
+            if mutation == "rule-disabled": broken["packageRules"][0]["enabled"] = False
+            if mutation == "pattern": broken["dockerfile"]["managerFilePatterns"] = []
+            if mutation == "ignore": broken["ignorePaths"] = ["hermes-vm/**"]
+            if mutation == "dead": broken["dockerfile"]["managerFilePatterns"].append("/^gone/Dockerfile$/")
+            if mutation == "age": broken["packageRules"] = []
+            if mutation == "narrow": broken["packageRules"][0]["matchFileNames"] = [path]
+            if mutation == "timestamp": broken["packageRules"][0].pop("minimumReleaseAgeBehaviour")
+            if mutation == "later": broken["packageRules"].append({"matchFileNames": ["hermes-vm/sandbox-image/**"], "minimumReleaseAge": "1 day"})
+            with self.subTest(mutation=mutation):
+                self.assertTrue(crs.analyse_dockerfiles(broken, source))
+        config["dockerfile"]["managerFilePatterns"].append("/^homelab/health/mcp/Dockerfile$/")
+        source.append(("homelab/health/mcp/Dockerfile", "FROM node:24@sha256:" + "b" * 64 + " AS base\nRUN python - <<'PY'\nfrom pathlib import Path\nPY\nFROM base"))
+        self.assertEqual(crs.analyse_dockerfiles(config, source), [])
+        self.assertTrue(crs.analyse_dockerfiles(config, source + [(path, "FROM ${BASE}")]))
+
+
 class TestIsPinned(unittest.TestCase):
     def test_a_digest_is_pinned(self):
         self.assertTrue(crs.is_pinned("ghcr.io/keel-hq/keel@sha256:" + "a" * 64))

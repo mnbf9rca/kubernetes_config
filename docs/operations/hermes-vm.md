@@ -1141,3 +1141,31 @@ Three of these were wrong in earlier drafts and one reported contradiction was a
 | `hermes -p <profile> memory off` | The first-class way to drop the external memory provider, rather than editing a config key |
 | `hermes tools disable NAME... --platform api_server` | Disables a toolset. **Its default platform is `cli`**, so omitting `--platform` disables it somewhere other than where you meant |
 | `hermes update --check` / `hermes update --plan` | The read-only pair. **`--check` exits 0 whether or not an update is available** — read its output, not its status. Neither names the ref it would install |
+
+
+### Security reviewer sandbox image
+
+Image delivery is PR A; profile installation remains pending PR B. The derived image is only for `security_reviewer`, via its own `terminal.docker_image` and matching `.env` fallback. Managed scope and the five existing profiles keep `nousresearch/hermes-sandbox:desktop`.
+
+`hermes-vm/sandbox-image/` builds `ghcr.io/mnbf9rca/hermes-security-reviewer` for linux/amd64 from a versioned `vX.Y.Z-desktop@sha256:...` base. It preserves the desktop runtime and adds ShellCheck, Bandit, Gitleaks, Semgrep, ruff and yamllint. Native release archives have committed SHA-256 checksums; the full Python closure has exact versions and hashes, installs as wheels without resolution, and must pass `uv pip check`. There are no runtime tool installs. Trivy and pip-audit are not included.
+
+Commands are linked into `/usr/local/bin`, because Hermes's login-shell environment resets PATH. `/etc/hermes-reviewer-tools.txt` records installed versions. Semgrep metrics and version checks are off; its two locally authored rules live under `/opt/hermes-reviewer/rules/`. Use that explicit rules file, `--metrics off --disable-version-check`, and the explicit baked Ruff/yamllint configs. Never use target-controlled configs, Semgrep registry/auto rules, autofix or target builds. Static tools provide limited checks; missing coverage belongs in the report's `Tooling gaps:` line, not an ad hoc package install.
+
+Renovate groups base versions/digests, native versions/checksums, every Python transitive pin and workflow actions as `security-reviewer image inputs`. Each waits seven days with a source timestamp. A mutable `desktop` tag cannot evidence an older release; default Docker versioning follows the versioned `-desktop` suffix instead. Missing timestamps or a checksum/closure failure stop the update. The cooldown deliberately delays fixes by seven days. PR A ships automerge **off**; it stays off until the operator merges PR A, adds `sandbox-changes` and `sandbox-build` to the existing master ruleset without removing other checks, and PR B enables it. Do not add required contexts while the workflow is absent from master: with no bypass actor, that blocks other PRs.
+
+1. Change image inputs on an isolated branch, rebase onto freshly fetched master, and open a PR.
+2. Read all PR checks, including the existing `changes`/`lint`/`build` and new `sandbox-changes`/`sandbox-build`. The build tests all six positive fixtures and clean controls as UID/GID 1000 through `bash -lc` with a temporary writable HOME. An altered-checksum build must fail before archive extraction.
+3. Resolve `sha-<PR head SHA first 12 characters>` once to its registry digest.
+4. Verify that digest with Cosign, GitHub issuer `https://token.actions.githubusercontent.com`, and certificate identity `https://github.com/mnbf9rca/kubernetes_config/.github/workflows/hermes-security-reviewer-image.yml@refs/pull/<PR>/merge`.
+5. Confirm the operator's GHCR publication/pull authorization; do not add VM registry credentials or change package visibility implicitly.
+6. Pull that exact digest on the VM and run the disposable candidate without profile, workspace or Docker-socket mounts:
+
+   ```sh
+   docker run --rm --user 1000:1000 --entrypoint /bin/sh "$IMAGE" \
+     -c 'tooling_home=$(mktemp -d /tmp/hermes-reviewer.XXXXXX); export HOME="$tooling_home"; exec bash -lc /opt/hermes-reviewer/test-tools.sh'
+   ```
+
+7. Obtain the independent review and report the candidate deployed with its PR number; the operator merges.
+8. Check `sandbox-promote` succeeded and registry `stable` equals the verified digest. The merge job resolves the PR tag once, verifies the anchored PR signature, then retags that same digest; it never rebuilds. Fork builds cannot push/sign and must be reopened on a repository branch before merge.
+
+After PR B installs the profile and extends refresh, its weekly idle-container refresh delivers stable alongside the upstream desktop image. Until then this is a tested disposable candidate only. For a tool regression, revert the image inputs through a PR and repeat delivery. For an urgent profile rollback after PR B, use the setup helper to set only the reviewer image and `.env` fallback back to upstream desktop, then recreate its container when idle and record the missing scanner coverage. Do not edit registry stable or managed scope to roll back one profile.

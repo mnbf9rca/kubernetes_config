@@ -51,7 +51,7 @@ kubernetes_config/
 ├── renovate.json             # scoped to both clusters; floating channels excluded, alpine/k8s pinned
 ├── secrets-to-rotate.md      # honesty box for disclosed secret values (identifiers only)
 ├── docs/                     # operational documentation (docs/superpowers/ is gitignored)
-├── .github/workflows/        # the repo's one workflow: builds the InfluxDB MCP image
+├── .github/workflows/        # signed PR image builds: InfluxDB MCP and reviewer sandbox
 ├── homelab/                  # Talos homelab cluster
 │   ├── kustomization.yaml    # top-level: bootstrap + secrets + workloads + backup + health + hindsight
 │   ├── talos/                # Omni ConfigPatches resources (applied via `make apply-talos`)
@@ -186,10 +186,10 @@ The rules that must not be broken:
       gh pr view <n> --repo mnbf9rca/kubernetes_config --json statusCheckRollup
 
   A `PENDING` or failing check means the pull request is not this session's work: leave it open and say so at the close.
-  This repository runs **one** workflow, `.github/workflows/influxdb-mcp-image.yml`: on a pull request it builds the InfluxDB MCP image from `homelab/health/mcp/`, asserts the added tool is registered, and pushes and signs it as `sha-<head sha>`; the merge then verifies that signature and promotes the same digest to `stable`.
+  This repository runs two image workflows. `.github/workflows/influxdb-mcp-image.yml`: on a pull request it builds the InfluxDB MCP image from `homelab/health/mcp/`, asserts the added tool is registered, and pushes and signs it as `sha-<head sha>`; the merge then verifies that signature and promotes the same digest to `stable`.
   So a pull request touching those inputs carries three checks — `changes`, `lint` and `build` — and they are the whole of that change's review.
   Renovate's own build-inputs pull requests **automerge** once those three and the stability wait have passed, so nobody normally sees one; what a failed automerge leaves behind is an open Renovate pull request with a red check, and that is the thing to read.
-  Every other pull request runs no check at all, which is the normal case for human and agent work and has nothing to wait for; the rule bites on a check that exists and has not gone green.
+  `.github/workflows/hermes-security-reviewer-image.yml` builds and tests the reviewer sandbox as UID/GID 1000 in a login shell, signs its PR digest and promotes that same digest on operator merge. Its jobs are `sandbox-changes`, `sandbox-build` and `sandbox-promote`; PR A leaves image automerge off until the post-merge required-check settings gate. Delivery and rollback: `docs/operations/hermes-vm.md#security-reviewer-sandbox-image`. Other PRs still report the changes/lint checks; image builds skip when their inputs are unchanged. Read every reported check before merge.
   Deploy-then-merge does not override this — a pull request can be applied and healthy and still be too young to merge.
 - **Concurrent deployed-but-unmerged branches are last-apply-wins on shared files.**
   An apply reconciles the whole rendered tree, so every file the applying branch does not carry is reset to that branch's version — another branch's already-deployed change included, silently, with every job still green.

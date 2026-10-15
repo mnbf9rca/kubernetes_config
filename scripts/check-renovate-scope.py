@@ -640,6 +640,76 @@ def analyse_render(cluster, text, patterns, ignore_paths, source_files):
     return failures, advisories
 
 
+def docker_from_lines(contents):
+    """Read instructions, excluding continuation and heredoc bodies (e.g. Python imports)."""
+    heredocs = []
+    continued = False
+    for line in contents.splitlines():
+        if heredocs:
+            if line.strip() == heredocs[0]:
+                heredocs.pop(0)
+            continue
+        if not continued and re.match(r"^\s*FROM\s", line, re.I):
+            yield line
+        if not line.lstrip().startswith("#"):
+            heredocs += re.findall(r"<<-?['\"]?(\w+)['\"]?", line)
+            continued = line.rstrip().endswith("\\")
+
+
+def analyse_dockerfiles(config, sources):
+    """Check literal base pins and the reviewer's whole-input age policy.
+
+    shortcut: supports file-wide rules only, extend before adding dependency-specific Dockerfile rules.
+    """
+    failures = []
+    try:
+        patterns = _compile_patterns(config.get("dockerfile", {}).get("managerFilePatterns"),
+                                     "dockerfile.managerFilePatterns")
+    except CheckUnrunnable as exc:
+        return [str(exc)]
+    if "dockerfile" not in config.get("enabledManagers", ["dockerfile"]) or config.get("dockerfile", {}).get("enabled") is False:
+        failures.append("dockerfile manager is disabled")
+    ignore = config.get("ignorePaths", [])
+    for text, pattern in patterns:
+        if not any(pattern.search(path) and not path_ignored(path, ignore) for path, _ in sources):
+            failures.append("dead dockerfile pattern: " + text)
+    for path, contents in sources:
+        stages = set()
+        for line in docker_from_lines(contents):
+            match = re.fullmatch(r"\s*FROM\s+(\S+)(?:\s+AS\s+(\S+))?\s*", line, re.I)
+            if not match or "$" in match[1] or "@sha256:" not in match[1] and match[1].lower() not in stages and match[1] != "scratch":
+                failures.append(path + ": unsupported/unpinned FROM: " + line)
+                continue
+            reference, alias = match.groups()
+            if alias:
+                stages.add(alias.lower())
+            if reference.lower() in stages or reference == "scratch":
+                continue
+            if not re.fullmatch(r"[^\s$]+@sha256:[a-f0-9]{64}", reference):
+                failures.append(path + ": invalid base digest")
+            if path_ignored(path, ignore) or not any(p.search(path) for _, p in patterns):
+                failures.append(path + ": base is outside dockerfile scope")
+    # Protect the complete input scope, not just FROM. Narrowing the file rule
+    # would silently leave actions, native archives or Python transitives at 3d.
+    required = {"hermes-vm/sandbox-image/**", ".github/workflows/hermes-security-reviewer-image.yml"}
+    if any(path.startswith("hermes-vm/sandbox-image/") for path, _ in sources):
+        for target in required:
+            policy = {k: config.get(k) for k in ("minimumReleaseAge", "minimumReleaseAgeBehaviour", "enabled")}
+            covered = False
+            probe = target.replace("**", "Dockerfile")
+            for rule in config.get("packageRules", []):
+                if not any(fnmatch.fnmatch(probe, pat) for pat in rule.get("matchFileNames", [])):
+                    continue
+                if any(k.startswith("match") and k != "matchFileNames" for k in rule):
+                    failures.append("reviewer age policy needs file-wide rules")
+                    continue
+                covered |= required <= set(rule.get("matchFileNames", []))
+                policy.update({k: rule[k] for k in policy if k in rule})
+            if not covered or policy != {"minimumReleaseAge": "7 days", "minimumReleaseAgeBehaviour": "timestamp-required", "enabled": None}:
+                failures.append(target + ": whole-input seven-day timestamp policy missing")
+    return failures
+
+
 def main(argv):
     which = argv[1:] or list(CLUSTERS)
     for cluster in which:
@@ -667,7 +737,12 @@ def main(argv):
                   "the same\ncommit that removed the tree it pointed at.")
             return 1
 
-        failures, advisories = [], []
+        with open(RENOVATE_JSON, encoding="utf-8") as handle:
+            config = json.load(handle)
+        dockerfiles = subprocess.run(["git", "ls-files", "--cached", "--others", "--exclude-standard", "--", "*Dockerfile"],
+                                     cwd=REPO_ROOT, capture_output=True, text=True, check=True).stdout.splitlines()
+        sources = [(path, open(os.path.join(REPO_ROOT, path), encoding="utf-8").read()) for path in dockerfiles]
+        failures, advisories = analyse_dockerfiles(config, sources), []
         for cluster in which:
             cluster_failures, cluster_advisories = analyse(
                 cluster, patterns, ignore_paths, source_files)
