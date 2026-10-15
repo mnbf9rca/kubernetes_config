@@ -17,8 +17,8 @@
 # resolve inside the sandbox is a file the agent cannot read.
 #
 # IT APPENDS. Entries the profile already has are kept, an entry already
-# present is not added twice, and a run that finds all three present writes
-# nothing at all - so running it a second time changes nothing.
+# present is not added twice. The .env list is repaired even when YAML already
+# has all three; a repeat run changes neither file once both lists agree.
 #
 # THE ATTACHMENTS MOUNT IS A STOPGAP WITH AN END DATE. hermes-webui saves chat
 # uploads to a single shared directory rather than per profile, which is
@@ -39,7 +39,6 @@ set -eu
 
 HERMES_BIN=/home/hermes/.local/bin/hermes
 HERMES_HOME=/home/hermes/.hermes
-ATTACHMENTS=$HERMES_HOME/webui/attachments
 
 profile=${1:-}
 policy_only=${2:-}
@@ -65,7 +64,7 @@ if [ ! -d "$profile_dir" ]; then
 fi
 
 # Use upstream's current PM runtime without allowing pending core completion.
-/usr/bin/python3 - "$profile_dir" <<'PYTHON'
+/usr/bin/python3 - "$profile_dir" "$policy_only" <<'PYTHON'
 from pathlib import Path
 import os
 import subprocess
@@ -75,13 +74,15 @@ agent = Path('/home/hermes/.hermes/hermes-agent')
 sys.path.insert(0, str(agent))
 from hermes_cli._launchers import runtime_command
 
-code = "home = " + repr(sys.argv[1]) + "\n" + r'''
+code = "home = " + repr(sys.argv[1]) + "\npolicy_only = " + repr(sys.argv[2] == "--policy-only") + "\n" + r'''
 import copy
+import json
 from pathlib import Path
 from utils import load_yaml_file_readonly, atomic_roundtrip_yaml_update
 from tools.terminal_scope import build_profile_terminal_scope
 from hermes_constants import set_hermes_home_override
-from hermes_cli.config import save_env_value
+from hermes_cli.config import (save_env_value, env_write_refusal, _env_write_lock,
+                               _write_env_lines, _env_line_defines_key)
 from agent.secret_scope import load_env_file
 managed = load_yaml_file_readonly('/etc/hermes/config.yaml')['terminal']
 keys = {'backend': 'TERMINAL_ENV', 'docker_image': 'TERMINAL_DOCKER_IMAGE',
@@ -107,6 +108,36 @@ assert {k: v for k, v in before_env.items() if k not in keys.values()} == {
 scope = build_profile_terminal_scope(home)
 for key, variable in keys.items():
     assert str(scope[variable]).lower() == str(managed[key]).lower(), key
+
+if not policy_only:
+    workspace = Path(home) / 'workspace'
+    workspace.mkdir(exist_ok=True)
+    attachments = '/home/hermes/.hermes/webui/attachments'
+    volumes = list(before.get('terminal', {}).get('docker_volumes') or [])
+    for entry in (f'{workspace}:/workspace', f'{attachments}:{attachments}:ro',
+                  f'{workspace}:{workspace}'):
+        if entry not in volumes:
+            volumes.append(entry)
+    variable = 'TERMINAL_DOCKER_VOLUMES'
+    refusal = env_write_refusal(variable, 'set')
+    if refusal:
+        raise RuntimeError(refusal)
+    if before.get('terminal', {}).get('docker_volumes') != volumes:
+        atomic_roundtrip_yaml_update(path, 'terminal.docker_volumes', volumes)
+    # WebUI strips quotes without dotenv unescaping; use JSON inside single quotes.
+    value = json.dumps(volumes).replace("'", r"\u0027")
+    assignment = variable + "='" + value + "'\n"
+    with _env_write_lock(env_path):
+        lines = env_path.read_text().splitlines(keepends=True) if env_path.exists() else []
+        updated = [assignment if _env_line_defines_key(line, variable) else line for line in lines]
+        if not any(_env_line_defines_key(line, variable) for line in lines):
+            if updated and not updated[-1].endswith('\n'):
+                updated[-1] += '\n'
+            updated.append(assignment)
+        if updated != lines:
+            _write_env_lines(env_path, updated, preserve_mode=env_path.exists())
+    assert json.loads(load_env_file(env_path)[variable]) == volumes
+    assert json.loads(build_profile_terminal_scope(home)[variable]) == volumes
 '''
 subprocess.run(runtime_command(agent, code=code, home=sys.argv[1]),
                env=dict(os.environ, HERMES_DISABLE_LAZY_INSTALLS='1'), check=True)
@@ -116,53 +147,6 @@ if [ "$policy_only" = --policy-only ]; then
   echo "Managed terminal policy copied to config and .env; profile mounts unchanged."
   exit 0
 fi
-
-workspace=$profile_dir/workspace
-mkdir -p "$workspace"
-
-# The plain (non-JSON) form prints one `- <entry>` line per list entry and
-# nothing of that shape otherwise, so this reads an unset key as no entries
-# without parsing YAML. Everything the profile already has is kept.
-volumes=$("$HERMES_BIN" -p "$profile" config get terminal.docker_volumes \
-  | sed -n 's/^- //p')
-
-added=0
-for want in \
-  "$workspace:/workspace" \
-  "$ATTACHMENTS:$ATTACHMENTS:ro" \
-  "$workspace:$workspace"
-do
-  if printf '%s\n' "$volumes" | grep -Fxq -- "$want"; then
-    continue
-  fi
-  if [ -z "$volumes" ]; then
-    volumes=$want
-  else
-    volumes=$(printf '%s\n%s' "$volumes" "$want")
-  fi
-  added=$((added + 1))
-done
-
-if [ "$added" -eq 0 ]; then
-  echo "$profile already has all three entries; nothing written."
-  exit 0
-fi
-
-# A JSON list, which the CLI parses into a real list; a bare string would be
-# stored as a string and silently ignored by every reader of this key.
-json=
-while IFS= read -r entry; do
-  [ -n "$entry" ] || continue
-  if [ -z "$json" ]; then
-    json="\"$entry\""
-  else
-    json="$json, \"$entry\""
-  fi
-done <<EOF
-$volumes
-EOF
-
-"$HERMES_BIN" -p "$profile" config set terminal.docker_volumes "[$json]"
 
 cat <<EOF
 

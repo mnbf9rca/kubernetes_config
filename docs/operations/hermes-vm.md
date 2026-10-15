@@ -836,8 +836,12 @@ This gives the profile the shared WebUI attachments inbox along with its workspa
 Skip it for an isolated worker, which is the `safer_web_reader` pattern ([safer-web-reader.md](safer-web-reader.md)): that profile deliberately has no `docker_volumes` of its own and takes the platform's per-profile sandbox workspace instead.
 
 **Launching a profile from the WebUI writes those same three entries itself**, into the profile's `config.yaml` and as `TERMINAL_DOCKER_VOLUMES` in its `.env`.
-The helper then finds all three present and writes nothing, which is the intended outcome rather than a sign it failed.
-The `.env` line the WebUI writes is double-quoted, which the WebUI's own parser then cannot read — see [The docker terminal sandboxes](#the-docker-terminal-sandboxes).
+The WebUI's `.env` line is double-quoted, which its own parser cannot read.
+Run the helper afterward: it preserves existing YAML mounts and writes matching single-quoted JSON to `.env`, even when all three standard entries are already present.
+A repeat run leaves both files untouched once they agree.
+The helper uses upstream's locked atomic environment writer and preserves the file mode.
+After a mount change, restart the WebUI and recreate only idle containers whose mounts are stale; verify through a fresh WebUI chat.
+See [The docker terminal sandboxes](#the-docker-terminal-sandboxes).
 
 ### 8. Shared gateway admission
 
@@ -1045,7 +1049,10 @@ After any configuration change made outside the CLI, `grep -c '\${' <profile hom
 
 **`TERMINAL_DOCKER_VOLUMES` must be single-quoted in a profile's `.env`, or the WebUI cannot read it.**
 hermes-webui parses that file itself — `v.strip().strip('"').strip("'")` at `api/profiles.py:903`, and again at 1561 on the profile-switch reload — which strips the enclosing quotes without undoing dotenv's `\"` escaping, so the double-quoted form the platform writes reaches the WebUI process as literal backslashes and its terminal cleanup thread logs an `expected valid JSON` error into `~/.hermes/logs/errors.log` once a minute.
-Single-quoted JSON parses identically under both readers, and was applied to the four profiles carrying the key on September 3, 2026; a WebUI profile launch writes the double-quoted form back, so expect it to return until the parser is fixed upstream.
+Single-quoted JSON parses identically under both readers.
+A WebUI profile launch or `hermes config set terminal.docker_volumes` can write the escaped form back; re-check the line after either operation.
+The setup helper now writes matching single-quoted JSON and repairs that override for trusted profiles without dropping their extra mounts.
+On October 15, default, emh and web_watcher already matched their three YAML mounts; HAL's four-entry list was repaired separately, and safer_web_reader had no override or explicit volumes.
 
 **Containers are created lazily, per (profile, task-id), so one profile can own several at once.**
 Each is named `hermes-<hex>` and labelled `hermes-profile:<name>` and `hermes-task-id:<id>`.
@@ -1094,7 +1101,8 @@ The tool rejects absolute script arguments and paths escaping `scripts/`; changi
 
 The gateway's profile terminal scope gives explicit YAML `terminal.docker_volumes` precedence over `.env`.
 External WebUI at `fd0141fa` instead loads YAML first and overlays `.env` afterward (`api/profiles.py:get_profile_runtime_env`).
-Keep HAL's `TERMINAL_DOCKER_VOLUMES` equal to its approved YAML list, using single-quoted JSON without escaped double quotes.
+Keep HAL's `TERMINAL_DOCKER_VOLUMES` equal to its approved YAML list; follow the single-quoted JSON rule above and re-check after raw config writes.
+
 After changing HAL's mounts, restart `hermes-webui` to clear its cached sandbox configuration.
 Recreate only idle HAL containers; preserve their host-backed home and workspace.
 An existing container retains its old bind layout until recreation.
