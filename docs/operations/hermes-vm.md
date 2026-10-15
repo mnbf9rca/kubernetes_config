@@ -2,7 +2,7 @@
 
 VM 103 (`hermes.cynexia.net`) runs the Hermes agent, one multiplexed gateway serving four messaging profiles, the dashboard and the WebUI the Hermex iOS app talks to.
 It is not a Kubernetes cluster, so none of this repository's cluster machinery reaches it.
-What it has instead lives in `hermes-vm/`: a daily liveness check, a weekly docker-sandbox refresh, a hand-run helper that finishes a new profile's docker setup, the managed-scope Hermes config and the `unattended-upgrades` configuration.
+What it has instead lives in `hermes-vm/`: a daily liveness check, a weekly docker-sandbox refresh, a hand-run helper that finishes a new profile's docker setup, the reviewer persona/plugin and closed-report sweep, the managed-scope Hermes config and the `unattended-upgrades` configuration.
 
 This page covers that machinery — how to read it, how to install it — and the VM facts that keep being rediscovered.
 Update core, its bundled dashboard and external hermes-webui together using [Application updates](#application-updates).
@@ -12,8 +12,8 @@ The canonical copy of every file named here is in `hermes-vm/`.
 The VM holds installed copies.
 Edit the repository, then reinstall.
 
-**Only three things this repository owns run on a schedule here, and only one of them is systemd's.**
-`unattended-upgrades` patches Debian security-only overnight and reboots at 04:45 UTC; the `hermes-app-alive` **cron job inside the default gateway** pushes a liveness verdict at 05:45 UTC; and `hermes-sandbox-refresh`, a cron job in the same place, replaces stale docker sandbox containers at 05:15 UTC on Sundays.
+**Four things this repository owns run on a schedule here, and only one is systemd's.**
+`unattended-upgrades` patches Debian security-only overnight and reboots at 04:45 UTC; the `hermes-app-alive` **cron job inside the default gateway** pushes a liveness verdict at 05:45 UTC; and `hermes-sandbox-refresh`, a cron job in the same place, replaces stale docker sandbox containers at 05:15 UTC on Sundays. The security_reviewer profile runs its closed-report sweep at 06:15 UTC daily.
 Nothing under `hermes-vm/` is scheduled by systemd any more — the `systemd/` directory and its two units were deleted on August 27, 2026.
 Application updates never run on a schedule at all.
 The `hal` profile also carries four agent-authored systemd timers that this repository does not own — see [Topology: what runs where](#topology-what-runs-where).
@@ -76,7 +76,7 @@ There is no scheduled application updater.
    1. Run the setup helper with `--policy-only` for default and every profile directory.
    2. Require its actual `build_profile_terminal_scope` assertions to pass.
    3. Preserve profile mounts and secret references.
-   The helper copies four managed keys into YAML and `.env`.
+   The helper copies three managed policy keys and the selected profile image into YAML and `.env`.
    The `.env` values survive bulk saves stripping managed YAML keys; `config get` alone misses this gap.
 9. Start the coherent runtime.
    1. Let upstream maintain the PM-aware gateway launcher and multiplex topology.
@@ -111,14 +111,14 @@ There is no scheduled application updater.
 12. Verify serving topology.
     1. Require three enabled/active units.
     2. Confirm four messaging profiles connected once using profile connection logs.
-    3. Require safer_web_reader to remain worker-only.
+    3. Require safer_web_reader and security_reviewer to remain worker-only.
     4. Check WebUI health.
     5. Exercise one normal authenticated diagnostic chat.
     6. Restore observer timers to their previous active/enabled states.
     The shared runtime record omits secondary mailbox connections.
     Existing observer failures remain outside this procedure.
 13. Verify sandbox and jobs.
-    1. Pull the floating desktop image.
+    1. Pull desktop and the configured reviewer image.
     2. Refresh only stale containers proven idle by platform and Docker process checks.
     3. Prove a new terminal sees its existing durable home/workspace.
     4. Preserve cron IDs, schedules, model pins and delivery.
@@ -221,8 +221,8 @@ Do not erase ledgers, restore only Git, shrink disks, or roll back remote Hindsi
 
 ## Topology: what runs where
 
-Verified live on October 15, 2026. Profiles own their personas, secrets, mailboxes, memories and sessions; the **single gateway** serves all five profile contexts.
-Four profiles receive messages: default, emh, hal and web_watcher. safer_web_reader has no messaging adapter and stays worker-only, with the broker boundary described above.
+Verified live on October 15, 2026. Profiles own their personas, secrets, mailboxes, memories and sessions; the **single gateway** serves all six profile contexts.
+Four profiles receive messages: default, emh, hal and web_watcher. safer_web_reader and security_reviewer are worker-only. The reader retains its broker boundary; the reviewer is advisory and has its own image and named board.
 
 ### The processes
 
@@ -253,6 +253,7 @@ The four `hal-ha-observer-{analyze,health,inventory,logbook}.timer` units are ag
     hal/               the same three files, the same shape
     web_watcher/       the same
     safer_web_reader/  the same; worker-only, no separate gateway unit
+    security_reviewer/ the same; worker-only, reports and staged skill candidates in workspace
 ```
 
 ### The three roles
@@ -329,12 +330,12 @@ The rule for reading any path is that a profile is just a different `HERMES_HOME
 Two consequences have already cost time, and both come from sharing.
 
 **Secret names collide inside the WebUI.**
-One process serves five profiles, so a `${VAR}` placeholder that more than one profile declares can resolve to another profile's value.
+One process serves six profiles, so a `${VAR}` placeholder that more than one profile declares can resolve to another profile's value.
 On September 6, 2026 an `emh` WebUI chat was handed the default profile's mailbox password.
 The fix — a per-profile prefix on every name — is [step 5 of Creating a profile](#5-secrets-if-the-profile-needs-any), and the defect is [hermes-agent issue 2](https://github.com/mnbf9rca/hermes-agent/issues/2).
 
 **Profiles invalidate each other's model login.**
-Every profile's `config.yaml` sets `model.provider: openai-codex`, but only `~/.hermes/auth.json` holds the grant: each profile's own `auth.json` is empty of providers and falls back to the root file.
+Profiles that select `model.provider: openai-codex` share the grant in `~/.hermes/auth.json`: each profile's own `auth.json` is empty of providers and falls back to the root file.
 That provider rotates its refresh token on every refresh, so two processes refreshing the same grant leave one of them holding a revoked token (`_write_through_provider_state_to_global_root` in `agent/credential_pool.py` explains it, and its write-back is best effort).
 The failure reads `refresh_token_reused` in `~/.hermes/auth.json`, and re-authenticating is the only repair.
 
@@ -383,10 +384,10 @@ The traceback goes to the journal and never near the pushed message, which carri
 
 A VM rebuild must repeat all of this.
 The nightly `hermes backup` zip covers `~/.hermes`, so it carries the profile config — the token injection in step 4 — and the cron store holding both jobs, from steps 5 and 6.
-All three scripts live at `~/.hermes/scripts/`, so they ride that zip too: scripts and cron store are backed up and restored together.
+Default scripts live at `~/.hermes/scripts/`; reviewer cleanup lives in its own profile scripts directory. Both scripts and their owning cron stores ride that zip together.
 That coupling is the right one, because the store names each script by bare filename, so a restore bringing back one without the other would leave a job pointing at nothing.
 The four apt files and `/etc/hermes/config.yaml` sit outside the zip, and they are rebuild territory.
-**A rebuild that skips `/etc/hermes/config.yaml` runs every profile's terminal tool on the host instead of in a container, and nothing reports it.**
+**Restore `/etc/hermes/config.yaml` and verify every profile's YAML/env terminal fallbacks. Missing both the managed policy and usable fallbacks can run terminal tools on the host without an alert.**
 **Do not trust the restored cron store without looking**: `hermes cron list` after a rebuild, because a check that quietly failed to come back looks exactly like a healthy day until the heartbeat lapses.
 
 ### 1. Lint first
@@ -395,7 +396,7 @@ The four apt files and `/etc/hermes/config.yaml` sit outside the zip, and they a
 make check-vm-scripts
 ```
 
-This is the **only** thing that ever lints these files: it runs in no preflight, the repository's one workflow builds the InfluxDB MCP image from `homelab/health/mcp/` and covers nothing under `hermes-vm/`, and nothing runs it on a schedule.
+This VM-script guard runs in no preflight or schedule. The two image workflows cover InfluxDB MCP and reviewer-image inputs; neither runs this guard for installed VM scripts.
 Run this guard before installing repository-owned VM scripts.
 It shellchecks all shell scripts under `hermes-vm/scripts/` — `hermes-app-alive.sh` from step 2, `hermes-sandbox-refresh.sh` from step 6, and `hermes-profile-docker-setup.sh` from [step 7](#7-pin-the-docker-terminal-backend).
 
@@ -569,14 +570,14 @@ The reviewed v0.21.x/v0.22.0 release notes contain no managed-scope deprecation 
 However, [build_profile_terminal_scope](https://github.com/NousResearch/hermes-agent/blob/5575a0859d6278bfcef79c28189a24594952efd3/tools/terminal_scope.py#L114) reads defaults, profile env and raw profile YAML without the managed layer.
 We observed a fresh emh container using the old image while `hermes config get` correctly reported desktop.
 
-`/etc/hermes/config.yaml` remains the source of record. Until upstream's actual terminal scope honors it, mirror its backend, image, run-as-host-user and cwd into each profile’s YAML and `.env` through upstream writers.
+`/etc/hermes/config.yaml` remains the source of record. Until upstream's actual terminal scope honors it, mirror its backend, run-as-host-user and cwd into each profile’s YAML and `.env` through upstream writers. Preserve an explicit profile image (the reviewer's derived image); use the managed image only when no YAML or env image is selected.
 The existing setup helper now does that and asserts actual scope parity, preserving unrelated config/comments and mounts.
 After a managed policy change, run it with `--policy-only` for **default and every directory under profiles/**; isolated workers must use that mode to avoid shared attachment mounts.
 A new trusted profile can use the ordinary helper to copy policy and add its standard mounts together.
-Bulk config saves strip managed leaves from profile YAML. The corresponding `TERMINAL_ENV`, `TERMINAL_DOCKER_IMAGE`, `TERMINAL_DOCKER_RUN_AS_HOST_USER` and `TERMINAL_CWD` values in each `.env` survive, keeping docker/desktop selected.
+Bulk config saves strip managed leaves from profile YAML. The corresponding `TERMINAL_ENV`, `TERMINAL_DOCKER_IMAGE`, `TERMINAL_DOCKER_RUN_AS_HOST_USER` and `TERMINAL_CWD` values in each `.env` survive, keeping the selected Docker image and backend.
 The helper preserves unrelated env entries and asserts actual scope parity.
-A regression fixture applies upstream’s real managed-key stripping and proves both an empty and old-image `.env` remain docker/desktop after setup.
-These copies are a temporary duplicate; remove the copying code and duplicate keys only after an updated upstream `build_profile_terminal_scope` demonstrably reads managed scope for each profile.
+The PM regression fixture applies upstream’s real managed-key stripping and proves the selected image survives, including a YAML image winning a stale env image.
+These copies are a temporary duplicate; remove copying only after an updated upstream `build_profile_terminal_scope` demonstrably reads managed scope for each profile. Before removing image fallbacks, unpin `terminal.docker_image` in managed scope and prove the reviewer's explicit image still wins; otherwise managed precedence would replace it with desktop.
 Do not file or draft an upstream bug report for this gap (operator ruling).
 
 **The repository copy is the only durable record.**
@@ -673,7 +674,7 @@ Every one of them fails silently if it is wrong.
    Do not substitute CLI `cron run`: it can resolve a fresh secret environment while the scheduled gateway still holds the old one.
    The scheduler uses bash for `.sh` files; lint remains POSIX sh.
 
-8. **Every profile retains the actual docker/desktop policy.**
+8. **Every profile retains its actual Docker policy and selected image.**
    Run the helper's scope assertion for default and every profile, rather than `config get`:
 
    ```sh
@@ -696,9 +697,9 @@ So the first 04:45 window clears that backlog — correct behaviour, not a fault
 
 Adding a Hermes profile to this VM, in order.
 Worked end to end on `web_watcher` on August 31, 2026; every hazard below is one that run met or would have met.
-**Stop the shared gateway before creating/configuring a profile**, because its rescan can admit a newly created profile automatically. Configure terminal policy, platform disables and credentials first; restart it in step 8.
+**Choose admission before creation:** either stop the shared gateway for the ordinary in-place flow, or use the fully staged native hot-add described in [Security reviewer operation](#security-reviewer-operation). Never expose a half-configured profile to live discovery. Configure terminal policy, platform disables and credentials before admission.
 
-Steps 4 to 8 are conditional, and a profile that only answers kanban tasks or WebUI chats needs none of them.
+Mailbox, secret and email steps are conditional. Isolated workers still need explicit mounts, adapter disables, admission and verification; do not run the ordinary shared-attachments helper on them.
 
 ### 1. Create the profile
 
@@ -709,7 +710,7 @@ Delete the directories the profile does not need, and **keep `<profile home>/ski
 ### 2. Copy the terminal policy
 
 Run `/home/hermes/.hermes/scripts/hermes-profile-docker-setup.sh <name> --policy-only` before any work is admitted.
-This copies the four managed terminal keys without adding any shared mount; it is required for isolated workers too.
+This mirrors three managed policy keys and the selected profile image without adding any shared mount; it is required for isolated workers too.
 See [the managed-scope gap](#managed-scope-gap-at-5575a08).
 The live multiplexer discovers new profiles on create/delete and periodic rescan, so establish platform disables and credentials before letting a new profile receive work.
 
@@ -763,8 +764,8 @@ Prefix each name with the profile's own name, and use the prefixed name in every
 Every profile on this VM carries its prefix as of September 6, 2026: `DEFAULT_`, `EMH_`, `HAL_` and `WEB_WATCHER_`.
 The prefix is the **profile** name, not the mailbox name — the default profile reads `kairos@cynexia.io` and its prefix is still `DEFAULT_`.
 
-`hermes-webui` serves all four profiles from one process, which is what makes a shared name dangerous.
-`_interpolate_env_vars` in `tools/mcp_tool.py` resolves a `${VAR}` placeholder through `agent.secret_scope.get_secret`, which reads the secret scope installed on the current context and — with `gateway.multiplex_profiles` off, as it is here — falls back to the process environment on a miss.
+`hermes-webui` serves all six profiles from one process, which is what makes a shared name dangerous.
+`_interpolate_env_vars` in `tools/mcp_tool.py` resolves a `${VAR}` placeholder through `agent.secret_scope.get_secret`, which reads the secret scope installed on the current context and can fall back to the process environment on a miss. Multiplex mode is now enabled; keep the unique secret names rather than assuming it repairs every caller.
 Either of those can be holding another profile's value for a name that more than one profile declares, and nothing in the resolution reports the mismatch.
 A name only one profile declares cannot resolve to the wrong account: it resolves correctly or it stays a literal placeholder, which fails loudly at the first call.
 This is a workaround for a hermes-agent defect, filed upstream as [hermes-agent issue 2](https://github.com/mnbf9rca/hermes-agent/issues/2); the prefixes stay until that is fixed.
@@ -849,18 +850,18 @@ See [The docker terminal sandboxes](#the-docker-terminal-sandboxes).
 ### 8. Shared gateway admission
 
 Do not create a `hermes-gateway-<name>` unit. Upstream multiplexing discovers profiles automatically; the one `hermes-gateway` unit serves messaging and worker contexts.
-Configure only the intended adapters, restart the shared gateway, then verify profile connection logs. A worker-only profile has no messaging adapters and needs no separate unit.
+Configure only the intended adapters. At 5575a08, a new fully configured profile can be published atomically and admitted through native `gateway/run_profile_reconcile.py` plus `hermes_cli.profiles._notify_multiplexer(name)`, without a shared restart. Stage it outside live discovery first. A worker-only profile has no messaging adapters and needs no separate unit.
 Restart the shared gateway if a change needs fresh startup discovery; browser runtime changes also require restarting WebUI.
 The alive check continues to track the final three units, not one unit per profile.
 
 ### 9. Verify
 
 ```sh
-tail ~/.hermes/profiles/<name>/logs/gateway.log
-/home/hermes/.local/bin/hermes -p <name> config get terminal.backend
+tail ~/.hermes/logs/gateway.log
+/home/hermes/.hermes/scripts/hermes-profile-docker-setup.sh <name> --policy-only
 ```
 
-The log shows `✓ <platform> connected` for each platform the profile enabled, or `No messaging platforms enabled` for a worker; `terminal.backend` reads `docker`.
+The shared root log names connected profile adapters. The helper asserts the actual `build_profile_terminal_scope` policy, including the selected image. For a worker-only profile, prove admission with its own real ticket and inspect its disabled adapters; absence of a connection line is expected. Compare the WebUI runtime reader too after a mount change.
 
 ## unattended-upgrades
 
@@ -888,10 +889,11 @@ Do not delete it as redundant.
 | 03:30 (+0–10 min) | `apt-daily.timer` refreshes the package lists | `unattended-upgrade` installs only from the cache and never refreshes the lists itself |
 | 04:00 (+0–10 min) | `apt-daily-upgrade.timer` runs `unattended-upgrade` | Leaves a 35-minute margin before the reboot |
 | 04:45 | Automatic reboot | Reboot is **on**, by operator decision, August 26, 2026 |
-| 05:15, Sundays only | `hermes-sandbox-refresh`, as a cron job inside the default gateway | **Between** the reboot window and the daily check: the reboot has already left the sandboxes `exited`, which is the cheapest state to replace them in, and the removals are done before anything reports on the VM. Weekly, because the pinned image moves only when Microsoft rebuilds the tag |
+| 05:15, Sundays only | `hermes-sandbox-refresh`, as a cron job inside the default gateway | **Between** the reboot window and the daily check: the reboot has already left the sandboxes `exited`, which is the cheapest state to replace them in, and the removals are done before anything reports on the VM. Weekly; upstream desktop floats and the reviewer uses its separately configured derived image |
 | 05:45 | `hermes-app-alive`, as a cron job inside the default gateway | **One hour** after the reboot, so the reboot has finished and the lingering user units have come back before anything looks at them |
+| 06:15 | `security-reviewer-sweep.py`, a no-agent job owned by security_reviewer | Removes only expired final reports for closed reviewer tickets |
 
-The two cron rows are the only ones with no jitter: they are cron expressions in the agent's scheduler rather than systemd timers, and neither `RandomizedDelaySec` nor `Persistent=` applies to them.
+The three cron rows have no jitter: they are cron expressions in the agent's scheduler rather than systemd timers, and neither `RandomizedDelaySec` nor `Persistent=` applies to them.
 Catch-up after a missed window comes from the scheduler's ticker picking up past-due jobs instead.
 
 Both apt drop-ins set `FixedRandomDelay=true`, so the offset is derived from the machine ID and unit name rather than re-rolled nightly.
@@ -927,7 +929,7 @@ A fresh import can succeed while a long-lived process has stale modules: restart
 Hindsight's backend canary checks the backend, not every profile's admission/bank credentials or asynchronous retain path.
 A failed reader plugin or changed dispatch surface can leave research unavailable or widen its capabilities with every scheduled monitor green.
 Detection is daily; a missing heartbeat alarms only after its 24-hour interval and 6-hour retry. The external dashboard monitor catches a dead VM sooner.
-Losing either cron job is agent-state loss: the alive job eventually alarms by silence, while refresh has no heartbeat. Read the actual cron store after restore.
+Losing any cron job is agent-state loss: the alive job eventually alarms by silence, while refresh and reviewer cleanup have no heartbeat. Read the default and reviewer cron stores after restore.
 The daily check says nothing about apt timer age, Docker images, busy sandboxes or the weekly refresh's success; its run history remains the diagnostic record.
 No extra monitors were added.
 
@@ -1002,12 +1004,12 @@ There is no rootless install and no second context.
 
 Updated October 15, 2026: root 50 GiB, separate Docker disk 125 GiB; desktop image is floating and pulled weekly.
 
-All five profiles resolve the terminal backend to docker after the managed-key mirror. The reader still cannot use terminal because its capability boundary is separate.
+All six profiles resolve the terminal backend to docker after the managed-key mirror. The reader still cannot use terminal because its capability boundary is separate.
 
 | Setting | Value | Source |
 |---|---|---|
 |`terminal.backend`|`docker`|Managed config plus temporary profile copy|
-|`terminal.docker_image`|`nousresearch/hermes-sandbox:desktop`|Same|
+|`terminal.docker_image`|`nousresearch/hermes-sandbox:desktop`; reviewer uses its signed derived digest below|Profile image, then env fallback, then managed default|
 |`terminal.docker_run_as_host_user`|`true`, uid1000|Same|
 |`terminal.cwd`|`/workspace`|Same|
 |`terminal.docker_volumes`|Profile-specific workspaces/identity/attachments mounts|Profile only|
@@ -1054,7 +1056,7 @@ After any configuration change made outside the CLI, `grep -c '\${' <profile hom
 hermes-webui parses that file itself — `v.strip().strip('"').strip("'")` at `api/profiles.py:903`, and again at 1561 on the profile-switch reload — which strips the enclosing quotes without undoing dotenv's `\"` escaping, so the double-quoted form the platform writes reaches the WebUI process as literal backslashes and its terminal cleanup thread logs an `expected valid JSON` error into `~/.hermes/logs/errors.log` once a minute.
 Single-quoted JSON parses identically under both readers.
 A WebUI profile launch or `hermes config set terminal.docker_volumes` can write the escaped form back; re-check the line after either operation.
-The setup helper now writes matching single-quoted JSON and repairs that override for trusted profiles without dropping their extra mounts.
+The setup helper writes matching single-quoted JSON without dropping extra mounts. Ordinary mode adds the standard trusted-profile mounts; `--policy-only` preserves the selected image and mirrors policy without adding mounts; `--sync-mounts` copies only the saved YAML list to env, supports default and isolated profiles, and adds no attachments or policy. Use sync mode for custom reviewer/report binds.
 On October 15, default, emh and web_watcher already matched their three YAML mounts; HAL's four-entry list was repaired separately, and safer_web_reader had no override or explicit volumes.
 
 **Containers are created lazily, per (profile, task-id), so one profile can own several at once.**
@@ -1070,7 +1072,7 @@ The workspace, home and HAL scripts sit under `~/.hermes`, so they ride the nigh
 The next terminal call builds a new container from the local image, with no gateway restart involved.
 That is also the whole of the image-update mechanism: a `docker pull` never touches an existing container, so **removal and recreation is the update**, which is what `hermes-sandbox-refresh` exists to do.
 
-**The pin is a tag rather than a digest, deliberately.**
+**The upstream desktop reference is a floating tag, deliberately.**
 Upstream rebuilds the floating `desktop` image, and the weekly pull-and-replace is how those arrive.
 The sandbox userland is hygiene, not the containment boundary — the boundary is the host kernel and runc, patched nightly by `unattended-upgrades`.
 For HAL, the writable scripts bind lets sandbox-written code run on the host as `hermes`, with access to every profile's secrets, so the boundary is HAL's own judgement over what it reads.
@@ -1145,13 +1147,21 @@ Three of these were wrong in earlier drafts and one reported contradiction was a
 
 ### Security reviewer sandbox image
 
-Image delivery is PR A; profile installation remains pending PR B. The derived image is only for `security_reviewer`, via its own `terminal.docker_image` and matching `.env` fallback. Managed scope and the five existing profiles keep `nousresearch/hermes-sandbox:desktop`.
+The deployed `security_reviewer` uses its own `terminal.docker_image` and matching `.env` fallback:
+
+```text
+ghcr.io/mnbf9rca/hermes-security-reviewer@sha256:5a34087dbcdd4dd91315f0546db8d9125691dcc04c4210dfc306a4fdf304ac03
+```
+
+This signed candidate was deployed before merge by operator ruling. Managed scope and the five other profiles keep `nousresearch/hermes-sandbox:desktop`. The reviewer base deliberately trails their floating image by at least seven days.
 
 `hermes-vm/sandbox-image/` builds `ghcr.io/mnbf9rca/hermes-security-reviewer` for linux/amd64 from a versioned `vX.Y.Z-desktop@sha256:...` base. It preserves the desktop runtime and adds ShellCheck, Bandit, Gitleaks, Semgrep, ruff and yamllint. Native release archives have committed SHA-256 checksums; the full Python closure has exact versions and hashes, installs as wheels without resolution, and must pass `uv pip check`. There are no runtime tool installs. Trivy and pip-audit are not included.
 
 Commands are linked into `/usr/local/bin`, because Hermes's login-shell environment resets PATH. `/etc/hermes-reviewer-tools.txt` records installed versions. Semgrep metrics and version checks are off; its two locally authored rules live under `/opt/hermes-reviewer/rules/`. Use that explicit rules file, `--metrics off --disable-version-check`, and the explicit baked Ruff/yamllint configs. Never use target-controlled configs, Semgrep registry/auto rules, autofix or target builds. Static tools provide limited checks; missing coverage belongs in the report's `Tooling gaps:` line, not an ad hoc package install.
 
-Renovate groups base versions/digests, native versions/checksums, every Python transitive pin and workflow actions as `security-reviewer image inputs`. Each waits seven days with a source timestamp. A mutable `desktop` tag cannot evidence an older release; default Docker versioning follows the versioned `-desktop` suffix instead. Missing timestamps or a checksum/closure failure stop the update. The cooldown deliberately delays fixes by seven days. PR A ships automerge **off**; it stays off until the operator merges PR A, adds `sandbox-changes` and `sandbox-build` to the existing master ruleset without removing other checks, and PR B enables it. Do not add required contexts while the workflow is absent from master: with no bypass actor, that blocks other PRs.
+Renovate groups base versions/digests, native versions/checksums, every Python transitive pin and workflow actions as `security-reviewer image inputs`. Each waits seven days with a source timestamp. A mutable `desktop` tag cannot evidence an older release; default Docker versioning follows the versioned `-desktop` suffix instead. Missing timestamps or a checksum/closure failure stop the update. The cooldown deliberately delays fixes by seven days. Image-input automerge is **off**. After the image workflow is merged, the operator-visible settings step adds `sandbox-changes` and `sandbox-build` to the existing master ruleset without removing other checks; only a subsequent verified change enables automerge. Do not add required contexts while the workflow is absent from master: with no bypass actor, that blocks other PRs.
+
+The manual bootstrap and exceptional delivery procedure is below. Routine Renovate image updates use the same checksum, cooldown, non-root fixture and signed-digest promotion gates in CI; they do not require repeating the manual VM candidate gate. While the profile is pinned to this candidate, promotion alone cannot move it: explicitly switch its YAML image and env fallback after verifying the promoted digest.
 
 1. Change image inputs on an isolated branch, rebase onto freshly fetched master, and open a PR.
 2. Read all PR checks, including the existing `changes`/`lint`/`build` and new `sandbox-changes`/`sandbox-build`. The build tests all six positive fixtures and clean controls as UID/GID 1000 through `bash -lc` with a temporary writable HOME. An altered-checksum build must fail before archive extraction.
@@ -1168,4 +1178,42 @@ Renovate groups base versions/digests, native versions/checksums, every Python t
 7. Obtain the independent review and report the candidate deployed with its PR number; the operator merges.
 8. Check `sandbox-promote` succeeded and registry `stable` equals the verified digest. The merge job resolves the PR tag once, verifies the anchored PR signature, then retags that same digest; it never rebuilds. Fork builds cannot push/sign and must be reopened on a repository branch before merge.
 
-After PR B installs the profile and extends refresh, its weekly idle-container refresh delivers stable alongside the upstream desktop image. Until then this is a tested disposable candidate only. For a tool regression, revert the image inputs through a PR and repeat delivery. For an urgent profile rollback after PR B, use the setup helper to set only the reviewer image and `.env` fallback back to upstream desktop, then recreate its container when idle and record the missing scanner coverage. Do not edit registry stable or managed scope to roll back one profile.
+The installed weekly refresh derives each profile's backend/image from `build_profile_terminal_scope` through the current PM runtime with lazy installs disabled. It pulls desktop and the reviewer's configured digest once each; it never promotes or rewrites a profile ref. Both idle checks still protect stale-container removal. Worker-only status with an unknown gateway state is conservatively kept.
+
+For an urgent reviewer image rollback, use upstream `atomic_roundtrip_yaml_update` under the selected PM runtime to set only `/home/hermes/.hermes/profiles/security_reviewer/config.yaml`'s `terminal.docker_image` to `nousresearch/hermes-sandbox:desktop`, then run the setup helper `security_reviewer --policy-only` to mirror the new image into `.env`. The helper preserves an existing image; it cannot select a replacement by itself, and `config set` refuses the managed-pinned leaf. Pull the selected image, recreate only proven idle reviewer containers, and record missing scanner coverage. Do not change registry stable or managed scope to roll back one profile.
+
+
+### Security reviewer operation
+
+`R` below means `/home/hermes/.hermes/profiles/security_reviewer`. The deployed model is `z-ai/glm-5.3` through `nous`, shared provider login, with no copied credentials. All messaging/API adapters are disabled, `mcp_servers` is empty, external memory is unconfigured and 1Password is disabled. The CLI/managed worker surface is `[web, file, terminal, skills, kanban]`, plus the additive request tool below. No HA, mail, MCP, cronjob toolset or host-shell bridge is provided. The [canonical persona](../../hermes-vm/profiles/security_reviewer/SOUL.md) treats targets as untrusted data: static inspection only, no target scripts/tests/hooks/builds, installs, automatic fixes or publication.
+
+File tickets on explicit board `security_reviewer`, assigned to `security_reviewer`, with absolute input paths, snapshot and scope. Ordinary tickets inherit its model; do not set provider/model overrides. Native board creation leaves the global current-board pointer unchanged. The board is routing, not an ACL. The operator accepted ordinary `kanban_create` authority, including its ability to dispatch another profile with a reviewer-written body; the persona forbids doing so. This is not a review gate on HAL or another agent.
+
+The reviewer mounts existing other profiles' workspace/scripts/skills directories at identical absolute paths read-only; missing directories are omitted. Its own workspace is writable at `/workspace` and its host path. There is no custom writable scripts, shared attachments, whole-profile-home, board database or Docker socket bind. Upstream still provides its normal writable sandbox home and read-only own-profile media/cache/skills mounts. Read-only inputs prevent ordinary edits, not network disclosure: the reviewer retains web and terminal network access.
+
+Default, emh and web_watcher have this read-only report bind in saved YAML and matching single-quoted JSON `.env`:
+
+```text
+/home/hermes/.hermes/profiles/security_reviewer/workspace:/home/hermes/.hermes/profiles/security_reviewer/workspace:ro
+```
+
+**HAL's bind is owed at its next idle window.** Operator ruling forbade editing HAL YAML/env or recreating its container during admission. Append the exact line above to HAL's YAML `terminal.docker_volumes`, preserving its scripts bind; run `hermes-profile-docker-setup.sh hal --sync-mounts`; compare both runtime readers; recreate only a proven idle stale HAL container. Do not restart shared services for this owed step without a separate need/authorization. `safer_web_reader` is excluded from requester/report mounts and its config/env remain unchanged.
+
+Admission at 5575a08 used native clean creation outside live discovery, complete offline configuration, atomic rename into `profiles/security_reviewer`, then native reconcile notification. No shared gateway, WebUI or dashboard restart occurred. Default's actual Docker terminal read the completed review by hash and refused a neighboring write; the reviewer's input write was refused and its own workspace write reached the host. HAL remained untouched.
+
+Each review/question atomically finalizes `R/workspace/reports/<task-id>/report.md` and completes its own card with that absolute path, verdict/answer, input hash/revision, evidence/limitations and **Tooling gaps:**. Missing or failed checks are unassessed, never clean; repeat non-empty gaps in the completion summary. Question `t_2cd8fa76`, static review `t_63805e4d` and controlled missing-CodeQL check `t_32c26f43` exercised the live route on October 15. Actual managed sessions billed Nous using GLM-5.3; all six tools passed positive/clean fixtures inside the live non-root reviewer container.
+
+The [reviewer-tooling-request plugin](../../hermes-vm/plugins/reviewer-tooling-request/) adds only `reviewer_tooling_request(tool, reason, report_path)` to kanban, with no override grant. Native reviewer task/run/board/claim and a live worker lease/PID must match; delegated/unbound calls are refused. Finalize the invoking task's regular report first. Its fixed root-home board path is `~/.hermes/kanban/boards/security_reviewer/kanban.db`; the handler creates/reuses a native `Tooling request` with NULL assignee, blocked status and `security-reviewer-tooling:<normalized-tool>` idempotency key. Keep dispatcher `kanban.default_assignee` unset; the narrow plugin bypasses the dispatcher assignment wrapper deliberately. Operator alone installs tools or closes requests. Acceptance called the tool twice and left one acceptance-only CodeQL card `t_97eafaad`, unassigned/blocked with no worker. The operator may close/archive it.
+
+An open tooling request does not retain its linked completed review report. Put a self-contained check/reason in the card. A done, non-archived request absorbs later requests for that tool; archive it to allow a new request. Neither limit makes a missing check assessed.
+
+Five complete Trail of Bits directories at `1f68e03536f7980d4c0e6869596f708043a19443` are staged under `R/workspace/skill-candidates/`: differential-review, sharp-edges, vulnerability-triage-brocards, fp-check and variant-analysis. The 56 original files include root LICENSE; PROVENANCE.md records source and CC-BY-SA-4.0 attribution. Completed content-review ticket `t_d1612857` inspected the staged skills as data. They remain outside discovery, with `.no-bundled-skills` intact; only a later operator decision can enable assessed bytes. If enabled, all five are equally discoverable; matching-ticket selection and unsupported named-agent/deep routes are persona guidance, not loader enforcement.
+
+The host-installed [sweep](../../hermes-vm/scripts/security-reviewer-sweep.py) lives at `R/scripts/security-reviewer-sweep.py`; it is not a writable sandbox scripts mount. Native profile-owned job `4727a4af2e24` runs `15 6 * * *`, UTC, `no_agent`, `deliver=local`. It only deletes final report directories older than 30 days whose own task is still done/archived, reads the named board without initialization/writes, and keeps unknown/open/error/symlink cases. It never closes tickets or sweeps skills. Before enabling or troubleshooting it:
+
+```sh
+/usr/bin/python3 /home/hermes/.hermes/profiles/security_reviewer/scripts/security-reviewer-sweep.py --dry-run
+/home/hermes/.local/bin/hermes -p security_reviewer cron list
+```
+
+Pause that job to roll back cleanup. Park reviewer work and disable only its additive plugin to roll back admission; retain board, reports and staged skills, and restore changed requester files from the private deployment backup if required. Recreate only idle affected containers. Profile files, scripts and job store ride the existing nightly `~/.hermes` backup; no new unit or monitor was added, and the alive check still watches the same three serving units.
