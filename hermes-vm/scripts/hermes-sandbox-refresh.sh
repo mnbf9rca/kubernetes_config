@@ -92,31 +92,31 @@ ERRORS=0
 # belong to - and would teach the next reader that the names are decorative.
 log() { printf '%s\n' "$*" >&2; }
 
-# ---- hermes CLI ------------------------------------------------------------
-# The profile list and both config values are read AT RUN TIME. A hardcoded
-# profile list is the failure this design exists to avoid: hal is still on the
-# local backend and moves to docker later, and a list written today would either
-# skip it forever or start refreshing it before it has a container to refresh.
-#
-# THE VALUE IS THE LAST LINE OF THE OUTPUT, never the first and never all of it.
-# The CLI prints a "1Password: applied N secrets" startup line, and it is not
-# reliably on stderr, so stderr is folded in and the tail is taken. Whitespace
-# is stripped because both values read here are single tokens - a backend name
-# and an image reference - and a trailing carriage return would fail an exact
-# comparison silently, which reads as "no docker profiles" and does nothing.
-config_get() {
-  _cg_profile=$1
-  _cg_key=$2
-  # The default profile takes NO -p flag; passing `-p default` is not the same
-  # command.
-  if [ "$_cg_profile" = default ]; then
-    _cg_out=$(timeout "$CLI_TIMEOUT" "$HERMES_BIN" config get "$_cg_key" 2>&1) \
-      || return 1
-  else
-    _cg_out=$(timeout "$CLI_TIMEOUT" "$HERMES_BIN" -p "$_cg_profile" \
-      config get "$_cg_key" 2>&1) || return 1
-  fi
-  printf '%s\n' "$_cg_out" | tail -n 1 | tr -d '[:space:]'
+# ---- actual per-profile terminal policy ------------------------------------
+# Multiplex scopes bypass managed config; project only backend/image without
+# CLI startup, 1Password resolution or a persisted PM interpreter pointer.
+terminal_scope() {
+  HERMES_DISABLE_LAZY_INSTALLS=1 timeout "$CLI_TIMEOUT" /usr/bin/python3 - "$1" <<'PYTHON'
+from pathlib import Path
+import os,subprocess,sys
+agent=Path('/home/hermes/.hermes/hermes-agent')
+sys.path.insert(0,str(agent))
+from hermes_cli._launchers import runtime_command
+home=Path('/home/hermes/.hermes')
+if sys.argv[1]!='default':home=home/'profiles'/sys.argv[1]
+code="""
+import re
+from tools.terminal_scope import build_profile_terminal_scope
+scope=build_profile_terminal_scope(PROFILE_HOME)
+backend=scope['TERMINAL_ENV']
+image=scope.get('TERMINAL_DOCKER_IMAGE') if backend=='docker' else '-'
+assert isinstance(backend,str) and re.fullmatch(r'[a-z_]+',backend)
+assert isinstance(image,str) and re.fullmatch(r'[A-Za-z0-9_./:@+-]+',image)
+print(backend,image)
+""".replace('PROFILE_HOME',repr(str(home)))
+subprocess.run(runtime_command(agent,code=code,home=str(home)),
+               env=dict(os.environ,HERMES_DISABLE_LAZY_INSTALLS='1'),check=True)
+PYTHON
 }
 
 # ---- idle check A: the platform ---------------------------------------------
@@ -212,22 +212,18 @@ main() {
   pairs=
   images=
   for _profile in $profiles; do
-    if ! _backend=$(config_get "$_profile" terminal.backend); then
-      log "ERROR: cannot read terminal.backend for profile $_profile"
+    if ! _scope=$(terminal_scope "$_profile"); then
+      log "ERROR: cannot read terminal scope for profile $_profile"
       ERRORS=$((ERRORS + 1))
       continue
     fi
-    # Exact match only. A backend this script does not know is left alone.
+    _backend=${_scope%% *}
+    _image=${_scope#* }
     if [ "$_backend" != docker ]; then
       continue
     fi
-    if ! _image=$(config_get "$_profile" terminal.docker_image); then
-      log "ERROR: cannot read terminal.docker_image for profile $_profile"
-      ERRORS=$((ERRORS + 1))
-      continue
-    fi
     if [ -z "$_image" ]; then
-      log "ERROR: terminal.docker_image is empty for profile $_profile"
+      log "ERROR: terminal image is empty for profile $_profile"
       ERRORS=$((ERRORS + 1))
       continue
     fi
@@ -253,7 +249,7 @@ main() {
     # Progress goes to stderr, so the journal keeps it and stdout stays clean.
     if ! timeout "$PULL_TIMEOUT" docker pull "$_image" >&2; then
       log "ERROR: docker pull failed for $_image"
-      printf 'verdict=pull-failed image=%s\n' "$_image"
+      printf 'verdict=pull-failed pulled=%s profiles=%s\n' "$PULLED" "$PROFILE_COUNT"
       return 1
     fi
     PULLED=$((PULLED + 1))
