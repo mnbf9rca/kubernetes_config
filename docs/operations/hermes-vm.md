@@ -1063,6 +1063,7 @@ That is also the whole of the image-update mechanism: a `docker pull` never touc
 **The pin is a tag rather than a digest, deliberately.**
 Upstream rebuilds the floating `desktop` image, and the weekly pull-and-replace is how those arrive.
 The sandbox userland is hygiene, not the containment boundary — the boundary is the host kernel and runc, patched nightly by `unattended-upgrades`.
+For HAL, the writable scripts bind lets sandbox-written code run on the host as `hermes`, with access to every profile's secrets, so the boundary is HAL's own judgement over what it reads.
 
 **`no_agent` cron scripts are unaffected by any of this.**
 The scheduler runs them as plain host subprocesses (`subprocess.Popen` in `cron/scheduler.py`), so `hermes-app-alive` still runs on the host and reports on the host whatever a profile's terminal backend is set to.
