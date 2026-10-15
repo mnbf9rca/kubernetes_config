@@ -565,6 +565,24 @@ Follow [the application update runbook](hermes-vm.md#application-updates), inclu
 Restore matching source, environments, units and stores into **emptied destinations** using [Rollback](hermes-vm.md#rollback).
 Keep moved-aside newer trees, the private recovery archive and the reboot hold; forward-only schema/pruning changes cannot be undone by a Git reset.
 
+#### What is and is not backed up
+
+Only paths under `~/.hermes` are covered by the nightly Hermes zip.
+The WebUI unit pins `HERMES_WEBUI_DEFAULT_WORKSPACE=/home/hermes/workspace`, which is **outside that backup**.
+Treat files there as expendable; put durable work in a Git remote or a profile workspace under `~/.hermes`.
+The private full recovery archive taken for maintenance is separate from the nightly zip.
+
+| Path | In the nightly zip? |
+|---|---|
+| `~/.hermes/webui/` sessions/settings and `~/.hermes/webui.env` | Yes |
+| Profile state, env/config, workspaces and durable sandbox homes under `~/.hermes` | Yes |
+| `~/.hermes/scripts/` and profile cron stores | Yes |
+| `/home/hermes/workspace` | **No; expendable WebUI default workspace** |
+| `/home/hermes/hermes-webui` | No; restore the reviewed source checkout separately |
+| `~/.config/systemd/user/` units and drop-ins | No |
+| `/etc/hermes`, apt configuration and apt timer drop-ins | No; reinstall canonical files |
+| `/var/lib/docker` images and container layers | No; durable host mounts live under `~/.hermes` |
+
 #### Rebuild step
 
 A VM rebuild does not restore this service.

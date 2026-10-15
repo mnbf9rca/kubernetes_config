@@ -1,7 +1,7 @@
 #!/bin/sh
 # Finish the docker terminal setup for ONE named Hermes profile.
 #
-# Copy the four terminal policy keys from /etc/hermes/config.yaml, then add
+# Copy terminal policy from /etc/hermes/config.yaml into config and .env, then add
 # the three durable mounts used by the trusted default, emh and hal profiles.
 # shortcut: multiplex terminal scopes ignore managed config at 5575a08; remove
 # the profile copies when upstream build_profile_terminal_scope honors it.
@@ -80,17 +80,30 @@ import copy
 from pathlib import Path
 from utils import load_yaml_file_readonly, atomic_roundtrip_yaml_update
 from tools.terminal_scope import build_profile_terminal_scope
+from hermes_constants import set_hermes_home_override
+from hermes_cli.config import save_env_value
+from agent.secret_scope import load_env_file
 managed = load_yaml_file_readonly('/etc/hermes/config.yaml')['terminal']
 keys = {'backend': 'TERMINAL_ENV', 'docker_image': 'TERMINAL_DOCKER_IMAGE',
         'docker_run_as_host_user': 'TERMINAL_DOCKER_RUN_AS_HOST_USER', 'cwd': 'TERMINAL_CWD'}
 path = Path(home) / 'config.yaml'
+set_hermes_home_override(Path(home))
 before = load_yaml_file_readonly(path)
+env_path = Path(home) / '.env'
+before_env = load_env_file(env_path)
 expected = copy.deepcopy(before)
 expected.setdefault('terminal', {}).update({key: managed[key] for key in keys})
 for key in keys:
     if before.get('terminal', {}).get(key) != managed[key]:
         atomic_roundtrip_yaml_update(path, 'terminal.' + key, managed[key])
+    # Bulk config saves strip managed YAML keys; .env keeps the sandbox policy.
+    value = str(managed[key]).lower() if isinstance(managed[key], bool) else str(managed[key])
+    if before_env.get(keys[key]) != value:
+        save_env_value(keys[key], value)
 assert load_yaml_file_readonly(path) == expected, 'unrelated profile config changed'
+after_env = load_env_file(env_path)
+assert {k: v for k, v in before_env.items() if k not in keys.values()} == {
+    k: v for k, v in after_env.items() if k not in keys.values()}, 'unrelated profile env changed'
 scope = build_profile_terminal_scope(home)
 for key, variable in keys.items():
     assert str(scope[variable]).lower() == str(managed[key]).lower(), key
@@ -100,7 +113,7 @@ subprocess.run(runtime_command(agent, code=code, home=sys.argv[1]),
 PYTHON
 
 if [ "$policy_only" = --policy-only ]; then
-  echo "Managed terminal policy copied; profile mounts unchanged."
+  echo "Managed terminal policy copied to config and .env; profile mounts unchanged."
   exit 0
 fi
 

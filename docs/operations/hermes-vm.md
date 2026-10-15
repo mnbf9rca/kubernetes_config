@@ -27,20 +27,122 @@ Do not set an explicit stable channel or advance core with `git pull`.
 Update external WebUI on **stable**; its **Update Now** is WebUI-only and `ignore_agent_updates: true` hides agent offers.
 There is no scheduled application updater.
 
-1. Record both source commits, the actual install stamp/pending path, PM state and unit states. Use `HERMES_DISABLE_LAZY_INSTALLS=1` for preparatory Hermes commands. An ordinary command from a cron worker can complete a pending update without the operator: that happened at **02:01:22Z on October 15**. A checkout commit alone is not the running version.
-2. Install a temporary final-sorting apt drop-in containing `Unattended-Upgrade::Automatic-Reboot "false";` and verify the effective setting with `apt-config dump`. Keep it through verification and any controlled reboot. Disable serving units while maintenance would make an unattended start unsafe.
-3. Stop the shared gateway, dashboard and WebUI and all profile writers. Stop the four hal observer timers/services without changing enablement. Inspect user/system `hermes-worker-*` scopes and open store/WAL handles with root visibility. Stop an orphan only after proving it has no Hermes/Python work or store handles. Check sandbox background tasks separately.
-4. Stream a stopped-state recovery archive off-host, including `~/.hermes`, `~/hermes-webui`, user units/drop-ins, launchers, external interpreter targets, `/etc/hermes` and every unit EnvironmentFile. Use a private 0700 directory and 0600 files. Verify gzip/tar and copied SQLite stores, then remove the disposable plaintext extraction. Retain the archive until the operator accepts recovery coverage and explicitly deletes it; it contains credentials.
-5. Before the next source advance, compare `skills/security/untrusted-web-content-analysis/` with the canonical promoted skill and the installed profile/shared copies; establish ownership and a recoverable home. Move `hermes_cli/.web_dist-build-vZVavf/` to private recovery storage. Preserve both until then; never `git clean` them. They were archived and left in place on October 15.
-6. Update external WebUI on stable and core through its updater, reviewing the proposed source target first. Preserve profile `op://` references, mail pins, plugin selections and bank identities. Never reinstall the Hindsight backend as part of this procedure. For a stopped WebUI source update, require a clean tracked tree and verified tag, then fast-forward to that tag without starting it prematurely.
-7. Require a matching built install stamp without `adoptedAt`, absent upstream `completion_pending_path`, safe selected SQLite, current PM environment and passing `hermes pm status`/`hermes pm doctor`. Distinguish actual update receipts from PM-sync receipts. Do not rerun completion merely because the original update receipt failed: gate the stamp and real pending/follow-up state. Leave lock files/markers to upstream; check kernel-lock ownership and owed restart predicates.
-8. Mirror the four managed terminal keys into every profile using the helper's `--policy-only` mode, including default, and verify `build_profile_terminal_scope` rather than only `hermes config get`. See [the managed-scope gap](#managed-scope-gap-at-5575a08). Preserve profile mounts and secrets.
-9. Let upstream maintain the PM-aware gateway launcher and multiplex topology. Restart the dashboard and external WebUI explicitly. The WebUI service runs `/usr/bin/python3 /home/hermes/hermes-webui/server.py`; remove `VIRTUAL_ENV`, any persisted `HERMES_WEBUI_PYTHON`, and the legacy venv PATH prefix. Keep authentication, ports and other settings. Use base PATH `/home/hermes/.local/bin:/usr/local/bin:/usr/bin:/bin`, `HERMES_WEBUI_AGENT_DIR` and `HERMES_SUPERVISED_CHILD=1`. Upstream `server.py` re-enters PM itself; require the actual serving process on store Python 3.14 and a successful authenticated WebUI gateway-status action.
-10. Run the installed `hermes-webui-runtime.py --check-import` through `/usr/bin/python3` from `/`. It uses upstream runtime selection, guards lazy completion, and imports `api.yaml_compat`, `api.profiles` and `run_agent` with disposable WebUI state. It serves nothing. Stable WebUI's ruamel fallback works without PyYAML; install no supplement when this gate passes. If a later release fails specifically for missing PyYAML, ruling 4 permits ordinary `uv pip install` of `pyyaml==6.0.3` into the current PM generation when PM tolerates it, otherwise an owned WebUI target directory. Diagnose first; use no hand-rolled extraction or core lock edits, and recheck after each generation change.
-11. Authenticate normally to the actual dashboard Memory and Plugins panels using `op://hermes/hermes-dashboard/password` inside the verification process; never print passwords, cookies or memory text. Require default/emh/hal Hindsight available/configured/ready and Plugins hub runtime_status enabled. Use `/api/dashboard/plugins/hub`, not `/api/plugins`. Read existing expected-bank memory once, with no repeat diagnostic write; check the existing scheduled backend canary. Verify used HA calls read-only, keep hal `watch_all:false`/empty watch lists, and preserve emh settings.
-12. Require three enabled/active units, four messaging profiles connected once, and worker-only safer_web_reader. The shared runtime record alone omits secondary mailbox connections: check profile connection logs. Check WebUI health and one normal authenticated diagnostic chat. Restore observer timers to their previous active/enabled states; do not silently repair their existing failures.
-13. Pull desktop and refresh only stale containers proven idle by both platform status and Docker process checks. Prove a new terminal sees its existing durable home/workspace. Keep the shared attachments mount until the deployed per-profile-upload fix is independently proven. Preserve cron IDs/schedules/model pins/delivery. Queue the existing alive job with `cron.jobs.trigger_job('36f76a55200c')` after checking enabled/no_agent; verify the **gateway-owned** run and uptime-kuma's `verdict=ok units=3/3 webui_http=200`. CLI `cron run` can use a different secret environment.
-14. Record the accepted [reader limitation](#accepted-reader-limitation-issue-146); do not patch core or weaken the broker. Check stores with the **selected store SQLite**, not system Python. Check reboot-required while the hold remains installed and perform an owed reboot under supervision; verify services/panels/chat afterwards. Remove the temporary apt hold as the **last VM mutation** and require automatic reboot true, WithUsers true and 04:45. Keep the hold if required gates fail.
+1. Prepare the window.
+   1. Record both source commits and the actual install stamp.
+   2. Record PM state, pending state and unit enablement.
+   3. Set `HERMES_DISABLE_LAZY_INSTALLS=1` for preparatory Hermes commands.
+   An ordinary worker command can complete a pending update without the operator.
+2. Hold unattended reboot.
+   1. Install a temporary final-sorting apt drop-in containing `Unattended-Upgrade::Automatic-Reboot "false";`.
+   2. Verify the effective setting with `apt-config dump`.
+   3. Retain the hold through verification and any controlled reboot.
+3. Quiesce writers.
+   1. Stop and disable the shared gateway, dashboard and WebUI.
+   2. Stop the four hal observer timers without changing enablement.
+   3. Require their observer services to be inactive.
+   4. Inspect user/system `hermes-worker-*` scopes with root visibility.
+   5. Stop an orphan only after proving it has no Hermes/Python work or open store handles.
+   6. Check sandbox background tasks separately.
+4. Create recovery.
+   1. Stream the stopped-state archive to a private off-host 0700 directory.
+   2. Include `~/.hermes`, `~/hermes-webui`, units/drop-ins, launchers, interpreter targets, `/etc/hermes` and every unit EnvironmentFile.
+   3. Require archive mode 0600.
+   4. Verify gzip, tar and copied SQLite stores.
+   5. Remove the disposable plaintext extraction.
+   6. Retain the credential-bearing archive until the operator explicitly deletes it.
+5. Prepare the next source advance.
+   1. Compare `skills/security/untrusted-web-content-analysis/` with the canonical promoted skill and installed copies.
+   2. Establish its ownership and recoverable home.
+   3. Move `hermes_cli/.web_dist-build-vZVavf/` to private recovery storage.
+   Preserve both paths until this work is complete; never `git clean` them.
+6. Update both products.
+   1. Review core's proposed source target.
+   2. Update external WebUI on stable.
+   3. Update core through its upstream updater.
+   4. Preserve profile `op://` references, mail pins, client selections and bank identities.
+   For a stopped WebUI source update, require a clean tracked tree and verified tag before fast-forwarding.
+   Keep it stopped until the runtime gates pass.
+   Do not reinstall the Hindsight backend.
+7. Gate completion.
+   1. Require a matching built install stamp without `adoptedAt`.
+   2. Require the upstream `completion_pending_path` to be absent.
+   3. Require safe selected SQLite and a current PM environment.
+   4. Run `hermes pm status` and `hermes pm doctor` under the guard.
+   5. Distinguish actual update receipts from PM-sync receipts.
+   6. Check kernel-lock ownership and upstream's owed-restart predicates.
+   Leave marker files to upstream.
+   A failed historical receipt alone is not a reason to run completion again.
+8. Persist terminal policy.
+   1. Run the setup helper with `--policy-only` for default and every profile directory.
+   2. Require its actual `build_profile_terminal_scope` assertions to pass.
+   3. Preserve profile mounts and secret references.
+   The helper copies four managed keys into YAML and `.env`.
+   The `.env` values survive bulk saves stripping managed YAML keys; `config get` alone misses this gap.
+9. Start the coherent runtime.
+   1. Let upstream maintain the PM-aware gateway launcher and multiplex topology.
+   2. Configure WebUI's direct `server.py` start as described below.
+   3. Restart the shared gateway when the updater has not already done so.
+   4. Restart the dashboard explicitly.
+   5. Restart external WebUI explicitly.
+   6. Require the serving WebUI process on store Python 3.14.
+   7. Exercise one authenticated read-only WebUI gateway-status action.
+   Keep WebUI authentication, ports and unrelated settings.
+   Remove `VIRTUAL_ENV`, persisted `HERMES_WEBUI_PYTHON` and the legacy venv PATH prefix.
+   Use `ExecStart=/usr/bin/python3 /home/hermes/hermes-webui/server.py`.
+   Use base PATH `/home/hermes/.local/bin:/usr/local/bin:/usr/bin:/bin`.
+   Set `HERMES_WEBUI_AGENT_DIR` and `HERMES_SUPERVISED_CHILD=1`.
+   Upstream `server.py` re-enters PM itself.
+10. Check deep imports.
+    1. Run `/usr/bin/python3 /home/hermes/.hermes/scripts/hermes-webui-runtime.py --check-import` from `/`.
+    2. Require successful WebUI YAML/profile API and `run_agent` imports.
+    The helper guards lazy completion and uses disposable WebUI state.
+    It serves nothing.
+    Stable WebUI's ruamel fallback needs no PyYAML supplement when this gate passes.
+11. Verify profiles.
+    1. Authenticate to the actual dashboard using `op://hermes/hermes-dashboard/password` inside the verification process.
+    2. Require ready/available/configured Hindsight on default, emh and hal Memory panels.
+    3. Require enabled runtime status at `/api/dashboard/plugins/hub` for each profile.
+    4. Read existing expected-bank memory without printing content.
+    5. Check the existing scheduled backend canary.
+    6. Exercise used HA calls read-only.
+    7. Preserve hal `watch_all:false`, empty watch lists and emh's settings.
+    Never print passwords, cookies or memory text.
+    Do not repeat diagnostic memory writes or create backend Jobs.
+12. Verify serving topology.
+    1. Require three enabled/active units.
+    2. Confirm four messaging profiles connected once using profile connection logs.
+    3. Require safer_web_reader to remain worker-only.
+    4. Check WebUI health.
+    5. Exercise one normal authenticated diagnostic chat.
+    6. Restore observer timers to their previous active/enabled states.
+    The shared runtime record omits secondary mailbox connections.
+    Existing observer failures remain outside this procedure.
+13. Verify sandbox and jobs.
+    1. Pull the floating desktop image.
+    2. Refresh only stale containers proven idle by platform and Docker process checks.
+    3. Prove a new terminal sees its existing durable home/workspace.
+    4. Preserve cron IDs, schedules, model pins and delivery.
+    5. Require the alive job to be enabled and no_agent.
+    6. Queue it with `cron.jobs.trigger_job('36f76a55200c')`.
+    7. Require its gateway-owned run and uptime-kuma's `verdict=ok units=3/3 webui_http=200`.
+    Keep shared attachments until the deployed per-profile-upload fix is independently proven.
+    CLI `cron run` can use a different secret environment.
+14. Close the window.
+    1. Record the accepted [reader limitation](#accepted-reader-limitation-issue-146).
+    2. Check stores with selected store SQLite.
+    3. Check reboot-required while the hold remains installed.
+    4. Perform an owed reboot under supervision.
+    5. Recheck services, panels and chat after any reboot.
+    6. Remove the temporary apt hold as the **last VM mutation**.
+    7. Require Automatic-Reboot true, WithUsers true and time 04:45.
+    Keep the hold if a required gate fails.
+    Do not patch core or weaken the broker.
+
+If a future release fails specifically for missing PyYAML, record the failure first.
+Ruling 4 permits ordinary `uv pip install` of `pyyaml==6.0.3` into the current PM generation when PM tolerates it.
+Use a WebUI-owned target directory only when PM polices installed contents.
+Use no hand-rolled extraction or core lock edits.
+Recheck the existing import-failed gate after every generation change.
 
 ### Completion record: October 15, 2026
 
@@ -415,11 +517,13 @@ The reviewed v0.21.x/v0.22.0 release notes contain no managed-scope deprecation 
 However, [build_profile_terminal_scope](https://github.com/NousResearch/hermes-agent/blob/5575a0859d6278bfcef79c28189a24594952efd3/tools/terminal_scope.py#L114) reads defaults, profile env and raw profile YAML without the managed layer.
 We observed a fresh emh container using the old image while `hermes config get` correctly reported desktop.
 
-`/etc/hermes/config.yaml` remains the source of record. Until upstream's actual terminal scope honors it, mirror its backend, image, run-as-host-user and cwd into each profile through upstream atomic round-trip YAML writes.
+`/etc/hermes/config.yaml` remains the source of record. Until upstream's actual terminal scope honors it, mirror its backend, image, run-as-host-user and cwd into each profile’s YAML and `.env` through upstream writers.
 The existing setup helper now does that and asserts actual scope parity, preserving unrelated config/comments and mounts.
 After a managed policy change, run it with `--policy-only` for **default and every directory under profiles/**; isolated workers must use that mode to avoid shared attachment mounts.
 A new trusted profile can use the ordinary helper to copy policy and add its standard mounts together.
-Bulk config saves can strip managed leaves from profile files; re-run the policy-only helper after such a save and verify actual scopes.
+Bulk config saves strip managed leaves from profile YAML. The corresponding `TERMINAL_ENV`, `TERMINAL_DOCKER_IMAGE`, `TERMINAL_DOCKER_RUN_AS_HOST_USER` and `TERMINAL_CWD` values in each `.env` survive, keeping docker/desktop selected.
+The helper preserves unrelated env entries and asserts actual scope parity.
+A regression fixture applies upstream’s real managed-key stripping and proves both an empty and old-image `.env` remain docker/desktop after setup.
 These copies are a temporary duplicate; remove the copying code and duplicate keys only after an updated upstream `build_profile_terminal_scope` demonstrably reads managed scope for each profile.
 Do not file or draft an upstream bug report for this gap (operator ruling).
 
@@ -517,14 +621,20 @@ Every one of them fails silently if it is wrong.
    Do not substitute CLI `cron run`: it can resolve a fresh secret environment while the scheduled gateway still holds the old one.
    The scheduler uses bash for `.sh` files; lint remains POSIX sh.
 
-8. **Every profile resolves its terminal backend to `docker`.**
-   A missing or misplaced `/etc/hermes/config.yaml` leaves the backend at its default and every terminal call then runs on the host, which nothing else on this page detects.
-   Check both effective config and `build_profile_terminal_scope`: the CLI alone missed the managed-scope bypass. Mirror policy using the helper before this check:
+8. **Every profile retains the actual docker/desktop policy.**
+   Run the helper's scope assertion for default and every profile, rather than `config get`:
 
    ```sh
-   /home/hermes/.local/bin/hermes config get terminal.backend
-   /home/hermes/.local/bin/hermes -p emh config get terminal.backend
+   helper=/home/hermes/.hermes/scripts/hermes-profile-docker-setup.sh
+   "$helper" default --policy-only
+   for profile_home in /home/hermes/.hermes/profiles/*; do
+     [ -d "$profile_home" ] || continue
+     "$helper" "${profile_home##*/}" --policy-only
+   done
    ```
+
+   This persists the four env fallbacks and verifies `build_profile_terminal_scope` for each profile.
+   The disposable regression test is `hermes-vm/scripts/test_hermes_profile_policy.py`; run it under the selected PM runtime.
 
 **Expect a reboot the first night after installing.**
 Before the first install the VM has a pending kernel reboot — an uptime over four days and a kernel image in the reboot-required list — and nothing has been arming an automatic reboot, because the drop-in that arms it is part of this install.
