@@ -1216,4 +1216,24 @@ The host-installed [sweep](../../hermes-vm/scripts/security-reviewer-sweep.py) l
 /home/hermes/.local/bin/hermes -p security_reviewer cron list
 ```
 
-Pause that job to roll back cleanup. Park reviewer work and disable only its additive plugin to roll back admission; retain board, reports and staged skills, and restore changed requester files from the private deployment backup if required. Recreate only idle affected containers. Profile files, scripts and job store ride the existing nightly `~/.hermes` backup; no new unit or monitor was added, and the alive check still watches the same three serving units.
+Pause that job to roll back cleanup. The private deployment-time backup is for diagnosis only; do not restore requester `config.yaml` or `.env` over current files, because that would undo later unrelated changes, including the shared root configuration.
+
+To remove report access, for each requester that currently carries the bind (`default`, `emh`, `web_watcher`, and HAL only if its owed bind was later installed):
+
+1. Delete only the exact reviewer-report entry above from saved YAML `terminal.docker_volumes`, preserving every other mount and setting.
+2. Run `/home/hermes/.hermes/scripts/hermes-profile-docker-setup.sh <profile> --sync-mounts` for that requester, including `default`.
+3. Compare core `build_profile_terminal_scope` and WebUI `get_profile_runtime_env`; require the same remaining mounts and no reviewer-report bind.
+4. Recreate only proven-idle containers whose mounts are stale.
+
+For full removal:
+
+1. Park ready reviewer tickets or remove its board from dispatch through the native board lifecycle.
+2. Wait for running reviewer work to finish.
+3. Pause sweep job `4727a4af2e24`.
+4. Disable the profile-local tooling-request plugin.
+5. Preserve wanted reports, persona, configuration and staged skills privately.
+6. Remove report access with the four steps above.
+7. Remove `security_reviewer` through upstream's profile-removal flow.
+8. Archive the dedicated board, retaining task history.
+
+Remove no input directory or other profile's state. Profile files, scripts and job store ride the existing nightly `~/.hermes` backup; no new unit or monitor was added, and the alive check still watches the same three serving units.
