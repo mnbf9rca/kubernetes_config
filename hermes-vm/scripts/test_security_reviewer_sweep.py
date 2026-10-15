@@ -1,3 +1,4 @@
+from contextlib import closing
 import hashlib
 import importlib.util
 import os
@@ -13,13 +14,13 @@ sweep=importlib.util.module_from_spec(spec);spec.loader.exec_module(sweep)
 class SweepTests(unittest.TestCase):
  def setUp(self):
   self.tmp=tempfile.TemporaryDirectory();self.addCleanup(self.tmp.cleanup);self.root=Path(self.tmp.name).resolve();self.reports=self.root/'reports';self.reports.mkdir();self.db=self.root/'board.db'
-  with sqlite3.connect(self.db) as c:c.execute('create table tasks (id text primary key,status text)')
+  with closing(sqlite3.connect(self.db)) as c, c:c.execute('create table tasks (id text primary key,status text)')
   self.now=time.time()
  def add(self,n,status,old=True,final=True):
   task='t_'+f'{n:08x}';directory=self.reports/task;directory.mkdir();p=directory/('report.md' if final else 'report.tmp');p.write_text('fixture')
   if old:os.utime(p,(self.now-31*86400,)*2)
   if status:
-   with sqlite3.connect(self.db) as c:c.execute('insert into tasks values (?,?)',(task,status))
+   with closing(sqlite3.connect(self.db)) as c, c:c.execute('insert into tasks values (?,?)',(task,status))
   return directory
  def test_old_closed_only(self):
   deleted=[self.add(1,'done'),self.add(2,'archived')]
@@ -36,7 +37,7 @@ class SweepTests(unittest.TestCase):
   self.assertTrue(directory.exists());self.assertTrue(outside.exists())
   missing=self.root/'missing.db'
   self.assertGreater(sweep.sweep(self.reports,missing,dry_run=False,now=self.now)['errors'],0);self.assertFalse(missing.exists())
-  with sqlite3.connect(self.db) as c:c.execute('drop table tasks')
+  with closing(sqlite3.connect(self.db)) as c, c:c.execute('drop table tasks')
   self.assertGreater(sweep.sweep(self.reports,self.db,dry_run=False,now=self.now)['errors'],0);self.assertTrue(directory.exists())
  def test_dry_run_and_status_recheck(self):
   directory=self.add(1,'done');self.assertEqual(sweep.sweep(self.reports,self.db,dry_run=True,now=self.now)['deleted'],0);self.assertTrue(directory.exists())

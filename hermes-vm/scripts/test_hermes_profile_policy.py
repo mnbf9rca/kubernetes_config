@@ -105,7 +105,7 @@ class ProfilePolicyTests(unittest.TestCase):
                     image='ghcr.io/example/reviewer@sha256:'+'a'*64
                     config=home/'config.yaml'; env=home/'.env'
                     atomic_roundtrip_yaml_save(config, {'terminal': {'docker_image':image, 'docker_volumes':[]}})
-                    env.write_text('TERMINAL_DOCKER_IMAGE='+image+'\n');env.chmod(0o600)
+                    env.write_text('TERMINAL_DOCKER_IMAGE='+(image if mode=='sync' else 'stale-image')+'\n');env.chmod(0o600)
                     ctx={'home':str(home),'policy_only':mode=='policy','sync_mounts':mode=='sync'}
                     exec(code,ctx)
                     self.assertEqual(build_profile_terminal_scope(home)['TERMINAL_DOCKER_IMAGE'],image)
