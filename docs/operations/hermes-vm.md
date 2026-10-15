@@ -1092,9 +1092,13 @@ The workspace's `/workspace` alias and host-path identity mount do not cover thi
 A script written to the sandbox's `/root/.hermes/scripts/` instead lands in its persistent container home, not the scheduler's script directory.
 The tool rejects absolute script arguments and paths escaping `scripts/`; changing `workdir` does not change lookup.
 
-The explicit `terminal.docker_volumes` list takes precedence over `.env` in the profile terminal scope.
-After a mount change, recreate only idle HAL containers; preserve their host-backed home and workspace.
+The gateway's profile terminal scope gives explicit YAML `terminal.docker_volumes` precedence over `.env`.
+External WebUI at `fd0141fa` instead loads YAML first and overlays `.env` afterward (`api/profiles.py:get_profile_runtime_env`).
+Keep HAL's `TERMINAL_DOCKER_VOLUMES` equal to its approved YAML list, using single-quoted JSON without escaped double quotes.
+After changing HAL's mounts, restart `hermes-webui` to clear its cached sandbox configuration.
+Recreate only idle HAL containers; preserve their host-backed home and workspace.
 An existing container retains its old bind layout until recreation.
+Verify the scripts path through an authenticated HAL WebUI chat as well as the gateway path.
 The [canonical HAL persona](../../hermes-vm/profiles/hal/SOUL.md) records this convention.
 On rebuild, copy it to `/home/hermes/.hermes/profiles/hal/SOUL.md`.
 HAL already reads its watchdog design through `skills/smart-home/homeassistant-integration/references/` and deployment notes through its mounted workspace.
