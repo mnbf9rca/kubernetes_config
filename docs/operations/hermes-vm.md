@@ -197,7 +197,7 @@ All four gateways were restarted; all six user units were active and the WebUI `
 
 ### Attachments stopgap removal condition
 
-The `default`, `emh` and `hal` sandboxes retain the read-only `/home/hermes/.hermes/webui/attachments` mount until the installed WebUI fixes [#6939](https://github.com/nesquena/hermes-webui/issues/6939), proposed in [#7022](https://github.com/nesquena/hermes-webui/pull/7022).
+The `default`, `emh`, `hal` and `web_watcher` sandboxes retain the read-only `/home/hermes/.hermes/webui/attachments` mount until the installed WebUI fixes [#6939](https://github.com/nesquena/hermes-webui/issues/6939), proposed in [#7022](https://github.com/nesquena/hermes-webui/pull/7022).
 The removal condition is that uploads use the profile's own `cache/documents/webui-attachments/<session>/` directory and work through its existing mount.
 Remove the shared mount from those profiles, the sandbox table below, and `hermes-vm/scripts/hermes-profile-docker-setup.sh` when that condition holds.
 Keep every other profile mount.
@@ -836,8 +836,12 @@ This gives the profile the shared WebUI attachments inbox along with its workspa
 Skip it for an isolated worker, which is the `safer_web_reader` pattern ([safer-web-reader.md](safer-web-reader.md)): that profile deliberately has no `docker_volumes` of its own and takes the platform's per-profile sandbox workspace instead.
 
 **Launching a profile from the WebUI writes those same three entries itself**, into the profile's `config.yaml` and as `TERMINAL_DOCKER_VOLUMES` in its `.env`.
-The helper then finds all three present and writes nothing, which is the intended outcome rather than a sign it failed.
-The `.env` line the WebUI writes is double-quoted, which the WebUI's own parser then cannot read — see [The docker terminal sandboxes](#the-docker-terminal-sandboxes).
+The WebUI's `.env` line is double-quoted, which its own parser cannot read.
+Run the helper afterward: it preserves existing YAML mounts and writes matching single-quoted JSON to `.env`, even when all three standard entries are already present.
+A repeat run leaves both files untouched once they agree.
+The helper uses upstream's locked atomic environment writer and preserves the file mode.
+After a mount change, restart the WebUI and recreate only idle containers whose mounts are stale; verify through a fresh WebUI chat.
+See [The docker terminal sandboxes](#the-docker-terminal-sandboxes).
 
 ### 8. Shared gateway admission
 
@@ -1012,13 +1016,16 @@ The existing refresh removed only idle old containers. A fresh hal terminal used
 The default profile's workspace is `/home/hermes/.hermes/workspace`, created for this; every other profile's is `workspace` inside its own profile home.
 A settings change takes effect on the next admitted profile turn or after restarting the shared gateway when startup discovery is involved.
 
-**`default`, `emh` and `hal` mount three volumes each, and two of them are identity mounts** — the same host path inside the container as outside:
+**`default`, `emh`, `hal` and `web_watcher` share three base mounts.**
+Two are identity mounts: the same host path inside the container as outside.
+HAL also has the writable scripts identity mount below.
 
 | Entry | Why |
 |---|---|
 | `<workspace>:/workspace` | The sandbox's working directory, matching `terminal.cwd` |
 | `/home/hermes/.hermes/webui/attachments:/home/hermes/.hermes/webui/attachments:ro` | Chat uploads, read-only, at the host path the WebUI pastes into the prompt |
 | `<workspace>:<workspace>` | The workspace again, at the host path the WebUI advertises in its `[Workspace::v1: …]` label |
+| HAL only: `<scripts>:<scripts>:rw` | HAL owns its cron scripts at `/home/hermes/.hermes/profiles/hal/scripts/`, shared with the host |
 
 The identity mounts exist because the WebUI hands the agent **host** paths as text, and a path that does not resolve inside the container is a file the agent cannot read.
 
@@ -1042,16 +1049,19 @@ After any configuration change made outside the CLI, `grep -c '\${' <profile hom
 
 **`TERMINAL_DOCKER_VOLUMES` must be single-quoted in a profile's `.env`, or the WebUI cannot read it.**
 hermes-webui parses that file itself — `v.strip().strip('"').strip("'")` at `api/profiles.py:903`, and again at 1561 on the profile-switch reload — which strips the enclosing quotes without undoing dotenv's `\"` escaping, so the double-quoted form the platform writes reaches the WebUI process as literal backslashes and its terminal cleanup thread logs an `expected valid JSON` error into `~/.hermes/logs/errors.log` once a minute.
-Single-quoted JSON parses identically under both readers, and was applied to the four profiles carrying the key on September 3, 2026; a WebUI profile launch writes the double-quoted form back, so expect it to return until the parser is fixed upstream.
+Single-quoted JSON parses identically under both readers.
+A WebUI profile launch or `hermes config set terminal.docker_volumes` can write the escaped form back; re-check the line after either operation.
+The setup helper now writes matching single-quoted JSON and repairs that override for trusted profiles without dropping their extra mounts.
+On October 15, default, emh and web_watcher already matched their three YAML mounts; HAL's four-entry list was repaired separately, and safer_web_reader had no override or explicit volumes.
 
 **Containers are created lazily, per (profile, task-id), so one profile can own several at once.**
 Each is named `hermes-<hex>` and labelled `hermes-profile:<name>` and `hermes-task-id:<id>`.
 The label is what tooling selects on; the name carries nothing.
 Hermes mounts the profile workspace at `/workspace`, along with skills, caches and attachments — and a **host-backed home**: `/home/hermes/.hermes/sandboxes/docker/<task-id>/home` is mounted as `/root` in the container and is writable at host uid 1000.
 
-**`/workspace` and that home are the only durable paths.**
+**The workspace, home and explicitly mounted writable directories are durable.**
 Anything written elsewhere in the container filesystem is lost when the container is recreated, so a user-level package install that lands under the mounted home survives a recreation and one that lands in `/usr` does not.
-Both durable paths sit under `~/.hermes`, so both ride the nightly `hermes backup` zip.
+The workspace, home and HAL scripts sit under `~/.hermes`, so they ride the nightly `hermes backup` zip.
 
 **`docker rm -f` on a sandbox is safe while its profile is idle**, verified by removing one and letting it come back.
 The next terminal call builds a new container from the local image, with no gateway restart involved.
@@ -1060,9 +1070,48 @@ That is also the whole of the image-update mechanism: a `docker pull` never touc
 **The pin is a tag rather than a digest, deliberately.**
 Upstream rebuilds the floating `desktop` image, and the weekly pull-and-replace is how those arrive.
 The sandbox userland is hygiene, not the containment boundary — the boundary is the host kernel and runc, patched nightly by `unattended-upgrades`.
+For HAL, the writable scripts bind lets sandbox-written code run on the host as `hermes`, with access to every profile's secrets, so the boundary is HAL's own judgement over what it reads.
 
 **`no_agent` cron scripts are unaffected by any of this.**
 The scheduler runs them as plain host subprocesses (`subprocess.Popen` in `cron/scheduler.py`), so `hermes-app-alive` still runs on the host and reports on the host whatever a profile's terminal backend is set to.
+
+### HAL's own script cron jobs
+
+HAL owns `ha-update-watchdog` (`e6a2fb6484b8`, daily 09:00 UTC) and `ha-observer-weekly-audit` (`ea2df3246202`, weekly interval).
+The first is a `no_agent` script job; the second uses an agent and currently cannot deliver to its old `webui` origin.
+Neither is a default-profile job: normal cron list, edit and run operations use the owning profile's store under the multiplexed gateway.
+The default profile owns the alive and sandbox-refresh jobs above.
+
+HAL's scripts are agent state at `/home/hermes/.hermes/profiles/hal/scripts/`, not source maintained in this repository.
+Its config adds one writable identity bind:
+
+```yaml
+terminal:
+  docker_volumes:
+    # Keep the existing entries and append this HAL-only bind.
+    - /home/hermes/.hermes/profiles/hal/scripts:/home/hermes/.hermes/profiles/hal/scripts:rw
+```
+
+HAL writes, reads and edits a script at that identical absolute path inside Docker and on the host.
+It schedules only the relative filename, such as `ha-update-watchdog.sh`, with `no_agent=true`.
+The host gateway resolves it beneath HAL's own `scripts/` and executes it as the host `hermes` user, without a model turn.
+The workspace's `/workspace` alias and host-path identity mount do not cover this directory.
+A script written to the sandbox's `/root/.hermes/scripts/` instead lands in its persistent container home, not the scheduler's script directory.
+The tool rejects absolute script arguments and paths escaping `scripts/`; changing `workdir` does not change lookup.
+
+The gateway's profile terminal scope gives explicit YAML `terminal.docker_volumes` precedence over `.env`.
+External WebUI at `fd0141fa` instead loads YAML first and overlays `.env` afterward (`api/profiles.py:get_profile_runtime_env`).
+Keep HAL's `TERMINAL_DOCKER_VOLUMES` equal to its approved YAML list; follow the single-quoted JSON rule above and re-check after raw config writes.
+
+After changing HAL's mounts, restart `hermes-webui` to clear its cached sandbox configuration.
+Recreate only idle HAL containers; preserve their host-backed home and workspace.
+An existing container retains its old bind layout until recreation.
+Verify the scripts path through an authenticated HAL WebUI chat as well as the gateway path.
+The [canonical HAL persona](../../hermes-vm/profiles/hal/SOUL.md) records this convention.
+On rebuild, copy it to `/home/hermes/.hermes/profiles/hal/SOUL.md`.
+HAL already reads its watchdog design through `skills/smart-home/homeassistant-integration/references/` and deployment notes through its mounted workspace.
+`deliver=local` keeps stdout in the host cron run record; that output directory is not part of the scripts bind.
+No repository checkout or cron-store mount is needed.
 
 ### The Home Assistant event feed on `hal`
 
