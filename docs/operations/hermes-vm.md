@@ -140,6 +140,53 @@ So a chat in the browser makes its own model calls and starts its own MCP server
 It serves every profile from that one process, switching `HERMES_HOME` per request, which is why there is one unit and one port rather than five.
 Restarting `hermes-gateway-<profile>` therefore changes nothing about a browser conversation — the fact recorded under [Facts about this VM](#facts-about-this-vm) about MCP tool discovery is a consequence of exactly this.
 
+### emh fitness and nutrition skill
+
+Only `emh` has the optional upstream [fitness-nutrition skill](https://hermes-agent.nousresearch.com/docs/user-guide/skills/optional/health/health-fitness-nutrition).
+It supplies deterministic Python calculators, wger exercise lookup and USDA FoodData Central lookup.
+Foodnoms remains emh's nutrition logger; installing this skill does not log meals.
+The installed version is `1.0.0`, copied from `optional-skills/health/fitness-nutrition` at core commit `5575a0859d6278bfcef79c28189a24594952efd3`.
+All four installed files match that source byte for byte.
+
+Install it for emh only:
+
+```sh
+/home/hermes/.local/bin/hermes -p emh skills install official/health/fitness-nutrition --yes
+```
+
+The destination is `/home/hermes/.hermes/profiles/emh/skills/health/fitness-nutrition/`.
+The calculator is `scripts/body_calc.py` there and uses only Python's standard library in the desktop sandbox.
+The skill needs `curl` and `python`; its network calls go to `wger.de` and `api.nal.usda.gov`.
+
+The emh config adds this entry to its existing `secrets.onepassword.env` map:
+
+```yaml
+secrets:
+  onepassword:
+    env:
+      USDA_API_KEY: op://hermes/usda-fooddata/api-key
+```
+
+The key is resolved on the host and is not stored literally in profile YAML or this repository.
+The upstream skill declares optional `USDA_API_KEY` in `required_environment_variables`.
+Loading it through `skill_view` registers that one name for profile-scoped terminal passthrough.
+No `docker_env`, `docker_forward_env`, managed-scope change or egress proxy is needed.
+The skill uses `DEMO_KEY` when the variable is absent; a missing reference leaves successful existing 1Password lookups intact.
+A live gateway keeps its secret-source snapshot.
+Use `/reload` in an emh CLI chat after changing the map.
+That profile-scoped reload does not require restarting the shared gateway.
+Never print the key or enable shell tracing around USDA requests.
+
+Verification on October 15 used a fresh emh chat through the shared gateway, not an independent CLI agent.
+Its desktop sandbox had Python `3.13.16`, `curl` and the real USDA key; no credential value was printed.
+The calculator returned BMI `22.2` for synthetic inputs `72 kg, 180 cm`, matching the independent calculation.
+USDA returned a banana result with FDC ID `173945`; wger returned exercise ID `9`, “2 Handed Kettlebell Swing”.
+
+**The skill's wger name-search example is stale.**
+[wger 2.5 removed `/api/v2/exercise/search/`](https://github.com/wger-project/wger/releases/tag/2.5); that example returns HTTP 404.
+Use `/api/v2/exerciseinfo/` for exercise lookup; the gateway chat verified its JSON list with HTTP 200.
+The installed skill remains byte-identical to upstream; no local patch was added.
+
 ### What is shared and what is per profile
 
 Shared: the checkout and venv, the host, the docker daemon and its sandboxes, the WebUI attachments directory, and the provider credentials.
