@@ -1150,10 +1150,10 @@ Three of these were wrong in earlier drafts and one reported contradiction was a
 The deployed `security_reviewer` uses its own `terminal.docker_image` and matching `.env` fallback:
 
 ```text
-ghcr.io/mnbf9rca/hermes-security-reviewer@sha256:5a34087dbcdd4dd91315f0546db8d9125691dcc04c4210dfc306a4fdf304ac03
+ghcr.io/mnbf9rca/hermes-security-reviewer:stable
 ```
 
-This signed candidate was deployed before merge by operator ruling. Managed scope and the five other profiles keep `nousresearch/hermes-sandbox:desktop`. The reviewer base deliberately trails their floating image by at least seven days.
+The signed candidate was deployed before merge by operator ruling. After promotion, the profile switched to `stable` on October 16; it resolved to the same verified digest `sha256:5a34087dbcdd4dd91315f0546db8d9125691dcc04c4210dfc306a4fdf304ac03`, image config `sha256:e2b75dd66b889c671dab4e616ebb49102793084c99e07bdea5a99577776a73d3`. Both YAML and env select stable; all mounts are preserved. Managed scope and the five other profiles keep `nousresearch/hermes-sandbox:desktop`. The reviewer base deliberately trails their floating image by at least seven days.
 
 `hermes-vm/sandbox-image/` builds `ghcr.io/mnbf9rca/hermes-security-reviewer` for linux/amd64 from a versioned `vX.Y.Z-desktop@sha256:...` base. It preserves the desktop runtime and adds ShellCheck, Bandit, Gitleaks, Semgrep, ruff and yamllint. Native release archives have committed SHA-256 checksums; the full Python closure has exact versions and hashes, installs as wheels without resolution, and must pass `uv pip check`. There are no runtime tool installs. Trivy and pip-audit are not included.
 
@@ -1161,7 +1161,7 @@ Commands are linked into `/usr/local/bin`, because Hermes's login-shell environm
 
 Renovate groups base versions/digests, native versions/checksums, every Python transitive pin and workflow actions as `security-reviewer image inputs`. Each waits seven days with a source timestamp. A mutable `desktop` tag cannot evidence an older release; default Docker versioning follows the versioned `-desktop` suffix instead. Missing timestamps or a checksum/closure failure stop the update. The cooldown deliberately delays fixes by seven days. Image-input automerge is **off**. After the image workflow is merged, the operator-visible settings step adds `sandbox-changes` and `sandbox-build` to the existing master ruleset without removing other checks; only a subsequent verified change enables automerge. Do not add required contexts while the workflow is absent from master: with no bypass actor, that blocks other PRs.
 
-The manual bootstrap and exceptional delivery procedure is below. Routine Renovate image updates use the same checksum, cooldown, non-root fixture and signed-digest promotion gates in CI; they do not require repeating the manual VM candidate gate. While the profile is pinned to this candidate, promotion alone cannot move it: explicitly switch its YAML image and env fallback after verifying the promoted digest.
+The manual bootstrap and exceptional delivery procedure is below. Routine Renovate image updates use the same checksum, cooldown, non-root fixture and signed-digest promotion gates in CI; they do not require repeating the manual VM candidate gate. The profile now tracks `stable`; the existing weekly refresh pulls that configured tag and replaces only idle stale-image containers. Promotion changes the tag, not an already-running container.
 
 1. Change image inputs on an isolated branch, rebase onto freshly fetched master, and open a PR.
 2. Read all PR checks, including the existing `changes`/`lint`/`build` and new `sandbox-changes`/`sandbox-build`. The build tests all six positive fixtures and clean controls as UID/GID 1000 through `bash -lc` with a temporary writable HOME. An altered-checksum build must fail before archive extraction.
@@ -1178,7 +1178,7 @@ The manual bootstrap and exceptional delivery procedure is below. Routine Renova
 7. Obtain the independent review and report the candidate deployed with its PR number; the operator merges.
 8. Check `sandbox-promote` succeeded and registry `stable` equals the verified digest. The merge job resolves the PR tag once, verifies the anchored PR signature, then retags that same digest; it never rebuilds. Fork builds cannot push/sign and must be reopened on a repository branch before merge.
 
-The installed weekly refresh derives each profile's backend/image from `build_profile_terminal_scope` through the current PM runtime with lazy installs disabled. It pulls desktop and the reviewer's configured digest once each; it never promotes or rewrites a profile ref. Both idle checks still protect stale-container removal. Worker-only status with an unknown gateway state is conservatively kept.
+The installed weekly refresh derives each profile's backend/image from `build_profile_terminal_scope` through the current PM runtime with lazy installs disabled. It pulls desktop and the reviewer's configured stable tag once each; it never promotes or rewrites a profile ref. Both idle checks still protect stale-container removal. Worker-only status with an unknown gateway state is conservatively kept.
 
 For an urgent reviewer image rollback, use upstream `atomic_roundtrip_yaml_update` under the selected PM runtime to set only `/home/hermes/.hermes/profiles/security_reviewer/config.yaml`'s `terminal.docker_image` to `nousresearch/hermes-sandbox:desktop`, then run the setup helper `security_reviewer --policy-only` to mirror the new image into `.env`. The helper preserves an existing image; it cannot select a replacement by itself, and `config set` refuses the managed-pinned leaf. Pull the selected image, recreate only proven idle reviewer containers, and record missing scanner coverage. Do not change registry stable or managed scope to roll back one profile.
 
