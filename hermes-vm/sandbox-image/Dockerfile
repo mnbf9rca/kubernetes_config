@@ -1,3 +1,4 @@
+FROM ghcr.io/astral-sh/uv:0.12.24@sha256:3af4716e991d6956a41e573eab705d0ee08500cd829ed30293eb8472f372c65a AS uv
 FROM nousresearch/hermes-sandbox:v0.21.6-desktop@sha256:669abbd2df186067be9c645eee5fddb8764c9fe8b9edd28625ec3a61e6685443
 
 # Renovate pairs each release with the checksum of its Linux amd64 attachment.
@@ -19,9 +20,9 @@ RUN set -eu; \
     test "$(shellcheck --version | sed -n 's/^version: //p')" = "${SHELLCHECK_VERSION#v}"; \
     test "$(gitleaks version)" = "${GITLEAKS_VERSION#v}"
 
-COPY requirements.txt /opt/hermes-reviewer/requirements.txt
-RUN uv venv --python python3 /opt/hermes-reviewer/venv \
-    && uv pip install --python /opt/hermes-reviewer/venv/bin/python --require-hashes --only-binary :all: --no-deps -r /opt/hermes-reviewer/requirements.txt \
+COPY --from=uv /uv /usr/local/bin/uv
+COPY pyproject.toml uv.lock /opt/hermes-reviewer/
+RUN UV_PROJECT_ENVIRONMENT=/opt/hermes-reviewer/venv UV_PYTHON_DOWNLOADS=never uv sync --project /opt/hermes-reviewer --python python3 --locked --no-dev --no-build \
     && uv pip check --python /opt/hermes-reviewer/venv/bin/python \
     && for tool in bandit semgrep ruff yamllint; do ln -s "/opt/hermes-reviewer/venv/bin/$tool" "/usr/local/bin/$tool"; done
 

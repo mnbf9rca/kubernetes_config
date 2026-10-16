@@ -11,22 +11,23 @@ for tool in shellcheck bandit gitleaks semgrep ruff yamllint; do
   [[ $(stat -Lc '%u:%g' "/usr/local/bin/$tool") == 0:0 ]] || fail "tool must be root-owned: $tool"
 done
 [[ -r /etc/hermes-reviewer-tools.txt ]] || fail 'missing tool manifest'
-for file in rules/semgrep-rules.yml ruff.toml yamllint.yml requirements.txt; do
+for file in rules/semgrep-rules.yml ruff.toml yamllint.yml pyproject.toml uv.lock; do
   [[ -r $root/$file ]] || fail "unreadable $file"
 done
 "$root/venv/bin/python" - <<'PY'
 import importlib.metadata as m
-import pathlib, re, subprocess
+import pathlib, re, subprocess, tomllib
 root = pathlib.Path('/opt/hermes-reviewer')
-pins = dict(re.findall(r'^([A-Za-z0-9_.-]+)==([^ \\]+)', (root/'requirements.txt').read_text(), re.M))
-for name, version in pins.items():
-    assert m.version(name) == version, f'installed pin mismatch: {name}'
+pins = {p['name']: p['version'] for p in tomllib.loads((root/'uv.lock').read_text())['package'] if 'registry' in p['source']}
+for dist in m.distributions():
+    name = re.sub(r'[-_.]+', '-', dist.metadata['Name']).lower()
+    assert pins.get(name) == dist.version, f'installed lock mismatch: {name}'
 versions = {name: m.version(name) for name in ('bandit', 'semgrep', 'ruff', 'yamllint')}
 versions['shellcheck'] = re.search(r'^version: (.+)$', subprocess.check_output(['shellcheck','--version'], text=True), re.M)[1]
 versions['gitleaks'] = subprocess.check_output(['gitleaks','version'], text=True).strip().removeprefix('v')
 expected = ''.join(f'{name} {versions[name]}\n' for name in sorted(versions))
 assert pathlib.Path('/etc/hermes-reviewer-tools.txt').read_text() == expected, 'manifest differs from installed tools'
-print('PASS: installed pins and six-tool manifest')
+print('PASS: installed lock and six-tool manifest')
 PY
 scratch=$(mktemp -d /tmp/reviewer-fixtures.XXXXXX)
 trap 'rm -rf "$scratch"' EXIT
