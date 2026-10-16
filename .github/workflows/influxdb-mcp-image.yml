@@ -1,4 +1,4 @@
-# The only workflow in this repository. It builds ghcr.io/mnbf9rca/influxdb-mcp-server
+# This workflow builds ghcr.io/mnbf9rca/influxdb-mcp-server
 # from homelab/health/mcp/.
 #
 # BUILD ON THE PULL REQUEST, PROMOTE ON MERGE, AND THE PULL REQUEST EVENT IS

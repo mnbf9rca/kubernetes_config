@@ -8,7 +8,9 @@
     "kustomize",
     "dockerfile",
     "npm",
-    "github-actions"
+    "github-actions",
+    "custom.regex",
+    "pip_requirements"
   ],
   "recreateWhen": "always",
   "pinDigests": true,
@@ -27,7 +29,8 @@
   },
   "dockerfile": {
     "managerFilePatterns": [
-      "/^homelab/health/mcp/Dockerfile$/"
+      "/^homelab/health/mcp/Dockerfile$/",
+      "/^hermes-vm/sandbox-image/Dockerfile$/"
     ]
   },
   "npm": {
@@ -37,7 +40,8 @@
   },
   "github-actions": {
     "managerFilePatterns": [
-      "/^\\.github/workflows/influxdb-mcp-image\\.yml$/"
+      "/^\\.github/workflows/influxdb-mcp-image\\.yml$/",
+      "/^\\.github/workflows/hermes-security-reviewer-image\\.yml$/"
     ]
   },
   "description": [
@@ -90,6 +94,51 @@
       "automergeType": "pr",
       "automergeStrategy": "squash",
       "description": "MCP build inputs automerge after the image build, signature checks and three-day stability wait; the merge promotes the reviewed digest to stable, which Keel deploys."
+    },
+    {
+      "matchFileNames": [
+        "hermes-vm/sandbox-image/**",
+        ".github/workflows/hermes-security-reviewer-image.yml"
+      ],
+      "minimumReleaseAge": "7 days",
+      "minimumReleaseAgeBehaviour": "timestamp-required",
+      "groupName": "security-reviewer image inputs",
+      "automerge": false,
+      "automergeType": "pr",
+      "automergeStrategy": "squash",
+      "platformAutomerge": false,
+      "description": "Reviewer-only image inputs wait seven days including digests and every hashed Python dependency. Automerge stays off until post-merge required checks are installed and PR B enables it."
+    }
+  ],
+  "pip_requirements": {
+    "managerFilePatterns": [
+      "/^hermes-vm/sandbox-image/requirements\\.txt$/"
+    ]
+  },
+  "customManagers": [
+    {
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/^hermes-vm/sandbox-image/Dockerfile$/"
+      ],
+      "matchStrings": [
+        "ARG SHELLCHECK_VERSION=(?<currentValue>v[^\\s]+)\\s+ARG SHELLCHECK_SHA256=(?<currentDigest>[a-f0-9]{64})"
+      ],
+      "depNameTemplate": "koalaman/shellcheck",
+      "datasourceTemplate": "github-release-attachments",
+      "versioningTemplate": "semver"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/^hermes-vm/sandbox-image/Dockerfile$/"
+      ],
+      "matchStrings": [
+        "ARG GITLEAKS_VERSION=(?<currentValue>v[^\\s]+)\\s+ARG GITLEAKS_SHA256=(?<currentDigest>[a-f0-9]{64})"
+      ],
+      "depNameTemplate": "gitleaks/gitleaks",
+      "datasourceTemplate": "github-release-attachments",
+      "versioningTemplate": "semver"
     }
   ]
 }

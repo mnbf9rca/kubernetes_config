@@ -1,0 +1,3 @@
+extends: relaxed
+rules:
+  key-duplicates: enable
