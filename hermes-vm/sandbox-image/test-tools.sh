@@ -6,7 +6,7 @@ fail() { echo "FAIL: $*" >&2; exit 1; }
 [[ -d $HOME && -w $HOME ]] || fail 'HOME must be writable'
 [[ ${SEMGREP_SEND_METRICS:-} == off && ${SEMGREP_ENABLE_VERSION_CHECK:-} == 0 ]] || fail 'Semgrep telemetry settings'
 root=/opt/hermes-reviewer
-for tool in shellcheck bandit gitleaks semgrep ruff yamllint; do
+for tool in shellcheck bandit gitleaks semgrep ruff yamllint codeql; do
   [[ $(command -v "$tool") == "/usr/local/bin/$tool" ]] || fail "login-shell command path: $tool"
   [[ $(stat -Lc '%u:%g' "/usr/local/bin/$tool") == 0:0 ]] || fail "tool must be root-owned: $tool"
 done
@@ -16,7 +16,7 @@ for file in rules/semgrep-rules.yml ruff.toml yamllint.yml pyproject.toml uv.loc
 done
 "$root/venv/bin/python" - <<'PY'
 import importlib.metadata as m
-import pathlib, re, subprocess, tomllib
+import json, pathlib, re, subprocess, tomllib
 root = pathlib.Path('/opt/hermes-reviewer')
 pins = {p['name']: p['version'] for p in tomllib.loads((root/'uv.lock').read_text())['package'] if 'registry' in p['source']}
 for dist in m.distributions():
@@ -25,9 +25,10 @@ for dist in m.distributions():
 versions = {name: m.version(name) for name in ('bandit', 'semgrep', 'ruff', 'yamllint')}
 versions['shellcheck'] = re.search(r'^version: (.+)$', subprocess.check_output(['shellcheck','--version'], text=True), re.M)[1]
 versions['gitleaks'] = subprocess.check_output(['gitleaks','version'], text=True).strip().removeprefix('v')
+versions['codeql'] = json.loads(subprocess.check_output(['codeql','version','--format=json'], text=True))['version']
 expected = ''.join(f'{name} {versions[name]}\n' for name in sorted(versions))
 assert pathlib.Path('/etc/hermes-reviewer-tools.txt').read_text() == expected, 'manifest differs from installed tools'
-print('PASS: installed lock and six-tool manifest')
+print('PASS: installed lock and seven-tool manifest')
 PY
 scratch=$(mktemp -d /tmp/reviewer-fixtures.XXXXXX)
 trap 'rm -rf "$scratch"' EXIT
@@ -84,4 +85,30 @@ grep -q '(key-duplicates)' yaml-bad
 expect 1 yaml-syntax yamllint -c "$root/yamllint.yml" -f parsable syntax.yml
 grep -q '(syntax)' yaml-syntax
 expect 0 yaml-good yamllint -c "$root/yamllint.yml" good.yml
-echo 'PASS: six positive fixtures, clean controls and YAML syntax; non-root login shell'
+mkdir codeql-src
+cat > codeql-src/bad.py <<'FIXTURE'
+import os
+from flask import Flask, request
+app = Flask(__name__)
+@app.get("/bad")
+def bad():
+    os.system(request.args["command"])
+FIXTURE
+cat > codeql-src/good.py <<'FIXTURE'
+import os
+from flask import Flask
+app = Flask(__name__)
+@app.get("/good")
+def good():
+    os.system("echo fixture")
+FIXTURE
+expect 0 codeql-create codeql database create codeql-db --language=python --build-mode=none --source-root="$scratch/codeql-src" --threads=1 --ram=1024
+expect 0 codeql-analysis codeql database analyze codeql-db codeql/python-queries:Security/CWE-078/CommandInjection.ql --format=sarif-latest --output=codeql.sarif --threads=1 --ram=1024
+python3 - <<'PYTHON'
+import json
+results = [r for run in json.load(open('codeql.sarif'))['runs'] for r in run.get('results', [])]
+paths = [loc['physicalLocation']['artifactLocation']['uri'] for r in results if r['ruleId'] == 'py/command-line-injection' for loc in r['locations']]
+assert any(p.endswith('bad.py') for p in paths), 'CodeQL missed command injection'
+assert not any(p.endswith('good.py') for p in paths), 'CodeQL flagged clean control'
+PYTHON
+echo 'PASS: seven positive fixtures, clean controls and YAML syntax; non-root login shell'
