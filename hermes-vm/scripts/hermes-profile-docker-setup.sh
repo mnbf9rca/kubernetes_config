@@ -42,15 +42,15 @@ HERMES_HOME=/home/hermes/.hermes
 
 profile=${1:-}
 policy_only=${2:-}
-case "$policy_only" in ''|--policy-only) ;; *) echo "unknown option: $policy_only" >&2; exit 2 ;; esac
+case "$policy_only" in ''|--policy-only|--sync-mounts) ;; *) echo "unknown option: $policy_only" >&2; exit 2 ;; esac
 
 if [ -z "$profile" ]; then
-  echo "usage: hermes-profile-docker-setup.sh <profile-name> [--policy-only]" >&2
+  echo "usage: hermes-profile-docker-setup.sh <profile-name> [--policy-only|--sync-mounts]" >&2
   exit 2
 fi
 
 # The default workspace is not under profiles/; only its policy can be copied.
-if [ "$profile" = default ] && [ "$policy_only" != --policy-only ]; then
+if [ "$profile" = default ] && [ "$policy_only" != --policy-only ] && [ "$policy_only" != --sync-mounts ]; then
   echo "default mounts are already configured; use --policy-only for its policy." >&2
   exit 2
 fi
@@ -74,9 +74,10 @@ agent = Path('/home/hermes/.hermes/hermes-agent')
 sys.path.insert(0, str(agent))
 from hermes_cli._launchers import runtime_command
 
-code = "home = " + repr(sys.argv[1]) + "\npolicy_only = " + repr(sys.argv[2] == "--policy-only") + "\n" + r'''
+code = "home = " + repr(sys.argv[1]) + "\npolicy_only = " + repr(sys.argv[2] == "--policy-only") + "\nsync_mounts = " + repr(sys.argv[2] == "--sync-mounts") + "\n" + r'''
 import copy
 import json
+sync_mounts = globals().get("sync_mounts", False)
 from pathlib import Path
 from utils import load_yaml_file_readonly, atomic_roundtrip_yaml_update
 from tools.terminal_scope import build_profile_terminal_scope
@@ -92,32 +93,37 @@ set_hermes_home_override(Path(home))
 before = load_yaml_file_readonly(path)
 env_path = Path(home) / '.env'
 before_env = load_env_file(env_path)
-expected = copy.deepcopy(before)
-expected.setdefault('terminal', {}).update({key: managed[key] for key in keys})
-for key in keys:
-    if before.get('terminal', {}).get(key) != managed[key]:
-        atomic_roundtrip_yaml_update(path, 'terminal.' + key, managed[key])
-    # Bulk config saves strip managed YAML keys; .env keeps the sandbox policy.
-    value = str(managed[key]).lower() if isinstance(managed[key], bool) else str(managed[key])
-    if before_env.get(keys[key]) != value:
-        save_env_value(keys[key], value)
-assert load_yaml_file_readonly(path) == expected, 'unrelated profile config changed'
-after_env = load_env_file(env_path)
-assert {k: v for k, v in before_env.items() if k not in keys.values()} == {
-    k: v for k, v in after_env.items() if k not in keys.values()}, 'unrelated profile env changed'
-scope = build_profile_terminal_scope(home)
-for key, variable in keys.items():
-    assert str(scope[variable]).lower() == str(managed[key]).lower(), key
+if not sync_mounts:
+    selected = dict(managed)
+    selected['docker_image'] = before.get('terminal', {}).get('docker_image') or before_env.get('TERMINAL_DOCKER_IMAGE') or managed['docker_image']
+    expected = copy.deepcopy(before)
+    expected.setdefault('terminal', {}).update({key: selected[key] for key in keys})
+    for key in keys:
+        if before.get('terminal', {}).get(key) != selected[key]:
+            atomic_roundtrip_yaml_update(path, 'terminal.' + key, selected[key])
+        # Bulk config saves strip managed YAML keys; .env keeps the sandbox policy.
+        value = str(selected[key]).lower() if isinstance(selected[key], bool) else str(selected[key])
+        if before_env.get(keys[key]) != value:
+            save_env_value(keys[key], value)
+    assert load_yaml_file_readonly(path) == expected, 'unrelated profile config changed'
+    after_env = load_env_file(env_path)
+    assert {k: v for k, v in before_env.items() if k not in keys.values()} == {
+        k: v for k, v in after_env.items() if k not in keys.values()}, 'unrelated profile env changed'
+    scope = build_profile_terminal_scope(home)
+    for key, variable in keys.items():
+        assert str(scope[variable]).lower() == str(selected[key]).lower(), key
 
-if not policy_only:
+if sync_mounts or not policy_only:
     workspace = Path(home) / 'workspace'
-    workspace.mkdir(exist_ok=True)
+    if not sync_mounts:
+        workspace.mkdir(exist_ok=True)
     attachments = '/home/hermes/.hermes/webui/attachments'
     volumes = list(before.get('terminal', {}).get('docker_volumes') or [])
-    for entry in (f'{workspace}:/workspace', f'{attachments}:{attachments}:ro',
-                  f'{workspace}:{workspace}'):
-        if entry not in volumes:
-            volumes.append(entry)
+    if not sync_mounts:
+        for entry in (f'{workspace}:/workspace', f'{attachments}:{attachments}:ro',
+                      f'{workspace}:{workspace}'):
+            if entry not in volumes:
+                volumes.append(entry)
     variable = 'TERMINAL_DOCKER_VOLUMES'
     refusal = env_write_refusal(variable, 'set')
     if refusal:
@@ -142,6 +148,11 @@ if not policy_only:
 subprocess.run(runtime_command(agent, code=code, home=sys.argv[1]),
                env=dict(os.environ, HERMES_DISABLE_LAZY_INSTALLS='1'), check=True)
 PYTHON
+
+if [ "$policy_only" = --sync-mounts ]; then
+  echo "Saved YAML mounts synchronized to profile env; policy unchanged."
+  exit 0
+fi
 
 if [ "$policy_only" = --policy-only ]; then
   echo "Managed terminal policy copied to config and .env; profile mounts unchanged."

@@ -37,7 +37,7 @@ class ProfilePolicyTests(unittest.TestCase):
                     atomic_roundtrip_yaml_save(config, stripped)
                     scope = build_profile_terminal_scope(home)
                     self.assertEqual(scope['TERMINAL_ENV'], 'docker')
-                    self.assertEqual(scope['TERMINAL_DOCKER_IMAGE'], 'nousresearch/hermes-sandbox:desktop')
+                    self.assertEqual(scope['TERMINAL_DOCKER_IMAGE'], 'old-image' if old_env else 'nousresearch/hermes-sandbox:desktop')
                     self.assertEqual(scope['TERMINAL_DOCKER_RUN_AS_HOST_USER'].lower(), 'true')
                     self.assertEqual(scope['TERMINAL_CWD'], '/workspace')
                     self.assertIn('# keep comment', config.read_text())
@@ -88,6 +88,60 @@ class ProfilePolicyTests(unittest.TestCase):
                     before = {p: (p.read_bytes(), p.stat().st_mtime_ns) for p in (config, env)}
                     exec(code, {'home': str(home), 'policy_only': False})
                     self.assertEqual({p: (p.read_bytes(), p.stat().st_mtime_ns) for p in before}, before)
+        finally:
+            set_hermes_home_override(previous)
+
+
+    def test_reviewer_image_survives_modes_and_bulk_save(self):
+        helper = Path(__file__).with_name('hermes-profile-docker-setup.sh')
+        outer = ast.parse(helper.read_text().split("<<'PYTHON'\n", 1)[1].split('\nPYTHON', 1)[0])
+        code = next(n.value for n in ast.walk(outer) if isinstance(n, ast.Constant)
+                    and isinstance(n.value, str) and 'managed = load_yaml_file_readonly' in n.value)
+        previous = get_hermes_home_override()
+        try:
+            for mode in ('ordinary', 'policy', 'sync'):
+                with self.subTest(mode=mode), tempfile.TemporaryDirectory() as scratch:
+                    home=Path(scratch); set_hermes_home_override(home)
+                    image='ghcr.io/example/reviewer@sha256:'+'a'*64
+                    config=home/'config.yaml'; env=home/'.env'
+                    atomic_roundtrip_yaml_save(config, {'terminal': {'docker_image':image, 'docker_volumes':[]}})
+                    env.write_text('TERMINAL_DOCKER_IMAGE='+(image if mode=='sync' else 'stale-image')+'\n');env.chmod(0o600)
+                    ctx={'home':str(home),'policy_only':mode=='policy','sync_mounts':mode=='sync'}
+                    exec(code,ctx)
+                    self.assertEqual(build_profile_terminal_scope(home)['TERMINAL_DOCKER_IMAGE'],image)
+                    with contextlib.redirect_stderr(io.StringIO()):
+                        atomic_roundtrip_yaml_save(config,_strip_managed_keys_for_save(load_yaml_file_readonly(config)))
+                    exec(code,ctx)
+                    self.assertEqual(build_profile_terminal_scope(home)['TERMINAL_DOCKER_IMAGE'],image)
+                    self.assertEqual(env.stat().st_mode & 0o777,0o600)
+        finally:
+            set_hermes_home_override(previous)
+
+    def test_sync_mounts_default_isolated_and_hal(self):
+        helper = Path(__file__).with_name('hermes-profile-docker-setup.sh')
+        outer=ast.parse(helper.read_text().split("<<'PYTHON'\n",1)[1].split('\nPYTHON',1)[0])
+        code=next(n.value for n in ast.walk(outer) if isinstance(n,ast.Constant)
+                  and isinstance(n.value,str) and 'managed = load_yaml_file_readonly' in n.value)
+        previous=get_hermes_home_override()
+        try:
+            for name in ('default','isolated','hal'):
+                with self.subTest(profile=name), tempfile.TemporaryDirectory() as scratch:
+                    home=Path(scratch);set_hermes_home_override(home)
+                    volumes=[] if name=='isolated' else [str(home/"owner's scripts")+':/scripts:ro']
+                    config=home/'config.yaml';env=home/'.env'
+                    atomic_roundtrip_yaml_save(config,{'terminal':{'docker_volumes':volumes}})
+                    env.write_text('UNRELATED=op://example/item/field\n');env.chmod(0o640)
+                    original=config.read_bytes()
+                    ctx={'home':str(home),'policy_only':False,'sync_mounts':True}
+                    exec(code,ctx)
+                    self.assertEqual(config.read_bytes(),original)
+                    self.assertEqual(json.loads(build_profile_terminal_scope(home)['TERMINAL_DOCKER_VOLUMES']),volumes)
+                    line=next(x for x in env.read_text().splitlines() if x.startswith('TERMINAL_DOCKER_VOLUMES='))
+                    self.assertEqual(json.loads(line.split('=',1)[1].strip().strip('"').strip("'")),volumes)
+                    self.assertEqual(env.stat().st_mode & 0o777,0o640)
+                    before=env.read_bytes(),env.stat().st_mtime_ns
+                    exec(code,ctx)
+                    self.assertEqual((env.read_bytes(),env.stat().st_mtime_ns),before)
         finally:
             set_hermes_home_override(previous)
 
