@@ -28,15 +28,32 @@ RUN UV_PROJECT_ENVIRONMENT=/opt/hermes-reviewer/venv UV_PYTHON_DOWNLOADS=never u
 
 COPY semgrep-rules.yml /opt/hermes-reviewer/rules/semgrep-rules.yml
 COPY ruff.toml yamllint.yml test-tools.sh /opt/hermes-reviewer/
+
+ARG CODEQL_VERSION=codeql-bundle-v2.27.2
+ARG CODEQL_SHA256=f002864be6dd8d5d7bdb123aaf7291ec8e291012bd9f70b6d2362f730db52aeb
+RUN set -eu; \
+    curl -fsSL "https://github.com/github/codeql-action/releases/download/${CODEQL_VERSION}/codeql-bundle-linux64.tar.gz" -o /tmp/codeql.tar.gz; \
+    printf '%s  %s\n' "$CODEQL_SHA256" /tmp/codeql.tar.gz | sha256sum -c -; \
+    mkdir -p /opt/hermes-reviewer/codeql; \
+    tar --no-same-owner -xzf /tmp/codeql.tar.gz -C /opt/hermes-reviewer/codeql --strip-components=1; \
+    rm /tmp/codeql.tar.gz; \
+    for language in actions cpp csharp go java javascript ruby rust swift; do \
+        rm -rf "/opt/hermes-reviewer/codeql/$language" /opt/hermes-reviewer/codeql/qlpacks/codeql/"$language"-*; \
+    done; \
+    chmod -R a+rX /opt/hermes-reviewer; \
+    chmod 755 /opt/hermes-reviewer/test-tools.sh; \
+    ln -s /opt/hermes-reviewer/codeql/codeql /usr/local/bin/codeql; \
+    test "$(codeql version --format=json | python3 -c 'import json,sys; print(json.load(sys.stdin)["version"])')" = "${CODEQL_VERSION#codeql-bundle-v}"
+
 ENV SEMGREP_SEND_METRICS=off SEMGREP_ENABLE_VERSION_CHECK=0
 RUN /opt/hermes-reviewer/venv/bin/python - <<'PY'
 import importlib.metadata as m
-import pathlib
-import re, subprocess
+import json, pathlib, re, subprocess
 versions = {name: m.version(name) for name in ('bandit', 'semgrep', 'ruff', 'yamllint')}
 versions['shellcheck'] = re.search(r'^version: (.+)$', subprocess.check_output(['shellcheck', '--version'], text=True), re.M)[1]
 versions['gitleaks'] = subprocess.check_output(['gitleaks', 'version'], text=True).strip().removeprefix('v')
+versions['codeql'] = json.loads(subprocess.check_output(['codeql', 'version', '--format=json'], text=True))['version']
 pathlib.Path('/etc/hermes-reviewer-tools.txt').write_text(''.join(f'{name} {versions[name]}\n' for name in sorted(versions)))
 PY
 # /etc/profile resets PATH in Hermes's login shell; deliver commands there too.
-RUN chmod -R a+rX /opt/hermes-reviewer && chmod 755 /opt/hermes-reviewer/test-tools.sh && chmod 644 /etc/hermes-reviewer-tools.txt
+RUN chmod 644 /etc/hermes-reviewer-tools.txt

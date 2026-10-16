@@ -134,6 +134,18 @@
       "depNameTemplate": "gitleaks/gitleaks",
       "datasourceTemplate": "github-release-attachments",
       "versioningTemplate": "semver"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/^hermes-vm/sandbox-image/Dockerfile$/"
+      ],
+      "matchStrings": [
+        "ARG CODEQL_VERSION=(?<currentValue>codeql-bundle-v[^\\s]+)\\s+ARG CODEQL_SHA256=(?<currentDigest>[a-f0-9]{64})"
+      ],
+      "depNameTemplate": "github/codeql-action",
+      "datasourceTemplate": "github-release-attachments",
+      "versioningTemplate": "regex:^codeql-bundle-v(?<major>\\d+)\\.(?<minor>\\d+)\\.(?<patch>\\d+)$"
     }
   ],
   "pep621": {
