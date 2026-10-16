@@ -10,7 +10,7 @@
     "npm",
     "github-actions",
     "custom.regex",
-    "pip_requirements"
+    "pep621"
   ],
   "recreateWhen": "always",
   "pinDigests": true,
@@ -107,14 +107,9 @@
       "automergeType": "pr",
       "automergeStrategy": "squash",
       "platformAutomerge": false,
-      "description": "Reviewer-only image inputs wait seven days including digests and every hashed Python dependency. Automerge stays off until post-merge required checks are installed and PR B enables it."
+      "description": "Reviewer image inputs wait seven days; uv resolves transitive constraints and enforces the same cooldown when refreshing the hashed lock. Automerge remains off until required checks are installed."
     }
   ],
-  "pip_requirements": {
-    "managerFilePatterns": [
-      "/^hermes-vm/sandbox-image/requirements\\.txt$/"
-    ]
-  },
   "customManagers": [
     {
       "customType": "regex",
@@ -140,5 +135,13 @@
       "datasourceTemplate": "github-release-attachments",
       "versioningTemplate": "semver"
     }
-  ]
+  ],
+  "pep621": {
+    "managerFilePatterns": [
+      "/^hermes-vm/sandbox-image/pyproject\\.toml$/"
+    ],
+    "lockFileMaintenance": {
+      "enabled": true
+    }
+  }
 }
