@@ -9,6 +9,7 @@ import contextlib
 import email
 import importlib.util
 import json
+import logging
 import os
 from pathlib import Path
 import ssl
@@ -101,6 +102,11 @@ class VerdictTests(unittest.TestCase):
             modules[name]=types.ModuleType(name);modules[name].__path__=[]
         modules['plugins.platforms.email.adapter']=native
         modules['plugins.platforms.email'].adapter=native
+        targets=types.ModuleType('tools.send_message_targets')
+        source=Path(os.environ['HERMES_EMAIL_ADAPTER_SOURCE']).resolve().parents[3]
+        exec(compile((source/'tools/send_message_targets.py').read_text(),str(source/'tools/send_message_targets.py'),'exec'),targets.__dict__)
+        modules['tools.send_message_targets']=targets
+        modules['gateway.channel_directory']=types.SimpleNamespace(resolve_channel_name=lambda *a:None)
         modules['gateway.config']=types.ModuleType('gateway.config')
         modules['gateway.platform_registry']=types.ModuleType('gateway.platform_registry')
         modules['gateway.platform_registry'].platform_registry=self.registry
@@ -115,7 +121,7 @@ class VerdictTests(unittest.TestCase):
         self.enterContext(patch.dict(sys.modules,modules))
         spec=importlib.util.spec_from_file_location('hal_email_verdict_tested',HERE/'__init__.py',submodule_search_locations=[str(HERE)])
         self.plugin=importlib.util.module_from_spec(spec);spec.loader.exec_module(self.plugin)
-        self.plugin.register(types.SimpleNamespace(register_platform=lambda **kw:self.entries.update({kw['name']:types.SimpleNamespace(**kw)})))
+        self.plugin.register(types.SimpleNamespace(register_platform=lambda **kw:self.entries.update({kw['name']:types.SimpleNamespace(**dict({'parse_target_ref_fn':None,'validate_target_ref_fn':None,'send_message_handler':None,'source':'plugin'},**kw))})))
         self.config.platforms[self.Platform(self.plugin.NAME)]=self.alias_config
         ns=dict(_live_adapter=lambda platform:(None,None),asyncio=asyncio,
             unknown_platform_error=lambda name:'Unknown platform: '+name,
@@ -123,6 +129,25 @@ class VerdictTests(unittest.TestCase):
             _bounded_send_error=lambda error:str(error))
         self.dispatch=native_functions(source/'tools/send_message_tool.py',
             {'_platform_enum','_resolve_platform_config','_send_via_adapter'},ns)
+        modules={name:types.ModuleType(name) for name in
+            ('agent.message_sanitization','tools.interrupt','gateway.platforms.base','model_tools','hermes_cli.plugins')}
+        modules['agent.message_sanitization']._sanitize_surrogates=lambda text:text
+        modules['tools.interrupt'].is_interrupted=lambda:False
+        modules['gateway.platforms.base'].BasePlatformAdapter=types.SimpleNamespace(
+            extract_media=lambda text:([],text),filter_media_delivery_paths=lambda paths,**kw:paths,
+            truncate_message=lambda text,limit:[text])
+        modules['model_tools']._run_async=asyncio.run
+        modules['hermes_cli.plugins'].discover_plugins=lambda:None
+        self.enterContext(patch.dict(sys.modules,modules))
+        # Stub framework authorization/mirroring only, never target/dispatch/receipt logic.
+        ns.update(json=json,logger=logging.getLogger('fixture'),resolve_send_target=targets.resolve_send_target,
+            tool_error=lambda error:json.dumps({'error':error}),_error=lambda error:{'error':error},
+            _maybe_skip_cron_duplicate_send=lambda *a:None,_authorize_relay_target=lambda *a,**kw:None,
+            _mirror_sent_message=lambda *a:False,_sanitize_error_text=str,
+            _PLUGIN_STANDALONE_MEDIA={},_CHUNKED_ROUTES={},_TEXT_SENDERS={})
+        self.tool=native_functions(source/'tools/send_message_tool.py',
+            {'send_message_tool','prepare_send_message_platforms','_resolve_tool_target','_handle_send',
+             '_send_to_platform','_send_chunks','_platform_max_length','_via_adapter_route'},ns)['send_message_tool']
 
 
     def envelope(self,subject='House: all clear',body='Nothing needs you today.\nChecked everything at 08:15.\n'):
@@ -190,6 +215,9 @@ class VerdictTests(unittest.TestCase):
         for method in ('_new_reply','_smtp_send','_send_email','_connect_smtp','send'):
             with self.subTest(method=method),patch.object(self.native.EmailAdapter,method,None):
                 with self.assertRaises(RuntimeError):self.send()
+        with patch.dict(self.plugin._PLATFORM_PARSERS,{},clear=True):
+            with self.assertRaisesRegex(RuntimeError,'native_target_parser_incompatible'):
+                self.plugin.register(types.SimpleNamespace(register_platform=lambda **kw:None))
         self.assertEqual(self.trace,[])
 
     def test_other_profile_cannot_register_or_send(self):
@@ -211,6 +239,14 @@ class VerdictTests(unittest.TestCase):
         self.assertIsNone(error);self.assertIs(config,self.alias_config)
         result=asyncio.run(self.dispatch['_send_via_adapter'](platform,config,RECIPIENT,self.envelope()))
         self.assertTrue(result['success']);self.assertEqual(sum(row[0]=='send' for row in self.trace),1)
+
+    def test_real_send_message_tool_resolves_literal_target_and_returns_bound_receipt(self):
+        result=json.loads(self.tool({'action':'send','target':self.plugin.NAME+':'+RECIPIENT,
+                                     'message':self.envelope()}))
+        self.assertTrue(result.get('success'),result)
+        self.assertEqual(result['platform'],self.plugin.NAME)
+        self.assertEqual(result['chat_id'],RECIPIENT)
+        self.assertEqual(sum(row[0]=='send' for row in self.trace),1)
 
     def test_absent_plugin_is_unknown_even_with_alias_config_and_no_email_fallback(self):
         self.entries.pop(self.plugin.NAME)

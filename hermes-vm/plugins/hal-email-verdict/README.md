@@ -26,7 +26,7 @@ Absent plugins, bad envelopes and missing native adapter methods fail before
 submission. Errors do not create a fallback send or an application retry.
 
 The installed copy lives outside the Hermes checkout changed by Update Now.
-Its native adapter compatibility checks run automatically; do not patch the
+Its native adapter and email target-parser compatibility checks run automatically; do not patch the
 checkout or add a manual post-upgrade maintenance step.
 
 Run the tests with a Hermes source tree (the adapter, `gateway/config.py` and
@@ -37,7 +37,8 @@ HERMES_EMAIL_ADAPTER_SOURCE=/path/to/hermes-agent/plugins/platforms/email/adapte
   python3 -B test_verdict.py
 ```
 
-The tests execute those native MIME/SMTP and routing functions locally with
+The tests execute the native target resolver, send_message_tool entry point,
+MIME/SMTP and routing functions locally with
 framework imports, credentials and network stubbed. They do not contact a mail
 server or prove SMTP/inbox delivery. The first scheduled mail is the live
 acceptance run; do not send a test email during deployment.

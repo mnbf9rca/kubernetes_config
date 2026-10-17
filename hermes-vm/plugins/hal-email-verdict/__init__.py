@@ -5,6 +5,7 @@ from pathlib import Path
 from gateway.config import Platform, load_gateway_config
 from hermes_constants import get_hermes_home
 from plugins.platforms.email import adapter as native
+from tools.send_message_targets import _PLATFORM_PARSERS
 
 NAME = 'hal_email_verdict'
 HAL_HOME = Path('/home/hermes/.hermes/profiles/hal')
@@ -84,12 +85,14 @@ async def standalone_send(config, chat_id, message, *, thread_id=None, media_fil
         raise ValueError('hal_verdict_text_only')
     parse_envelope(message)
     result = await VerdictAdapter(config).send(chat_id, message)
-    if result.success: return {'success': True, 'message_id': result.message_id}
+    if result.success: return {'success': True, 'platform': NAME, 'chat_id': chat_id, 'message_id': result.message_id}
     return {'error': result.error or 'hal_verdict_native_send_failed'}
 
 
 def register(ctx):
     require_native()
+    parser = _PLATFORM_PARSERS.get('email')
+    if not callable(parser): raise RuntimeError('hal_verdict_native_target_parser_incompatible')
     ctx.register_platform(name=NAME, label='Hal verdict email', adapter_factory=VerdictAdapter,
-        check_fn=lambda: True, standalone_sender_fn=standalone_send,
+        check_fn=lambda: True, standalone_sender_fn=standalone_send, parse_target_ref_fn=parser,
         max_message_length=50000, pii_safe=True, allow_update_command=False)
