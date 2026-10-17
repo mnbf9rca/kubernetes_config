@@ -1,0 +1,6 @@
+name: hal-email-verdict
+label: Hal verdict email
+kind: platform
+version: 1.0.0
+author: cynexia
+description: Hal-only outbound verdict mail using the native email configuration and SMTP adapter, without an inbound listener.
