@@ -222,6 +222,9 @@ The rules that must not be broken:
 
 - **Use three seats for multi-agent work: chief of staff, builder and reviewer.**
   Any request that names a subagent, Codex, a reviewer or multi-agent work is routed through those three seats, whatever words the operator used for it.
+  The chief of staff interprets before it dispatches: it works out what the operator's words mean for this request, for this project and for how the operator works, replays that reading in a few plain sentences, confirms it when the matter is complex, and then acts at that scope.
+  It never passes the operator's words on verbatim, and it never narrows a general remark to the single instance in front of it.
+  Operator ruling, 2026-10-17: the seat exists to spare the operator long explanations in a text conversation, and an agent that captures what was said and relays it is not doing the job.
   The chief of staff reads `docs/operations/agent-teams.md` before dispatching anything, and never dispatches a generic Claude subagent for builder or reviewer work: the builder is Codex (`implementer`) and the reviewer is `k8s-reviewer`.
   The chief of staff does not read inventories, diffs or cluster state itself; those belong to the builder and the reviewer, and reading them is what fills the context the seat exists to keep clean.
   Pass handovers as file paths under `.superpowers/sdd/<plan>/`, never pasted output, with the chief of staff outside that loop.
@@ -439,6 +442,17 @@ The rules that must not be broken:
   Explanatory prose, the reasons behind a rule, stays in ordinary clear English.
   Operator ruling, 2026-09-06: the operator reviews under time pressure and an instruction that takes two readings is a fault.
   Operator ruling, 2026-09-20: use absolute paths for every file named in messages to the operator, so links are clickable.
+- **A message to the operator answers "what do I need to know or do", in plain English, and nothing else.**
+  This covers every channel an agent writes for the operator to read: a chief-of-staff reply, a Hal email, a heartbeat message, a pull request body.
+  Lead with the verdict.
+  Then list the items that need the operator, each as what happened, why it matters and what to do.
+  Then say what changed since the last message, and close with one line on whether the agent could do its job.
+  The agent's own working state stays with the agent: entity ids, sensor values, coverage codes, report hashes, per-candidate rows and hedges about what has not been proven belong in its ledger or log, where triage starts.
+  Turn a value into its meaning before it leaves: "replace the monstera sensor battery", not "value=0.0, freshness=unknown".
+  Unfinished analysis is not a fact about the estate and does not appear until the agent has a view.
+  A quiet day is a verdict and two lines.
+  Plain English throughout: no jargon, no codes, no invented terms.
+  Operator ruling, 2026-10-17, after the first Hal morning email arrived as 84 lines of diagnostics with the summary at the bottom: the operator read it as unusable, and the fault was a class of message, not one layout.
 - **Documentation, not agent memories.**
   Do not record repo, cluster, or account state in an agent's private memory system — that hides operational knowledge from the operator, from other agents, and from review.
   Anything worth remembering goes in `docs/` (or this file, per the rule above), where it is versioned, diffable and shared.

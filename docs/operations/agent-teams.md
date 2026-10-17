@@ -1,6 +1,6 @@
 # Agent teams
 
-Operator rulings, September 20, 2026, define this repository's multi-agent working arrangement.
+Operator rulings of 2026-09-20 define this repository's multi-agent working arrangement.
 
 ## Three seats, one workspace
 
@@ -10,12 +10,17 @@ The builder uses an isolated Git worktree branch within the shared repository.
 
 | Seat | Agent | Responsibility |
 |---|---|---|
-| Chief of staff | Claude, `chief-of-staff` | Operator conversation, work classification and delegation. |
+| Chief of staff | Claude, `chief-of-staff` | Operator conversation, interpretation of the operator's intent, work classification and delegation. |
 | Builder | Codex, `implementer` | Specifications, implementation plans, code, documentation and commits. |
-| Reviewer | Claude on the most capable model at high effort, `k8s-reviewer` on September 20 | Independent review and read-only verification. |
+| Reviewer | Claude on the most capable model at high effort, `k8s-reviewer` since 2026-09-20 | Independent review and read-only verification. |
 
 The chief of staff keeps its context clean.
-It captures the operator's answers to brainstorming questions before the builder writes the specification.
+It is the operator's interpreter, not their stenographer.
+When the operator says something, it first works out what that means for the request, for the project and for how the operator works, then replays that reading in a few plain sentences.
+It confirms the reading with the operator when the matter is complex, and acts at that scope once confirmed.
+It never passes the operator's words on verbatim, and it never narrows a general remark to the single instance in front of it.
+It carries the operator's intent, so interpreted, into the brief the builder works from before the builder writes the specification.
+Operator ruling, 2026-10-17: the seat exists to spare the operator long explanations in a text conversation, and relaying words back and forth is the failure the seat exists to prevent.
 It does not read inventories or diffs, or write specifications or plans.
 It rules on disagreements, defective plans and the escalations defined below.
 The builder writes the specification and implementation plan.
@@ -90,7 +95,7 @@ After a review, the next move belongs to the builder.
 Run every step your credentials and tools allow, including restore drills with the job key.
 Ask the operator only for private-vault access, browser sign-in or publication approval.
 Re-prompt once after fifteen minutes without a reply, then escalate continued silence to the chief of staff.
-Operator ruling, September 20, 2026: never run long tasks synchronously.
+Operator ruling, 2026-09-20: never run long tasks synchronously.
 Never block your turn on another seat or cluster Job for more than about one minute.
 Start a background monitor or background wait, then continue other work or end your turn.
 For Herdr agents, poll `herdr agent get <name>` in the background and report `done` or `blocked`.
@@ -108,6 +113,8 @@ The builder sends no per-round updates to the chief of staff.
 The chief of staff reports to the operator only at milestones: spec ready, plan ready, deployed or blocked.
 A decision only the operator can make is also a reporting milestone.
 Use absolute paths for every file named in messages to the operator, so links are clickable.
+Every message to the operator follows the communication rule in [AGENTS.md](../../AGENTS.md#when-editing): verdict first, then what needs the operator, in plain English, with the agent's working state left in the ledger.
+This applies to the chief of staff's replies and to anything an agent sends on the operator's behalf, such as Hal's morning email.
 
 ### Escalation
 
@@ -143,7 +150,7 @@ A selection dialog may need `herdr agent send-keys <name> <key>` instead of text
 Use `agent prompt` for normal handovers.
 
 Agent names are unique server-wide, not workspace-wide.
-On September 20, `reviewer` was already taken, so this team's reviewer became `k8s-reviewer`.
+On 2026-09-20, `reviewer` was already taken, so this team's reviewer became `k8s-reviewer`.
 Discover the name before sending work.
 Do not assume a neighboring workspace's `reviewer` belongs to this team.
 
