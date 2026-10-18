@@ -58,16 +58,21 @@ def _park(tid):
 
 def handle_publish(args,**kwargs):
     try:
-        if set(args) not in ({'card_id','assessments'},{'card_id','note'}):
+        if 'card_id' not in args or not set(args)<={'card_id','assessments','note'}:
             raise ValueError('invalid publication arguments')
+        assessments=args.get('assessments');note=args.get('note')
+        if (assessments is not None and not isinstance(assessments,dict)) or (note is not None and not isinstance(note,str)):
+            raise ValueError('invalid publication payload types')
+        if not assessments and not (note and note.strip()):
+            return json.dumps({'error':'provide non-empty assessments or note; both are empty'})
         task=_context(args['card_id'],publishing=True)
         board=NativeBoard()
         board.schedule=_park
-        drafts=args['assessments'] if 'assessments' in args else args['note']
+        drafts=assessments or {}
         try:
             sender=NativeMail(PROFILE)
             secrets=secret_values(PROFILE)
-            return json.dumps(publish(board,task,drafts,PROFILE,sender,secrets=secrets))
+            return json.dumps(publish(board,task,drafts,PROFILE,sender,secrets=secrets,note=note))
         except Exception:
             _park(task)
             return json.dumps({'success':False,'scheduled':True})
@@ -78,7 +83,7 @@ def handle_publish(args,**kwargs):
 def register(ctx):
     common={'card_id':{'type':'string','description':'Your current dispatcher-owned Hal card ID.'}}
     tools=[('kanban_hal_daily_plan',handle_plan,'Create public-only release readers and one dependent assembly for your batch.',dict(common,choices={'type':'object','description':'Pair-keyed public release choices: releases [{component,release_version,url}], missing [string], or no_public_notes true.'}),['card_id','choices']),
-           ('kanban_hal_daily_publish',handle_publish,'Validate complete reader results, refuse failed pairs, save and send one receipt-guarded batch or episode email. A failed send parks your card; stop afterward.',dict(common,assessments={'type':'object','additionalProperties':{'type':'string'}},note={'type':'string'}),['card_id'])]
+           ('kanban_hal_daily_publish',handle_publish,'Validate complete reader results, refuse failed pairs, save and send one receipt-guarded batch or episode email. A failed send parks your card; stop afterward.',dict(common,assessments={'type':['object','null'],'additionalProperties':{'type':'string'},'description':'Pair-keyed assessed advice for a batch. May accompany a note explaining what could not be assessed.'},note={'type':['string','null'],'description':'For a batch, what could not be assessed and why, appended to the same email. For a device episode, the look-over advice. At least assessments or note must be non-empty.'}),['card_id'])]
     for name,handler,description,properties,required in tools:
         result=ctx.register_tool(name=name,toolset='kanban',handler=handler,check_fn=available,schema={'name':name,'description':description,'parameters':{'type':'object','properties':properties,'required':required,'additionalProperties':False}})
         if result is None:

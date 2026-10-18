@@ -1,4 +1,5 @@
 import importlib.util
+import json
 from pathlib import Path
 import sys
 import tempfile
@@ -31,7 +32,7 @@ class PublicationFailure(unittest.TestCase):
   import hal_daily_cards
   asm=hal_daily_cards.plan(b,root,choice(key))['assembly'];b.tasks[asm]['status']='running'
   with patch.object(plugin,'_context',return_value=asm),patch.object(plugin,'NativeBoard',return_value=b),patch.object(plugin,'NativeMail',side_effect=ValueError('missing config')),patch.object(plugin,'_park',side_effect=b.schedule,create=True):
-   result=plugin.handle_publish({'card_id':asm,'assessments':{}})
+   result=plugin.handle_publish({'card_id':asm,'assessments':{key:'Useful advice.'}})
   self.assertEqual(b.tasks[asm]['status'],'scheduled')
 
 class PlanConfidentiality(unittest.TestCase):
@@ -45,7 +46,7 @@ class PublicationValidationFailure(unittest.TestCase):
  def test_valid_worker_publication_exception_is_parked_by_host(self):
   b=Board();root,key=batch(b)
   with patch.object(plugin,'_context',return_value=root),patch.object(plugin,'NativeBoard',return_value=b),patch.object(plugin,'NativeMail',return_value=lambda *a:None),patch.object(plugin,'secret_values',return_value=()),patch.object(plugin,'publish',side_effect=ValueError('invalid stored evidence')),patch.object(plugin,'_park',side_effect=b.schedule):
-   plugin.handle_publish({'card_id':root,'assessments':{}})
+   plugin.handle_publish({'card_id':root,'assessments':{key:'Useful advice.'}})
   self.assertEqual(b.tasks[root]['status'],'scheduled')
 
 
@@ -59,5 +60,58 @@ class WorkerContext(unittest.TestCase):
    with self.assertRaises(ValueError):plugin._context('t_12345678',publishing=True)
    with patch.object(plugin,'NativeMail',side_effect=AssertionError('no sender')):
     self.assertIn('refused',plugin.handle_publish({'card_id':'t_12345678','note':'No mail'}))
+
+
+class PublicationPayloads(unittest.TestCase):
+ def publish_batch(self,home,extra):
+  from test_hal_daily_cards import envelope
+  import hal_daily_cards as cards
+  b=Board();root,key=batch(b);data=json.loads(b.tasks[root]['body'])
+  data['updates'].append(dict(data['updates'][0],key='core-pending',package='core-pending',name='Core update'))
+  b.tasks[root]['body']=json.dumps(data)
+  asm=cards.plan(b,root,dict(choice(key),**{'core-pending':{'missing':['Core supporting detail unavailable']}}))['assembly']
+  reader=next(t for t in b.tasks.values() if t['assignee']=='safer_web_reader')
+  reader.update(status='done',result=json.dumps(envelope()))
+  sent=[];args={'card_id':asm,**extra(key)}
+  with patch.object(plugin,'_context',return_value=asm),patch.object(plugin,'NativeBoard',return_value=b),patch.object(plugin,'NativeMail',return_value=lambda *a:(sent.append(a) or {'success':True,'message_id':'fixture-mail'})),patch.object(plugin,'secret_values',return_value=()),patch.object(plugin,'PROFILE',Path(home)):
+   result=json.loads(plugin.handle_publish(args))
+  return result,sent,key
+ def test_live_partial_batch_shape_sends_assessment_and_note_in_one_email(self):
+  with tempfile.TemporaryDirectory() as home:
+   advice='Spook advice. '+('A'*2410)
+   note='Core could not be assessed because supporting details were unavailable.'
+   result,sent,key=self.publish_batch(home,lambda key:dict(assessments={key:advice},note=note))
+   self.assertTrue(result.get('success'),result);self.assertEqual(len(sent),1)
+   self.assertIn(advice,sent[0][1]);self.assertIn(note,sent[0][1]);self.assertLess(sent[0][1].index(advice),sent[0][1].index(note))
+   store=json.loads((Path(home)/'daily-check-assessments.json').read_text())
+   self.assertEqual(store['pairs'][key]['assessment'],advice);self.assertNotIn('core-pending',store['pairs'])
+   self.assertTrue(store['batches'][next(iter(store['batches']))]['receipt'])
+ def test_assessments_accept_omitted_empty_or_null_note(self):
+  for other in ({},{'note':''},{'note':None}):
+   with self.subTest(other=other),tempfile.TemporaryDirectory() as home:
+    result,sent,_=self.publish_batch(home,lambda key:dict(assessments={key:'Useful advice.'},**other))
+    self.assertTrue(result.get('success'),result);self.assertEqual(len(sent),1);self.assertIn('Useful advice.',sent[0][1])
+ def test_batch_note_accepts_omitted_empty_or_null_assessments(self):
+  for other in ({},{'assessments':{}},{'assessments':None}):
+   with self.subTest(other=other),tempfile.TemporaryDirectory() as home:
+    result,sent,_=self.publish_batch(home,lambda key:dict(note='Core remains unassessed; release detail unavailable.',**other))
+    self.assertTrue(result.get('success'),result);self.assertEqual(len(sent),1);self.assertIn('Core remains unassessed',sent[0][1])
+ def test_device_note_uses_its_episode_receipt(self):
+  with tempfile.TemporaryDirectory() as home:
+   b=Board();tid=b.create('look',dict(schema='hal-daily.device.v1',situation=dict(key='device',members=[],line='Lamp offline')),'hal','hal-daily:device:fixture')
+   sent=[]
+   with patch.object(plugin,'_context',return_value=tid),patch.object(plugin,'NativeBoard',return_value=b),patch.object(plugin,'NativeMail',return_value=lambda *a:(sent.append(a) or {'success':True})),patch.object(plugin,'secret_values',return_value=()),patch.object(plugin,'PROFILE',Path(home)):
+    result=json.loads(plugin.handle_publish({'card_id':tid,'assessments':None,'note':'Check the hub power.'}))
+   self.assertTrue(result.get('success'),result);self.assertEqual(len(sent),1);self.assertEqual(sent[0][1],'Check the hub power.')
+   self.assertTrue(json.loads((Path(home)/'daily-check-device-notes.json').read_text())['pairs'][tid]['sent_receipt'])
+ def test_both_empty_refused_before_board_or_sender(self):
+  for fields in ({},{'assessments':{},'note':''},{'assessments':None,'note':None},{'note':'  '}):
+   with self.subTest(fields=fields),patch.object(plugin,'NativeBoard',side_effect=AssertionError('board must not be read')):
+    result=json.loads(plugin.handle_publish({'card_id':'t_7ce44176',**fields}))
+    self.assertEqual(result.get('error'),'provide non-empty assessments or note; both are empty')
+ def test_extra_fields_and_wrong_payload_types_still_refused(self):
+  for fields in ({'note':'Advice','inventory':['private']},{'note':42},{'assessments':[],'note':'Advice'}):
+   with self.subTest(fields=fields),patch.object(plugin,'NativeBoard',side_effect=AssertionError('board must not be read')):
+    self.assertIn('refused',plugin.handle_publish({'card_id':'t_7ce44176',**fields}))
 
 if __name__=='__main__':unittest.main()

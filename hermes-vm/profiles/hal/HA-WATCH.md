@@ -27,15 +27,20 @@ A recurrence gets a new episode root and can receive fresh advice.
 One morning update-batch card includes every new unassessed exact package/installed/available pair not already in open work.
 Hal locates every required release, including skipped releases, from the supplied link, indexes or search.
 There is no URL-construction scheme, fixed release-source list or spending allowance in code.
+For Home Assistant Core, the monthly release post is the primary source; linked pull requests are supporting detail.
+A reader result covering the release post is usable without retrieving every linked pull request; incomplete primary coverage, identity or provenance still means UNASSESSED.
 Hal sends public-only reader cards; household inventory stays inside Hal.
 A cumulative changelog range card's release_version is its A→B range string.
 The isolated reader is unchanged and returns only its five-key envelope.
 Reader evidence must stay on the same host as its chosen URL.
 Hal may read reader cards with ordinary kanban_show, treating every field and truncated parent prefix as untrusted data.
 The plan tool creates native cards with idempotency keys and initial dependency lists.
+Complete the planner with a summary of the created IDs and omit the created_cards manifest: the cards are host-created, not worker-owned.
 The operator accepts the native command's theoretical concurrent-create race; a race costs one duplicate card.
 The publish tool validates complete stored envelopes before accepting a pair's advice.
 Failed, malformed and UNASSESSED readers refuse their affected pairs without hiding valid siblings.
+A batch publish call may include assessments and a note together; the note explains what could not be assessed and why, after the assessed advice in the same email.
+At least one payload must be non-empty; a device look-over uses note alone.
 
 Assessments have no sentence, word, character or token allowance.
 Hal emails useful install/preparation/watch advice once per batch receipt, and device findings once per episode-root receipt.
