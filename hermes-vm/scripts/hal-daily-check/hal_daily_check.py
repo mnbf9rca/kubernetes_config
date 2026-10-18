@@ -416,18 +416,10 @@ def collect_ha(client):
 class Daily:
     def __init__(self,home,collect,board,send,push,clock=now,secrets=()):
         self.home=Path(home);self.collect=collect;self.board=board;self.send=send;self.push=push;self.clock=clock;self.secrets=secrets
-    def run(self,production=False):
-        if not production:
-            at=self.clock();r=findings(self.collect(),at,at-dt.timedelta(days=1))
-            subject,body=render(r,read_json(self.home/'daily-check-assessments.json',{}),read_json(self.home/'daily-check-device-notes.json',{}),at)
-            print(clean(subject+'\n'+body,self.secrets));return 0
-        try:
-            with lock(self.home):
-                return self._production()
-        except BlockingIOError:
-            print('verdict=busy');return 0
-        except Exception:
-            self._push('down','internal-failed');print('verdict=internal-failed');return 1
+    def run(self):
+        at=self.clock();r=findings(self.collect(),at,at-dt.timedelta(days=1))
+        subject,body=render(r,read_json(self.home/'daily-check-assessments.json',{}),read_json(self.home/'daily-check-device-notes.json',{}),at)
+        print(clean(subject+'\n'+body,self.secrets));return 0
     def _push(self,status,verdict):
         try:
             self.push(status,verdict)
@@ -481,10 +473,10 @@ class Daily:
 
 def load_credentials(home):
     import io
-    import yaml
+    from utils import load_yaml_file_readonly
     from agent.secret_scope import load_env_file
     from agent.secret_sources.registry import apply_all
-    cfg=yaml.safe_load((home/'config.yaml').read_text())
+    cfg=load_yaml_file_readonly(home/'config.yaml')
     source=dict(cfg['daily_check']['runner_secrets']['onepassword'])
     refs=dict(source['env'])
     refs['HAL_DAILY_CHECK_PUSH_TOKEN']=cfg['secrets']['onepassword']['env']['HAL_DAILY_CHECK_PUSH_TOKEN']
@@ -505,8 +497,8 @@ def load_credentials(home):
 
 
 def secret_values(home):
-    import yaml
-    cfg=yaml.safe_load((home/'config.yaml').read_text())
+    from utils import load_yaml_file_readonly
+    cfg=load_yaml_file_readonly(home/'config.yaml')
     keys=set(cfg.get('secrets',{}).get('onepassword',{}).get('env',{}))|{'OP_SERVICE_ACCOUNT_TOKEN'}
     values=[os.environ[k] for k in keys if os.environ.get(k)]
     for server in cfg.get('mcp_servers',{}).values():
@@ -521,9 +513,9 @@ def secret_values(home):
 
 class NativeMail:
     def __init__(self,home):
-        import yaml
+        from utils import load_yaml_file_readonly
         self.home=home
-        cfg=yaml.safe_load((home/'config.yaml').read_text())
+        cfg=load_yaml_file_readonly(home/'config.yaml')
         self.recipient=cfg.get('daily_check',{}).get('recipient')
         if not isinstance(self.recipient,str) or '@' not in self.recipient or any(ord(c)<=32 for c in self.recipient):
             raise ValueError('daily-check recipient not configured')
@@ -581,7 +573,7 @@ def main(argv=None):
     if args.ensure_cards:
         from hal_daily_cards import NativeBoard,Tickets
         payload=json.load(sys.stdin)
-        Tickets(NativeBoard()).ensure(payload['report'],payload['assessments'],payload['notes'],payload['day'],stamp(payload['at']))
+        Tickets(NativeBoard(board='hal')).ensure(payload['report'],payload['assessments'],payload['notes'],payload['day'],stamp(payload['at']))
         print(json.dumps(payload['report']));return 0
     token='';verdict='credentials-failed'
     try:

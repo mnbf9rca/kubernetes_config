@@ -48,4 +48,16 @@ class PublicationValidationFailure(unittest.TestCase):
    plugin.handle_publish({'card_id':root,'assessments':{}})
   self.assertEqual(b.tasks[root]['status'],'scheduled')
 
+
+class WorkerContext(unittest.TestCase):
+ def test_disposable_worker_can_plan_but_cannot_publish(self):
+  import os,types
+  modules={'hermes_cli.profiles':types.SimpleNamespace(current_profile_name=lambda *a:'hal'),'tools.kanban_tools':types.SimpleNamespace(_is_dispatcher_owned_worker=lambda:True,_worker_guard=lambda *a:'t_12345678',_worker_run_id=lambda *a:7),'gateway.session_kanban':types.SimpleNamespace(_bound_claim_is_live=lambda *a:True)}
+  with patch.dict(sys.modules,modules),patch.dict(os.environ,{'HERMES_KANBAN_BOARD':'disposable'}):
+   self.assertTrue(plugin.available())
+   self.assertEqual(plugin._context('t_12345678'),'t_12345678')
+   with self.assertRaises(ValueError):plugin._context('t_12345678',publishing=True)
+   with patch.object(plugin,'NativeMail',side_effect=AssertionError('no sender')):
+    self.assertIn('refused',plugin.handle_publish({'card_id':'t_12345678','note':'No mail'}))
+
 if __name__=='__main__':unittest.main()

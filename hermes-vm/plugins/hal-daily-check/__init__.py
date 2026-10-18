@@ -11,14 +11,14 @@ from hal_daily_cards import NativeBoard,plan,publish
 from hal_daily_check import NativeMail,PROFILE,secret_values,sanitize
 
 
-def _context(provided=None):
+def _context(provided=None,publishing=False):
     from hermes_cli.profiles import current_profile_name
     from tools.kanban_tools import _is_dispatcher_owned_worker,_worker_guard,_worker_run_id
     from gateway.session_kanban import _bound_claim_is_live
     if current_profile_name('default')!='hal' or not _is_dispatcher_owned_worker():
         raise ValueError('not a Hal card worker')
     task=_worker_guard('kanban_schedule',{'task_id':provided} if provided else {})
-    if os.environ.get('HERMES_KANBAN_BOARD')!='hal' or not _worker_run_id(task):
+    if not _worker_run_id(task) or (publishing and os.environ.get('HERMES_KANBAN_BOARD')!='hal'):
         raise ValueError('not a production Hal card')
     context=dict(task_id=task,run_id=_worker_run_id(task),claim_lock=os.environ.get('HERMES_KANBAN_CLAIM_LOCK'),db=os.environ.get('HERMES_KANBAN_DB'))
     if not _bound_claim_is_live(context):
@@ -34,15 +34,19 @@ def available():
 
 
 def handle_plan(args,**kwargs):
+    phase='arguments'
     try:
         if set(args)!={'card_id','choices'}:
             raise ValueError('invalid plan arguments')
+        phase='worker context'
         task=_context(args['card_id'])
+        phase='credential scrubber'
         if sanitize(args['choices'],secret_values(PROFILE))!=args['choices']:
             raise ValueError('credential in public choices')
+        phase='native board'
         return json.dumps(plan(NativeBoard(),task,args['choices']))
-    except Exception:
-        return json.dumps({'error':'hal daily plan refused: invalid context, public choices or native command'})
+    except Exception as exc:
+        return json.dumps({'error':'hal daily plan refused: invalid context, public choices or native command','phase':phase,'kind':type(exc).__name__})
 
 
 def _park(tid):
@@ -56,7 +60,7 @@ def handle_publish(args,**kwargs):
     try:
         if set(args) not in ({'card_id','assessments'},{'card_id','note'}):
             raise ValueError('invalid publication arguments')
-        task=_context(args['card_id'])
+        task=_context(args['card_id'],publishing=True)
         board=NativeBoard()
         board.schedule=_park
         drafts=args['assessments'] if 'assessments' in args else args['note']

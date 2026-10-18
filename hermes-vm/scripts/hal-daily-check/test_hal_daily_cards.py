@@ -8,10 +8,12 @@ import hal_daily_cards as c
 import hal_daily_check as d
 from test_hal_daily_check import AT,snapshot
 
+NATIVE_FIELDS={'id','title','body','assignee','status','priority','tenant','workspace_kind','workspace_path','branch_name','project_id','created_by','created_at','started_at','completed_at','result','skills','max_runtime_seconds','max_retries','model_override','provider_override','session_id','workflow_template_id','current_step_key','completion_contract','last_failure_error'}
+
 class Board:
  def __init__(self):self.tasks={};self.serial=0;self.calls=[]
- def all(self):return list(self.tasks.values())
- def show(self,tid):return copy.deepcopy(self.tasks[tid])
+ def all(self):return [{k:copy.deepcopy(v) for k,v in task.items() if k in NATIVE_FIELDS} for task in self.tasks.values()]
+ def show(self,tid):return {k:copy.deepcopy(v) for k,v in self.tasks[tid].items() if k in NATIVE_FIELDS}
  def create(self,title,body,assignee,key,parents=()):
   old=next((x for x in self.tasks.values() if x['idempotency_key']==key and x['status']!='archived'),None)
   if old:return old['id']
@@ -206,5 +208,14 @@ class FullBoardBoundary(unittest.TestCase):
    tickets.ensure(report([]),{}, {},'2026-10-20',AT);self.assertEqual(b.tasks[root]['status'],'archived')
    again=report([situation]);tickets.ensure(again,{}, {},'2026-10-21',AT);new=again['situation_roots']['s'];self.assertNotEqual(root,new)
    c.publish(b,new,'A new episode.',Path(tmp),send,AT);self.assertEqual(len(sent),2)
+
+
+class RunnerBoardPin(unittest.TestCase):
+ def test_explicit_hal_pin_overrides_transient_dispatcher_board(self):
+  import os
+  from unittest.mock import patch
+  with patch.dict(os.environ,{'HERMES_KANBAN_BOARD':'unrelated'}):
+   self.assertEqual(c.NativeBoard(board='hal').command[-1],'hal')
+   self.assertNotIn('--board',c.NativeBoard().command)
 
 if __name__=='__main__':unittest.main()

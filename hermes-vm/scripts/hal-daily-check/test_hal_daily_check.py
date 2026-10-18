@@ -52,14 +52,14 @@ class Delivery(unittest.TestCase):
  def test_refusal_retry_is_identical_then_receipt_suppresses(self):
   with tempfile.TemporaryDirectory() as tmp:
    app=d.Daily(Path(tmp),snapshot,None,lambda *a:{'success':False},lambda *a:None,clock=lambda:AT)
-   self.assertEqual(app.run(production=True),1);first=json.loads((Path(tmp)/'daily-check-state.json').read_text())
+   self.assertEqual(app._production(),1);first=json.loads((Path(tmp)/'daily-check-state.json').read_text())
    app.collect=lambda:self.fail('retry recollected');sent=[];app.send=lambda *a:(sent.append(a) or {'success':True})
-   self.assertEqual(app.run(production=True),0);self.assertEqual(sent[0],(first['subject'],first['body']))
-   self.assertEqual(app.run(production=True),0);self.assertEqual(len(sent),1)
+   self.assertEqual(app._production(),0);self.assertEqual(sent[0],(first['subject'],first['body']))
+   self.assertEqual(app._production(),0);self.assertEqual(len(sent),1)
  def test_preview_has_no_side_effect(self):
   with tempfile.TemporaryDirectory() as tmp:
    app=d.Daily(Path(tmp),snapshot,None,lambda *a:self.fail('mail'),lambda *a:self.fail('push'),clock=lambda:AT)
-   app.run(production=False);self.assertEqual(list(Path(tmp).iterdir()),[])
+   app.run();self.assertEqual(list(Path(tmp).iterdir()),[])
 class Confidentiality(unittest.TestCase):
  def test_exact_credential_canary_scrubbed(self):
   self.assertNotIn('PASSWORD-CANARY',d.clean('Flower PASSWORD-CANARY',('PASSWORD-CANARY',)))
@@ -74,14 +74,14 @@ class Heartbeat(unittest.TestCase):
  def test_accepted_incomplete_is_up(self):
   with tempfile.TemporaryDirectory() as tmp:
    pushes=[];s=snapshot();s['gaps']=['devices'];app=d.Daily(Path(tmp),lambda:s,None,lambda *a:{'success':True},lambda *a:pushes.append(a),clock=lambda:AT)
-   self.assertEqual(app.run(production=True),0);self.assertEqual(pushes[-1],('up','accepted'))
+   self.assertEqual(app._production(),0);self.assertEqual(pushes[-1],('up','accepted'))
 
 class InvalidState(unittest.TestCase):
  def test_malformed_saved_advice_does_not_abort_delivery(self):
   with tempfile.TemporaryDirectory() as tmp:
    (Path(tmp)/'daily-check-assessments.json').write_text('[]');sent=[]
    app=d.Daily(Path(tmp),snapshot,None,lambda *a:(sent.append(a) or {'success':True}),lambda *a:None,clock=lambda:AT)
-   self.assertEqual(app.run(production=True),0);self.assertEqual(len(sent),1)
+   self.assertEqual(app._production(),0);self.assertEqual(len(sent),1)
  def test_missing_ids_each_get_fixed_advice(self):
   s=snapshot();s['states'] += [state('automation.a','on',friendly_name='Blinds'),state('automation.b','off',friendly_name='Lights')]
   text=' '.join(d.findings(s,AT,AT-dt.timedelta(days=1))['items'])
@@ -106,7 +106,7 @@ class OutputBoundaries(unittest.TestCase):
    class Board:
     def ensure(self,report,*args):created.append(json.dumps(report))
    app=d.Daily(Path(tmp),lambda:s,Board(),lambda *a:(sent.append(a) or {'success':True}),lambda *a:None,clock=lambda:AT,secrets=('secret"CANARY',))
-   self.assertEqual(app.run(production=True),0)
+   self.assertEqual(app._production(),0)
    self.assertNotIn('secret"CANARY',sent[0][1]);self.assertNotIn('secret\\"CANARY',''.join(created))
    self.assertNotIn('CANARY',(Path(tmp)/'daily-check-state.json').read_text())
 
@@ -152,9 +152,9 @@ class DevelopmentNotices(unittest.TestCase):
   with tempfile.TemporaryDirectory() as tmp:
    s=snapshot();s['states'][1]['state']='off';s['states'][1]['attributes']['installed_version']='2026.11.0.dev20261018'
    clock=[AT];sent=[];app=d.Daily(Path(tmp),lambda:s,None,lambda *a:(sent.append(a) or {'success':True}),lambda *a:None,clock=lambda:clock[0])
-   app.run(production=True);self.assertIn('development build',sent[-1][1])
-   clock[0]+=dt.timedelta(days=1);app.run(production=True);self.assertNotIn('development build',sent[-1][1])
-   s['states'][1]['attributes']['latest_version']='2026.11.0';clock[0]+=dt.timedelta(days=1);app.run(production=True);self.assertIn('development build',sent[-1][1])
+   app._production();self.assertIn('development build',sent[-1][1])
+   clock[0]+=dt.timedelta(days=1);app._production();self.assertNotIn('development build',sent[-1][1])
+   s['states'][1]['attributes']['latest_version']='2026.11.0';clock[0]+=dt.timedelta(days=1);app._production();self.assertIn('development build',sent[-1][1])
 
 class RunnerCredentials(unittest.TestCase):
  def test_runner_references_resolve_in_private_mapping_never_agent_environment(self):
@@ -166,7 +166,7 @@ class RunnerCredentials(unittest.TestCase):
    self.assertEqual(environ['HOME'],'/fixture-home')
    for name in config['onepassword']['env']:
     environ[name]={'HAL_DAILY_RUNNER_HASS_TOKEN':'fixture-token','HAL_DAILY_RUNNER_HASS_URL':'https://fixture.invalid','HAL_DAILY_CHECK_PUSH_TOKEN':'fixture-push'}[name]
-  modules={'yaml':types.SimpleNamespace(safe_load=json.loads), 'agent.secret_scope':types.SimpleNamespace(load_env_file=lambda p:{'OP_SERVICE_ACCOUNT_TOKEN':'fixture-bootstrap'}), 'agent.secret_sources.registry':types.SimpleNamespace(apply_all=apply)}
+  modules={'utils':types.SimpleNamespace(load_yaml_file_readonly=lambda p:json.loads(p.read_text())), 'agent.secret_scope':types.SimpleNamespace(load_env_file=lambda p:{'OP_SERVICE_ACCOUNT_TOKEN':'fixture-bootstrap'}), 'agent.secret_sources.registry':types.SimpleNamespace(apply_all=apply)}
   with tempfile.TemporaryDirectory() as tmp:
    home=Path(tmp);(home/'.op.env').write_text('fixture bootstrap')
    config={'secrets':{'onepassword':{'enabled':True,'env':{'HAL_DAILY_CHECK_PUSH_TOKEN':'op://fixture/push/token','OTHER':'op://fixture/other/token'}}},'daily_check':{'runner_secrets':{'onepassword':{'enabled':True,'env':{'HAL_DAILY_RUNNER_HASS_TOKEN':'op://fixture/ha/token','HAL_DAILY_RUNNER_HASS_URL':'op://fixture/ha/url'}}}}}
@@ -223,8 +223,8 @@ class ReceiptCrash(unittest.TestCase):
     if value.get('receipt'):raise OSError('fixture disk failure')
     real(path,value,secrets)
    app=d.Daily(Path(tmp),snapshot,None,lambda *a:(calls.append(a) or {'success':True}),lambda *a:None,clock=lambda:AT)
-   with patch.object(d,'atomic_json',side_effect=write):self.assertEqual(app.run(production=True),1)
-   self.assertEqual(app.run(production=True),0);self.assertEqual(calls[0],calls[1])
-   self.assertEqual(app.run(production=True),0);self.assertEqual(len(calls),2)
+   with patch.object(d,'atomic_json',side_effect=write):self.assertEqual(app._production(),1)
+   self.assertEqual(app._production(),0);self.assertEqual(calls[0],calls[1])
+   self.assertEqual(app._production(),0);self.assertEqual(len(calls),2)
 
 if __name__=='__main__':unittest.main()

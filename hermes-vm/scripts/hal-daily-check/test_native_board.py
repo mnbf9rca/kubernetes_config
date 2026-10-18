@@ -39,3 +39,12 @@ class NativeIntegration(unittest.TestCase):
   for _ in range(3):
    self.board.schedule(root);self.assertEqual(self.board.show(root)['status'],'scheduled')
    self.board.unblock(root);self.assertEqual(self.board.show(root)['status'],'ready')
+
+ def test_morning_sweep_wakes_native_scheduled_hal_card(self):
+  import datetime as dt
+  from test_hal_daily_check import AT,snapshot
+  import hal_daily_check as d
+  root,_=batch(self.board);self.board.schedule(root)
+  report=d.findings(snapshot(),AT,AT-dt.timedelta(days=1))
+  c.Tickets(self.board).ensure(report,{}, {},'2026-10-19',AT)
+  self.assertEqual(self.board.show(root)['status'],'ready')
