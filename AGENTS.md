@@ -287,6 +287,13 @@ The rules that must not be broken:
   That seat found four deletions two other reviewers missed (2026-08-27); the spec or plan's own author cannot fill it.
 - **An agent must not disable or descope a product feature in the operator's name.**
   Present what it does and its cost, then let the operator choose whether to enable it.
+- **API cost is capped at the vendor, never in agent code.**
+  The operator sets spending limits in each provider's billing dashboard, and that is the whole of the cost control.
+  An agent does not add call counts, token allowances, daily budgets, fetch quotas or reservations of its own to bound spend, whether in a spec, a plan, a review finding or code.
+  Such limits are hidden policy: they fail silently, they carry exhaustion from one run into the next, and they twice left Hal unable to do its job while every guard stayed green.
+  The only limits an agent may add are operational: a timeout or size bound that stops a hang or a runaway from blocking the output the job exists to produce.
+  Each one is generous, applies to one run only and is forgotten when the run ends, and when it fires the job says so in its output rather than failing quietly.
+  Operator ruling, 2026-10-18, after agents had carried a thirty-two-calls-a-day cap through three specs and a chief of staff had approved it in the operator's name: "api costs are capped at the vendor and stop applying arbitrary, hidden limits".
 - **An operator ruling beats a review finding.**
   Once the operator has chosen an approach, a finding against it is input for fixing that design, not grounds to reopen the decision.
   Harvest the finding's fixes into the chosen design, and state the contradiction in one sentence only.
