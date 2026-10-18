@@ -279,7 +279,7 @@ def findings(snapshot,at,cutoff):
             else:
                 automations[str(identity)]=names[eid]
     for aid in sorted(set(automations)|set(buckets)):
-        name=automations.get(aid,'an automation')
+        name=automations.get(aid,'unnamed')
         if aid=='None':
             diagnostics.append('a retained automation run has no automation ID')
         rows=buckets.get(aid,[])
@@ -295,20 +295,24 @@ def findings(snapshot,at,cutoff):
     for entry in entries.values():
         if entry.get('state') in ('setup_error','setup_retry','migration_error'):
             items.append(f'The {label(entry.get("title"),entry.get("domain"))} integration could not start; check its connection and setup.')
+    reported_errors=set()
     for log in snapshot.get('logs',[]):
         if str(log.get('level','')).upper() not in ('ERROR','CRITICAL'):
             continue
         domain=str(log.get('name') or log.get('logger') or 'Home Assistant')
         if domain.startswith('homeassistant.components.automation'):
             continue
-        match=re.match(r'homeassistant\.components\.([a-z0-9_]+)',domain)
+        match=re.match(r'(?:homeassistant\.components|custom_components)\.([a-z0-9_]+)',domain)
         name=label(match.group(1).replace('_',' ')) if match else 'Home Assistant'
+        if name in reported_errors:
+            continue
         message=log.get('message')
         if isinstance(message,list):
             message=next((x for x in message if isinstance(x,str) and x.strip()),'')
         message=next((x.strip() for x in message.splitlines() if x.strip()),'') if isinstance(message,str) else ''
         if message:
             items.append(f'{name}: {label(message).rstrip(".")}. Check its log in Home Assistant.')
+            reported_errors.add(name)
         else:
             diagnostics.append(f'{name}: a recent error had no readable message')
     for issue in snapshot.get('repairs',[]):
@@ -413,8 +417,9 @@ def collect_ha(client):
             if not isinstance(value,list):
                 raise ValueError('unexpected HA response')
             data[field]=value
-        except Exception:
-            data[field]=[];data['gaps'].append('I could not check '+area_names[field]+': the sixty-second read guard fired or its source was unavailable.')
+        except Exception as exc:
+            reason='the sixty-second wait for Home Assistant timed out' if isinstance(exc,TimeoutError) else 'Home Assistant did not provide the data'
+            data[field]=[];data['gaps'].append('I could not check '+area_names[field]+' because '+reason+'.')
     for row in data['traces']:
         if row.get('script_execution')=='aborted' and not row.get('not_triggered') and not row.get('error'):
             try:
@@ -446,10 +451,10 @@ class Daily:
             try:
                 report=findings(self.collect(),at,cutoff)
             except Exception:
-                report=dict(items=[],updates=[],situations=[],gaps=list(AREAS),device_complete=False,inventory=[],cutoff=at.isoformat())
+                report=dict(items=[],updates=[],situations=[],gaps=[f'I could not check {area} because the Home Assistant data could not be read.' for area in AREAS],device_complete=False,inventory=[],cutoff=at.isoformat())
             notice_updates={}
             for line in report.get('diagnostics',[]):
-                print(clean('Diagnostic: '+line,self.secrets),file=sys.stderr)
+                print(clean('Diagnostic: '+line,self.secrets))
             acknowledged=saved.get('development_notices',{})
             for notice in report.get('development',[]):
                 if acknowledged.get(notice['package'])!=notice['signature']:
@@ -460,8 +465,11 @@ class Daily:
             if self.board:
                 try:
                     self.board.ensure(report,assessments,notes,day,at)
-                except Exception:
-                    report['gaps'].append('the task board: three-minute hang guard or source unavailable')
+                except Exception as exc:
+                    blocker="I could not read the task board, so I could not check Hal's open work."
+                    if isinstance(exc,subprocess.TimeoutExpired):
+                        blocker+=' The three-minute wait for the task board timed out.'
+                    report['gaps'].append(blocker)
             subject,body=render(report,assessments,notes,at)
             saved=sanitize(dict(day=day,subject=subject,body=body,cutoff=report['cutoff'],accepted_cutoff=saved.get('accepted_cutoff'),receipt=None,notice_updates=notice_updates,development_notices=saved.get('development_notices',{})),self.secrets)
             try:

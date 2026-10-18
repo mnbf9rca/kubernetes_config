@@ -242,13 +242,16 @@ class MorningEmailFaults(unittest.TestCase):
   data['states'].append(state('automation.lights','off',id='lights',friendly_name='💡 Hall lights'))
   data['traces']=[dict(item_id='lights',timestamp={'start':(AT-dt.timedelta(minutes=i+1)).isoformat()},script_execution='finished') for i in range(5)]
   sent=[];log=io.StringIO()
-  with tempfile.TemporaryDirectory() as home,contextlib.redirect_stderr(log):
+  with tempfile.TemporaryDirectory() as home,contextlib.redirect_stdout(log):
    app=d.Daily(Path(home),lambda:data,None,lambda *a:(sent.append(a) or {'success':True}),lambda *a:None,clock=lambda:AT)
    self.assertEqual(app._production(),0)
   self.assertEqual(sent[0][0],'House: nothing needs you');self.assertNotIn('retained',sent[0][1]);self.assertIn('retained',log.getvalue())
   data['traces'][0]['error']='Connection failed'
   report=d.findings(data,AT,AT-dt.timedelta(days=1))
   self.assertEqual(report['items'],['The 💡 Hall lights automation failed; check its trace in Home Assistant.']);self.assertEqual(report['gaps'],[])
+  for identity in (None,'removed'):
+   data['traces']=[dict(item_id=identity,error='Connection failed',timestamp={'start':(AT-dt.timedelta(minutes=1)).isoformat()})]
+   self.assertEqual(d.findings(data,AT,AT-dt.timedelta(days=1))['items'],['The unnamed automation failed; check its trace in Home Assistant.'])
  def test_could_not_finish_lists_only_whole_check_blockers_on_separate_lines(self):
   data=snapshot();data['gaps']=['Recent errors could not be checked.']
   data['states'][-1]['last_reported']=(AT-dt.timedelta(minutes=10)).isoformat()
@@ -281,5 +284,39 @@ class MorningEmailFaults(unittest.TestCase):
   report=d.findings(data,AT,AT-dt.timedelta(days=1));body=d.render(report,{},{},AT)[1]
   self.assertIn('ohme: Could not connect to the charger. Check its log in Home Assistant.',body.splitlines())
   self.assertNotIn('ask Hal',body);self.assertNotIn('Traceback',body);self.assertNotIn('Another error',body)
+
+ def test_multiple_error_records_are_one_action_per_integration(self):
+  data=snapshot();data['logs']=[dict(level='ERROR',name=name,message=[message]) for name,message in [('homeassistant.components.ohme.coordinator','First charger error.'),('homeassistant.components.ohme.client','Second charger error.'),('custom_components.ohme.client','Third charger error.')]]
+  report=d.findings(data,AT,AT-dt.timedelta(days=1));subject,body=d.render(report,{},{},AT)
+  self.assertEqual(subject,'House: 2 things need you')
+  self.assertEqual([line for line in body.splitlines() if line.startswith('ohme:')],['ohme: First charger error. Check its log in Home Assistant.'])
+  self.assertNotIn('Second charger error',body);self.assertNotIn('Third charger error',body)
+ def test_blockers_name_timeouts_only_when_a_timeout_occurs(self):
+  from unittest.mock import patch
+  class Client:
+   def read(self,command,**args):
+    if command=='system_log/list':raise failure
+    return []
+  for failure in (TimeoutError('fixture timeout'),ValueError('fixture unavailable')):
+   with self.subTest(failure=type(failure).__name__):
+    result=d.collect_ha(Client());line=next(x for x in result['gaps'] if 'recent errors' in x)
+    self.assertIn('sixty-second wait' if isinstance(failure,TimeoutError) else 'Home Assistant did not provide the data',line)
+    self.assertNotIn('guard',line)
+  sent=[]
+  with tempfile.TemporaryDirectory() as home,patch.object(d,'findings',side_effect=ValueError('fixture malformed input')):
+   app=d.Daily(Path(home),snapshot,None,lambda *a:(sent.append(a) or {'success':True}),lambda *a:None,clock=lambda:AT)
+   self.assertEqual(app._production(),0)
+  self.assertIn('- I could not check batteries because the Home Assistant data could not be read.',sent[0][1])
+  import subprocess
+  class Board:
+   def ensure(self,*args):raise failure
+  for failure in (subprocess.TimeoutExpired(['fixture'],180),ValueError('fixture unavailable')):
+   sent=[]
+   with tempfile.TemporaryDirectory() as home:
+    app=d.Daily(Path(home),snapshot,Board(),lambda *a:(sent.append(a) or {'success':True}),lambda *a:None,clock=lambda:AT)
+    self.assertEqual(app._production(),0)
+   self.assertIn("I could not read the task board",sent[0][1])
+   self.assertEqual('three-minute wait' in sent[0][1],isinstance(failure,subprocess.TimeoutExpired))
+
 
 if __name__=='__main__':unittest.main()
