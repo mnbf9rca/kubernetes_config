@@ -78,8 +78,17 @@ if [ "$check_worktrees" -eq 1 ]; then
       continue
     fi
     # shellcheck disable=SC2016  # the $-expressions are for the child sh, deliberately
-    check "op token from a non-interactive shell in $wt" \
-      env -u OP_SERVICE_ACCOUNT_TOKEN sh -c 'cd "$1" && eval "$(direnv export bash 2>/dev/null)" && [ -n "$OP_SERVICE_ACCOUNT_TOKEN" ]' _ "$wt"
+    if ! env -u OP_SERVICE_ACCOUNT_TOKEN sh -c 'cd "$1" && eval "$(direnv export bash 2>/dev/null)" && [ -n "$OP_SERVICE_ACCOUNT_TOKEN" ]' _ "$wt"; then
+      # Say why. direnv's stderr never carries the token (that goes to stdout,
+      # which is discarded), but redact anything token-shaped as a backstop.
+      reason=$(env -u OP_SERVICE_ACCOUNT_TOKEN sh -c 'cd "$1" && direnv export bash 2>&1 >/dev/null' _ "$wt" \
+        | sed -E 's/ops_[A-Za-z0-9_-]+/ops_<redacted>/g' | grep -m1 -E 'ERROR|error' | cut -c1-200)
+      echo "FAIL: op token from a non-interactive shell in $wt"
+      echo "      ${reason:-direnv exported no token and printed no error}"
+      rc=1
+    else
+      echo "OK:   op token from a non-interactive shell in $wt"
+    fi
   done
 fi
 
