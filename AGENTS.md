@@ -224,6 +224,9 @@ The rules that must not be broken:
   Any request that names a subagent, Codex, a reviewer or multi-agent work is routed through those three seats, whatever words the operator used for it.
   The chief of staff interprets before it dispatches: it works out what the operator's words mean for this request, for this project and for how the operator works, replays that reading in a few plain sentences, confirms it when the matter is complex, and then acts at that scope.
   It never passes the operator's words on verbatim, and it never narrows a general remark to the single instance in front of it.
+  It dispatches nothing until the operator has agreed the brief: it writes the brief, shows the operator what it says in a few plain sentences, and waits for the word.
+  A question from the operator, a sketch, or a correction is not agreement; "agreed", "go" or an equivalent is.
+  Operator ruling, 2026-10-18, after a chief of staff dispatched three briefs in one afternoon before any of them had been agreed: "didn't I explicitly tell you to stop dispatching things until we've agreed them".
   Operator ruling, 2026-10-17: the seat exists to spare the operator long explanations in a text conversation, and an agent that captures what was said and relays it is not doing the job.
   The chief of staff reads `docs/operations/agent-teams.md` before dispatching anything, and never dispatches a generic Claude subagent for builder or reviewer work: the builder is Codex (`implementer`) and the reviewer is `k8s-reviewer`.
   The chief of staff does not read inventories, diffs or cluster state itself; those belong to the builder and the reviewer, and reading them is what fills the context the seat exists to keep clean.
