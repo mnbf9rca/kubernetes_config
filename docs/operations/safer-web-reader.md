@@ -16,10 +16,12 @@ Everything else about the VM, including stable application updates, is in [herme
 | Piece | Where | Notes |
 |---|---|---|
 | The profile | `/home/hermes/.hermes/profiles/safer_web_reader/` | A full separate Hermes home, not an overlay on the root config |
-| The board | slug `safer_web_reader`, at `~/.hermes/kanban/boards/safer_web_reader/kanban.db` | The request queue |
+| The boards | `safer_web_reader` for general requests; `hal` for Hal daily release readers | Databases at `~/.hermes/kanban/boards/<board>/kanban.db` |
 | The persona | `SOUL.md` in the profile home | Carries the whole worker protocol; canonical copy at `hermes-vm/profiles/safer_web_reader/SOUL.md` |
 | The broker plugin | `<profile home>/plugins/safer-reader-broker/` | Two tools; canonical copy at `hermes-vm/plugins/safer-reader-broker/` |
 | Worker logs | `~/.hermes/kanban/boards/safer_web_reader/logs/<task>.log`, or `hermes kanban --board safer_web_reader log <task>` | Where every failure is read. Both spellings were exercised live in the verification battery on 2026-08-30 |
+
+Hal’s daily check also creates public release-reader cards on board `hal`, assigned to the unchanged `safer_web_reader` profile. Their logs are `~/.hermes/kanban/boards/hal/logs/<task>.log` or `hermes kanban --board hal log <task>`. Household inventory stays in Hal’s planner and assembly cards; the host publish tool validates full reader envelopes before accepting advice.
 
 The profile has no messaging adapters or separate gateway unit; its owner context is served by the shared multiplexer.
 The kanban dispatcher runs inside a gateway under a machine-global advisory lock at `~/.hermes/kanban/.dispatcher.lock`, held by the shared `hermes-gateway.service`, and it enumerates every non-archived board on each 60-second tick.

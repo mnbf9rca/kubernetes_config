@@ -362,6 +362,7 @@ Read it per row rather than assuming up-on-success everywhere.
 | `homelab-update-watch` | `op://Homelab/update-watch/kuma-push-token` | 86400s, 1 retry at 21600s | `update-watch` CronJob in `ops`: `down` for lookup failures or a missing dashboard, `up` for a readable dashboard without lookup-failure markers, and **nothing** for indeterminate reads; the one-line `msg` starts with `verdict=`, then `run_epoch=`, fixed `next=` advice and any lookup-failure count |
 | `jottacloud-backup` | `op://Homelab/jottacloud-backup/kuma-push-token` | 21600s, 1 retry at 7200s | The `jottacloud-backup-scheduled` CronJob's own image, on success only. This repo does not build that image and does not control the request — see the note below |
 | `hermes-app-alive` | `op://hermes/hermes-app-alive/kuma-push-token` | 86400s, 1 retry at 21600s | A `no_agent` cron job inside `hermes-gateway` on the hermes VM at 05:45 UTC, `up` on exit 0 and `down` on failure, from an EXIT trap |
+| `hal-daily-check` | `op://hermes/hal-daily-check/kuma-push-token` | 86400s, 1 retry at 7200s | Hal’s 09:00 Europe/London native cron runner on the hermes VM: `up` after accepted/already-accepted morning mail, `down` on owned state/mail failure; no push from preview or a lock-losing run. Later assessment mail does not gate this heartbeat |
 
 The keel image floors are exactly **25 for homelab** and **12 for VPS**, counting distinct floating images across all containers in keel-annotated workloads.
 The former homelab count of 20 matched the live Keel gauge after the printer services were applied on 2026-10-08; Homepage, NetAlertX and Netdisco were added later.
@@ -372,11 +373,13 @@ Each migrated row's interval and retry mirror the period and grace of the health
 Its interval tracks its CronJob's period, so both moved when the schedule went from six-hourly to every 15 minutes on September 3, 2026: 1800s with 1 retry at 900s, which tolerates one missed run before it alerts.
 Nothing in this repo sets those two numbers — change them by hand in the uptime-kuma UI on the monitor's edit page, because a CronJob schedule change does not reach the monitor.
 
-`hermes-app-alive` is the exception to that migration sentence, and to the claim above that every push comes from inside a cluster.
+`hermes-app-alive` and `hal-daily-check` run outside both clusters on the Hermes VM; neither replaced a healthchecks.io check. Hal’s monitor was created by the operator on October 18, 2026, with one two-hour retry so a missed 09:00 email alarms around 11:00.
+
+The following details describe `hermes-app-alive`.
 Three things about it are unlike every other row here.
 
-- **It is the only push monitor driven from outside both clusters.**
-  Every other one is a CronJob in a namespace; this is a cron job inside the hermes agent on an off-cluster Debian VM.
+- **Both VM push monitors are native cron jobs on an off-cluster Debian VM.**
+  The other push monitors are CronJobs in namespaces.
   It relies on the same `/api/push/*` Access bypass, which is what widens that bypass's blast radius past "the clusters": remove or narrow it and this monitor goes permanently DOWN over a perfectly healthy VM, along with every other push monitor here.
 - **Its token lives in the `hermes` vault, not `Homelab`**, because the VM's 1Password service account can see only that vault — which is what lets the VM resolve it for itself.
   Anyone looking for it in `Homelab` will not find it.

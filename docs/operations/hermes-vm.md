@@ -1118,10 +1118,18 @@ HAL already reads its watchdog design through `skills/smart-home/homeassistant-i
 `deliver=local` keeps stdout in the host cron run record; that output directory is not part of the scripts bind.
 No repository checkout or cron-store mount is needed.
 
+### Hal daily house check
+
+Hal’s 09:00 Europe/London native `no_agent` job `e6a2fb6484b8` runs `scripts/hal-daily-check-morning.py`; the old 08:15 producer is paused. The script collects facts and sends the deterministic morning email without waiting for an agent. Native cards on board `hal` let Hal assess updates and investigate grouped device situations later, through the two `kanban_hal_daily_plan` and `kanban_hal_daily_publish` tools. The [Hal guide](../../hermes-vm/profiles/hal/HA-WATCH.md) records the scope and receipt limits.
+
+The native Home Assistant plugin is disabled and privately archived. HASS credentials are absent from Hal’s agent/worker mapping; only the host runner resolves `daily_check.runner_secrets` into a private mapping. Hal’s MCP entry uses the operator’s readonly address, which restricts that address rather than other clients using the same credential. Ordinary daily-check rollback keeps this separation and the old producer’s host-only credential adaptation.
+
+The `hal-daily-check` Kuma push monitor follows morning-mail acceptance, with a 24-hour heartbeat and one two-hour retry. A refused later publication parks its own card in native scheduled state; the next morning wakes it. SMTP acceptance is not inbox receipt, and a crash before saving the local receipt can repeat an identical email.
+
 ### The Home Assistant event feed on `hal`
 
 **`hal` is the only profile that watches Home Assistant.**
-Its settings live in `platforms.homeassistant.extra` in `~/.hermes/profiles/hal/config.yaml` — agent state on the VM, carried by the nightly `hermes backup` zip, with no copy in this repository — so a change is made on the VM and recorded here.
+Before the native plugin was removed on October 18, 2026, its event-feed settings lived in `platforms.homeassistant.extra` in `~/.hermes/profiles/hal/config.yaml` — agent state on the VM, carried by the nightly `hermes backup` zip, with no copy in this repository — so a change is made on the VM and recorded here.
 
 **`enabled: false` under `platforms.homeassistant` does not disable the platform.**
 The gateway marks an explicit enable or disable only for a **top-level** platform block (`enabled_was_explicit`, `gateway/config.py`), so a nested block never sets that marker and the later env-driven pass re-enables the platform on the presence of `HASS_TOKEN`.

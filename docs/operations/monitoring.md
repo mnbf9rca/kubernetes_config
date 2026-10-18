@@ -604,9 +604,10 @@ One consequence bites from this side: a monitor that follows redirects reports U
 Layer 3 is no longer only outbound HTTP checks.
 It also holds **push monitors**, driven by jobs that send a heartbeat rather than answering a request — the dead-man's-switch shape that used to mean a healthchecks.io check.
 Ten were created on August 26, 2026: `homelab-keel-fresh` and `vps-keel-fresh`, and the eight that took over the routine heartbeats — `health-influx-backup`, `health-garmin-and-apple-ingest`, `homelab-cloudflare-analytics`, `homelab-hermes-pull`, `hindsight-pg-dump`, `hindsight-canary`, `homelab-update-watch` and `jottacloud-backup`.
-An eleventh, **`hermes-app-alive`**, is the one driven from **outside** both clusters: a `no_agent` cron job inside the hermes agent on the off-cluster VM at 05:45 UTC, `up` on exit 0 and `down` otherwise ([hermes-vm.md](hermes-vm.md#reading-a-down-hermes-app-alive)).
+**`hermes-app-alive`** runs **outside** both clusters: a `no_agent` cron job inside the hermes agent on the off-cluster VM at 05:45 UTC, `up` on exit 0 and `down` otherwise ([hermes-vm.md](hermes-vm.md#reading-a-down-hermes-app-alive)).
+**`hal-daily-check`** also runs on that VM, at 09:00 Europe/London. It follows accepted morning mail only, including an honest incomplete check; later assessment mail cannot delay it. Its 24-hour heartbeat and one two-hour retry alert on a missed morning around 11:00. The operator created it on October 18, 2026; [monitor details](uptime-kuma.md#push-monitors).
 That widens the `/api/push/*` Access bypass's blast radius past "the clusters".
-A twelfth, **`Withings-ingest`**, was added on September 2, 2026 for the `withings-ingest` CronJob in `health`.
+**`Withings-ingest`** was added on September 2, 2026 for the `withings-ingest` CronJob in `health`.
 The `vps-github-mirror` push monitor covers the nightly `github-mirror` CronJob in `backup`, with an 86400s interval and one retry at 7200s.
 It pushes `up` on exit 0 and `down` otherwise, including default-branch force-pushes and deletions.
 Its message carries `verdict=`, `repos=`, `forced_default=`, `deleted_default=` and, on failure, `failed_step=`.
