@@ -1,0 +1,210 @@
+import copy
+import datetime as dt
+import json
+from pathlib import Path
+import tempfile
+import unittest
+import hal_daily_cards as c
+import hal_daily_check as d
+from test_hal_daily_check import AT,snapshot
+
+class Board:
+ def __init__(self):self.tasks={};self.serial=0;self.calls=[]
+ def all(self):return list(self.tasks.values())
+ def show(self,tid):return copy.deepcopy(self.tasks[tid])
+ def create(self,title,body,assignee,key,parents=()):
+  old=next((x for x in self.tasks.values() if x['idempotency_key']==key and x['status']!='archived'),None)
+  if old:return old['id']
+  self.serial+=1;tid=f't_{self.serial:08x}';self.tasks[tid]=dict(id=tid,title=title,body=json.dumps(body),assignee=assignee,idempotency_key=key,status='todo' if parents else 'ready',parents=list(parents),created_at=int(AT.timestamp()),result=None);return tid
+ def archive(self,tid):self.tasks[tid]['status']='archived'
+ def unblock(self,tid):self.tasks[tid]['status']='ready'
+ def schedule(self,tid):self.tasks[tid]['status']='scheduled';self.calls.append(('schedule',tid))
+
+def batch(board):
+ r=d.findings(snapshot(),AT,AT-dt.timedelta(days=1));r['inventory']=['zha','private-canary']
+ tid=board.create('assess',dict(schema='hal-daily.batch.v1',updates=r['updates'],inventory=r['inventory']), 'hal','hal-daily:batch:2026-10-18')
+ return tid,r['updates'][0]['key']
+
+def choice(key):return {key:dict(releases=[dict(component='home-assistant/core',release_version='2026.10',url='https://example.org/core')])}
+
+def envelope(version='2026.10'):
+ url='https://example.org/core'
+ return dict(status='OK',reason='',sources=[url],quotes=[dict(source=url,text='A breaking change')],answer=dict(component='home-assistant/core',release_version=version,retrieval_status='ok',source_urls=[url],version_match=True,summary='Summary',security_fixes=[],breaking_changes=['Change'],migrations=[],operator_actions=[],changed_components=[],relevant_bug_fixes=[],risk='routine',confidence='high',evidence=[dict(source_url=url,quote='A breaking change',supports='breaking_changes')]))
+
+class Tickets(unittest.TestCase):
+ def test_one_morning_batch_and_changed_day_does_not_duplicate_open_pair(self):
+  b=Board();r=d.findings(snapshot(),AT,AT-dt.timedelta(days=1));adapter=c.Tickets(b)
+  adapter.ensure(r,{}, {},'2026-10-18',AT);adapter.ensure(r,{}, {},'2026-10-18',AT)
+  adapter.ensure(r,{}, {},'2026-10-19',AT+dt.timedelta(days=1))
+  self.assertEqual(len(b.tasks),1)
+ def test_clear_archives_episode_and_recurrence_has_new_root(self):
+  b=Board();adapter=c.Tickets(b);r=dict(updates=[],inventory=[],gaps=[],situations=[dict(key='situation',members=[dict(device_id='a',condition='offline')],line='Lamp offline')],device_complete=True)
+  adapter.ensure(r,{}, {},'2026-10-18',AT);first=list(b.tasks)[0];b.tasks[first]['status']='done'
+  adapter.ensure(dict(r,situations=[]),{}, {},'2026-10-19',AT);adapter.ensure(r,{}, {},'2026-10-20',AT)
+  self.assertEqual(b.tasks[first]['status'],'archived');self.assertEqual(len(b.tasks),2)
+
+class Graph(unittest.TestCase):
+ def test_plan_uses_native_create_public_only_and_dependencies(self):
+  b=Board();root,key=batch(b)
+  out=getattr(c,'plan',lambda *a,**k:{})(b,root,choice(key))
+  self.assertIn('assembly',out)
+  readers=[t for t in b.tasks.values() if t['assignee']=='safer_web_reader']
+  self.assertEqual(len(readers),1);self.assertNotIn('private-canary',readers[0]['body'])
+  self.assertEqual(b.tasks[out['assembly']]['parents'],[readers[0]['id']])
+  c.plan(b,root,choice(key));self.assertEqual(len(b.tasks),3)
+
+class Envelopes(unittest.TestCase):
+ def test_correct_then_malformed_and_unassessed(self):
+  body=dict(component='home-assistant/core',release_version='2026.10',url='https://example.org/core')
+  self.assertIsInstance(c.validate_reader(json.dumps(envelope()),body),dict)
+  for mutation in ({'status':'UNASSESSED'},{'extra':1},{'answer':{}},{'sources':['https://bad.example/page']}):
+   with self.subTest(mutation=mutation):
+    bad=envelope();bad.update(mutation)
+    with self.assertRaises(ValueError):c.validate_reader(json.dumps(bad),body)
+ def test_wrong_version_and_duplicate_keys_refused(self):
+  body=dict(component='home-assistant/core',release_version='2026.10',url='https://example.org/core')
+  with self.assertRaises(ValueError):c.validate_reader(json.dumps(envelope('2025.9')),body)
+  with self.assertRaises(ValueError):c.validate_reader('{"status":"OK","status":"OK"}',body)
+
+class Publication(unittest.TestCase):
+ def prepare(self,b):
+  root,key=batch(b);out=c.plan(b,root,choice(key));reader=next(t for t in b.tasks.values() if t['assignee']=='safer_web_reader')
+  reader['status']='done';reader['result']=json.dumps(envelope());return out['assembly'],key,reader
+ def test_failed_reader_refuses_affected_pair_and_never_stores_its_prose(self):
+  with tempfile.TemporaryDirectory() as tmp:
+   b=Board();asm,key,reader=self.prepare(b);reader['result']=json.dumps(dict(status='UNASSESSED',answer={},sources=[],quotes=[],reason='failed'))
+   sent=[];out=c.publish(b,asm,{key:'MUST NOT STORE'},Path(tmp),lambda *a:(sent.append(a) or {'success':True}),AT)
+   self.assertIn(key,out['refused']);text=''.join(p.read_text() for p in Path(tmp).glob('*.json'));self.assertNotIn('MUST NOT STORE',text)
+ def test_multi_sentence_long_assessment_one_mail_and_no_duplicate(self):
+  with tempfile.TemporaryDirectory() as tmp:
+   b=Board();asm,key,reader=self.prepare(b);sent=[];draft='Install after checking Zigbee. Watch its reconnect. '+('Useful detail. '*5000)
+   send=lambda *a:(sent.append(a) or {'success':True})
+   c.publish(b,asm,{key:draft},Path(tmp),send,AT);c.publish(b,asm,{key:draft},Path(tmp),send,AT)
+   self.assertEqual(len(sent),1);self.assertIn(draft,sent[0][1]);self.assertTrue(json.loads((Path(tmp)/'daily-check-assessments.json').read_text())['pairs'][key]['sent_receipt'])
+ def test_repeated_refusal_schedules_without_triage_and_retries_frozen(self):
+  with tempfile.TemporaryDirectory() as tmp:
+   b=Board();asm,key,_=self.prepare(b);attempt=[]
+   send=lambda *a:(attempt.append(a) or {'success':False})
+   for i in range(3):
+    b.tasks[asm]['status']='running';c.publish(b,asm,{key:'Install after checking Zigbee.'},Path(tmp),send,AT)
+    self.assertEqual(b.tasks[asm]['status'],'scheduled')
+   self.assertEqual(attempt[0],attempt[2])
+ def test_pending_only_not_emailed_daily(self):
+  with tempfile.TemporaryDirectory() as tmp:
+   b=Board();asm,key,reader=self.prepare(b);reader['status']='blocked';sent=[];send=lambda *a:(sent.append(a) or {'success':True})
+   c.publish(b,asm,{},Path(tmp),send,AT)
+   # A new morning batch with the same pending pair is a distinct assembly.
+   b.tasks[asm]['idempotency_key']='old';other=b.create('assemble',json.loads(b.tasks[asm]['body']),'hal','hal-daily:assemble:other')
+   c.publish(b,other,{},Path(tmp),send,AT+dt.timedelta(days=1));self.assertEqual(len(sent),1)
+
+class Devices(unittest.TestCase):
+ def test_episode_receipt_and_refused_send_park(self):
+  with tempfile.TemporaryDirectory() as tmp:
+   b=Board();tid=b.create('look',dict(schema='hal-daily.device.v1',situation=dict(key='s',members=[dict(device_id='x',condition='offline')],line='Lamp offline')),'hal','hal-daily:device:s')
+   c.publish(b,tid,'The hub is down. Check its power.',Path(tmp),lambda *a:{'success':False},AT)
+   self.assertEqual(b.tasks[tid]['status'],'scheduled')
+
+class NativeCommand(unittest.TestCase):
+ def test_create_body_stdin_idempotency_and_parent_argv(self):
+  calls=[]
+  def run(argv,**kwargs):
+   calls.append((argv,kwargs));return type('Result',(),dict(returncode=0,stdout='{"id":"t_00000001"}',stderr=''))()
+  b=c.NativeBoard(run=run,command=['hermes','-p','hal','kanban','--board','test'])
+  self.assertEqual(b.create('title',{'private':'$(touch /bad)'},'hal','stable',['t_00000002']),'t_00000001')
+  argv,kw=calls[0];self.assertIn('--idempotency-key',argv);self.assertIn('--parent',argv);self.assertNotIn('$(touch /bad)',' '.join(argv));self.assertIn('$(touch /bad)',kw['input'])
+
+class Recovery(unittest.TestCase):
+ def test_scheduled_and_blocked_hal_cards_wake(self):
+  b=Board();root,key=batch(b);b.tasks[root]['status']='scheduled';r=d.findings(snapshot(),AT,AT-dt.timedelta(days=1))
+  c.Tickets(b).ensure(r,{}, {},'2026-10-19',AT);self.assertEqual(b.tasks[root]['status'],'ready');self.assertEqual(len(b.tasks),1)
+
+class ReleasePlan(unittest.TestCase):
+ def test_missing_release_remains_pending_without_discovery(self):
+  b=Board();root,key=batch(b);out=c.plan(b,root,{key:{'missing':['September release not located']}})
+  self.assertIn(key,json.loads(b.tasks[out['assembly']]['body'])['missing']);self.assertEqual(len(b.tasks),2)
+
+class Assessments(unittest.TestCase):
+ def test_full_reader_envelope_is_used_beyond_native_context_prefix(self):
+  body=dict(component='home-assistant/core',release_version='2026.10',url='https://example.org/core')
+  value=envelope();value['answer']['summary']='x'*6000
+  self.assertEqual(len(c.validate_reader(json.dumps(value),body)['summary']),6000)
+ def test_delivered_pair_is_immutable_even_in_another_assembly(self):
+  with tempfile.TemporaryDirectory() as tmp:
+   b=Board();root,key=batch(b);asm=c.plan(b,root,choice(key))['assembly'];reader=next(x for x in b.tasks.values() if x['assignee']=='safer_web_reader')
+   reader['status']='done';reader['result']=json.dumps(envelope());sent=[];send=lambda *a:(sent.append(a) or {'success':True})
+   c.publish(b,asm,{key:'FIRST ADVICE'},Path(tmp),send,AT)
+   newer=b.create('assemble',json.loads(b.tasks[asm]['body']),'hal','hal-daily:assemble:new')
+   c.publish(b,newer,{key:'SECOND ADVICE'},Path(tmp),send,AT+dt.timedelta(days=1))
+   self.assertEqual(len(sent),1);store=json.loads((Path(tmp)/'daily-check-assessments.json').read_text());self.assertEqual(store['pairs'][key]['assessment'],'FIRST ADVICE')
+
+
+class FailedReaderRetry(unittest.TestCase):
+ def test_completed_unassessed_reader_is_retired_for_next_attempt(self):
+  with tempfile.TemporaryDirectory() as tmp:
+   b=Board();root,key=batch(b);asm=c.plan(b,root,choice(key))['assembly'];reader=next(x for x in b.tasks.values() if x['assignee']=='safer_web_reader')
+   reader['status']='done';reader['result']=json.dumps(dict(status='UNASSESSED',answer={},sources=[],quotes=[],reason='not fetched'))
+   c.publish(b,asm,{},Path(tmp),lambda *a:{'success':True},AT)
+   self.assertEqual(reader['status'],'archived')
+ def test_valid_sibling_survives_failed_other_pair(self):
+  with tempfile.TemporaryDirectory() as tmp:
+   b=Board();root,key=batch(b);original=json.loads(b.tasks[root]['body']);second=dict(original['updates'][0],key='second',package='other',name='Other update');original['updates'].append(second);b.tasks[root]['body']=json.dumps(original)
+   choices=choice(key);choices['second']={'missing':['release not located']};asm=c.plan(b,root,choices)['assembly']
+   reader=next(x for x in b.tasks.values() if x['assignee']=='safer_web_reader');reader['status']='done';reader['result']=json.dumps(envelope())
+   sent=[];out=c.publish(b,asm,{key:'Useful advice.','second':'INVALID'},Path(tmp),lambda *a:(sent.append(a) or {'success':True}),AT)
+   self.assertEqual(out['refused'],['second']);self.assertIn('Useful advice.',sent[0][1]);self.assertNotIn('INVALID',sent[0][1])
+
+class StalePending(unittest.TestCase):
+ def test_saved_but_unsent_assessment_is_named_after_three_days(self):
+  b=Board();root,key=batch(b);b.tasks[root]['created_at']=int((AT-dt.timedelta(days=4)).timestamp());b.tasks[root]['status']='done'
+  report=d.findings(snapshot(),AT,AT-dt.timedelta(days=1));c.Tickets(b).ensure(report,{'pairs':{key:{'assessment':'advice','sent_receipt':None}}},{},'2026-10-18',AT)
+  self.assertTrue(any('ask Hal' in x for x in report['gaps']))
+
+class CachedEvidenceBoundary(unittest.TestCase):
+ def test_failed_current_reader_cannot_publish_an_unsent_cached_assessment(self):
+  with tempfile.TemporaryDirectory() as tmp:
+   b=Board();root,key=batch(b);asm=c.plan(b,root,choice(key))['assembly'];reader=next(x for x in b.tasks.values() if x['assignee']=='safer_web_reader')
+   reader['status']='done';reader['result']=json.dumps(dict(status='UNASSESSED',answer={},sources=[],quotes=[],reason='not fetched'))
+   d.atomic_json(Path(tmp)/'daily-check-assessments.json',{'pairs':{key:dict(assessment='CACHED UNSENT ADVICE',assessed_at=AT.isoformat(),sent_receipt=None)}})
+   sent=[];out=c.publish(b,asm,{},Path(tmp),lambda *a:(sent.append(a) or {'success':True}),AT)
+   self.assertIn(key,out['refused']);self.assertNotIn('CACHED UNSENT ADVICE',sent[0][1])
+
+
+class DeviceNag(unittest.TestCase):
+ def test_saved_unsent_note_still_gets_three_day_reminder(self):
+  b=Board();adapter=c.Tickets(b)
+  def report():return dict(updates=[],inventory=[],gaps=[],situations=[dict(key='s',members=[],line='Lamp offline')],device_complete=True)
+  first=report();adapter.ensure(first,{}, {},'2026-10-18',AT);root=first['situation_roots']['s']
+  notes={'pairs':{root:dict(note='Saved advice',observed_at=AT.isoformat())}}
+  later=report();adapter.ensure(later,{},notes,'2026-10-21',AT+dt.timedelta(days=3))
+  self.assertTrue(any('look at the board' in gap for gap in later['gaps']))
+  notes['pairs'][root]['sent_receipt']={'accepted_at':AT.isoformat()}
+  sent=report();adapter.ensure(sent,{},notes,'2026-10-22',AT+dt.timedelta(days=4))
+  self.assertEqual(sent['gaps'],[])
+
+
+class FullBoardBoundary(unittest.TestCase):
+ def test_large_private_root_and_reader_are_read_from_board_and_shared(self):
+  with tempfile.TemporaryDirectory() as tmp:
+   b=Board();root,key=batch(b);data=json.loads(b.tasks[root]['body']);data['inventory']=['PRIVATE-HOUSE-CANARY-'+str(i) for i in range(1000)];b.tasks[root]['body']=json.dumps(data)
+   first=c.plan(b,root,choice(key));reader=next(t for t in b.tasks.values() if t['assignee']=='safer_web_reader')
+   self.assertGreater(len(b.tasks[root]['body']),8192);self.assertNotIn('PRIVATE-HOUSE',reader['body'])
+   value=envelope();value['answer']['summary']='SAFE PUBLIC FACT. '*400;reader.update(status='done',result=json.dumps(value))
+   self.assertGreater(len(reader['result']),4096)
+   sent=[];c.publish(b,first['assembly'],{key:'Useful complete advice.'},Path(tmp),lambda *a:(sent.append(a) or {'success':True}),AT)
+   other=b.create('new batch',data,'hal','hal-daily:batch:other');second=c.plan(b,other,choice(key))
+   self.assertEqual(json.loads(b.tasks[second['assembly']]['body'])['readers'][key],[reader['id']])
+   self.assertEqual(len([t for t in b.tasks.values() if t['assignee']=='safer_web_reader']),1)
+   self.assertIn('Useful complete advice.',sent[0][1])
+ def test_incomplete_device_check_never_clears_episode_and_recurrence_emails(self):
+  with tempfile.TemporaryDirectory() as tmp:
+   b=Board();tickets=c.Tickets(b);sent=[];send=lambda *a:(sent.append(a) or {'success':True})
+   def report(rows,complete=True):return dict(updates=[],inventory=[],gaps=[],situations=rows,device_complete=complete)
+   situation=dict(key='s',members=[dict(device_id='a',condition='offline')],line='Lamp offline')
+   first=report([situation]);tickets.ensure(first,{}, {},'2026-10-18',AT);root=first['situation_roots']['s']
+   c.publish(b,root,'Check its power.',Path(tmp),send,AT);c.publish(b,root,'No second email.',Path(tmp),send,AT)
+   tickets.ensure(report([],False),{}, {},'2026-10-19',AT);self.assertNotEqual(b.tasks[root]['status'],'archived')
+   tickets.ensure(report([]),{}, {},'2026-10-20',AT);self.assertEqual(b.tasks[root]['status'],'archived')
+   again=report([situation]);tickets.ensure(again,{}, {},'2026-10-21',AT);new=again['situation_roots']['s'];self.assertNotEqual(root,new)
+   c.publish(b,new,'A new episode.',Path(tmp),send,AT);self.assertEqual(len(sent),2)
+
+if __name__=='__main__':unittest.main()
