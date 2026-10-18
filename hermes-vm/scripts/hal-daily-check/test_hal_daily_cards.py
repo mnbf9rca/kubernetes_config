@@ -159,7 +159,7 @@ class StalePending(unittest.TestCase):
  def test_saved_but_unsent_assessment_is_named_after_three_days(self):
   b=Board();root,key=batch(b);b.tasks[root]['created_at']=int((AT-dt.timedelta(days=4)).timestamp());b.tasks[root]['status']='done'
   report=d.findings(snapshot(),AT,AT-dt.timedelta(days=1));c.Tickets(b).ensure(report,{'pairs':{key:{'assessment':'advice','sent_receipt':None}}},{},'2026-10-18',AT)
-  self.assertTrue(any('ask Hal' in x for x in report['gaps']))
+  self.assertTrue(any('ask Hal' in x for x in report['items']))
 
 class CachedEvidenceBoundary(unittest.TestCase):
  def test_failed_current_reader_cannot_publish_an_unsent_cached_assessment(self):
@@ -178,7 +178,7 @@ class DeviceNag(unittest.TestCase):
   first=report();adapter.ensure(first,{}, {},'2026-10-18',AT);root=first['situation_roots']['s']
   notes={'pairs':{root:dict(note='Saved advice',observed_at=AT.isoformat())}}
   later=report();adapter.ensure(later,{},notes,'2026-10-21',AT+dt.timedelta(days=3))
-  self.assertTrue(any('look at the board' in gap for gap in later['gaps']))
+  self.assertTrue(any('look at the board' in line for line in later['items']))
   notes['pairs'][root]['sent_receipt']={'accepted_at':AT.isoformat()}
   sent=report();adapter.ensure(sent,{},notes,'2026-10-22',AT+dt.timedelta(days=4))
   self.assertEqual(sent['gaps'],[])

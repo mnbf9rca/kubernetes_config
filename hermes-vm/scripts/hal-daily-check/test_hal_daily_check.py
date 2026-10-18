@@ -82,9 +82,10 @@ class InvalidState(unittest.TestCase):
    (Path(tmp)/'daily-check-assessments.json').write_text('[]');sent=[]
    app=d.Daily(Path(tmp),snapshot,None,lambda *a:(sent.append(a) or {'success':True}),lambda *a:None,clock=lambda:AT)
    self.assertEqual(app._production(),0);self.assertEqual(len(sent),1)
- def test_missing_ids_each_get_fixed_advice(self):
+ def test_missing_ids_each_get_log_only_diagnostics(self):
   s=snapshot();s['states'] += [state('automation.a','on',friendly_name='Blinds'),state('automation.b','off',friendly_name='Lights')]
-  text=' '.join(d.findings(s,AT,AT-dt.timedelta(days=1))['items'])
+  report=d.findings(s,AT,AT-dt.timedelta(days=1));text=' '.join(report['diagnostics'])
+  self.assertFalse(any('Give ' in line for line in report['items']))
   self.assertIn('Blinds',text);self.assertIn('Lights',text)
 
 class CLI(unittest.TestCase):
@@ -191,7 +192,7 @@ class ScopeEdges(unittest.TestCase):
  def test_missing_monitor_denominator_is_named_without_losing_findings(self):
   s=snapshot();s['states'][-1]['state']='1';s['states'][-1]['attributes'].update(devices=[dict(id='plant',name='Flower sensor')],integrations={'zha':99})
   report=d.findings(s,AT,AT-dt.timedelta(days=1))
-  self.assertTrue(report['situations']);self.assertTrue(any('grouping' in g for g in report['gaps']))
+  self.assertTrue(report['situations']);self.assertTrue(any('grouping' in g for g in report['diagnostics']))
  def test_prerelease_target_does_not_enter_normal_update_batch(self):
   for version in ('2026.11.0b1','2026.11.0rc2','v2.0.0-beta.1','2026.11.0.dev1'):
    s=snapshot();s['states'][1]['attributes']['latest_version']=version
@@ -201,7 +202,7 @@ class ScopeEdges(unittest.TestCase):
   s['traces']=[dict(item_id='lamp',run_id=str(i),error='private-error',timestamp={'start':(AT-dt.timedelta(minutes=i+1)).isoformat()}) for i in range(5)]
   report=d.findings(s,AT,AT-dt.timedelta(days=1))
   self.assertTrue(any('Lamp automation failed' in line for line in report['items']))
-  self.assertTrue(any('Lamp needs more retained' in gap for gap in report['gaps']))
+  self.assertTrue(any('Lamp: retained run history' in line for line in report['diagnostics']))
 
 
 class ProductionLock(unittest.TestCase):
@@ -226,5 +227,59 @@ class ReceiptCrash(unittest.TestCase):
    with patch.object(d,'atomic_json',side_effect=write):self.assertEqual(app._production(),1)
    self.assertEqual(app._production(),0);self.assertEqual(calls[0],calls[1])
    self.assertEqual(app._production(),0);self.assertEqual(len(calls),2)
+
+
+class MorningEmailFaults(unittest.TestCase):
+ def test_update_entities_without_data_never_become_gaps_or_mail(self):
+  data=snapshot()
+  data['states'] += [state('update.window_'+value,value,friendly_name='Left Window Firmware',installed_version='16.0.1-dev') for value in ('unknown','unavailable')]
+  report=d.findings(data,AT,AT-dt.timedelta(days=1));body=d.render(report,{},{},AT)[1]
+  self.assertEqual(report['gaps'],[]);self.assertEqual(report['development'],[])
+  self.assertNotIn('Left Window',body)
+ def test_frequent_runs_have_log_only_coverage_and_only_errors_reach_mail(self):
+  import contextlib,io
+  data=snapshot();data['states'][0]['state']='100';data['states'][1]['state']='off'
+  data['states'].append(state('automation.lights','off',id='lights',friendly_name='💡 Hall lights'))
+  data['traces']=[dict(item_id='lights',timestamp={'start':(AT-dt.timedelta(minutes=i+1)).isoformat()},script_execution='finished') for i in range(5)]
+  sent=[];log=io.StringIO()
+  with tempfile.TemporaryDirectory() as home,contextlib.redirect_stderr(log):
+   app=d.Daily(Path(home),lambda:data,None,lambda *a:(sent.append(a) or {'success':True}),lambda *a:None,clock=lambda:AT)
+   self.assertEqual(app._production(),0)
+  self.assertEqual(sent[0][0],'House: nothing needs you');self.assertNotIn('retained',sent[0][1]);self.assertIn('retained',log.getvalue())
+  data['traces'][0]['error']='Connection failed'
+  report=d.findings(data,AT,AT-dt.timedelta(days=1))
+  self.assertEqual(report['items'],['The 💡 Hall lights automation failed; check its trace in Home Assistant.']);self.assertEqual(report['gaps'],[])
+ def test_could_not_finish_lists_only_whole_check_blockers_on_separate_lines(self):
+  data=snapshot();data['gaps']=['Recent errors could not be checked.']
+  data['states'][-1]['last_reported']=(AT-dt.timedelta(minutes=10)).isoformat()
+  data['states'].append(state('automation.lights','on',id='lights',friendly_name='Lights'))
+  data['traces']=[dict(item_id='lights',timestamp={})]
+  report=d.findings(data,AT,AT-dt.timedelta(days=1));body=d.render(report,{},{},AT)[1]
+  section=body.split('Could not finish:\n',1)[-1].splitlines()
+  self.assertEqual(section,['- Recent errors could not be checked.','- The offline-devices monitor is stale or unreadable, so I could not check for offline devices.'])
+  self.assertNotIn('run timing',body)
+ def test_subject_counts_actions_but_not_pending_development_or_nonaction_blockers(self):
+  data=snapshot();data['states'][-1]['last_reported']=(AT-dt.timedelta(minutes=10)).isoformat()
+  data['states'].append(state('update.wled','off',title='WLED',installed_version='16.0.1-dev',latest_version='16.0.1-dev'))
+  sent=[]
+  with tempfile.TemporaryDirectory() as home:
+   app=d.Daily(Path(home),lambda:data,None,lambda *a:(sent.append(a) or {'success':True}),lambda *a:None,clock=lambda:AT)
+   self.assertEqual(app._production(),0)
+  self.assertEqual(sent[0][0],'House: I could not finish the check; 1 thing needs you')
+  self.assertIn('replace or recharge',sent[0][1]);self.assertIn('assessment pending',sent[0][1]);self.assertIn('development build',sent[0][1])
+  report=d.findings(snapshot(),AT,AT-dt.timedelta(days=1));key=report['updates'][0]['key']
+  self.assertEqual(d.render(report,{'pairs':{key:dict(assessment='Advice',assessed_at=AT.isoformat(),sent_receipt={'accepted_at':AT.isoformat()})}},{},AT)[0],'House: 2 things need you')
+ def test_entity_type_suffixes_are_removed_and_emoji_stay(self):
+  data=snapshot();data['states'][0]['attributes']['friendly_name']='🌿 monstera Battery'
+  data['states'][1]['attributes']['title']='Spook 👻 Your homie Update'
+  data['states'].append(state('update.window','on',title='Bathroom Window Firmware Update',installed_version='1',latest_version='2'))
+  body=d.render(d.findings(data,AT,AT-dt.timedelta(days=1)),{},{},AT)[1]
+  self.assertIn('🌿 monstera battery is flat',body);self.assertIn('Spook 👻 Your homie 2026.9.3',body);self.assertIn('Bathroom Window 1 → 2',body)
+  self.assertNotIn('Battery battery',body);self.assertNotIn('homie Update',body);self.assertNotIn('Firmware',body)
+ def test_log_warning_names_the_actual_first_error_in_one_line(self):
+  data=snapshot();data['logs']=[dict(level='ERROR',name='homeassistant.components.ohme',message=['Could not connect to the charger.\nTraceback: implementation detail','Another error'])]
+  report=d.findings(data,AT,AT-dt.timedelta(days=1));body=d.render(report,{},{},AT)[1]
+  self.assertIn('ohme: Could not connect to the charger. Check its log in Home Assistant.',body.splitlines())
+  self.assertNotIn('ask Hal',body);self.assertNotIn('Traceback',body);self.assertNotIn('Another error',body)
 
 if __name__=='__main__':unittest.main()

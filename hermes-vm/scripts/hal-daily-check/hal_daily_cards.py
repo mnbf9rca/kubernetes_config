@@ -327,7 +327,7 @@ class Tickets:
             roots[situation['key']]=root
             started=next((t.get('created_at') for t in tasks if t['id']==root),None) or at.timestamp()
             if not notes.get('pairs',{}).get(root,{}).get('sent_receipt') and at-dt.datetime.fromtimestamp(started,dt.timezone.utc)>=dt.timedelta(days=3):
-                report['gaps'].append('A device situation still awaits its look-over email; ask Hal to look at the board')
+                report.setdefault('items',[]).append('A device situation still awaits its look-over email; ask Hal to look at the board')
         report['situation_roots']=roots
         for update in report.get('updates',[]):
             key=update['key'];saved=pairs.get(key,{})
@@ -335,4 +335,4 @@ class Tickets:
                 continue
             age=at-dt.datetime.fromtimestamp(first_seen.get(key,at.timestamp()),dt.timezone.utc)
             if age>=dt.timedelta(days=3):
-                report['gaps'].append(f'{update["name"]} still awaits its assessment email; ask Hal to look at the board')
+                report.setdefault('items',[]).append(f'{update["name"]} still awaits its assessment email; ask Hal to look at the board')
