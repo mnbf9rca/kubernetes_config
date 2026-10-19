@@ -1,13 +1,15 @@
 # safer_web_reader: the quarantined web-reader profile
 
-The 5575a08 managed worker loses the profile deny-list, so broker version 1.1.0 hides and refuses kanban through supported profile-scoped registry overrides.
+The 5575a08 managed worker loses the profile deny-list, so the broker hides and refuses kanban through supported profile-scoped registry overrides.
+Version 1.2.0 also pages the existing web_extract result without widening the four-tool surface.
 Core source remains unchanged; [issue 146](https://github.com/mnbf9rca/kubernetes_config/issues/146) records the upstream defect and local repair.
 
 `safer_web_reader` is a Hermes profile on VM 103 that reads untrusted web pages on behalf of other agents.
 A requester files a task carrying an instruction and one or more URLs; the reader fetches, reasons and returns one JSON envelope as the task result.
 It exists because release notes, changelogs and arbitrary pages can carry instructions aimed at whatever model reads them, and the agents that want those pages read hold exactly the capabilities such an instruction would be aiming for.
 
-The intended containment is a four-tool capability boundary: none can touch a file, shell, LAN or another task.
+The four model-facing tools expose no file, shell, LAN or other-task operation.
+Trusted fetch code reads its own URL-keyed extraction cache; the model cannot name a cache path or a local file.
 The scoped overrides remove kanban schemas even when the managed worker force-adds that toolset.
 Everything else about the VM, including stable application updates, is in [hermes-vm.md](hermes-vm.md).
 
@@ -18,27 +20,52 @@ Everything else about the VM, including stable application updates, is in [herme
 | The profile | `/home/hermes/.hermes/profiles/safer_web_reader/` | A full separate Hermes home, not an overlay on the root config |
 | The boards | `safer_web_reader` for general requests; `hal` for Hal daily release readers | Databases at `~/.hermes/kanban/boards/<board>/kanban.db` |
 | The persona | `SOUL.md` in the profile home | Carries the whole worker protocol; canonical copy at `hermes-vm/profiles/safer_web_reader/SOUL.md` |
-| The broker plugin | `<profile home>/plugins/safer-reader-broker/` | Two tools; canonical copy at `hermes-vm/plugins/safer-reader-broker/` |
+| The broker plugin | `<profile home>/plugins/safer-reader-broker/` | Two lifecycle tools and the existing fetch override; canonical copy at `hermes-vm/plugins/safer-reader-broker/` |
 | Worker logs | `~/.hermes/kanban/boards/safer_web_reader/logs/<task>.log`, or `hermes kanban --board safer_web_reader log <task>` | Where every failure is read. Both spellings were exercised live in the verification battery on 2026-08-30 |
 
-Hal’s daily check also creates public release-reader cards on board `hal`, assigned to the unchanged `safer_web_reader` profile. Their logs are `~/.hermes/kanban/boards/hal/logs/<task>.log` or `hermes kanban --board hal log <task>`. Household inventory stays in Hal’s planner and assembly cards; the host publish tool validates full reader envelopes before accepting advice.
+Hal’s daily check creates public release-reader cards on board `hal`, assigned to `safer_web_reader`.
+Their logs are `~/.hermes/kanban/boards/hal/logs/<task>.log` or `hermes kanban --board hal log <task>`.
+Household inventory stays in Hal’s planner and assembly cards; the host publish tool validates full reader envelopes before accepting advice.
 
 The profile has no messaging adapters or separate gateway unit; its owner context is served by the shared multiplexer.
 The kanban dispatcher runs inside a gateway under a machine-global advisory lock at `~/.hermes/kanban/.dispatcher.lock`, held by the shared `hermes-gateway.service`, and it enumerates every non-archived board on each 60-second tick.
-So a task on this board is picked up by an existing gateway, and the worker's toolset pin is resolved from the profile config on disk at dispatch time — a config edit takes effect on the next dispatch, with no restart of anything.
+A task on either board is picked up by the existing gateway, and the worker's toolset pin is resolved from the profile config on disk at dispatch time — a config edit takes effect on the next dispatch, with no restart of anything.
 Starting a separate gateway for this profile would add nothing and would re-run the lock race; `fuser -v ~/.hermes/kanban/.dispatcher.lock` names the current holder if that ever needs re-checking.
 
 ## The tool surface, which is the whole of the containment
 
 Four tools reach the model, and nothing else does.
-A live tool list also names the `tool_search`, `tool_describe` and `tool_call` bridges, which are the runtime's delivery mechanism for two of the four rather than a fifth capability, and `multi_tool_use.parallel`, which is a wire artefact; the verification record explains both.
+A live tool list also names the `tool_search`, `tool_describe` and `tool_call` bridges, which deliver broker-provided tools rather than adding capabilities, and `multi_tool_use.parallel`, which is a wire artefact; the verification record explains both.
 
 | Tool | Source | What it does |
 |---|---|---|
 | `web_search` | built-in `web` toolset | Finds sources the task did not name |
-| `web_extract` | built-in `web` toolset | Fetches and reads pages |
+| `web_extract` | broker-scoped override in `web` | Fetches one public URL through native checks; returns numbered pieces of its saved extraction |
 | `safer_reader_task` | broker plugin | Returns this worker's own task title and body; no parameters |
 | `safer_reader_complete` | broker plugin | Completes this worker's own task; the envelope string is its only parameter |
+
+### Reading a complete page
+
+Call `web_extract` with `url` and zero-based `piece` (default 0).
+The result contains `url`, `title`, `piece`, `total` and `content`.
+Read every piece from 0 through `total - 1` before claiming complete retrieval.
+
+```json
+{"url":"https://example.org/release","piece":0}
+```
+
+The first call uses Hermes's existing extraction path, including URL-secret, private-network and website-policy checks.
+The broker reads the full extraction through the native URL/format/provider cache API, then holds that snapshot for this worker.
+Later calls only slice that snapshot; they do not fetch again or recheck an expiring disk cache.
+Each piece carries at most 15,000 characters; the total is derived from the full text, with no new page-length cap.
+The broker applies the native inline-image cleanup before slicing.
+A short uncached result can be returned directly; a truncated response without its full cached extraction returns an error rather than masquerading as complete.
+Native extraction/cache failures remain failures; this does not change provider storage or availability.
+
+The input has no file path, cache identifier or other-task identifier.
+A later piece for a URL not yet fetched in this worker is refused without a fetch or cache read.
+A local-path or private URL on piece 0 still reaches the unchanged native URL checks and is refused there.
+The existing profile-scoped override grant is reused; no tool, profile, credential, dependency or quarantine rule is added.
 
 Every instructed action that would matter needs a capability that is not there:
 
@@ -105,11 +132,15 @@ The reader returns exactly one JSON object as the task result:
 
 **Fail closed, with no partial confidence.**
 `status` is `UNASSESSED` whenever retrieval fails, a page cannot be parsed, or the instruction cannot be satisfied from what was fetched.
+A long page alone is not a reason to stop: read its remaining pieces first.
+Return the requested structured summary, not the raw pieces, inside the unchanged five-key envelope.
 Salvageable material goes in `answer` and the gap goes in `reason`; on that path `sources` and `quotes` are empty lists rather than absent keys.
 
 **Every field is a model claim, not verified provenance.**
 `sources` and `quotes` are useful to a human and are not mechanically checkable — nothing proves the reader fetched those URLs or that those words appear on those pages.
-A digest field was considered and removed: the installed Hermes stores full page text only above the extraction character limit, keys the stored file by URL rather than by content, and returns no digest, so a model-supplied hash would be one more attacker-controlled string.
+Paging makes the saved extraction readable; it does not verify the model's coverage, sources or quotes.
+The native cache keys full provider text by URL, format and provider, not by an evidence digest.
+A model-supplied hash would remain an attacker-controlled claim.
 A trusted-code fetch ledger is the documented upgrade path if mechanically verified evidence ever earns its build cost, and it would get its own design.
 
 **Consumers treat every field as untrusted data.**
@@ -198,17 +229,21 @@ That is why the web block and `security.allow_private_urls` are pinned explicitl
 **`platform_toolsets.cli: [web]` is not an allowlist.**
 The managed worker force-adds `kanban` and passes only its own delegation deny-list, ignoring the saved `agent.disabled_toolsets: [kanban]`.
 The saved deny-list remains useful for paths that honour it, but the scoped registry overrides enforce the managed-worker boundary.
-At plugin load, the broker enumerates `registry.get_tool_names_for_toolset("kanban")`, currently fifteen names, rather than maintaining a frozen list.
+At plugin load, the broker enumerates `registry.get_tool_names_for_toolset("kanban")`, rather than maintaining a frozen list.
 Each reader-scoped replacement has a permanently false availability check and a refusing handler: schemas disappear, and guessed direct calls still cannot reach the original handler.
 The manifest declares `capabilities: [tools.override]`, and this profile alone grants that capability through `plugins.entries.safer-reader-broker.granted_capabilities`.
 Without the grant, registration fails; a failed plugin load does not itself prevent ordinary kanban tools being offered, so verify the surface before resuming reader work after an update.
 Other profiles retain the original global registrations.
-The two broker tools register in the existing `web` toolset, so disabling or renaming `web` removes them with the fetch tools.
+The lifecycle tools and paged fetch all register in the existing `web` toolset.
+Disabling or renaming `web` removes them together.
+Other profiles retain native web_extract and its original schema.
 
 **The web path is the Nous managed Tool Gateway, not direct Firecrawl.**
 `use_gateway: true` beside a backend name maps the whole selection to `nous` at read time regardless of the name key, so both `web_search` and `web_extract` leave the host to `https://firecrawl-gateway.nousresearch.com`.
 Dropping `use_gateway` silently changes the transport to keyless direct cloud.
-Both capabilities are therefore off-LAN, and nothing local serves either — which is also why the URL-safety layer that blocks private addresses matters: it runs in Hermes's own trusted tool code before the request is handed out, and the remote gateway has no route to this LAN in any case.
+Initial search and extraction use the remote gateway.
+Native URL safety runs before a request is handed out; the remote gateway has no route to this LAN.
+Later extraction pieces are served locally from the already-fetched public text, with no network request.
 
 **`security.allow_private_urls: false` is not the whole story.**
 `HERMES_ALLOW_PRIVATE_URLS` exists as an environment override and outranks the YAML, so the posture that counts is the effective one inside the worker process.
@@ -223,9 +258,9 @@ The containment target is the tool surface, not the key: nothing the reader can 
 The install location *is* the scoping mechanism: Hermes discovers user plugins from the active `HERMES_HOME` with no fallback, a profile is a separate home, and a dispatcher-spawned worker is a separate process with `HERMES_HOME` set to its own profile.
 Neither `emh` nor `hal` names the plugin or holds a copy of it.
 
-It supplies the two lifecycle operations removed with the ordinary kanban tools.
+It supplies the two lifecycle operations removed with the ordinary kanban tools, and extends the existing fetch tool with paging.
 The reader needs completion and a way to read its own instruction: the dispatcher spawns the worker with the prompt `work kanban task <id>` and nothing else, and the task body reaches the model only through a tool call.
-So the broker is two tools rather than one, and both are strictly narrower than what they replace — no `task_id`, no `board`, no `created_cards`, no `artifacts`, no `metadata`, and no comment thread, parent hand-off or child card id in the read tool's output.
+Both lifecycle tools are narrower than what they replace — no `task_id`, no `board`, no `created_cards`, no `artifacts`, no `metadata`, and no comment thread, parent hand-off or child card id in the read tool's output.
 Every identifying value is read from the worker's environment in trusted code.
 
 `safer_reader_complete` accepts the envelope only if it is at most 65,536 bytes of UTF-8, parses as a JSON object, carries `status` of exactly `OK` or `UNASSESSED`, and contains no control character other than newline and tab and none of the nine Unicode bidirectional controls — raw or JSON-escaped.
@@ -233,7 +268,8 @@ That last rule protects the human at the other end rather than the machine in th
 Nothing else is validated here, because everything else is a consumer's job and a half-measure would imply a guarantee that does not exist.
 
 **Run `test_validate.py` by hand before any install.**
-Nothing runs it automatically — the repository's one workflow builds the InfluxDB MCP image from `homelab/health/mcp/` and covers neither this guard nor anything else under `hermes-vm/`, and `make check-vm-scripts` is `shellcheck` over the shell scripts plus the ping-body scan, so it parses the Python for ping sinks and never executes it:
+CI does not run this broker suite.
+`make check-vm-scripts` checks script syntax and ping-body sinks; it does not execute these tests:
 
 ```sh
 python3 -m unittest discover -s hermes-vm/plugins/safer-reader-broker -p 'test_*.py'
@@ -261,7 +297,8 @@ There is no routine out-of-process containment check attached to application upd
 An update or restore can change the effective tool surface; the in-process check remains, with the soft-failure limitation above.
 
 Everything else about the broker fails closed and reads the same way.
-It depends on six underscore-prefixed helpers in `tools/kanban_tools.py`, one private module global, and three public-looking functions, none of which carries an upstream stability promise.
+It depends on native kanban, extraction and cache helpers, plus the private tool-list global.
+Those helpers carry no upstream stability promise.
 A rename, a moved helper, a changed signature, a split `web` toolset or a change to plugin discovery all produce the same symptom: the task ends `blocked` with the cause in the per-task worker log at `~/.hermes/kanban/boards/safer_web_reader/logs/<task>.log`, or through `hermes kanban --board safer_web_reader log <task>`.
 A plugin load failure logs one warning line carrying the exception text and no traceback, so re-run the dispatch with `HERMES_PLUGINS_DEBUG=1` in the environment when that one line is not enough.
 
@@ -291,6 +328,15 @@ The August injection and SSRF battery below was not repeated during this repair.
 
 ### August 30, 2026: historical battery
 
+### October 19, 2026: complete extraction paging
+
+Broker 1.2.0 adds URL-plus-piece reads to the existing web_extract name.
+The 200,000-character fixture test reconstructs the original text exactly across piece boundaries and asserts one fetch and one cache read.
+Additional tests cover an unknown URL's later piece, refusal of a file-path parameter, native URL refusals, short uncached results, invalid indices and missing full-cache output.
+Registration tests retain the kanban denial and unchanged global registrations for other profiles.
+Installation, the quarantine review and the single Core trial are recorded in the local `core-reader-paging-report.md` and `core-reader-paging-review.md` under `.superpowers/sdd/hal-watchers/`.
+Live result and deployment evidence will be added after the agreed trial.
+
 The following checks describe the older deny-list implementation at `23bae43c`; they are retained as historical evidence, not a claim that the current worker honours the deny-list.
 It was run in full on **2026-08-30** against Hermes `v0.20.6 (2026.8.27)`, on seven dispatched tasks left on the board as evidence; all nine checks passed.
 
@@ -310,8 +356,9 @@ Check 8 demonstrates the mitigation layer only.
 The containment does not depend on it passing, and no model can be relied on to strip adversarial text from what it reads.
 
 One thing makes check 1's list longer than the tool-surface table above, and it is not a fault: **Tool Search bridging is live on this profile**, which the battery established on 2026-08-30 rather than predicting.
-The bridge is partial, and the partiality is what matters.
-`tool_search`, `tool_describe` and `tool_call` appear *alongside* the four tools rather than in place of them — a worker calls `tool_describe` on the two broker schemas and then calls the broker tools directly — and the deferrable surface is exactly those two broker tools, which is what `total_available: 2` reports.
+The August 30 bridge was partial, and that distinction matters.
+`tool_search`, `tool_describe` and `tool_call` appear *alongside* the four tools rather than in place of them — a worker calls `tool_describe` on the two broker schemas and then calls the broker tools directly — and that historical run exposed exactly the two lifecycle tools as deferrable, as `total_available: 2` reports.
+The fetch override remains the same web_extract capability whether the runtime serves its schema directly or through Tool Search.
 That mixed form leaves the in-process guard live, because the resolved list still names the tool that is executing: check 2's refusal is the proof, taken with the bridges present.
 Only *full* bridging, where the broker tools drop out of the resolved list altogether, reaches the guard's soft fail and leaves the recorded list as the only detector.
 The guard's `INTERNALS_ALLOWED` holds the three bridge names for exactly this reason, so a bridged list is expected rather than a loss.

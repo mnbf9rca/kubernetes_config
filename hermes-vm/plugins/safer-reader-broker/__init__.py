@@ -1,9 +1,9 @@
-"""safer-reader-broker: the two tools the quarantined reader profile keeps.
+"""safer-reader-broker: own-task lifecycle and paging for the existing web fetch.
 
 The ``safer_web_reader`` profile hides and refuses built-in kanban tools with
 profile-scoped registry overrides. Its deny-list alone is insufficient: the
 managed dispatcher force-appends kanban and loses the profile subtraction.
-This plugin supplies only the two lifecycle capabilities the reader needs:
+The lifecycle capabilities remain:
 
   ``safer_reader_task()``            title and body of this worker's own task.
   ``safer_reader_complete(envelope)`` completion, with one string parameter.
@@ -17,8 +17,8 @@ Design: docs/superpowers/specs/2026-08-29-safer-reader-complete-broker-design.md
 Canonical copy: hermes-vm/plugins/safer-reader-broker/ in the kubernetes_config
 repository. Nothing enforces parity between that copy and this installed one.
 
-Hermes imports are all top-level, deliberately: this plugin depends on six
-underscore-prefixed helpers that carry no upstream stability promise, so a
+Hermes imports are top-level: the native lifecycle, extraction and cache
+helpers carry no upstream stability promise, so a
 rename must fail at worker start with one warning line in the per-task log,
 not at tool-call time in the middle of a run.
 """
@@ -38,6 +38,9 @@ from tools.kanban_tools import (
     _worker_run_id,
 )
 from tools.registry import registry, tool_error
+from tools.web_tools import web_extract_tool, _get_extract_backend, _resolve_extract_provider
+from tools.web_result_cache import extract_cache_get
+from tools.web_tools_truncate import convert_base64_images_to_links
 
 from . import validate
 
@@ -97,6 +100,70 @@ SAFER_READER_COMPLETE = {
         "required": ["envelope"],
     },
 }
+
+
+EXTRACT_PIECE_CHARS = 15000
+WEB_EXTRACT = {
+    "name": "web_extract",
+    "description": (
+        "Read one public URL in complete numbered pieces. Start with piece 0, "
+        "then read every piece through total - 1 before claiming full coverage. "
+        "Later pieces use the same saved extraction, without fetching again. "
+        "No file paths or file tools are needed. Return a summary, not the raw page."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "url": {"type": "string", "description": "Public URL to extract."},
+            "piece": {"type": "integer", "minimum": 0, "default": 0,
+                      "description": "Zero-based piece index; begin with 0."},
+        },
+        "required": ["url"],
+        "additionalProperties": False,
+    },
+}
+
+
+def _cached_extraction(url):
+    provider, error = _resolve_extract_provider(_get_extract_backend())
+    return None if error else extract_cache_get(url, format="markdown", provider=provider.name)
+
+
+def make_extract_handler(fetch, cached):
+    pages = {}
+
+    async def extract(args, **kwargs):
+        if not isinstance(args, dict) or not set(args) <= {"url", "piece"}:
+            return tool_error("web_extract accepts only url and piece")
+        url, piece = args.get("url"), args.get("piece", 0)
+        if not isinstance(url, str) or type(piece) is not int or piece < 0:
+            return tool_error("Provide a URL and a non-negative integer piece")
+        if url not in pages:
+            if piece != 0:
+                return tool_error("Read piece 0 of this URL first")
+            # Native fetch retains the existing URL, network and website-policy checks.
+            raw = await fetch(url)
+            try:
+                result = json.loads(raw)
+                page = result["results"][0]
+            except (ValueError, KeyError, IndexError, TypeError):
+                return tool_error("The native extraction failed")
+            if page.get("error"):
+                return tool_error(page["error"])
+            full = cached(url)
+            if full is None and "[TRUNCATED]" in page.get("content", ""):
+                return tool_error("The complete extraction was not available in the native cache")
+            page = full or page
+            pages[url] = (page.get("title", ""), convert_base64_images_to_links(page.get("content", "")))
+        title, text = pages[url]
+        total = max(1, (len(text) + EXTRACT_PIECE_CHARS - 1) // EXTRACT_PIECE_CHARS)
+        if piece >= total:
+            return tool_error("Piece index is outside this extraction")
+        return json.dumps(dict(url=url, title=title, piece=piece, total=total,
+                               content=text[piece * EXTRACT_PIECE_CHARS:(piece + 1) * EXTRACT_PIECE_CHARS]),
+                          ensure_ascii=False)
+
+    return extract
 
 
 def _containment_check(tool_name):
@@ -364,7 +431,7 @@ def _refuse_kanban(args, **kwargs):
 
 
 def register(ctx) -> None:
-    """Register both tools into the existing ``web`` toolset.
+    """Register the lifecycle tools and paged fetch in the existing ``web`` toolset.
 
     ``web`` rather than a toolset of our own: the dispatcher resolves the
     ``--toolsets`` pin in the GATEWAY process, which does not load this
@@ -392,6 +459,13 @@ def register(ctx) -> None:
         )
         if registered is None:
             raise RuntimeError("safer-reader-broker: kanban override was refused")
+    native = registry.get_entry("web_extract")
+    extract = ctx.register_tool(
+        name="web_extract", toolset="web", schema=WEB_EXTRACT,
+        handler=make_extract_handler(lambda url: web_extract_tool([url], "markdown"), _cached_extraction),
+        check_fn=native.check_fn, requires_env=native.requires_env, is_async=True,
+        emoji="📄", override=True,
+    )
     task = ctx.register_tool(
         name="safer_reader_task",
         toolset="web",
@@ -406,5 +480,5 @@ def register(ctx) -> None:
         handler=handle_complete,
         emoji="✅",
     )
-    if task is None or complete is None:
+    if task is None or complete is None or extract is None:
         raise RuntimeError("safer-reader-broker: a tool registration was refused")

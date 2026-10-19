@@ -19,7 +19,7 @@ Hermes imports is that it can be tested off the VM, and the path load is what
 cashes that in.
 
 What these lock down is the four rules of the broker spec's "Validation, in
-trusted code" section, plus the containment guard, lifecycle handlers and override registration. They fail
+trusted code" section, plus the containment guard, lifecycle handlers, scoped overrides and extraction paging. They fail
 INVISIBLY if they regress: a validator that accepts everything, and a guard
 that always passes, look exactly like a validator and a guard that are never
 given anything bad. The rules are the only thing standing between a
@@ -30,6 +30,7 @@ The live checks the design keeps for the VM -- error-to-model, no partial
 write, in-run recovery -- are verification item 4 and are not repeated here.
 """
 
+import asyncio
 import contextlib
 import importlib.util
 import json
@@ -55,7 +56,7 @@ def _load_broker_against_stubs():
     they need a test, and a test that only runs on the VM is a test nobody runs.
 
     The stubs are the thinnest thing that lets the module body execute: they
-    are NOT a model of Hermes, and nothing calls through the six
+    are NOT a model of Hermes, and nothing calls through the
     `_unreachable_stub`s -- each raises if it is reached. The handler tests
     below do run the handlers, against per-test replacements they install
     themselves; what they cannot do is assert against a real board, which is
@@ -87,6 +88,17 @@ def _load_broker_against_stubs():
     ):
         setattr(kanban_tools, symbol, _unreachable_stub(symbol))
     stubs["tools.kanban_tools"] = kanban_tools
+
+    web = types.ModuleType("tools.web_tools")
+    for symbol in ("web_extract_tool", "_get_extract_backend", "_resolve_extract_provider"):
+        setattr(web, symbol, _unreachable_stub(symbol))
+    stubs["tools.web_tools"] = web
+    cache = types.ModuleType("tools.web_result_cache")
+    cache.extract_cache_get = _unreachable_stub("extract_cache_get")
+    stubs["tools.web_result_cache"] = cache
+    truncate = types.ModuleType("tools.web_tools_truncate")
+    truncate.convert_base64_images_to_links = lambda text: text
+    stubs["tools.web_tools_truncate"] = truncate
 
     registry = types.ModuleType("tools.registry")
     registry.registry = types.SimpleNamespace()
@@ -604,9 +616,11 @@ class TestKanbanOverrides(unittest.TestCase):
             schema={'name': name, 'parameters': {'type': 'object', 'properties': {}}},
             handler=original, check_fn=None)
             for name in ('kanban_show', 'kanban_complete', 'kanban_future_tool')}
+        self.kanban_names = tuple(self.entries)
+        self.entries['web_extract'] = types.SimpleNamespace(schema={}, handler=original, check_fn=lambda:True, requires_env=[])
         self.overlay = {}
         broker.registry = types.SimpleNamespace(
-            get_tool_names_for_toolset=lambda toolset: list(self.entries),
+            get_tool_names_for_toolset=lambda toolset: list(self.kanban_names),
             get_entry=self.entries.__getitem__)
         self.granted = True
         def register_tool(**kw):
@@ -624,7 +638,7 @@ class TestKanbanOverrides(unittest.TestCase):
 
     def test_all_runtime_kanban_schemas_are_hidden(self):
         broker.register(self.ctx)
-        for name in self.entries:
+        for name in self.kanban_names:
             self.assertIn(name, self.overlay)
             self.assertTrue(self.overlay[name].override)
             self.assertEqual(self.overlay[name].toolset, 'kanban')
@@ -634,7 +648,7 @@ class TestKanbanOverrides(unittest.TestCase):
 
     def test_guessed_direct_calls_do_not_reach_original_handlers(self):
         broker.register(self.ctx)
-        for name in self.entries:
+        for name in self.kanban_names:
             entry = self.overlay.get(name, self.entries[name])
             self.assertIn('error', json.loads(entry.handler({})))
         self.assertEqual(self.original_calls, [])
@@ -646,12 +660,66 @@ class TestKanbanOverrides(unittest.TestCase):
         self.assertTrue(json.loads(self.entries['kanban_show'].handler({}))['ok'])
         self.assertEqual(len(self.original_calls), 1)
 
+    def test_paging_replaces_only_existing_extract_and_keeps_its_availability(self):
+        broker.register(self.ctx)
+        entry=self.overlay['web_extract']
+        self.assertTrue(entry.override);self.assertTrue(entry.is_async)
+        self.assertEqual(entry.toolset,'web');self.assertIs(entry.check_fn,self.entries['web_extract'].check_fn)
+        self.assertEqual(set(entry.schema['parameters']['properties']),{'url','piece'})
+        self.assertNotIn('read_file',self.overlay);self.assertEqual(len(self.overlay),len(self.kanban_names)+3)
+
     def test_missing_grant_refuses_registration(self):
         self.granted = False
         with self.assertRaisesRegex(PermissionError, 'tools.override'):
             broker.register(self.ctx)
         self.assertEqual(self.overlay, {})
 
+
+class TestExtractionPaging(unittest.IsolatedAsyncioTestCase):
+    async def test_200k_fixture_is_complete_without_duplicate_or_missing_characters(self):
+        text="".join(f"{i:06d} 🧩 source line\n" for i in range(12000))[:200000]
+        self.assertEqual(len(text),200000)
+        calls=[];cache_reads=[]
+        async def fetch(url):
+            calls.append(url)
+            return json.dumps({"results":[{"url":url,"title":"Long page","content":"head [TRUNCATED] tail","error":None}]})
+        def cached(url):
+            cache_reads.append(url)
+            return {"url":url,"title":"Long page","content":text}
+        handler=broker.make_extract_handler(fetch,cached)
+        first=json.loads(await handler({"url":"https://example.org/long","piece":0}))
+        pieces=[first['content']]
+        for index in range(1,first['total']):
+            result=json.loads(await handler({"url":"https://example.org/long","piece":index}))
+            self.assertEqual(result['piece'],index);self.assertEqual(result['total'],first['total'])
+            pieces.append(result['content'])
+        self.assertEqual(''.join(pieces),text)
+        self.assertEqual(calls,['https://example.org/long']);self.assertEqual(cache_reads,calls)
+        self.assertTrue(all(len(piece)<=broker.EXTRACT_PIECE_CHARS for piece in pieces))
+    async def test_later_piece_cannot_fetch_an_unknown_url_or_take_a_file_path(self):
+        calls=[]
+        async def fetch(url):
+            calls.append(url)
+            return json.dumps({'results':[{'url':url,'content':'','error':'Blocked by native URL validation'}]})
+        handler=broker.make_extract_handler(fetch,lambda url:self.fail('blocked extraction reached cache'))
+        for args in ({'url':'https://example.org/unknown','piece':1},{'url':'https://example.org/page','piece':0,'path':'/etc/passwd'},{'url':'https://example.org/page','piece':-1},{'url':'https://example.org/page','piece':True}):
+            self.assertIn('error',json.loads(await handler(args)))
+        self.assertEqual(calls,[])
+        self.assertIn('error',json.loads(await handler({'url':'file:///etc/passwd','piece':0})))
+        self.assertEqual(calls,['file:///etc/passwd'])
+    async def test_short_uncached_page_and_piece_bounds(self):
+        calls=[]
+        async def fetch(url):
+            calls.append(url);return json.dumps({'results':[{'url':url,'title':'Short','content':'Complete source','error':None}]})
+        handler=broker.make_extract_handler(fetch,lambda url:None)
+        result=json.loads(await handler({'url':'https://example.org/short'}))
+        self.assertEqual(result['content'],'Complete source');self.assertEqual(result['total'],1)
+        self.assertIn('error',json.loads(await handler({'url':'https://example.org/short','piece':1})))
+        self.assertEqual(len(calls),1)
+    async def test_missing_full_cache_never_labels_head_tail_as_complete(self):
+        async def fetch(url):return json.dumps({'results':[{'url':url,'content':'head [TRUNCATED] tail','error':None}]})
+        handler=broker.make_extract_handler(fetch,lambda url:None)
+        self.assertIn('error',json.loads(await handler({'url':'https://example.org/long'})))
 
 if __name__ == "__main__":
     unittest.main()
