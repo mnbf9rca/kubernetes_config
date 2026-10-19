@@ -127,6 +127,33 @@ class ReaderListTypes(unittest.TestCase):
      value=envelope();value['answer'][field]=bad
      with self.assertRaises(ValueError):c.validate_reader(json.dumps(value),expected)
 
+class ReaderIdentityShape(unittest.TestCase):
+ def test_boolean_and_textual_true_spellings(self):
+  expected=dict(component='home-assistant/core',release_version='2026.10.2',url='https://example.org/core')
+  for flag in (True,'true',' TRUE '):
+   with self.subTest(flag=flag):
+    value=envelope('2026.10.2');value['answer']['version_match']=flag
+    self.assertIs(c.validate_reader(json.dumps(value),expected)['version_match'],True)
+ def test_negative_unknown_and_wrong_identity_still_refused(self):
+  expected=dict(component='home-assistant/core',release_version='2026.10.2',url='https://example.org/core')
+  for flag in (False,None,0,1,{},'false','unknown','Confirmed: 2026.10.20','Confirmed: not 2026.10.2','Confirmed: 2026.10.2 is a mismatch','2026.10.2',
+   "Confirmed: the post doesn't include 2026.10.2",'Confirmed: 2026.10.2 is missing from the post',
+   'Confirmed: cannot find 2026.10.2',
+   'Confirmed: the monthly 2026.10 release post explicitly includes 2026.10.2 - October 16. This assessment includes monthly changes and patches through that version.'):
+   with self.subTest(flag=flag):
+    value=envelope('2026.10.2');value['answer']['version_match']=flag
+    with self.assertRaises(ValueError):c.validate_reader(json.dumps(value),expected)
+  for field,bad in (('component','wrong component'),('release_version','2026.10.3'),('retrieval_status','partial'),('risk','unassessed')):
+   with self.subTest(field=field):
+    value=envelope('2026.10.2');value['answer'].update(version_match='true',**{field:bad})
+    with self.assertRaises(ValueError):c.validate_reader(json.dumps(value),expected)
+ def test_emitted_instruction_explains_identity_and_boolean(self):
+  b=Board();root,key=batch(b);c.plan(b,root,choice(key))
+  reader=next(t for t in b.tasks.values() if t['assignee']=='safer_web_reader');instruction=json.loads(reader['body'])['instruction']
+  self.assertIn('Copy component and release_version exactly from this task',instruction)
+  self.assertIn('version_match is a JSON Boolean true or false',instruction)
+  self.assertIn('Put explanations in summary',instruction)
+
 class Publication(unittest.TestCase):
  def prepare(self,b):
   root,key=batch(b);out=c.plan(b,root,choice(key));reader=next(t for t in b.tasks.values() if t['assignee']=='safer_web_reader')
