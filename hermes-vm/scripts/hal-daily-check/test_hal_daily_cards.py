@@ -72,6 +72,12 @@ class ReaderRequest(unittest.TestCase):
   self.assertIn('Do not enumerate every changed component',instruction)
   self.assertNotIn('private-canary',reader['body'])
   self.assertNotIn('return every named changed component',instruction)
+ def test_emitted_reader_names_five_plain_string_lists(self):
+  b=Board();root,key=batch(b);c.plan(b,root,choice(key))
+  reader=next(t for t in b.tasks.values() if t['assignee']=='safer_web_reader')
+  instruction=json.loads(reader['body'])['instruction']
+  self.assertIn('security_fixes, breaking_changes, migrations, operator_actions and relevant_bug_fixes are lists of plain strings, one item per change',instruction)
+  self.assertIn('component name first in the string if useful',instruction)
  def test_revised_request_gets_new_reader_without_resetting_old_result(self):
   b=Board();root,key=batch(b);c.plan(b,root,choice(key))
   old=next(t for t in b.tasks.values() if t['assignee']=='safer_web_reader');old['status']='done';old['result']=json.dumps(envelope())
@@ -95,6 +101,31 @@ class Envelopes(unittest.TestCase):
   body=dict(component='home-assistant/core',release_version='2026.10',url='https://example.org/core')
   with self.assertRaises(ValueError):c.validate_reader(json.dumps(envelope('2025.9')),body)
   with self.assertRaises(ValueError):c.validate_reader('{"status":"OK","status":"OK"}',body)
+
+class ReaderListTypes(unittest.TestCase):
+ def test_exact_trial_three_breaking_object_shape_in_key_order(self):
+  value=envelope();value['answer']['breaking_changes']=[
+   {'component':'Authentication','change':'Legacy authentication-provider mode is removed. Usernames are always lowercase with leading/trailing spaces removed; resolve existing non-normalized-username repairs.'},
+   {'change':'Allow a list of states with a duration','component':'State conditions'}]
+  expected=dict(component='home-assistant/core',release_version='2026.10',url='https://example.org/core')
+  answer=c.validate_reader(json.dumps(value),expected)
+  self.assertEqual(answer['breaking_changes'],[
+   'Authentication: Legacy authentication-provider mode is removed. Usernames are always lowercase with leading/trailing spaces removed; resolve existing non-normalized-username repairs.',
+   'Allow a list of states with a duration: State conditions'])
+ def test_five_lists_accept_only_strings_or_all_string_objects(self):
+  expected=dict(component='home-assistant/core',release_version='2026.10',url='https://example.org/core')
+  for field in ('security_fixes','breaking_changes','migrations','operator_actions','relevant_bug_fixes'):
+   with self.subTest(field=field):
+    value=envelope();value['answer'][field]=['Keep this text',{'component':'MQTT','change':'Check triggers','step':'Restart'},{}]
+    self.assertEqual(c.validate_reader(json.dumps(value),expected)[field],['Keep this text','MQTT: Check triggers: Restart',''])
+   for bad in (None,False,4,['nested'],{'change':None},{'change':False},{'change':4},{'change':['nested']},{'change':{'nested':'text'}}):
+    with self.subTest(field=field,bad=bad):
+     value=envelope();value['answer'][field]=[bad]
+     with self.assertRaises(ValueError):c.validate_reader(json.dumps(value),expected)
+   for bad in ('not a list',{'component':'MQTT','change':'Check triggers'},None):
+    with self.subTest(field=field,whole_field=bad):
+     value=envelope();value['answer'][field]=bad
+     with self.assertRaises(ValueError):c.validate_reader(json.dumps(value),expected)
 
 class Publication(unittest.TestCase):
  def prepare(self,b):
