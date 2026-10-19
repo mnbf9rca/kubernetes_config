@@ -1,0 +1,346 @@
+{
+  "captured_at": "2026-10-19T16:36:32.621851+00:00",
+  "serialized_monitor": {
+    "entity_id": "sensor.offline_devices",
+    "state": "4",
+    "attributes": {
+      "state_class": "measurement",
+      "devices": [
+        {
+          "id": "30128064fffc98818ea5e9013ed764cf",
+          "name": "F2CFC7CA3E326240",
+          "area": null,
+          "integration": "ePaper",
+          "since": "2026-10-13T23:24:21.801124+01:00"
+        },
+        {
+          "id": "84bd033edc966da5ff6bc24bd4c0e131",
+          "name": "kieran-plant",
+          "area": null,
+          "integration": "MQTT",
+          "since": "2026-10-17T16:25:05.945559+01:00"
+        },
+        {
+          "id": "d8b31f6674491b647b3e84d11646e58a",
+          "name": "magnolia",
+          "area": null,
+          "integration": "MQTT",
+          "since": "2026-10-17T00:28:20.086344+01:00"
+        },
+        {
+          "id": "fa0554d06f518c3f833058d1d84fe11d",
+          "name": "monstera",
+          "area": null,
+          "integration": "MQTT",
+          "since": "2026-10-16T20:43:17.288336+01:00"
+        }
+      ],
+      "integrations": {
+        "zha": 18,
+        "matter": 7,
+        "mqtt": 6,
+        "esphome": 1,
+        "tplink": 2,
+        "meross_lan": 2,
+        "wled": 1,
+        "open_epaper_link": 5,
+        "ohme": 1,
+        "mbapi2020": 1,
+        "heatmiserneo": 10
+      },
+      "icon": "mdi:lan-disconnect",
+      "friendly_name": "Offline devices"
+    },
+    "last_changed": "2026-10-17T21:26:00.320528+00:00",
+    "last_reported": "2026-10-19T01:13:00.319619+00:00",
+    "last_updated": "2026-10-19T01:03:00.320293+00:00",
+    "context": {
+      "id": "01M58TXTQ03ZGKPS2PN21WKFBH",
+      "parent_id": null,
+      "user_id": null
+    }
+  },
+  "live_monitor": {
+    "entity_id": "sensor.offline_devices",
+    "state": "4",
+    "attributes": {
+      "state_class": "measurement",
+      "devices": [
+        {
+          "id": "30128064fffc98818ea5e9013ed764cf",
+          "name": "F2CFC7CA3E326240",
+          "area": null,
+          "integration": "ePaper",
+          "since": "2026-10-13T23:24:21.801124+01:00"
+        },
+        {
+          "id": "84bd033edc966da5ff6bc24bd4c0e131",
+          "name": "kieran-plant",
+          "area": null,
+          "integration": "MQTT",
+          "since": "2026-10-17T16:25:05.945559+01:00"
+        },
+        {
+          "id": "d8b31f6674491b647b3e84d11646e58a",
+          "name": "magnolia",
+          "area": null,
+          "integration": "MQTT",
+          "since": "2026-10-17T00:28:20.086344+01:00"
+        },
+        {
+          "id": "fa0554d06f518c3f833058d1d84fe11d",
+          "name": "monstera",
+          "area": null,
+          "integration": "MQTT",
+          "since": "2026-10-16T20:43:17.288336+01:00"
+        }
+      ],
+      "integrations": {
+        "zha": 18,
+        "matter": 7,
+        "mqtt": 6,
+        "esphome": 1,
+        "tplink": 2,
+        "meross_lan": 2,
+        "wled": 1,
+        "open_epaper_link": 5,
+        "ohme": 1,
+        "mbapi2020": 1,
+        "heatmiserneo": 10
+      },
+      "icon": "mdi:lan-disconnect",
+      "friendly_name": "Offline devices"
+    },
+    "last_changed": "2026-10-17T21:26:00.320528+00:00",
+    "last_reported": "2026-10-19T16:36:00.318965+00:00",
+    "last_updated": "2026-10-19T01:03:00.320293+00:00",
+    "context": {
+      "id": "01M58TXTQ03ZGKPS2PN21WKFBH",
+      "parent_id": null,
+      "user_id": null
+    }
+  },
+  "devices": [
+    {
+      "id": "84bd033edc966da5ff6bc24bd4c0e131",
+      "name": "kieran-plant",
+      "config_entries": [
+        "01JH1344RD03S3NDMVMKEPZBSJ"
+      ]
+    },
+    {
+      "id": "fa0554d06f518c3f833058d1d84fe11d",
+      "name": "monstera",
+      "config_entries": [
+        "01JH1344RD03S3NDMVMKEPZBSJ"
+      ]
+    },
+    {
+      "id": "d8b31f6674491b647b3e84d11646e58a",
+      "name": "magnolia",
+      "config_entries": [
+        "01JH1344RD03S3NDMVMKEPZBSJ"
+      ]
+    },
+    {
+      "id": "30128064fffc98818ea5e9013ed764cf",
+      "name": "F2CFC7CA3E326240",
+      "config_entries": [
+        "01M37W662GNZFM036HDX0Z64XA"
+      ]
+    }
+  ],
+  "entries": [
+    {
+      "entry_id": "01JJD8YJWKG50BDY3C04H30KB9",
+      "domain": "heatmiserneo",
+      "state": "loaded",
+      "disabled_by": null
+    },
+    {
+      "entry_id": "01M2GQ8RFYQF4XNW2P07D2EX2T",
+      "domain": "ohme",
+      "state": "loaded",
+      "disabled_by": null
+    },
+    {
+      "entry_id": "01M37W662GNZFM036HDX0Z64XA",
+      "domain": "open_epaper_link",
+      "state": "loaded",
+      "disabled_by": null
+    },
+    {
+      "entry_id": "01M37XJT7CR4W086H7NF0SC42C",
+      "domain": "open_epaper_link",
+      "state": "not_loaded",
+      "disabled_by": null
+    },
+    {
+      "entry_id": "01M37XJVW0QK3V16JXRXGNRT36",
+      "domain": "open_epaper_link",
+      "state": "not_loaded",
+      "disabled_by": null
+    },
+    {
+      "entry_id": "01M3AG5XNH4CQ7KKPS52XDN54S",
+      "domain": "open_epaper_link",
+      "state": "not_loaded",
+      "disabled_by": null
+    }
+  ],
+  "entities": [
+    {
+      "entity_id": "binary_sensor.neohub_192_168_17_82_away",
+      "config_entry_id": "01JJD8YJWKG50BDY3C04H30KB9",
+      "platform": "heatmiserneo",
+      "disabled_by": null,
+      "name": null,
+      "original_name": "Away"
+    },
+    {
+      "entity_id": "button.ohme_home_pro_approve_charge",
+      "config_entry_id": "01M2GQ8RFYQF4XNW2P07D2EX2T",
+      "platform": "ohme",
+      "disabled_by": null,
+      "name": null,
+      "original_name": "Approve charge"
+    },
+    {
+      "entity_id": "number.ohme_home_pro_state_of_charge_input",
+      "config_entry_id": "01M2GQ8RFYQF4XNW2P07D2EX2T",
+      "platform": "ohme",
+      "disabled_by": null,
+      "name": null,
+      "original_name": "State of charge input"
+    },
+    {
+      "entity_id": "number.ohme_home_pro_target_percentage",
+      "config_entry_id": "01M2GQ8RFYQF4XNW2P07D2EX2T",
+      "platform": "ohme",
+      "disabled_by": null,
+      "name": null,
+      "original_name": "Target percentage"
+    },
+    {
+      "entity_id": "select.ohme_home_pro_charge_mode",
+      "config_entry_id": "01M2GQ8RFYQF4XNW2P07D2EX2T",
+      "platform": "ohme",
+      "disabled_by": null,
+      "name": null,
+      "original_name": "Charge mode"
+    },
+    {
+      "entity_id": "sensor.openepaperlink_ap_ip_address",
+      "config_entry_id": "01M37W662GNZFM036HDX0Z64XA",
+      "platform": "open_epaper_link",
+      "disabled_by": null,
+      "name": null,
+      "original_name": "IP Address"
+    },
+    {
+      "entity_id": "sensor.f2cfc7ca3e326240_temperature",
+      "config_entry_id": "01M37W662GNZFM036HDX0Z64XA",
+      "platform": "open_epaper_link",
+      "disabled_by": null,
+      "name": null,
+      "original_name": "Temperature"
+    },
+    {
+      "entity_id": "sensor.f2cfc7ca3e326240_battery_percentage",
+      "config_entry_id": "01M37W662GNZFM036HDX0Z64XA",
+      "platform": "open_epaper_link",
+      "disabled_by": null,
+      "name": null,
+      "original_name": "Battery Percentage"
+    },
+    {
+      "entity_id": "image.f2cfc7ca3e326240_content",
+      "config_entry_id": "01M37W662GNZFM036HDX0Z64XA",
+      "platform": "open_epaper_link",
+      "disabled_by": null,
+      "name": null,
+      "original_name": "Content"
+    },
+    {
+      "entity_id": "text.f2cfc7ca3e326240_alias",
+      "config_entry_id": "01M37W662GNZFM036HDX0Z64XA",
+      "platform": "open_epaper_link",
+      "disabled_by": null,
+      "name": null,
+      "original_name": "Alias"
+    }
+  ],
+  "states": [
+    {
+      "entity_id": "binary_sensor.neohub_192_168_17_82_away",
+      "state": "on",
+      "attributes": {
+        "friendly_name": "NeoHub - 192.168.17.82 Away"
+      }
+    },
+    {
+      "entity_id": "button.ohme_home_pro_approve_charge",
+      "state": "unavailable",
+      "attributes": {
+        "friendly_name": "Ohme Home Pro Approve charge"
+      }
+    },
+    {
+      "entity_id": "number.ohme_home_pro_state_of_charge_input",
+      "state": "unavailable",
+      "attributes": {
+        "friendly_name": "Ohme Home Pro State of charge input"
+      }
+    },
+    {
+      "entity_id": "number.ohme_home_pro_target_percentage",
+      "state": "100",
+      "attributes": {
+        "friendly_name": "Ohme Home Pro Target percentage"
+      }
+    },
+    {
+      "entity_id": "select.ohme_home_pro_charge_mode",
+      "state": "unavailable",
+      "attributes": {
+        "friendly_name": "Ohme Home Pro Charge mode"
+      }
+    },
+    {
+      "entity_id": "sensor.openepaperlink_ap_ip_address",
+      "state": "10.0.2.169",
+      "attributes": {
+        "friendly_name": "OpenEPaperLink AP IP Address"
+      }
+    },
+    {
+      "entity_id": "sensor.f2cfc7ca3e326240_temperature",
+      "state": "unavailable",
+      "attributes": {
+        "friendly_name": "F2CFC7CA3E326240 Temperature"
+      }
+    },
+    {
+      "entity_id": "sensor.f2cfc7ca3e326240_battery_percentage",
+      "state": "unavailable",
+      "attributes": {
+        "friendly_name": "F2CFC7CA3E326240 Battery Percentage"
+      }
+    },
+    {
+      "entity_id": "image.f2cfc7ca3e326240_content",
+      "state": "unavailable",
+      "attributes": {
+        "friendly_name": "F2CFC7CA3E326240 Content"
+      }
+    },
+    {
+      "entity_id": "text.f2cfc7ca3e326240_alias",
+      "state": "unavailable",
+      "attributes": {
+        "friendly_name": "F2CFC7CA3E326240 Alias"
+      }
+    }
+  ],
+  "_source": "19 October live monitor via REST and direct State fields. Entity-name examples retain every unavailable entity and one available example per integration; other enabled entities omitted. Template remains unchanged."
+}

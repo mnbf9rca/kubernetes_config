@@ -25,7 +25,9 @@ from zoneinfo import ZoneInfo
 
 LONDON=ZoneInfo('Europe/London')
 PROFILE=Path('/home/hermes/.hermes/profiles/hal')
-READS={'get_states','config/entity_registry/list','config/device_registry/list','config_entries/get','trace/list','trace/get','system_log/list','repairs/list_issues','manifest/list'}
+READS={'get_states','config/entity_registry/list','config/device_registry/list','config_entries/get','trace/list','trace/get','system_log/list','repairs/list_issues','manifest/list','render_template'}
+# Serialized State JSON can cache last_reported while an unchanged template keeps reporting.
+MONITOR_TEMPLATE='{% set s = states.sensor.offline_devices %}{{ dict(entity_id=s.entity_id, state=s.state, attributes=s.attributes, last_changed=s.last_changed.isoformat(), last_updated=s.last_updated.isoformat(), last_reported=s.last_reported.isoformat()) | to_json }}'
 HA_READ_SECONDS=60
 MAIL_SECONDS=180
 AREAS=('batteries','devices','automation runs','recent errors','updates','reported configuration issues')
@@ -242,15 +244,18 @@ def error_context(log,snapshot,at):
         timing='time and count unknown'
     ids={e['entry_id'] for e in entries}
     entities=[e for e in snapshot.get('entities',[]) if (e.get('config_entry_id') in ids or e.get('platform')==domain) and not e.get('disabled_by')]
-    states={s['entity_id']:s['state'] for s in snapshot.get('states',[])}
-    available=[states.get(e['entity_id']) for e in entities]
-    status='unknown'
+    states={s['entity_id']:s for s in snapshot.get('states',[])}
+    available=[states.get(e['entity_id'],{}).get('state') for e in entities]
+    status='unknown';detail=''
     if any(e.get('state') in ('setup_retry','setup_error','migration_error') for e in entries) or (available and all(s=='unavailable' for s in available)):
         status='still failing'
-    elif any(e.get('state')=='loaded' for e in entries) and available and all(s is not None for s in available):
-        unavailable=available.count('unavailable')
-        status='working now'+(f', but {unavailable} of its {len(available)} entities are unavailable' if unavailable else '')
-    return domain,name,f'{name}: {sentence}, {timing}; {status}.',status
+    elif any(e.get('state')=='loaded' for e in entries) and any(s is not None and s!='unavailable' for s in available):
+        status='working now'
+        unavailable=[e for e in entities if states.get(e['entity_id'],{}).get('state')=='unavailable']
+        if unavailable:
+            names=sorted(label(states[e['entity_id']].get('attributes',{}).get('friendly_name') or e.get('name') or e.get('original_name'),e['entity_id']) for e in unavailable)
+            detail='; unavailable: '+', '.join(names) if len(names)<=5 else f'; {len(names)} of its {len(available)} entities are unavailable'
+    return domain,name,f'{name}: {sentence}, {timing}; {status}{detail}.',status
 
 
 def assessment_email_time(saved):
@@ -316,9 +321,17 @@ def findings(snapshot,at,cutoff):
             updates.append(dict(pair,key=digest(pair),name=name,entity_id=eid,release_url=public_url(a.get('release_url'))))
     monitor=states.get('sensor.offline_devices');unhealthy=[];device_complete=False;eligible=set()
     if monitor:
+        problem='The offline-devices monitor is unreadable, so I could not check for offline devices.'
         try:
-            if not -5<=(at-stamp(monitor['last_reported'])).total_seconds()<=300:
+            if monitor['state'] in ('unknown','unavailable'):
+                raise ValueError('unavailable')
+            observed=stamp(snapshot['collected_at']) if snapshot.get('collected_at') else at
+            age=(observed-stamp(monitor['last_reported'])).total_seconds()
+            if age>300:
+                problem='The offline-devices monitor: restore its every-minute trigger in packages/device_health.yaml; it has not reported for more than five minutes.'
                 raise ValueError('stale')
+            if age < -5:
+                raise ValueError('future report time')
             a=monitor['attributes'];raw=a['devices'];counts=a['integrations']
             if not isinstance(raw,list) or not isinstance(counts,dict) or str(len(raw))!=monitor['state']:
                 raise ValueError('shape')
@@ -337,7 +350,7 @@ def findings(snapshot,at,cutoff):
                     eligible|=candidates
             device_complete=True
         except (KeyError,ValueError,TypeError):
-            gaps.append('The offline-devices monitor is stale or unreadable, so I could not check for offline devices.');unhealthy=[]
+            gaps.append(problem);unhealthy=[]
     else:
         gaps.append('The offline-devices monitor is unavailable, so I could not check for offline devices.')
     parent_down={er[eid].get('device_id') for eid,s in states.items() if eid in er and s.get('state')=='unavailable'}
@@ -482,6 +495,10 @@ class HA:
         timeout=aiohttp.ClientTimeout(total=60)
         url=self.url.replace('https://','wss://',1).replace('http://','ws://',1)+'/api/websocket'
         async with aiohttp.ClientSession(timeout=timeout) as session:
+            if command=='render_template':
+                async with session.post(self.url+'/api/template',headers={'Authorization':'Bearer '+self.token},json=args) as response:
+                    response.raise_for_status()
+                    return await response.json(content_type=None)
             async with session.ws_connect(url,max_msg_size=32*1024*1024) as ws:
                 await ws.receive_json()
                 await ws.send_json({'type':'auth','access_token':self.token})
@@ -526,6 +543,19 @@ def collect_ha(client):
                 row['full']=client.read('trace/get',domain='automation',item_id=row['item_id'],run_id=row['run_id'])
             except Exception:
                 data['diagnostics'].append('automation runs: an aborted run could not be classified')
+    for index,monitor in enumerate(data['states']):
+        if monitor['entity_id']!='sensor.offline_devices':
+            continue
+        try:
+            live=client.read('render_template',template=MONITOR_TEMPLATE)
+            if not isinstance(live,dict) or live.get('entity_id')!='sensor.offline_devices':
+                raise ValueError('unexpected live monitor')
+            data['states'][index]=live
+        except Exception:
+            # Do not fall back to the serialized timestamp that caused the false alarm.
+            monitor['last_reported']=None
+            data['diagnostics'].append('Home Assistant did not provide the live offline-monitor state')
+    data['collected_at']=now().isoformat()
     return data
 
 

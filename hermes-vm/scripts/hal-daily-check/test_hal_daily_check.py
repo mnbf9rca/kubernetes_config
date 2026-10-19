@@ -259,7 +259,7 @@ class MorningEmailFaults(unittest.TestCase):
   data['traces']=[dict(item_id='lights',timestamp={})]
   report=d.findings(data,AT,AT-dt.timedelta(days=1));body=d.render(report,{},{},AT)[1]
   section=body.split('## Could not finish\n',1)[-1].splitlines()
-  self.assertEqual(section,['- **Recent errors** could not be checked.','- **Offline-devices monitor** is stale or unreadable, so I could not check for offline devices.'])
+  self.assertEqual(section,['- **Recent errors** could not be checked.','- **Offline-devices monitor**: restore its every-minute trigger in packages/device_health.yaml; it has not reported for more than five minutes.'])
   self.assertNotIn('run timing',body)
  def test_subject_counts_actions_but_not_pending_development_or_nonaction_blockers(self):
   data=snapshot();data['states'][-1]['last_reported']=(AT-dt.timedelta(minutes=10)).isoformat()
@@ -410,9 +410,9 @@ class ErrorContext(unittest.TestCase):
  def test_live_errors_show_display_name_log_times_count_and_current_availability(self):
   data=error_context_fixture();at=d.stamp(data['captured_at']);data.update(devices=[],traces=[],repairs=[],gaps=[]);data['states'].append(dict(state('sensor.offline_devices','0',devices=[],integrations={}),last_reported=at.isoformat()))
   report=d.findings(data,at,at-dt.timedelta(days=1));subject,body=d.render(report,{},{},at)
-  self.assertEqual(subject,'House: 2 things need you')
-  self.assertIn('**Ohme**: could not reach its cloud service, once at 17 October 11:33; working now, but 3 of its 16 entities are unavailable.',body)
-  self.assertIn('**OpenEPaperLink**: its WebSocket connection failed (HTTP 404), 3 times between 17 October 03:56 and 19 October 03:56; working now, but 4 of its 51 entities are unavailable.',body)
+  self.assertEqual(subject,'House: nothing needs you')
+  self.assertIn('**Ohme**: could not reach its cloud service, once at 17 October 11:33; working now; unavailable:',body)
+  self.assertIn('**OpenEPaperLink**: its WebSocket connection failed (HTTP 404), 3 times between 17 October 03:56 and 19 October 03:56; working now; unavailable:',body)
   self.assertIn('## Resolved overnight\n- **Heatmiser Neo Climate**: could not reach the device at 192.168.17.82, 4 times between 18 October 01:56 and 18 October 01:57; working now.',body)
   self.assertEqual(body.count('Heatmiser Neo Climate'),1);self.assertNotIn('ssl:default',body)
   # A current failure wins over readable entities; missing reads never claim recovery.
@@ -452,14 +452,14 @@ class ErrorMetadataRead(unittest.TestCase):
   report=d.collect_ha(MissingNames());self.assertEqual(report['logs'],fixture['logs']);self.assertEqual(report['gaps'],[]);self.assertTrue(report['diagnostics'])
 
 class ReviewErrorContext(unittest.TestCase):
- def test_partial_availability_is_explicit_and_counted_total_outage_still_fails(self):
+ def test_partial_availability_is_explicit_and_uncounted_total_outage_still_fails(self):
   data=error_context_fixture();at=d.stamp(data['captured_at']);data.update(devices=[],traces=[],repairs=[],gaps=[])
   data['states'].append(dict(state('sensor.offline_devices','0',devices=[],integrations={}),last_reported=at.isoformat()))
   subject,body=d.render(d.findings(data,at,at-dt.timedelta(days=1)),{},{},at)
-  self.assertEqual(subject,'House: 2 things need you')
-  needs=body.split('## Needs you\n')[1].split('\n\n')[0]
-  self.assertIn('**Ohme**: could not reach its cloud service, once at 17 October 11:33; working now, but 3 of its 16 entities are unavailable.',needs)
-  self.assertIn('working now, but 4 of its 51 entities are unavailable.',needs)
+  self.assertEqual(subject,'House: nothing needs you');self.assertNotIn('## Needs you',body)
+  needs=body.split('## Resolved overnight\n')[1]
+  self.assertIn('**Ohme**: could not reach its cloud service, once at 17 October 11:33; working now; unavailable:',needs)
+  self.assertIn('working now; unavailable:',needs)
   ohme=next(log for log in data['logs'] if '.ohme.' in log['name']);ids={e['entry_id'] for e in data['entries'] if e['domain']=='ohme'};eids={e['entity_id'] for e in data['entities'] if e.get('config_entry_id') in ids}
   for row in data['states']:
    if row['entity_id'] in eids:row['state']='unavailable'
@@ -474,3 +474,60 @@ class ReviewErrorContext(unittest.TestCase):
    key,name,line,status=d.error_context(log,data,AT);self.assertEqual(name,'Home Assistant');self.assertEqual(key,'homeassistant')
   report=d.findings(data,AT,AT-dt.timedelta(days=1));self.assertEqual(len(report['items']),1)
   subject,body=d.render(report,{},{},AT);self.assertIn('1 thing needs you',subject);self.assertEqual(body.count('- **Home Assistant**:'),1);self.assertNotIn('Homeassistant.',body);self.assertNotIn('Aiohttp.',body)
+
+
+def availability_fixture():
+ return json.loads((Path(__file__).parent/'fixtures/availability-rules-20261019.json').read_text())
+
+class AvailabilityRules(unittest.TestCase):
+ def test_live_partial_availability_names_entities_under_uncounted_resolved_and_six_use_count(self):
+  import copy
+  live=availability_fixture();at=d.stamp(live['captured_at']);data=snapshot();data.update(entries=live['entries'],entities=live['entities'],states=live['states']+[dict(state('sensor.offline_devices','0',devices=[],integrations={}),last_reported=at.isoformat())],logs=error_context_fixture()['logs'],manifests=error_context_fixture()['manifests'])
+  subject,body=d.render(d.findings(data,at,at-dt.timedelta(days=1)),{},{},at)
+  self.assertEqual(subject,'House: nothing needs you');self.assertNotIn('## Needs you',body)
+  self.assertIn('## Resolved overnight',body)
+  for name in ['Ohme Home Pro Approve charge','Ohme Home Pro State of charge input','Ohme Home Pro Charge mode','F2CFC7CA3E326240 Temperature','F2CFC7CA3E326240 Battery Percentage','F2CFC7CA3E326240 Content','F2CFC7CA3E326240 Alias']:self.assertIn(name,body)
+  self.assertIn('working now; unavailable:',body)
+  # An arbitrary domain proves there is no integration allowlist.
+  sample=copy.deepcopy(data);entry=next(e for e in sample['entries'] if e['domain']=='ohme');entry['domain']='arbitrary';sample['logs']=[dict(name='custom_components.arbitrary.client',level='ERROR',message=['Connection failed.'])]
+  for i in range(3):
+   eid='sensor.extra_'+str(i);sample['states'].append(state(eid,'unavailable',friendly_name='Extra '+str(i)));sample['entities'].append(dict(entity_id=eid,config_entry_id=entry['entry_id']))
+  subject,body=d.render(d.findings(sample,at,at-dt.timedelta(days=1)),{},{},at)
+  self.assertEqual(subject,'House: nothing needs you');self.assertIn('working now; 6 of its 7 entities are unavailable.',body);self.assertNotIn('Extra 0',body)
+ def test_today_monitor_uses_live_state_fields_and_keeps_real_timer_staleness_visible(self):
+  import copy
+  live=availability_fixture();at=d.stamp(live['captured_at']);values=dict(zip(['get_states','config/entity_registry/list','config/device_registry/list','config_entries/get','trace/list','system_log/list','repairs/list_issues','manifest/list','render_template'],[[live['serialized_monitor']],[],live['devices'],[],[],[],[],[],live['live_monitor']]))
+  calls=[]
+  class Client:
+   def read(self,command,**args):calls.append((command,args));return copy.deepcopy(values[command])
+  def collect():
+   from unittest.mock import patch
+   with patch.object(d,'now',return_value=at):return d.collect_ha(Client())
+  # Collection can finish after the run-start time; a new heartbeat is not a future clock.
+  report=d.findings(collect(),at-dt.timedelta(minutes=10),at-dt.timedelta(days=1))
+  self.assertTrue(report['device_complete']);self.assertEqual(report['gaps'],[]);self.assertEqual(sum(len(s['members']) for s in report['situations']),4)
+  self.assertEqual(calls[-1],('render_template',{'template':d.MONITOR_TEMPLATE}))
+  for bad in ['unknown','unavailable']:
+   values['render_template']=dict(live['live_monitor'],state=bad)
+   report=d.findings(collect(),at,at-dt.timedelta(days=1));self.assertFalse(report['device_complete']);self.assertTrue(report['gaps'])
+  values['render_template']=live['serialized_monitor']
+  report=d.findings(collect(),at,at-dt.timedelta(days=1));self.assertFalse(report['device_complete']);self.assertIn('restore its every-minute trigger in packages/device_health.yaml',' '.join(report['gaps']))
+  values['render_template']=[]
+  report=d.findings(collect(),at,at-dt.timedelta(days=1));self.assertFalse(report['device_complete']);self.assertNotIn('restore its every-minute trigger',' '.join(report['gaps']))
+
+class MonitorReadTransport(unittest.TestCase):
+ @unittest.skipUnless(__import__('importlib.util').util.find_spec('aiohttp'),'native aiohttp transport')
+ def test_live_monitor_template_uses_read_only_rest_render_and_correct_bearer(self):
+  import http.server,threading
+  captured=[];live=availability_fixture()['live_monitor']
+  class Handler(http.server.BaseHTTPRequestHandler):
+   def do_POST(self):
+    captured.append((self.path,self.headers.get('Authorization'),json.loads(self.rfile.read(int(self.headers['Content-Length'])))))
+    self.send_response(200);self.send_header('Content-Type','text/plain');self.end_headers();self.wfile.write(json.dumps(live).encode())
+   def log_message(self,*args):pass
+  server=http.server.ThreadingHTTPServer(('127.0.0.1',0),Handler);thread=threading.Thread(target=server.serve_forever,daemon=True);thread.start()
+  try:
+   client=d.HA('http://127.0.0.1:'+str(server.server_port),'fixture-token')
+   self.assertEqual(client.read('render_template',template=d.MONITOR_TEMPLATE),live)
+   self.assertEqual(captured,[('/api/template','Bearer fixture-token',{'template':d.MONITOR_TEMPLATE})])
+  finally:server.shutdown();server.server_close();thread.join()
