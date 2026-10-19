@@ -198,10 +198,10 @@ def error_context(log,snapshot,at):
     match=re.match(r'(?:homeassistant\.components|custom_components)\.([a-z0-9_]+)',logger)
     manifests=snapshot.get('manifests',[])
     manifest=next((m for m in manifests if (match and m['domain']==match[1]) or any(logger==name or logger.startswith(name+'.') for name in m.get('loggers') or [])),{})
-    domain=manifest.get('domain') or (match[1] if match else logger)
+    domain=manifest.get('domain') or (match[1] if match else 'homeassistant')
     entries=[e for e in snapshot.get('entries',[]) if e.get('domain')==domain and not e.get('disabled_by')]
-    name=manifest.get('name') or domain.replace('_',' ').capitalize()
-    if not entries and not logger.startswith('custom_components.'):
+    name=manifest.get('name') or (domain.replace('_',' ').capitalize() if match else 'Home Assistant')
+    if (match or manifest) and not entries and not logger.startswith('custom_components.'):
         name='Home Assistant ('+name+')'
     message=log.get('message')
     if isinstance(message,list):
@@ -225,7 +225,7 @@ def error_context(log,snapshot,at):
         else:
             sentence='its WebSocket connection failed: '+sentence
     elif local_address and any(word in lower for word in ('connect','error fetching','timeout','timed out')):
-        sentence='could not reach the hub at '+address[0]
+        sentence='could not reach the device at '+address[0]
     elif any(word in lower for word in ('cannot connect','could not connect','connection failed','connection refused','connect call failed','timed out','timeout')):
         host=re.search(r'(?:host |https?://|to )([a-z0-9.-]+\.[a-z]{2,})(?=[:/\s]|$)',lower)
         if host and not host[1].endswith(('.local','.lan','.internal')):
@@ -245,10 +245,11 @@ def error_context(log,snapshot,at):
     states={s['entity_id']:s['state'] for s in snapshot.get('states',[])}
     available=[states.get(e['entity_id']) for e in entities]
     status='unknown'
-    if any(e.get('state') in ('setup_retry','setup_error','migration_error') for e in entries) or 'unavailable' in available:
+    if any(e.get('state') in ('setup_retry','setup_error','migration_error') for e in entries) or (available and all(s=='unavailable' for s in available)):
         status='still failing'
-    elif entries and all(e.get('state')=='loaded' for e in entries) and available and all(s is not None for s in available):
-        status='working now'
+    elif any(e.get('state')=='loaded' for e in entries) and available and all(s is not None for s in available):
+        unavailable=available.count('unavailable')
+        status='working now'+(f', but {unavailable} of its {len(available)} entities are unavailable' if unavailable else '')
     return domain,name,f'{name}: {sentence}, {timing}; {status}.',status
 
 

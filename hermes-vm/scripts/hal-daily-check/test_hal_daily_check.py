@@ -411,9 +411,9 @@ class ErrorContext(unittest.TestCase):
   data=error_context_fixture();at=d.stamp(data['captured_at']);data.update(devices=[],traces=[],repairs=[],gaps=[]);data['states'].append(dict(state('sensor.offline_devices','0',devices=[],integrations={}),last_reported=at.isoformat()))
   report=d.findings(data,at,at-dt.timedelta(days=1));subject,body=d.render(report,{},{},at)
   self.assertEqual(subject,'House: 2 things need you')
-  self.assertIn('**Ohme**: could not reach its cloud service, once at 17 October 11:33; still failing.',body)
-  self.assertIn('**OpenEPaperLink**: its WebSocket connection failed (HTTP 404), 3 times between 17 October 03:56 and 19 October 03:56; still failing.',body)
-  self.assertIn('## Resolved overnight\n- **Heatmiser Neo Climate**: could not reach the hub at 192.168.17.82, 4 times between 18 October 01:56 and 18 October 01:57; working now.',body)
+  self.assertIn('**Ohme**: could not reach its cloud service, once at 17 October 11:33; working now, but 3 of its 16 entities are unavailable.',body)
+  self.assertIn('**OpenEPaperLink**: its WebSocket connection failed (HTTP 404), 3 times between 17 October 03:56 and 19 October 03:56; working now, but 4 of its 51 entities are unavailable.',body)
+  self.assertIn('## Resolved overnight\n- **Heatmiser Neo Climate**: could not reach the device at 192.168.17.82, 4 times between 18 October 01:56 and 18 October 01:57; working now.',body)
   self.assertEqual(body.count('Heatmiser Neo Climate'),1);self.assertNotIn('ssl:default',body)
   # A current failure wins over readable entities; missing reads never claim recovery.
   data['logs']=[x for x in data['logs'] if '.heatmiserneo.' in x['name']][:1]
@@ -450,3 +450,27 @@ class ErrorMetadataRead(unittest.TestCase):
     if command=='manifest/list':raise ValueError('unavailable')
     return super().read(command,**args)
   report=d.collect_ha(MissingNames());self.assertEqual(report['logs'],fixture['logs']);self.assertEqual(report['gaps'],[]);self.assertTrue(report['diagnostics'])
+
+class ReviewErrorContext(unittest.TestCase):
+ def test_partial_availability_is_explicit_and_counted_total_outage_still_fails(self):
+  data=error_context_fixture();at=d.stamp(data['captured_at']);data.update(devices=[],traces=[],repairs=[],gaps=[])
+  data['states'].append(dict(state('sensor.offline_devices','0',devices=[],integrations={}),last_reported=at.isoformat()))
+  subject,body=d.render(d.findings(data,at,at-dt.timedelta(days=1)),{},{},at)
+  self.assertEqual(subject,'House: 2 things need you')
+  needs=body.split('## Needs you\n')[1].split('\n\n')[0]
+  self.assertIn('**Ohme**: could not reach its cloud service, once at 17 October 11:33; working now, but 3 of its 16 entities are unavailable.',needs)
+  self.assertIn('working now, but 4 of its 51 entities are unavailable.',needs)
+  ohme=next(log for log in data['logs'] if '.ohme.' in log['name']);ids={e['entry_id'] for e in data['entries'] if e['domain']=='ohme'};eids={e['entity_id'] for e in data['entities'] if e.get('config_entry_id') in ids}
+  for row in data['states']:
+   if row['entity_id'] in eids:row['state']='unavailable'
+  self.assertEqual(d.error_context(ohme,data,at)[3],'still failing')
+  for row in data['states']:
+   if row['entity_id'] in eids:row['state']='off'
+  self.assertEqual(d.error_context(ohme,data,at)[3],'working now')
+ def test_non_component_core_loggers_share_one_plain_name_and_count(self):
+  data=snapshot();data['states']=[];names=['homeassistant.helpers.template','aiohttp.server','homeassistant.core','homeassistant.config_entries',None]
+  data['logs']=[dict(name=name,level='ERROR',message=['Connection failed.']) for name in names]
+  for log in data['logs']:
+   key,name,line,status=d.error_context(log,data,AT);self.assertEqual(name,'Home Assistant');self.assertEqual(key,'homeassistant')
+  report=d.findings(data,AT,AT-dt.timedelta(days=1));self.assertEqual(len(report['items']),1)
+  subject,body=d.render(report,{},{},AT);self.assertIn('1 thing needs you',subject);self.assertEqual(body.count('- **Home Assistant**:'),1);self.assertNotIn('Homeassistant.',body);self.assertNotIn('Aiohttp.',body)
