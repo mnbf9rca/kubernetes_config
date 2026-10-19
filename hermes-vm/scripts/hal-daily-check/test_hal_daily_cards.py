@@ -82,7 +82,7 @@ class Publication(unittest.TestCase):
    b=Board();asm,key,reader=self.prepare(b);sent=[];draft='Install after checking Zigbee. Watch its reconnect. '+('Useful detail. '*5000)
    send=lambda *a:(sent.append(a) or {'success':True})
    c.publish(b,asm,{key:draft},Path(tmp),send,AT);c.publish(b,asm,{key:draft},Path(tmp),send,AT)
-   self.assertEqual(len(sent),1);self.assertIn(draft,sent[0][1]);self.assertTrue(json.loads((Path(tmp)/'daily-check-assessments.json').read_text())['pairs'][key]['sent_receipt'])
+   self.assertEqual(len(sent),1);self.assertIn(draft.rstrip(),sent[0][1]);self.assertTrue(json.loads((Path(tmp)/'daily-check-assessments.json').read_text())['pairs'][key]['sent_receipt'])
  def test_repeated_refusal_schedules_without_triage_and_retries_frozen(self):
   with tempfile.TemporaryDirectory() as tmp:
    b=Board();asm,key,_=self.prepare(b);attempt=[]
@@ -219,3 +219,29 @@ class RunnerBoardPin(unittest.TestCase):
    self.assertNotIn('--board',c.NativeBoard().command)
 
 if __name__=='__main__':unittest.main()
+
+
+class AssessmentComposition(unittest.TestCase):
+ def test_assessment_verdict_first_details_below_and_link_last(self):
+  title='Spook v5.11.0 → v5.11.1'
+  text=title+': update at the next convenient restart.\nCheck the Repairs list.\nThis release fixes a crash.\nhttps://example.org/release'
+  rendered=c.assessment_bullet(title,text,'https://example.org/release')
+  self.assertEqual(rendered,'- **'+title+': update at the next convenient restart.**\n  Check the Repairs list.\n  This release fixes a crash.\n  https://example.org/release')
+  self.assertEqual(rendered.count(title),1);self.assertEqual(rendered.count('https://example.org/release'),1)
+ def test_partial_batch_pending_package_once_with_reason_and_no_duplicate_section(self):
+  with tempfile.TemporaryDirectory() as tmp:
+   b=Board();root,key=batch(b);data=json.loads(b.tasks[root]['body'])
+   data['updates'].append(dict(data['updates'][0],key='second',package='second',name='Spook'))
+   b.tasks[root]['body']=json.dumps(data)
+   asm=c.plan(b,root,dict(choice(key),second={'missing':['release not located']}))['assembly']
+   reader=next(t for t in b.tasks.values() if t['assignee']=='safer_web_reader');reader.update(status='done',result=json.dumps(envelope()))
+   sent=[];note='Spook 2026.9.3 → 2026.10.2: not assessed. The release post could not be read.'
+   c.publish(b,asm,{key:'Update at the next convenient restart.\nCheck the Repairs list.'},Path(tmp),lambda *a:(sent.append(a) or {'success':True}),AT,note=note)
+   subject,body=sent[0];self.assertIn('1',subject);self.assertIn('## Needs you',body);self.assertIn('## Updates',body)
+   self.assertEqual(body.count('Spook'),1);self.assertIn('The release post could not be read.',body);self.assertNotIn('Could not assess',body)
+   self.assertNotIn('## Could not finish',body);self.assertLess(body.index('Check the Repairs'),body.index('Spook'))
+ def test_device_note_has_one_bold_bullet_per_item_and_a_counted_subject(self):
+  with tempfile.TemporaryDirectory() as tmp:
+   b=Board();tid=b.create('look',dict(schema='hal-daily.device.v1',situation=dict(key='s',members=[],line='Lamp offline')),'hal','hal-daily:device:s')
+   sent=[];c.publish(b,tid,{},Path(tmp),lambda *a:(sent.append(a) or {'success':True}),AT,note='Zigbee: Check the hub power.\nLamp: Check its battery.')
+   self.assertEqual(sent[0],('House: 2 things need you','## Needs you\n- **Zigbee**: Check the hub power.\n- **Lamp**: Check its battery.'))

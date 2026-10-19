@@ -44,9 +44,9 @@ class Presentation(unittest.TestCase):
   r=d.findings(snapshot(),AT,AT-dt.timedelta(days=1));key=r['updates'][0]['key']
   body=d.render(r,{'pairs':{key:{'outcome':'no_public_notes'}}},{},AT)[1]
   self.assertIn('no release notes to assess',body);self.assertNotIn('ask Hal',body)
- def test_quiet_two_lines_and_gap_never_quiet(self):
+ def test_quiet_verdict_only_and_gap_never_quiet(self):
   r=dict(items=[],updates=[],situations=[],gaps=[]);subject,body=d.render(r,{},{},AT)
-  self.assertEqual(subject,'House: nothing needs you');self.assertEqual(len(body.splitlines()),2)
+  self.assertEqual(subject,'House: nothing needs you');self.assertEqual(body,'Nothing needs your attention today.')
   r['gaps']=['devices'];self.assertNotEqual(d.render(r,{},{},AT)[0],subject)
 class Delivery(unittest.TestCase):
  def test_refusal_retry_is_identical_then_receipt_suppresses(self):
@@ -258,8 +258,8 @@ class MorningEmailFaults(unittest.TestCase):
   data['states'].append(state('automation.lights','on',id='lights',friendly_name='Lights'))
   data['traces']=[dict(item_id='lights',timestamp={})]
   report=d.findings(data,AT,AT-dt.timedelta(days=1));body=d.render(report,{},{},AT)[1]
-  section=body.split('Could not finish:\n',1)[-1].splitlines()
-  self.assertEqual(section,['- Recent errors could not be checked.','- The offline-devices monitor is stale or unreadable, so I could not check for offline devices.'])
+  section=body.split('## Could not finish\n',1)[-1].splitlines()
+  self.assertEqual(section,['- **Recent errors** could not be checked.','- **offline-devices monitor** is stale or unreadable, so I could not check for offline devices.'])
   self.assertNotIn('run timing',body)
  def test_subject_counts_actions_but_not_pending_development_or_nonaction_blockers(self):
   data=snapshot();data['states'][-1]['last_reported']=(AT-dt.timedelta(minutes=10)).isoformat()
@@ -277,19 +277,19 @@ class MorningEmailFaults(unittest.TestCase):
   data['states'][1]['attributes']['title']='Spook 👻 Your homie Update'
   data['states'].append(state('update.window','on',title='Bathroom Window Firmware Update',installed_version='1',latest_version='2'))
   body=d.render(d.findings(data,AT,AT-dt.timedelta(days=1)),{},{},AT)[1]
-  self.assertIn('🌿 monstera battery is flat',body);self.assertIn('Spook 👻 Your homie 2026.9.3',body);self.assertIn('Bathroom Window 1 → 2',body)
+  self.assertIn('**🌿 monstera battery** is flat',body);self.assertIn('Spook 👻 Your homie 2026.9.3',body);self.assertIn('Bathroom Window 1 → 2',body)
   self.assertNotIn('Battery battery',body);self.assertNotIn('homie Update',body);self.assertNotIn('Firmware',body)
  def test_log_warning_names_the_actual_first_error_in_one_line(self):
   data=snapshot();data['logs']=[dict(level='ERROR',name='homeassistant.components.ohme',message=['Could not connect to the charger.\nTraceback: implementation detail','Another error'])]
   report=d.findings(data,AT,AT-dt.timedelta(days=1));body=d.render(report,{},{},AT)[1]
-  self.assertIn('ohme: Could not connect to the charger. Check its log in Home Assistant.',body.splitlines())
+  self.assertIn('- **ohme**: Could not connect to the charger.',body.splitlines())
   self.assertNotIn('ask Hal',body);self.assertNotIn('Traceback',body);self.assertNotIn('Another error',body)
 
  def test_multiple_error_records_are_one_action_per_integration(self):
   data=snapshot();data['logs']=[dict(level='ERROR',name=name,message=[message]) for name,message in [('homeassistant.components.ohme.coordinator','First charger error.'),('homeassistant.components.ohme.client','Second charger error.'),('custom_components.ohme.client','Third charger error.')]]
   report=d.findings(data,AT,AT-dt.timedelta(days=1));subject,body=d.render(report,{},{},AT)
   self.assertEqual(subject,'House: 2 things need you')
-  self.assertEqual([line for line in body.splitlines() if line.startswith('ohme:')],['ohme: First charger error. Check its log in Home Assistant.'])
+  self.assertEqual([line for line in body.splitlines() if line.startswith('- **ohme**:')],['- **ohme**: First charger error.'])
   self.assertNotIn('Second charger error',body);self.assertNotIn('Third charger error',body)
  def test_blockers_name_timeouts_only_when_a_timeout_occurs(self):
   from unittest.mock import patch
@@ -306,7 +306,7 @@ class MorningEmailFaults(unittest.TestCase):
   with tempfile.TemporaryDirectory() as home,patch.object(d,'findings',side_effect=ValueError('fixture malformed input')):
    app=d.Daily(Path(home),snapshot,None,lambda *a:(sent.append(a) or {'success':True}),lambda *a:None,clock=lambda:AT)
    self.assertEqual(app._production(),0)
-  self.assertIn('- I could not check batteries because the Home Assistant data could not be read.',sent[0][1])
+  self.assertIn('- **I could not check batteries because the Home Assistant data could not be read.**',sent[0][1])
   import subprocess
   class Board:
    def ensure(self,*args):raise failure
@@ -318,5 +318,28 @@ class MorningEmailFaults(unittest.TestCase):
    self.assertIn("I could not read the task board",sent[0][1])
    self.assertEqual('three-minute wait' in sent[0][1],isinstance(failure,subprocess.TimeoutExpired))
 
+
+
+class EmailComposition(unittest.TestCase):
+ def test_sections_bold_leads_and_subject_count_match_action_bullets(self):
+  report=d.findings(snapshot(),AT,AT-dt.timedelta(days=1));report['gaps']=['Recent errors could not be checked.']
+  subject,body=d.render(report,{},{},AT)
+  self.assertEqual(subject,'House: I could not finish the check; 1 thing needs you')
+  self.assertIn('- **Flower sensor battery** is flat; replace or recharge it.',body)
+  self.assertIn('- **Home Assistant Core 2026.9.3 → 2026.10.2**',body)
+  self.assertIn('- **Recent errors** could not be checked.',body)
+  self.assertLess(body.index('## Needs you'),body.index('## Updates'));self.assertLess(body.index('## Updates'),body.index('## Could not finish'))
+  needs=body.split('## Needs you\n',1)[1].split('\n\n',1)[0]
+  self.assertEqual(sum(line.startswith('- ') for line in needs.splitlines()),1)
+ def test_delivered_update_action_moves_to_needs_you_and_prose_stays_private(self):
+  report=d.findings(snapshot(),AT,AT-dt.timedelta(days=1));key=report['updates'][0]['key']
+  subject,body=d.render(report,{'pairs':{key:dict(assessment='PRIVATE ADVICE',assessed_at=AT.isoformat(),sent_receipt={'accepted_at':AT.isoformat()})}},{},AT)
+  self.assertEqual(subject,'House: 2 things need you');self.assertNotIn('## Updates',body);self.assertNotIn('PRIVATE ADVICE',body)
+  self.assertEqual(sum(x.startswith('- ') for x in body.splitlines()),2)
+ def test_real_error_is_one_sentence_and_keeps_environment_terms(self):
+  data=snapshot();data['logs']=[dict(level='ERROR',name='custom_components.ohme.client',message=['Cannot connect to api.ohme.io:443. Retry later. Extra diagnostic.'])]
+  body=d.render(d.findings(data,AT,AT-dt.timedelta(days=1)),{},{},AT)[1]
+  self.assertIn('- **ohme**: Cannot connect to api.ohme.io:443.',body)
+  self.assertNotIn('Retry later',body);self.assertNotIn('Extra diagnostic',body);self.assertNotIn('Check its log',body)
 
 if __name__=='__main__':unittest.main()

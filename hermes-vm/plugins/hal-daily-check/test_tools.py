@@ -102,7 +102,7 @@ class PublicationPayloads(unittest.TestCase):
    sent=[]
    with patch.object(plugin,'_context',return_value=tid),patch.object(plugin,'NativeBoard',return_value=b),patch.object(plugin,'NativeMail',return_value=lambda *a:(sent.append(a) or {'success':True})),patch.object(plugin,'secret_values',return_value=()),patch.object(plugin,'PROFILE',Path(home)):
     result=json.loads(plugin.handle_publish({'card_id':tid,'assessments':None,'note':'Check the hub power.'}))
-   self.assertTrue(result.get('success'),result);self.assertEqual(len(sent),1);self.assertEqual(sent[0][1],'Check the hub power.')
+   self.assertTrue(result.get('success'),result);self.assertEqual(len(sent),1);self.assertEqual(sent[0],('House: 1 thing needs you','## Needs you\n- **Check the hub power.**'))
    self.assertTrue(json.loads((Path(home)/'daily-check-device-notes.json').read_text())['pairs'][tid]['sent_receipt'])
  def test_both_empty_refused_before_board_or_sender(self):
   for fields in ({},{'assessments':{},'note':''},{'assessments':None,'note':None},{'note':'  '}):

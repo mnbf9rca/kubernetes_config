@@ -311,7 +311,8 @@ def findings(snapshot,at,cutoff):
             message=next((x for x in message if isinstance(x,str) and x.strip()),'')
         message=next((x.strip() for x in message.splitlines() if x.strip()),'') if isinstance(message,str) else ''
         if message:
-            items.append(f'{name}: {label(message).rstrip(".")}. Check its log in Home Assistant.')
+            sentence=re.split(r'(?<=[.!?])\s+',label(message),maxsplit=1)[0]
+            items.append(f'{name}: {sentence}' + ('' if sentence.endswith(('.', '!', '?')) else '.'))
             reported_errors.add(name)
         else:
             diagnostics.append(f'{name}: a recent error had no readable message')
@@ -331,39 +332,50 @@ def findings(snapshot,at,cutoff):
     return dict(development=development,items=sorted(set(items)),updates=sorted(updates,key=lambda x:(x['package'],str(x['available']))),situations=situations,gaps=sorted(set(gaps)),diagnostics=sorted(set(diagnostics)),device_complete=device_complete,inventory=inventory,cutoff=at.isoformat())
 
 
+def item_bullet(text):
+    text=text.strip().removeprefix('- ').removeprefix('The ')
+    if text.startswith('**'):
+        return '- '+text
+    split=re.search(r':\s|\s(?:is|are|looks|reports|has|have|could|still|automation failed|integration could)\b',text)
+    end=split.start() if split and text[:split.start()]!='I' else len(text)
+    return '- **'+text[:end]+'**'+text[end:]
+
+
+def email_sections(needs=(),updates=(),gaps=()):
+    sections=[f'## {heading}\n'+'\n'.join(items) for heading,items in
+              [('Needs you',needs),('Updates',updates),('Could not finish',gaps)] if items]
+    return '\n\n'.join(sections) or 'Nothing needs your attention today.'
+
+
+def email_subject(actions,gaps=False):
+    count=f'{actions} '+('thing needs you' if actions==1 else 'things need you')
+    if gaps:
+        return 'House: I could not finish the check'+('; '+count if actions else '')
+    return 'House: '+(count if actions else 'nothing needs you')
+
+
 def render(report,assessments,notes,at):
-    lines=list(report.get('items',[]));actions=len(lines);gaps=list(report.get('gaps',[]));pairs=assessments.get('pairs',{})
+    lines=list(report.get('items',[]));gaps=list(report.get('gaps',[]));pairs=assessments.get('pairs',{})
     for situation in report.get('situations',[]):
         root=report.get('situation_roots',{}).get(situation['key'])
         saved=notes.get('pairs',{}).get(root,{})
         if saved.get('sent_receipt') and saved.get('observed_at') and situation['line'] in lines:
             when=stamp(saved['observed_at']).astimezone(LONDON).strftime('%-d %B')
             index=lines.index(situation['line']);lines[index]+=f' Hal looked at this on {when}.'
+    needs=[item_bullet(line) for line in lines];updates=[]
     for update in report.get('updates',[]):
-        saved=pairs.get(update['key'],{});name=update['name'];target=label(update.get('available'),'unknown version')
-        link=f' — {update["release_url"]}' if update.get('release_url') else ' — no release link supplied'
+        saved=pairs.get(update['key'],{});target=label(update.get('available'),'unknown version')
+        title=f'{update["name"]} {label(update.get("installed"),"unknown version")} → {target}'
+        link=update.get('release_url') or 'No release link supplied.'
         if saved.get('outcome')=='no_public_notes':
-            line=f'{name} {target}: no release notes to assess; read the release link{link}.'
-            actions+=1
+            needs.append(f'- **{title}**: no release notes to assess; review the release link.\n  {link}')
         elif saved.get('assessment') and saved.get('sent_receipt'):
             when=stamp(saved['assessed_at']).astimezone(LONDON).strftime('%-d %B')
-            line=f'{name} {target} is still waiting to be installed; assessed on {when}{link}. Review that assessment before installing.'
-            actions+=1
+            needs.append(f'- **{title}**: still waiting to be installed; assessed on {when}. Review that assessment before installing.\n  {link}')
         else:
-            line=f'{name} {label(update.get("installed"),"unknown version")} → {target}{link}; assessment pending.'
-        lines.append(line)
-    lines.extend(report.get('notices',[]))
-    checked='Checked batteries, devices, automation runs, recent errors, updates and reported configuration issues.'
-    if gaps:
-        checked='Checked what was available.\nCould not finish:\n'+'\n'.join('- '+label(x) for x in sorted(set(gaps)))
-    count=f'{actions} '+('thing needs you' if actions==1 else 'things need you')
-    if gaps:
-        subject='House: I could not finish the check'+('; '+count if actions else '')
-    elif actions:
-        subject='House: '+count
-    else:
-        subject='House: nothing needs you'
-    return subject, '\n'.join(lines or ['No action identified in the checks I could complete.' if gaps else 'Nothing needs your attention today.'])+'\n'+checked
+            updates.append(f'- **{title}**: assessment pending.\n  {link}')
+    updates.extend(item_bullet(line) for line in report.get('notices',[]))
+    return email_subject(len(needs),bool(gaps)),email_sections(needs,updates,[item_bullet(label(x)) for x in sorted(set(gaps))])
 
 
 class HA:

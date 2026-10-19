@@ -1,5 +1,8 @@
 """Hal-only outbound verdicts through Hermes' native email adapter."""
+import html
 import json
+import re
+from email.mime.text import MIMEText
 from pathlib import Path
 
 from gateway.config import Platform, load_gateway_config
@@ -45,6 +48,33 @@ def parse_envelope(message):
     return subject, body
 
 
+def render_html(body):
+    """Render our headings, bullets and continuation lines; source HTML stays text."""
+    def inline(text):
+        escaped=html.escape(text)
+        if re.fullmatch(r'https?://[^\s]+',text):
+            return f'<a href="{escaped}">{escaped}</a>'
+        return re.sub(r'\*\*(.+?)\*\*',r'<strong>\1</strong>',escaped)
+    out=[];in_list=False
+    for line in body.splitlines():
+        if line.startswith('  ') and in_list:
+            out.append('<br>'+inline(line.strip()))
+            continue
+        if line.startswith('- '):
+            out.append('</li>' if in_list else '<ul>')
+            out.append('<li>'+inline(line[2:]));in_list=True
+            continue
+        if in_list:
+            out.append('</li></ul>');in_list=False
+        if line.startswith('## '):
+            out.append('<h2>'+inline(line[3:])+'</h2>')
+        elif line.strip():
+            out.append('<p>'+inline(line)+'</p>')
+    if in_list:
+        out.append('</li></ul>')
+    return '<html><body>'+''.join(out)+'</body></html>'
+
+
 class VerdictAdapter(native.EmailAdapter):
     def __init__(self, config):
         require_native()
@@ -67,6 +97,8 @@ class VerdictAdapter(native.EmailAdapter):
         message, message_id, _ = super()._new_reply(to_addr, body, reply_to_msg_id,
                                                     attach_empty_body=attach_empty_body)
         message.replace_header('Subject', subject)
+        message.set_type('multipart/alternative')
+        message.attach(MIMEText(render_html(body), 'html', 'utf-8'))
         # Per-message state keeps concurrent native executor sends independent.
         message._hal_verdict_subject = subject
         return message, message_id, subject
