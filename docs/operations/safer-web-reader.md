@@ -338,7 +338,9 @@ Their reconstruction matched the native cached extraction exactly, and the accep
 Broker runtime files were installed from `43311c8` with rollback preimages; the native fetch/cache files, profile configuration, persona and envelope validator were unchanged.
 The native runtime check retained exactly the four web capabilities, hid and refused kanban calls, and refused file paths, private URLs and unknown later-piece URLs.
 All 54 broker tests passed locally and in the installed runtime.
-The local report holds trial card IDs, the publisher receipt and the independent quarantine verdict.
+The trial then stopped at a separate requester handoff: Hal's board tool spilled the large accepted reader result to a file unavailable inside its execution backend.
+Hal could not inspect that complete result, so it published only an unchanged pending notice, silently; no Core assessment or email was produced.
+The local report holds trial card IDs, the publisher outcome and the independent quarantine verdict.
 
 ### August 30, 2026: historical battery
 
