@@ -356,3 +356,28 @@ class ReviewB1(unittest.TestCase):
   result=c.assessment_bullet('Spook 👻 Your homie v5.11.0 → v5.11.1',text,'https://example.org/spook')
   self.assertIn('\n  **Before** you restart, note the **Repairs** list.',result)
   self.assertNotIn('v5.11.1: Spook',result)
+
+class EarlierAssessments(unittest.TestCase):
+ def test_live_receipts_follow_current_pending_inventory_through_real_publish(self):
+  from test_hal_daily_check import error_context_fixture
+  live=error_context_fixture();at=d.stamp(live['captured_at']);updates=live['updates'];saved=live['assessments']
+  with tempfile.TemporaryDirectory() as tmp:
+   home=Path(tmp);(home/'daily-check-assessments.json').write_text(json.dumps(saved))
+   b=Board();report=dict(updates=updates,inventory=[],situations=[])
+   c.Tickets(b).ensure(report,saved,{},'2026-10-20',at)
+   root=next(iter(b.tasks));data=c.body(b.show(root))
+   self.assertEqual([u['name'] for u in data['updates']],['Mosquitto broker'])
+   out=c.plan(b,root,{data['updates'][0]['key']:{'releases':[dict(component='home-assistant/core',release_version='2026.10',url='https://example.org/core')]}})
+   asm=out['assembly'];reader=next(t for t in b.tasks.values() if t['assignee']=='safer_web_reader');reader.update(status='done',result=json.dumps(envelope()))
+   # An installed update is absent from this morning's pending inventory.
+   payload=c.body(b.show(asm));removed=updates[-1]['key'];payload['pending_updates']=[u for u in payload['pending_updates'] if u['key']!=removed];b.tasks[asm]['body']=json.dumps(payload)
+   sent=[];result=c.publish(b,asm,{data['updates'][0]['key']:'update at the next convenient restart\nCheck the broker.'},home,lambda *args:(sent.append(args) or dict(success=True,message_id='<fixture@test>')),at)
+   self.assertTrue(result['success']);subject,body=sent[0];self.assertEqual(subject,'House: 1 thing needs you')
+   already=body.split('## Already assessed\n')[1]
+   self.assertIn('Home Assistant Core 2026.10.1 → 2026.10.2',already);self.assertIn('update at the next convenient restart',already);self.assertIn('19 October 13:49',already)
+   self.assertIn('Spook',already);self.assertIn('19 October 09:07',already);self.assertNotIn('Presence Simulation',already)
+   self.assertNotIn('Its strongest benefits',already);self.assertNotIn('Check the broker',already);self.assertNotIn('After the restart',already);self.assertNotIn('Mosquitto broker',already)
+   # Unsent saved assessments must not appear as earlier-emailed advice.
+   saved['pairs'][updates[0]['key']]['sent_receipt']=None
+   self.assertEqual(d.already_assessed([updates[0]],saved['pairs']),[])
+   self.assertEqual(d.email_sections(needs=['- new'],already=[]),'## Needs you\n- new')

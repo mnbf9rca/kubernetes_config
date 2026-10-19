@@ -108,7 +108,7 @@ def plan(board,root_id,choices):
         maps[key]=ids
         if absent or not ids:
             missing[key]=[d.label(x,'release not located') for x in absent] or ['release not located']
-    assembly=dict(schema='hal-daily.assembly.v1',root_id=root_id,updates=data['updates'],inventory=data.get('inventory',[]),readers=maps,missing=missing,no_public_notes=no_notes,instruction=ASSEMBLY_INSTRUCTION)
+    assembly=dict(schema='hal-daily.assembly.v1',root_id=root_id,updates=data['updates'],pending_updates=data.get('pending_updates',data['updates']),inventory=data.get('inventory',[]),readers=maps,missing=missing,no_public_notes=no_notes,instruction=ASSEMBLY_INSTRUCTION)
     asm=board.create('Assemble morning update assessments',assembly,'hal','hal-daily:assemble:'+root_id,sorted(set(created)))
     return dict(assembly=asm,created_cards=list(dict.fromkeys(created+[asm])))
 
@@ -277,7 +277,7 @@ def publish(board,card_id,drafts,home,send,at=None,secrets=(),note=None):
                         retire_failed_readers(board,data)
                         return dict(success=True,silent=True,refused=refused)
                     subject=d.email_subject(len(needs))
-                    text=d.email_sections(needs,updates,[d.item_bullet(line) for line in note_lines])
+                    text=d.email_sections(needs,updates,[d.item_bullet(line) for line in note_lines],already=d.already_assessed(data.get('pending_updates',data['updates']),store['pairs']))
                 old=dict(subject=d.clean(subject,secrets),body=d.clean(text,secrets),pairs=identities,pending=pending,receipt=None,device=device)
                 store['batches'][receipt_key]=old
                 d.atomic_json(path,store,secrets)
@@ -343,7 +343,7 @@ class Tickets:
         pairs=assessments.get('pairs',{})
         candidates=[x for x in report.get('updates',[]) if not pairs.get(x['key'],{}).get('assessment') and pairs.get(x['key'],{}).get('outcome')!='no_public_notes' and x['key'] not in open_pairs]
         if candidates:
-            data=dict(schema='hal-daily.batch.v1',updates=candidates,inventory=report.get('inventory',[]),instruction=PLAN_INSTRUCTION)
+            data=dict(schema='hal-daily.batch.v1',updates=candidates,pending_updates=report['updates'],inventory=report.get('inventory',[]),instruction=PLAN_INSTRUCTION)
             self.board.create('Assess morning updates',data,'hal','hal-daily:batch:'+day)
         roots={}
         for situation in report.get('situations',[]):

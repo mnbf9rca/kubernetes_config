@@ -25,7 +25,7 @@ from zoneinfo import ZoneInfo
 
 LONDON=ZoneInfo('Europe/London')
 PROFILE=Path('/home/hermes/.hermes/profiles/hal')
-READS={'get_states','config/entity_registry/list','config/device_registry/list','config_entries/get','trace/list','trace/get','system_log/list','repairs/list_issues'}
+READS={'get_states','config/entity_registry/list','config/device_registry/list','config_entries/get','trace/list','trace/get','system_log/list','repairs/list_issues','manifest/list'}
 HA_READ_SECONDS=60
 MAIL_SECONDS=180
 AREAS=('batteries','devices','automation runs','recent errors','updates','reported configuration issues')
@@ -193,6 +193,86 @@ def group_devices(unhealthy,devices,eligible,entry_names,parent_down):
     return groups
 
 
+def error_context(log,snapshot,at):
+    logger=str(log.get('name') or log.get('logger') or 'Home Assistant')
+    match=re.match(r'(?:homeassistant\.components|custom_components)\.([a-z0-9_]+)',logger)
+    manifests=snapshot.get('manifests',[])
+    manifest=next((m for m in manifests if (match and m['domain']==match[1]) or any(logger==name or logger.startswith(name+'.') for name in m.get('loggers') or [])),{})
+    domain=manifest.get('domain') or (match[1] if match else logger)
+    entries=[e for e in snapshot.get('entries',[]) if e.get('domain')==domain and not e.get('disabled_by')]
+    name=manifest.get('name') or domain.replace('_',' ').capitalize()
+    if not entries and not logger.startswith('custom_components.'):
+        name='Home Assistant ('+name+')'
+    message=log.get('message')
+    if isinstance(message,list):
+        message=next((x for x in message if isinstance(x,str) and x.strip()),'')
+    message=next((x.strip() for x in message.splitlines() if x.strip()),'') if isinstance(message,str) else ''
+    if not message:
+        return domain,name,None,None
+    sentence=re.split(r'(?<=[.!?])\s+',label(message),maxsplit=1)[0].rstrip('.!?')
+    lower=message.casefold()
+    address=re.search(r'(?<![\d.])(?:\d{1,3}\.){3}\d{1,3}(?![\d.])',message)
+    try:
+        local_address=bool(address and ipaddress.ip_address(address[0]).is_private)
+    except ValueError:
+        local_address=False
+    if 'websocket' in lower:
+        status=re.search(r'\b([45]\d\d)\b',message)
+        if 'refused' in lower:
+            sentence='its WebSocket connection was refused'
+        elif status:
+            sentence='its WebSocket connection failed (HTTP '+status[1]+')'
+        else:
+            sentence='its WebSocket connection failed: '+sentence
+    elif local_address and any(word in lower for word in ('connect','error fetching','timeout','timed out')):
+        sentence='could not reach the hub at '+address[0]
+    elif any(word in lower for word in ('cannot connect','could not connect','connection failed','connection refused','connect call failed','timed out','timeout')):
+        host=re.search(r'(?:host |https?://|to )([a-z0-9.-]+\.[a-z]{2,})(?=[:/\s]|$)',lower)
+        if host and not host[1].endswith(('.local','.lan','.internal')):
+            sentence='could not reach its cloud service'
+    try:
+        first=dt.datetime.fromtimestamp(log['first_occurred'],dt.timezone.utc).astimezone(LONDON)
+        last=dt.datetime.fromtimestamp(log['timestamp'],dt.timezone.utc).astimezone(LONDON)
+        count=log['count']
+        if not isinstance(count,int) or count<1 or first>last:
+            raise ValueError('invalid log timing')
+        pattern='%H:%M' if first.date()==last.date()==at.astimezone(LONDON).date() else '%-d %B %H:%M'
+        timing='once at '+last.strftime(pattern) if count==1 else f'{count} times between '+first.strftime(pattern)+' and '+last.strftime(pattern)
+    except (KeyError,TypeError,ValueError,OverflowError,OSError):
+        timing='time and count unknown'
+    ids={e['entry_id'] for e in entries}
+    entities=[e for e in snapshot.get('entities',[]) if (e.get('config_entry_id') in ids or e.get('platform')==domain) and not e.get('disabled_by')]
+    states={s['entity_id']:s['state'] for s in snapshot.get('states',[])}
+    available=[states.get(e['entity_id']) for e in entities]
+    status='unknown'
+    if any(e.get('state') in ('setup_retry','setup_error','migration_error') for e in entries) or 'unavailable' in available:
+        status='still failing'
+    elif entries and all(e.get('state')=='loaded' for e in entries) and available and all(s is not None for s in available):
+        status='working now'
+    return domain,name,f'{name}: {sentence}, {timing}; {status}.',status
+
+
+def assessment_email_time(saved):
+    try:
+        return stamp(saved['sent_receipt']['accepted_at']).astimezone(LONDON).strftime('%-d %B %H:%M')
+    except (KeyError,TypeError,ValueError):
+        return 'an unknown date and time'
+
+
+def already_assessed(updates,pairs):
+    lines=[]
+    for update in updates:
+        saved=pairs.get(update['key'],{})
+        if not saved.get('sent_receipt') or not saved.get('assessment'):
+            continue
+        verdict=next((line.strip() for line in saved['assessment'].splitlines() if line.strip()),'')
+        # Older receipts put the verdict and context in one paragraph.
+        verdict=re.split(r'(?<=[.!?])\s+',verdict,maxsplit=1)[0].rstrip('.!?')
+        title=f'{label(update["name"])} {label(update.get("installed"),"unknown version")} → {label(update.get("available"),"unknown version")}'
+        lines.append(f'- **{title}**: {verdict}. Assessed in the email of {assessment_email_time(saved)}.')
+    return lines
+
+
 def findings(snapshot,at,cutoff):
     items=[];gaps=list(snapshot.get('gaps',[]));diagnostics=list(snapshot.get('diagnostics',[]));updates=[];development=[]
     states={s['entity_id']:s for s in snapshot.get('states',[])}
@@ -292,30 +372,24 @@ def findings(snapshot,at,cutoff):
                 diagnostics.append(f'{name} run timing was unreadable');continue
             if cutoff<end<=at and failed_trace(row,row.get('full')):
                 items.append(f'The {name} automation failed; check its trace in Home Assistant.')
-    for entry in entries.values():
-        if entry.get('state') in ('setup_error','setup_retry','migration_error'):
-            items.append(f'The {label(entry.get("title"),entry.get("domain"))} integration could not start; check its connection and setup.')
-    reported_errors=set()
+    reported_errors=set();resolved=[]
     for log in snapshot.get('logs',[]):
         if str(log.get('level','')).upper() not in ('ERROR','CRITICAL'):
             continue
-        domain=str(log.get('name') or log.get('logger') or 'Home Assistant')
-        if domain.startswith('homeassistant.components.automation'):
+        logger=str(log.get('name') or log.get('logger') or '')
+        if logger.startswith('homeassistant.components.automation'):
             continue
-        match=re.match(r'(?:homeassistant\.components|custom_components)\.([a-z0-9_]+)',domain)
-        name=label(match.group(1).replace('_',' ')) if match else 'Home Assistant'
-        if name in reported_errors:
+        domain,name,line,status=error_context(log,snapshot,at)
+        if domain in reported_errors:
             continue
-        message=log.get('message')
-        if isinstance(message,list):
-            message=next((x for x in message if isinstance(x,str) and x.strip()),'')
-        message=next((x.strip() for x in message.splitlines() if x.strip()),'') if isinstance(message,str) else ''
-        if message:
-            sentence=re.split(r'(?<=[.!?])\s+',label(message),maxsplit=1)[0]
-            items.append(f'{name}: {sentence}' + ('' if sentence.endswith(('.', '!', '?')) else '.'))
-            reported_errors.add(name)
+        if line:
+            (resolved if status=='working now' else items).append(line)
+            reported_errors.add(domain)
         else:
             diagnostics.append(f'{name}: a recent error had no readable message')
+    for entry in entries.values():
+        if entry.get('state') in ('setup_error','setup_retry','migration_error') and entry.get('domain') not in reported_errors:
+            items.append(f'The {label(entry.get("title"),entry.get("domain"))} integration could not start; check its connection and setup.')
     for issue in snapshot.get('repairs',[]):
         if issue.get('ignored') or issue.get('severity') not in ('warning','error','critical'):
             continue
@@ -329,7 +403,7 @@ def findings(snapshot,at,cutoff):
         else:
             items.append(f'{domain} reports a configuration issue; review its repair notice.')
     inventory=sorted({e.get('domain') for e in entries.values() if not e.get('disabled_by') and e.get('domain')}|{e['platform'] for e in er.values() if not e.get('disabled_by') and e.get('platform')})
-    return dict(development=development,items=sorted(set(items)),updates=sorted(updates,key=lambda x:(x['package'],str(x['available']))),situations=situations,gaps=sorted(set(gaps)),diagnostics=sorted(set(diagnostics)),device_complete=device_complete,inventory=inventory,cutoff=at.isoformat())
+    return dict(development=development,items=sorted(set(items)),resolved=sorted(set(resolved)),updates=sorted(updates,key=lambda x:(x['package'],str(x['available']))),situations=situations,gaps=sorted(set(gaps)),diagnostics=sorted(set(diagnostics)),device_complete=device_complete,inventory=inventory,cutoff=at.isoformat())
 
 
 def item_bullet(text):
@@ -347,9 +421,9 @@ def item_bullet(text):
     return '- **'+text[:end]+'**'+text[end:]
 
 
-def email_sections(needs=(),updates=(),gaps=()):
+def email_sections(needs=(),updates=(),gaps=(),resolved=(),already=()):
     sections=[f'## {heading}\n'+'\n'.join(items) for heading,items in
-              [('Needs you',needs),('Updates',updates),('Could not finish',gaps)] if items]
+              [('Needs you',needs),('Resolved overnight',resolved),('Updates',updates),('Could not finish',gaps),('Already assessed',already)] if items]
     return '\n\n'.join(sections) or 'Nothing needs your attention today.'
 
 
@@ -376,12 +450,12 @@ def render(report,assessments,notes,at):
         if saved.get('outcome')=='no_public_notes':
             needs.append(f'- **{title}**: no release notes to assess; review the release link.\n  {link}')
         elif saved.get('assessment') and saved.get('sent_receipt'):
-            when=stamp(saved['assessed_at']).astimezone(LONDON).strftime('%-d %B')
-            needs.append(f'- **{title}**: still waiting to be installed; assessed on {when}. Review that assessment before installing.\n  {link}')
+            when=assessment_email_time(saved)
+            needs.append(f'- **{title}**: still waiting to be installed; assessed in the email of {when}. Review that assessment before installing.\n  {link}')
         else:
             updates.append(f'- **{title}**: assessment pending.\n  {link}')
     updates.extend(item_bullet(line) for line in report.get('notices',[]))
-    return email_subject(len(needs),bool(gaps)),email_sections(needs,updates,[item_bullet(label(x)) for x in sorted(set(gaps))])
+    return email_subject(len(needs),bool(gaps)),email_sections(needs,updates,[item_bullet(label(x)) for x in sorted(set(gaps))],resolved=[item_bullet(line) for line in report.get('resolved',[])])
 
 
 class HA:
@@ -438,6 +512,13 @@ def collect_ha(client):
         except Exception as exc:
             reason='the sixty-second wait for Home Assistant timed out' if isinstance(exc,TimeoutError) else 'Home Assistant did not provide the data'
             data[field]=[];data['gaps'].append('I could not check '+area_names[field]+' because '+reason+'.')
+    try:
+        domains=sorted({e['domain'] for e in data['entries']}|{m[1] for log in data['logs'] if (m:=re.match(r'(?:homeassistant\.components|custom_components)\.([a-z0-9_]+)',str(log.get('name') or log.get('logger') or '')))})
+        data['manifests']=client.read('manifest/list',integrations=domains) if domains else []
+        if not isinstance(data['manifests'],list):
+            raise ValueError('unexpected HA manifests')
+    except Exception:
+        data['manifests']=[];data['diagnostics'].append('Home Assistant did not provide integration display names')
     for row in data['traces']:
         if row.get('script_execution')=='aborted' and not row.get('not_triggered') and not row.get('error'):
             try:
