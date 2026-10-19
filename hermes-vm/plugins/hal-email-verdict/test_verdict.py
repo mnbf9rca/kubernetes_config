@@ -64,4 +64,11 @@ class MimeComposition(unittest.TestCase):
   self.assertEqual(msg['Message-ID'],mid);self.assertEqual(msg.get_payload()[0].get_payload(decode=True).decode('utf-8'),body)
   self.assertIn('<strong>Spook 👻: update now.</strong>',msg.get_payload()[1].get_payload(decode=True).decode('utf-8'))
 
+class TrialSubject(unittest.TestCase):
+ def test_exact_trial_prefix_is_allowed_and_other_subject_guards_stay_closed(self):
+  subject='[trial] House: 1 thing needs you'
+  self.assertEqual(parse(json.dumps(dict(schema='hal.email-verdict.v1',subject=subject,body='## Needs you\n- **Lamp**: check power.')))[0],subject)
+  for subject in ('[trial] House: ','[trial] anything','[trial] [trial] House: test','[trial] House: test\nBcc: bad'):
+   with self.subTest(subject=subject),self.assertRaises(ValueError):parse(json.dumps(dict(schema='hal.email-verdict.v1',subject=subject,body='text')))
+
 if __name__=='__main__':unittest.main()

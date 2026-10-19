@@ -38,8 +38,9 @@ def parse_envelope(message):
             or envelope['schema'] != SCHEMA):
         raise ValueError('hal_verdict_envelope_invalid')
     subject, body = envelope['subject'], envelope['body']
-    if (type(subject) is not str or not subject.startswith('House: ')
-            or not 7 < len(subject) <= 200 or subject != subject.strip()
+    verdict_subject = subject.removeprefix('[trial] ') if type(subject) is str else ''
+    if (type(subject) is not str or not verdict_subject.startswith('House: ')
+            or not 7 < len(verdict_subject) or len(subject) > 200 or subject != subject.strip()
             or any(ord(c) < 32 or ord(c) == 127 for c in subject)):
         raise ValueError('hal_verdict_subject_invalid')
     if (type(body) is not str or not body

@@ -348,4 +348,56 @@ class ReviewFormatting(unittest.TestCase):
   self.assertEqual(d.item_bullet('The 🌿 monstera battery is flat; replace it.'),'- **🌿 Monstera battery** is flat; replace it.')
   self.assertEqual(d.item_bullet('I could not check batteries because the Home Assistant data could not be read.'),'- **Batteries**: The Home Assistant data could not be read.')
 
+class TrialMode(unittest.TestCase):
+ def test_trial_collects_and_sends_despite_live_receipt_and_lock_without_side_effects(self):
+  from unittest.mock import patch
+  with tempfile.TemporaryDirectory() as tmp:
+   home=Path(tmp);saved=dict(day='2026-10-18',accepted_cutoff=(AT-dt.timedelta(hours=2)).isoformat(),receipt={'message_id':'normal-receipt'},development_notices={})
+   (home/'daily-check-state.json').write_text(json.dumps(saved));before={p.name:p.read_bytes() for p in home.iterdir()};calls=[];sent=[]
+   class Board:
+    def ensure(self,*a):raise AssertionError('trial created cards')
+   app=d.Daily(home,lambda:(calls.append('collect') or snapshot()),Board(),lambda *a:(sent.append(a) or {'success':True,'message_id':'<trial@example.org>'}),lambda *a:self.fail('heartbeat'),clock=lambda:AT)
+   with d.lock(home),patch.object(d,'atomic_json',side_effect=AssertionError('state write')):
+    self.assertEqual(app.run(trial=True),0)
+   self.assertEqual(calls,['collect']);self.assertTrue(sent[0][0].startswith('[trial] House: '));self.assertIn('## Needs you',sent[0][1]);self.assertIn('## Updates',sent[0][1])
+   self.assertEqual(before,{p.name:p.read_bytes() for p in home.iterdir()})
+ def test_refused_trial_returns_failure_and_never_retries_or_pushes(self):
+  with tempfile.TemporaryDirectory() as tmp:
+   for reply in ({'success':False},{'success':True,'skipped':True},{'success':True,'partial_success':True}):
+    calls=[];app=d.Daily(Path(tmp),snapshot,None,lambda *a:(calls.append(a) or reply),lambda *a:self.fail('push'),clock=lambda:AT)
+    self.assertEqual(app.run(trial=True),1);self.assertEqual(len(calls),1);self.assertEqual(list(Path(tmp).iterdir()),[])
+ def test_entrypoint_forwards_trial_and_keeps_no_argument_production_default(self):
+  import runpy,sys
+  from unittest.mock import patch
+  entry=Path(d.__file__).parent.parent/'hal-daily-check-morning.py'
+  for args,expected in [([],['--production']),(['--trial'],['--trial'])]:
+   with patch.object(sys,'argv',[str(entry)]+args),patch.object(d,'main',return_value=0) as main,self.assertRaises(SystemExit):runpy.run_path(str(entry),run_name='__main__')
+   main.assert_called_once_with(expected)
+ def test_main_trial_never_constructs_board_or_uses_real_lock(self):
+  import os
+  from unittest.mock import patch
+  with tempfile.TemporaryDirectory() as tmp:
+   home=Path(tmp);credentials={'HAL_DAILY_RUNNER_HASS_URL':'https://fixture.invalid','HAL_DAILY_RUNNER_HASS_TOKEN':'fixture-token'};sent=[]
+   with patch.object(d,'PROFILE',home),patch.dict(os.environ,{'HERMES_HOME':str(home)}),patch.object(d,'load_credentials',return_value=credentials) as load,patch.object(d,'secret_values',return_value=()),patch.object(d,'collect_ha',return_value=snapshot()),patch.object(d,'NativeMail',return_value=lambda *a:(sent.append(a) or {'success':True,'message_id':'<fixture@example.org>'})),patch.object(d,'BoardProcess',side_effect=AssertionError('board')),patch.object(d,'lock',side_effect=AssertionError('lock')),patch.object(d,'atomic_json',side_effect=AssertionError('write')),patch.object(d,'kuma_push',side_effect=AssertionError('heartbeat')):
+    self.assertEqual(d.main(['--trial']),0)
+   load.assert_called_once_with(home,heartbeat=False);self.assertEqual(len(sent),1);self.assertEqual(list(home.iterdir()),[])
+ def test_trial_cannot_be_combined_with_production_fixture_or_card_ensurer(self):
+  for args in (['--trial','--production'],['--trial','--fixture','missing'],['--trial','--ensure-cards']):
+   with self.subTest(args=args),self.assertRaises(SystemExit):d.main(args)
+
+class TrialCredentials(unittest.TestCase):
+ def test_trial_resolves_runner_credentials_without_heartbeat_reference_or_exports(self):
+  import os,sys,types
+  from unittest.mock import patch
+  refs={'HAL_DAILY_RUNNER_HASS_URL':'op://fixture/ha/url','HAL_DAILY_RUNNER_HASS_TOKEN':'op://fixture/ha/token'}
+  def apply(config,home,environ):
+   self.assertEqual(config['onepassword']['env'],refs)
+   environ.update(HAL_DAILY_RUNNER_HASS_URL='https://fixture.invalid',HAL_DAILY_RUNNER_HASS_TOKEN='fixture-token')
+  modules={'utils':types.SimpleNamespace(load_yaml_file_readonly=lambda p:json.loads(p.read_text())),'agent.secret_scope':types.SimpleNamespace(load_env_file=lambda p:{}),'agent.secret_sources.registry':types.SimpleNamespace(apply_all=apply)}
+  with tempfile.TemporaryDirectory() as tmp:
+   home=Path(tmp);(home/'config.yaml').write_text(json.dumps({'daily_check':{'runner_secrets':{'onepassword':{'enabled':True,'env':refs}}}}))
+   with patch.dict(sys.modules,modules),patch.dict(os.environ,{},clear=True):
+    values=d.load_credentials(home,heartbeat=False)
+    self.assertEqual(set(values),set(refs));self.assertEqual(os.environ,{})
+
 if __name__=='__main__':unittest.main()

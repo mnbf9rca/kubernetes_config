@@ -450,10 +450,24 @@ def collect_ha(client):
 class Daily:
     def __init__(self,home,collect,board,send,push,clock=now,secrets=()):
         self.home=Path(home);self.collect=collect;self.board=board;self.send=send;self.push=push;self.clock=clock;self.secrets=secrets
-    def run(self):
-        at=self.clock();r=findings(self.collect(),at,at-dt.timedelta(days=1))
+    def run(self,trial=False):
+        at=self.clock();saved=read_json(self.home/'daily-check-state.json',{}) if trial else {}
+        cutoff=stamp(saved['accepted_cutoff']) if saved.get('accepted_cutoff') else at-dt.timedelta(days=1)
+        r=findings(self.collect(),at,cutoff)
+        if trial:
+            r['notices']=[x['line'] for x in r.get('development',[]) if saved.get('development_notices',{}).get(x['package'])!=x['signature']]
         subject,body=render(r,read_json(self.home/'daily-check-assessments.json',{}),read_json(self.home/'daily-check-device-notes.json',{}),at)
-        print(clean(subject+'\n'+body,self.secrets));return 0
+        subject,body=clean(subject,self.secrets),clean(body,self.secrets)
+        if trial:
+            subject='[trial] '+subject
+            try:
+                result=self.send(subject,body)
+            except Exception:
+                result={}
+            accepted=bool(result.get('success') and not result.get('skipped') and not result.get('partial_success'))
+            print(clean(json.dumps(dict(success=accepted,message_id=result.get('message_id') if accepted else None,sent_at=self.clock().isoformat(),subject=subject),ensure_ascii=False),self.secrets))
+            return 0 if accepted else 1
+        print(subject+'\n'+body);return 0
     def _push(self,status,verdict):
         try:
             self.push(status,verdict)
@@ -510,7 +524,7 @@ class Daily:
         self._push('up','accepted');return 0
 
 
-def load_credentials(home):
+def load_credentials(home,heartbeat=True):
     import io
     from utils import load_yaml_file_readonly
     from agent.secret_scope import load_env_file
@@ -518,7 +532,8 @@ def load_credentials(home):
     cfg=load_yaml_file_readonly(home/'config.yaml')
     source=dict(cfg['daily_check']['runner_secrets']['onepassword'])
     refs=dict(source['env'])
-    refs['HAL_DAILY_CHECK_PUSH_TOKEN']=cfg['secrets']['onepassword']['env']['HAL_DAILY_CHECK_PUSH_TOKEN']
+    if heartbeat:
+        refs['HAL_DAILY_CHECK_PUSH_TOKEN']=cfg['secrets']['onepassword']['env']['HAL_DAILY_CHECK_PUSH_TOKEN']
     source['env']=refs
     # Resolve into a private mapping: neither agents nor child processes inherit HA credentials.
     values=dict(os.environ)
@@ -529,7 +544,7 @@ def load_credentials(home):
         values.pop(key,None)
     with contextlib.redirect_stdout(io.StringIO()),contextlib.redirect_stderr(io.StringIO()):
         apply_all({'onepassword':source},home,environ=values)
-    required=('HAL_DAILY_RUNNER_HASS_URL','HAL_DAILY_RUNNER_HASS_TOKEN','HAL_DAILY_CHECK_PUSH_TOKEN')
+    required=('HAL_DAILY_RUNNER_HASS_URL','HAL_DAILY_RUNNER_HASS_TOKEN')+(('HAL_DAILY_CHECK_PUSH_TOKEN',) if heartbeat else ())
     if any(not values.get(key) or values[key].startswith(('op://','${')) for key in required):
         raise ValueError('credentials unavailable')
     return {key:values[key] for key in (*required,'OP_SERVICE_ACCOUNT_TOKEN') if values.get(key)}
@@ -596,11 +611,13 @@ class BoardProcess:
 
 def main(argv=None):
     parser=argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--production',action='store_true')
+    modes=parser.add_mutually_exclusive_group()
+    modes.add_argument('--production',action='store_true')
+    modes.add_argument('--trial',action='store_true',help='collect and email once with [trial] prefix; no state, cards, heartbeat or daily lock')
     parser.add_argument('--fixture',type=Path)
-    parser.add_argument('--ensure-cards',action='store_true',help=argparse.SUPPRESS)
+    modes.add_argument('--ensure-cards',action='store_true',help=argparse.SUPPRESS)
     args=parser.parse_args(argv)
-    if args.fixture and (args.production or args.ensure_cards):
+    if args.fixture and (args.production or args.trial or args.ensure_cards):
         parser.error('fixture input is preview-only')
     if args.fixture:
         snapshot=json.loads(args.fixture.read_text())
@@ -622,11 +639,11 @@ def main(argv=None):
             signal.signal(signal.SIGALRM,timed_out)
             signal.alarm(3000)
             try:
-                credentials=load_credentials(PROFILE);token=credentials['HAL_DAILY_CHECK_PUSH_TOKEN']
+                credentials=load_credentials(PROFILE,heartbeat=not args.trial);token=credentials.get('HAL_DAILY_CHECK_PUSH_TOKEN','')
                 client=HA(credentials['HAL_DAILY_RUNNER_HASS_URL'],credentials['HAL_DAILY_RUNNER_HASS_TOKEN'])
-                app=Daily(PROFILE,lambda:collect_ha(client),BoardProcess(PROFILE,lambda:client.deadline),NativeMail(PROFILE),lambda s,v:kuma_push(token,s,v),secrets=(*secret_values(PROFILE),*credentials.values()))
+                app=Daily(PROFILE,lambda:collect_ha(client),None if args.trial else BoardProcess(PROFILE,lambda:client.deadline),NativeMail(PROFILE),lambda s,v:kuma_push(token,s,v),secrets=(*secret_values(PROFILE),*credentials.values()))
                 verdict='internal-failed'
-                return app._production() if args.production else app.run()
+                return app._production() if args.production else app.run(trial=args.trial)
             finally:
                 signal.alarm(0)
     except BlockingIOError:
