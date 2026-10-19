@@ -847,6 +847,20 @@ The helper uses upstream's locked atomic environment writer and preserves the fi
 After a mount change, restart the WebUI and recreate only idle containers whose mounts are stale; verify through a fresh WebUI chat.
 See [The docker terminal sandboxes](#the-docker-terminal-sandboxes).
 
+#### Hal: read-only tool-result spillover
+
+Hermes saves large tool results under `$HERMES_HOME/cache/spillover` and can return that host path to a card worker.
+The native spillover directory is fixed, so Hal adds one read-only identity bind rather than changing native storage.
+This exposes only Hal's own tool results; the reader profile and other profiles get no additional mount.
+
+1. Append `/home/hermes/.hermes/profiles/hal/cache/spillover:/home/hermes/.hermes/profiles/hal/cache/spillover:ro` to Hal's saved YAML `terminal.docker_volumes`, preserving all existing entries.
+2. Run `/home/hermes/.hermes/scripts/hermes-profile-docker-setup.sh hal --sync-mounts` to mirror that list into the single-quoted JSON env value. Compare the core and WebUI runtime readers.
+3. Let fresh card workers take the new scope. Recreate only proven-idle stale Hal containers when needed; preserve their host-backed home and workspace. Restart the WebUI only if its cached scope needs clearing.
+4. Check the new container's mount is `RW=false` at that exact path. Read a known spillover file through the sandbox and confirm a write to the bind fails.
+
+The native `/root/.hermes/cache/spillover` alias alone did not cover the host path handed to Hal on 19 October.
+No whole-profile home, board database, other profile's cache or credential directory is mounted for this fix.
+
 ### 8. Shared gateway admission
 
 Do not create a `hermes-gateway-<name>` unit. Upstream multiplexing discovers profiles automatically; the one `hermes-gateway` unit serves messaging and worker contexts.
@@ -1023,7 +1037,7 @@ A settings change takes effect on the next admitted profile turn or after restar
 
 **`default`, `emh`, `hal` and `web_watcher` share three base mounts.**
 Two are identity mounts: the same host path inside the container as outside.
-HAL also has the writable scripts identity mount below.
+HAL also has the writable scripts and read-only tool-result spillover identity mounts below.
 
 | Entry | Why |
 |---|---|
@@ -1031,6 +1045,7 @@ HAL also has the writable scripts identity mount below.
 | `/home/hermes/.hermes/webui/attachments:/home/hermes/.hermes/webui/attachments:ro` | Chat uploads, read-only, at the host path the WebUI pastes into the prompt |
 | `<workspace>:<workspace>` | The workspace again, at the host path the WebUI advertises in its `[Workspace::v1: …]` label |
 | HAL only: `<scripts>:<scripts>:rw` | HAL owns its cron scripts at `/home/hermes/.hermes/profiles/hal/scripts/`, shared with the host |
+| HAL only: `<spillover>:<spillover>:ro` | Oversized tool results at `/home/hermes/.hermes/profiles/hal/cache/spillover/`, readable at the host path returned to the worker |
 
 The identity mounts exist because the WebUI hands the agent **host** paths as text, and a path that does not resolve inside the container is a file the agent cannot read.
 

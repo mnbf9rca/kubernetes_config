@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 import hal_daily_cards as c
 import hal_daily_check as d
 from test_hal_daily_check import AT,snapshot
@@ -54,6 +55,33 @@ class Graph(unittest.TestCase):
   self.assertEqual(len(readers),1);self.assertNotIn('private-canary',readers[0]['body'])
   self.assertEqual(b.tasks[out['assembly']]['parents'],[readers[0]['id']])
   c.plan(b,root,choice(key));self.assertEqual(len(b.tasks),3)
+
+class ReaderRequest(unittest.TestCase):
+ def test_emitted_planner_and_reader_ask_for_household_summary(self):
+  b=Board();report=d.findings(snapshot(),AT,AT-dt.timedelta(days=1));report['inventory']=['private-canary']
+  c.Tickets(b).ensure(report,{}, {},'2026-10-18',AT)
+  root=next(t for t in b.tasks.values() if json.loads(t['body'])['schema']=='hal-daily.batch.v1')
+  planner=json.loads(root['body'])['instruction'];key=report['updates'][0]['key']
+  c.plan(b,root['id'],choice(key))
+  reader=next(t for t in b.tasks.values() if t['assignee']=='safer_web_reader')
+  instruction=json.loads(reader['body'])['instruction']
+  for text in (planner,instruction):
+   for requirement in ('household update question','breaking changes and migration steps in full','exact wording','before or after upgrading','summary'):
+    self.assertIn(requirement,text)
+  self.assertIn('changed_components includes only',instruction)
+  self.assertIn('Do not enumerate every changed component',instruction)
+  self.assertNotIn('private-canary',reader['body'])
+  self.assertNotIn('return every named changed component',instruction)
+ def test_revised_request_gets_new_reader_without_resetting_old_result(self):
+  b=Board();root,key=batch(b);c.plan(b,root,choice(key))
+  old=next(t for t in b.tasks.values() if t['assignee']=='safer_web_reader');old['status']='done';old['result']=json.dumps(envelope())
+  other=b.create('new batch',json.loads(b.tasks[root]['body']),'hal','hal-daily:batch:next')
+  with patch.object(c,'READER_INSTRUCTION',c.READER_INSTRUCTION+' Revised summary request.'):
+   c.plan(b,other,choice(key));c.plan(b,other,choice(key))
+  readers=[t for t in b.tasks.values() if t['assignee']=='safer_web_reader']
+  self.assertEqual(len(readers),2);self.assertEqual(old['status'],'done');self.assertEqual(old['result'],json.dumps(envelope()))
+  assembly=next(t for t in b.tasks.values() if json.loads(t['body']).get('root_id')==other)
+  self.assertNotEqual(json.loads(assembly['body'])['readers'][key],[old['id']])
 
 class Envelopes(unittest.TestCase):
  def test_correct_then_malformed_and_unassessed(self):
