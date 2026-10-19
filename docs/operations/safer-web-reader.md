@@ -326,8 +326,6 @@ The current runtime fully defers the two broker schemas; the guard therefore tak
 The registry overrides provide the kanban boundary on this path; the guard's soft-failure limitation remains unchanged.
 The August injection and SSRF battery below was not repeated during this repair.
 
-### August 30, 2026: historical battery
-
 ### October 19, 2026: complete extraction paging
 
 Broker 1.2.0 adds URL-plus-piece reads to the existing web_extract name.
@@ -335,7 +333,14 @@ The 200,000-character fixture test reconstructs the original text exactly across
 Additional tests cover an unknown URL's later piece, refusal of a file-path parameter, native URL refusals, short uncached results, invalid indices and missing full-cache output.
 Registration tests retain the kanban denial and unchanged global registrations for other profiles.
 Installation, the quarantine review and the single Core trial are recorded in the local `core-reader-paging-report.md` and `core-reader-paging-review.md` under `.superpowers/sdd/hal-watchers/`.
-Live result and deployment evidence will be added after the agreed trial.
+The dispatched Core reader read all 14 pieces of the 202,360-character monthly release post.
+Their reconstruction matched the native cached extraction exactly, and the accepted envelope returned `OK` with `retrieval_status: ok` and a matching target version.
+Broker runtime files were installed from `43311c8` with rollback preimages; the native fetch/cache files, profile configuration, persona and envelope validator were unchanged.
+The native runtime check retained exactly the four web capabilities, hid and refused kanban calls, and refused file paths, private URLs and unknown later-piece URLs.
+All 54 broker tests passed locally and in the installed runtime.
+The local report holds trial card IDs, the publisher receipt and the independent quarantine verdict.
+
+### August 30, 2026: historical battery
 
 The following checks describe the older deny-list implementation at `23bae43c`; they are retained as historical evidence, not a claim that the current worker honours the deny-list.
 It was run in full on **2026-08-30** against Hermes `v0.20.6 (2026.8.27)`, on seven dispatched tasks left on the board as evidence; all nine checks passed.
