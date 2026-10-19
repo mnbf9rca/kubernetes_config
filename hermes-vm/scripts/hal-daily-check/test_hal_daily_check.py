@@ -259,7 +259,7 @@ class MorningEmailFaults(unittest.TestCase):
   data['traces']=[dict(item_id='lights',timestamp={})]
   report=d.findings(data,AT,AT-dt.timedelta(days=1));body=d.render(report,{},{},AT)[1]
   section=body.split('## Could not finish\n',1)[-1].splitlines()
-  self.assertEqual(section,['- **Recent errors** could not be checked.','- **offline-devices monitor** is stale or unreadable, so I could not check for offline devices.'])
+  self.assertEqual(section,['- **Recent errors** could not be checked.','- **Offline-devices monitor** is stale or unreadable, so I could not check for offline devices.'])
   self.assertNotIn('run timing',body)
  def test_subject_counts_actions_but_not_pending_development_or_nonaction_blockers(self):
   data=snapshot();data['states'][-1]['last_reported']=(AT-dt.timedelta(minutes=10)).isoformat()
@@ -277,7 +277,7 @@ class MorningEmailFaults(unittest.TestCase):
   data['states'][1]['attributes']['title']='Spook 👻 Your homie Update'
   data['states'].append(state('update.window','on',title='Bathroom Window Firmware Update',installed_version='1',latest_version='2'))
   body=d.render(d.findings(data,AT,AT-dt.timedelta(days=1)),{},{},AT)[1]
-  self.assertIn('**🌿 monstera battery** is flat',body);self.assertIn('Spook 👻 Your homie 2026.9.3',body);self.assertIn('Bathroom Window 1 → 2',body)
+  self.assertIn('**🌿 Monstera battery** is flat',body);self.assertIn('Spook 👻 Your homie 2026.9.3',body);self.assertIn('Bathroom Window 1 → 2',body)
   self.assertNotIn('Battery battery',body);self.assertNotIn('homie Update',body);self.assertNotIn('Firmware',body)
  def test_log_warning_names_the_actual_first_error_in_one_line(self):
   data=snapshot();data['logs']=[dict(level='ERROR',name='homeassistant.components.ohme',message=['Could not connect to the charger.\nTraceback: implementation detail','Another error'])]
@@ -306,7 +306,7 @@ class MorningEmailFaults(unittest.TestCase):
   with tempfile.TemporaryDirectory() as home,patch.object(d,'findings',side_effect=ValueError('fixture malformed input')):
    app=d.Daily(Path(home),snapshot,None,lambda *a:(sent.append(a) or {'success':True}),lambda *a:None,clock=lambda:AT)
    self.assertEqual(app._production(),0)
-  self.assertIn('- **I could not check batteries because the Home Assistant data could not be read.**',sent[0][1])
+  self.assertIn('- **Batteries**: The Home Assistant data could not be read.',sent[0][1])
   import subprocess
   class Board:
    def ensure(self,*args):raise failure
@@ -341,5 +341,11 @@ class EmailComposition(unittest.TestCase):
   body=d.render(d.findings(data,AT,AT-dt.timedelta(days=1)),{},{},AT)[1]
   self.assertIn('- **ohme**: Cannot connect to api.ohme.io:443.',body)
   self.assertNotIn('Retry later',body);self.assertNotIn('Extra diagnostic',body);self.assertNotIn('Check its log',body)
+
+class ReviewFormatting(unittest.TestCase):
+ def test_named_bold_leads_are_capitalised_and_blocker_is_not_all_bold(self):
+  self.assertEqual(d.item_bullet('The monstera battery is flat; replace it.'),'- **Monstera battery** is flat; replace it.')
+  self.assertEqual(d.item_bullet('The 🌿 monstera battery is flat; replace it.'),'- **🌿 Monstera battery** is flat; replace it.')
+  self.assertEqual(d.item_bullet('I could not check batteries because the Home Assistant data could not be read.'),'- **Batteries**: The Home Assistant data could not be read.')
 
 if __name__=='__main__':unittest.main()

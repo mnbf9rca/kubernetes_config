@@ -245,3 +245,28 @@ class AssessmentComposition(unittest.TestCase):
    b=Board();tid=b.create('look',dict(schema='hal-daily.device.v1',situation=dict(key='s',members=[],line='Lamp offline')),'hal','hal-daily:device:s')
    sent=[];c.publish(b,tid,{},Path(tmp),lambda *a:(sent.append(a) or {'success':True}),AT,note='Zigbee: Check the hub power.\nLamp: Check its battery.')
    self.assertEqual(sent[0],('House: 2 things need you','## Needs you\n- **Zigbee**: Check the hub power.\n- **Lamp**: Check its battery.'))
+
+
+class ReviewB1(unittest.TestCase):
+ def test_host_title_differs_from_hal_and_two_pending_notes_match_versions(self):
+  host='Spook 👻 Your homie v5.11.0 → v5.11.1'
+  result=c.assessment_bullet(host,'Spook v5.11.0 → v5.11.1: update at the next convenient restart.\nCheck Repairs.','https://example.org/spook')
+  self.assertEqual(result.splitlines()[0],'- **'+host+': update at the next convenient restart.**')
+  self.assertEqual(result.count('v5.11.0'),1)
+  with tempfile.TemporaryDirectory() as tmp:
+   b=Board();root,key=batch(b);data=json.loads(b.tasks[root]['body'])
+   data['updates']=[dict(data['updates'][0],key='spook',name='Spook 👻 Your homie',installed='v5.11.0',available='v5.11.1'),dict(data['updates'][0],key='core',name='Home Assistant Core',installed='2026.10.1',available='2026.10.2')]
+   b.tasks[root]['body']=json.dumps(data)
+   asm=c.plan(b,root,{'spook':{'missing':['release unavailable']},'core':{'missing':['release unavailable']}})['assembly']
+   sent=[];note='Spook v5.11.0 → v5.11.1: not assessed. The Spook post was unavailable.\n2026.10.2: not assessed. The Core post was unavailable.'
+   c.publish(b,asm,{},Path(tmp),lambda *a:(sent.append(a) or {'success':True}),AT,note=note)
+   body=sent[0][1]
+   self.assertEqual(body.count('v5.11.0'),1);self.assertEqual(body.count('2026.10.1'),1)
+   self.assertEqual(body.count('v5.11.1'),1);self.assertEqual(body.count('2026.10.2'),1)
+   self.assertIn('The Spook post was unavailable.',body);self.assertIn('The Core post was unavailable.',body)
+   self.assertNotIn('## Could not finish',body)
+ def test_inline_bold_is_preserved_and_only_whole_line_wrapper_is_removed(self):
+  text='**Spook v5.11.0 → v5.11.1: update now.**\n**Before** you restart, note the **Repairs** list.'
+  result=c.assessment_bullet('Spook 👻 Your homie v5.11.0 → v5.11.1',text,'https://example.org/spook')
+  self.assertIn('\n  **Before** you restart, note the **Repairs** list.',result)
+  self.assertNotIn('v5.11.1: Spook',result)

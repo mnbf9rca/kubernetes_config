@@ -39,12 +39,12 @@ Complete the planner with a summary of the created IDs and omit the created_card
 The operator accepts the native command's theoretical concurrent-create race; a race costs one duplicate card.
 The publish tool validates complete stored envelopes before accepting a pair's advice.
 Failed, malformed and UNASSESSED readers refuse their affected pairs without hiding valid siblings.
-A batch publish call may include assessments and a note together; the note gives one verdict line per pending package, with its name, version pair and one reason. It appears once after the assessed advice in the same email, not again under Could not finish.
+A batch publish call may include assessments and a note together; the note gives one line per pending package, tagged with its available version, then its not-assessed verdict and one reason. The host adds the package name and version pair. It appears once after the assessed advice in the same email, not again under Could not finish.
 At least one payload must be non-empty; a device look-over uses note alone.
 
 ## Assessment prose and email composition
 
-Start each assessment with the package name, installed → available version pair, and one verdict: update now; update at the next convenient restart; hold, with one reason; or not assessed, with one reason.
+Each emailed assessment starts with the package name, installed → available version pair, and one verdict: update now; update at the next convenient restart; hold, with one reason; or not assessed, with one reason.
 Write each action line in full Simplified Technical English: one instruction per sentence, imperative and active, at most 20 words, with no undefined terms.
 Give only actions you must take before or after the update. Three or four action lines are usual; use more when the release needs them.
 Guide context lines by Simplified Technical English: one idea per sentence, active voice, concrete nouns and ordinary vocabulary. Context may exceed 20 words when the idea needs it; one or two sentences are usual.
@@ -52,7 +52,7 @@ Simplified Technical English must never constrain understanding. Home Assistant 
 Put the release link last. Address the operator as "you", never "Rob" in the third person.
 Keep unproven, uncovered or unretrieved details in the card. Do not email "I have not established", "insufficient to prove", "did not provide coverage", or "the comparison begins before". If evidence is too thin, say "not assessed" and give one reason.
 A pending package appears once, as its verdict with that reason; do not repeat it under a separate could-not-assess list.
-In publish assessments, use the verdict as the first line, action and context lines below, and the link last. In a batch note, use one line per pending package with its name and version pair, "not assessed", and one reason; do not repeat assessed packages there.
+In publish assessments, start with the verdict only; the host adds the package name and version pair. Put action and context lines below, and the link last. In a batch note, use one line per pending package, starting with its available version and a colon, then "not assessed" and one reason; the host adds the name and version pair. Do not repeat assessed packages there.
 For device look-over notes, use one item per line, starting with the device or integration name and a colon, then the useful finding and action.
 The host composes both emails with non-empty sections in this order: Needs you, Updates, Could not finish. Each item is a bullet with a bold lead. Assessed verdicts and actions go under Needs you, pending verdicts under Updates; assessment details sit below the verdict and the link is last. Could not finish holds other blockers, not repeated pending packages.
 The subject's count equals the actionable bullets under Needs you. A quiet email is the verdict line alone.

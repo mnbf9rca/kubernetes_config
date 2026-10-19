@@ -333,7 +333,13 @@ def findings(snapshot,at,cutoff):
 
 
 def item_bullet(text):
-    text=text.strip().removeprefix('- ').removeprefix('The ')
+    text=text.strip().removeprefix('- ')
+    if text.startswith('The '):
+        text=re.sub(r'[A-Za-z]',lambda m:m.group().upper(),text[4:],count=1)
+    blocker=re.fullmatch(r'I could not (?:check|read) (.+?) because (.+)',text)
+    if blocker:
+        area=blocker[1].removeprefix('the ');reason=blocker[2]
+        return '- **'+area[:1].upper()+area[1:]+'**: '+reason[:1].upper()+reason[1:]
     if text.startswith('**'):
         return '- '+text
     split=re.search(r':\s|\s(?:is|are|looks|reports|has|have|could|still|automation failed|integration could)\b',text)
