@@ -7,11 +7,14 @@ it expires, so the record outlives Cloudflare's retention.
 
 THE FOUR RULES THIS SCRIPT EXISTS TO ENFORCE. Read them before changing anything.
 
-  1. THE DATA IS ITS OWN WATERMARK. The resume point is max(_time) over the
-     `cloudflare` bucket, read back from InfluxDB on every run. There is no state
-     file, no PVC and no ConfigMap cursor, because all three can disagree with
-     what was actually stored — after a restore, after a manual delete, after a
-     partial write. This cannot.
+  1. THE DATA IS ITS OWN WATERMARK. The resume point is max(_time) PER ZONE
+     over the `cloudflare` bucket, read back from InfluxDB on every run. There
+     is no state file, no PVC and no ConfigMap cursor, because all three can
+     disagree with what was actually stored — after a restore, after a manual
+     delete, after a partial write. This cannot. The zones themselves are
+     enumerated from the Cloudflare API on every run, not configured, so a
+     zone with no points at all is new and is seeded from Cloudflare's whole
+     retention window.
 
   2. A FAILED QUERY IS NOT AN EMPTY ONE. Cloudflare answers a broken query with
      HTTP 200 and a non-empty `errors` array in the body. Treating that as "no
@@ -27,10 +30,11 @@ THE FOUR RULES THIS SCRIPT EXISTS TO ENFORCE. Read them before changing anything
      `homelab-cloudflare-analytics` monitor is pushed DOWN. Quietly resuming
      would be the same bug as a probe that stays green through an outage.
 
-  4. COMMIT IN ORDER, STOP AT THE FIRST FAILURE. Chunks are processed oldest
-     first and a chunk is committed only when EVERY zone succeeded for it. Commit
-     a chunk where one zone failed and the watermark jumps past hours that zone
-     never covered.
+  4. COMMIT IN ORDER, STOP AT THE FIRST FAILURE. Each zone's chunks are
+     processed oldest first and the run stops at the first failed chunk. A
+     zone's watermark is its own, so a failed chunk leaves that zone where it
+     was and the next run resumes it there; no zone's watermark can move past
+     hours it never fetched.
 
 Idempotency comes from InfluxDB point overwrite: same measurement, same tag set
 and same timestamp replaces. Every run deliberately rewinds OVERLAP_HOURS behind
@@ -105,6 +109,9 @@ query ZoneHourly($zoneTag: string!, $start: Time!, $end: Time!, $limit: Int!) {
           clientRequestHTTPMethodName
           edgeResponseStatus
           clientCountryName
+          verifiedBotCategory
+          securitySource
+          userAgent
         }
       }
     }
@@ -139,8 +146,8 @@ def log(msg):
 #
 # NEVER PUT A QueryFailed MESSAGE, A RESPONSE BODY OR repr(exc) IN HERE.
 # QueryFailed is raised at ten sites below and those messages splice in
-# `zone_tag` - which comes from CF_ZONE_TAGS, a secretKeyRef whose own manifest
-# comment says a zone ID identifies the account - plus up to 800 bytes of raw
+# `zone_tag` - a zone ID from the Cloudflare zone listing, which identifies
+# the account and this repo is public - plus up to 800 bytes of raw
 # Cloudflare and InfluxDB response (`text[:500]`, `json.dumps(errors)[:800]`).
 # `make check-ping-bodies` checks every hc_emit/hc_summary argument against an
 # explicit value allowlist. Both sinks keep their names on purpose: that guard
@@ -238,46 +245,79 @@ def rewind(watermark):
         minute=0, second=0, microsecond=0)
 
 
-def parse_zone_tags(raw):
-    """`name=tag,name=tag` -> [(name, tag), ...], order preserved."""
-    zones = []
-    for entry in raw.split(","):
-        entry = entry.strip()
-        if not entry:
-            continue
-        if "=" not in entry:
-            raise SystemExit(
-                "FATAL: CF_ZONE_TAGS entry %r is not name=zonetag" % entry)
-        name, tag = entry.split("=", 1)
-        name, tag = name.strip(), tag.strip()
-        if not name or not tag:
-            raise SystemExit(
-                "FATAL: CF_ZONE_TAGS entry %r has an empty half" % entry)
-        zones.append((name, tag))
-    if not zones:
-        raise SystemExit("FATAL: CF_ZONE_TAGS resolved to no zones")
-    return zones
-
-
 # --- HTTP -------------------------------------------------------------------
 
-def http_post(url, body, headers, timeout=HTTP_TIMEOUT):
-    """POST and return (status, body_text). Transport errors raise QueryFailed.
+def _send(req, timeout):
+    """Return (status, body_text). Transport errors raise QueryFailed.
 
     urllib raises HTTPError for non-2xx, which is still a response worth reading:
     Cloudflare and InfluxDB both put the useful diagnostic in the error body.
     """
-    req = urllib.request.Request(url, data=body, headers=headers, method="POST")
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             return resp.status, resp.read().decode("utf-8", "replace")
     except urllib.error.HTTPError as exc:
         return exc.code, exc.read().decode("utf-8", "replace")
     except Exception as exc:                       # noqa: BLE001 - transport
-        raise QueryFailed("transport error contacting %s: %r" % (url, exc))
+        raise QueryFailed(
+            "transport error contacting %s: %r" % (req.full_url, exc))
+
+
+def http_post(url, body, headers, timeout=HTTP_TIMEOUT):
+    return _send(urllib.request.Request(
+        url, data=body, headers=headers, method="POST"), timeout)
+
+
+def http_get(url, headers, timeout=HTTP_TIMEOUT):
+    return _send(urllib.request.Request(
+        url, headers=headers, method="GET"), timeout)
 
 
 # --- Cloudflare -------------------------------------------------------------
+
+CF_ZONES_URL = "https://api.cloudflare.com/client/v4/zones"
+
+
+def cf_zones(token):
+    """Every zone the token can see, as [(name, tag), ...] sorted by name.
+
+    Enumerated on every run rather than configured, so a zone added to the
+    account is ingested from its next run without anyone editing a list; the
+    token therefore carries Zone:Read beside Zone.Analytics:Read. Pagination is
+    honoured because an account can outgrow one page. Anything short of a
+    clean, complete listing raises QueryFailed: a silently shortened list would
+    skip a zone, which is the same loss as treating a failed query as empty.
+    """
+    headers = {"Authorization": "Bearer %s" % token}
+    zones = []
+    page = 1
+    while True:
+        status, text = http_get(
+            "%s?per_page=50&page=%d" % (CF_ZONES_URL, page), headers)
+        try:
+            doc = json.loads(text)
+        except ValueError:
+            raise QueryFailed(
+                "zone listing HTTP %s, body is not JSON: %s" % (status, text[:500]))
+        if status < 200 or status >= 300 or not doc.get("success"):
+            raise QueryFailed(
+                "zone listing HTTP %s: %s"
+                % (status, json.dumps(doc.get("errors"))[:800]))
+        for zone in doc.get("result") or []:
+            name, tag = zone.get("name"), zone.get("id")
+            if not name or not tag:
+                raise QueryFailed(
+                    "zone listing entry without name or id: %s"
+                    % json.dumps(zone)[:200])
+            zones.append((name, tag))
+        info = doc.get("result_info") or {}
+        if page >= int(info.get("total_pages") or 1):
+            break
+        page += 1
+    if not zones:
+        raise QueryFailed("the token can see no zones at all")
+    return sorted(zones)
+
 
 def cf_query(token, zone_tag, start, end, limit, budget):
     """Return the raw group rows for one zone and window.
@@ -398,8 +438,8 @@ def truncate_path(path, keep_full):
     return head[:256]
 
 
-# Path prefixes, per zone NAME (the left half of a CF_ZONE_TAGS entry), whose
-# next segment identifies a person. Everything beneath them collapses to
+# Path prefixes, per zone NAME as Cloudflare lists it (`name` in GET /zones),
+# whose next segment identifies a person. Everything beneath them collapses to
 # `<prefix>*` before the series key is built, so the raw paths never reach
 # InfluxDB and their counts sum into the one masked series.
 PRIVATE_PATH_PREFIXES = {
@@ -444,6 +484,13 @@ def aggregate(rows, zone_name, full_path_hosts, acc):
         hour = parse_hour(dims.get("datetimeHour"))
         host = dims.get("clientRequestHTTPHost") or "unknown"
         keep_full = host in full_path_hosts
+        # The raw user agent is NEVER stored: it is unbounded, attacker-chosen
+        # text and would be a cardinality bomb. It is collapsed here to the
+        # one class the estate asks about - its own uptime-kuma probes - and
+        # `other`. It is still requested as a dimension so Cloudflare splits
+        # the groups by it, which is what makes the collapse possible.
+        agent = dims.get("userAgent") or ""
+        client = "uptime-kuma" if agent.startswith("Uptime-Kuma/") else "other"
         key = (
             zone_name,
             host,
@@ -452,6 +499,9 @@ def aggregate(rows, zone_name, full_path_hosts, acc):
             str(dims.get("edgeResponseStatus", "unknown")),
             dims.get("clientCountryName") or "unknown",
             dims.get("clientRequestHTTPMethodName") or "unknown",
+            dims.get("verifiedBotCategory") or "none",
+            dims.get("securitySource") or "unknown",
+            client,
             int(hour.timestamp()),
         )
         count = int(row.get("count") or 0)
@@ -499,17 +549,19 @@ def points(acc):
     kept in the sort only to make the output deterministic.
     """
     def oldest_first(item):
-        zone, host, path, status, country, method, ts = item[0]
-        return (ts, zone, host, path, status, country, method)
+        return (item[0][-1],) + item[0][:-1]
 
     for key, (count, weighted) in sorted(acc.items(), key=oldest_first):
-        zone, host, path, status, country, method, ts = key
+        (zone, host, path, status, country, method,
+         bot_category, security_source, client, ts) = key
         interval = (weighted / count) if count else 1.0
         yield ("http_requests,zone=%s,host=%s,path=%s,status=%s,country=%s,"
-               "method=%s count=%di,sample_interval=%.6f %d"
+               "method=%s,bot_category=%s,security_source=%s,client=%s "
+               "count=%di,sample_interval=%.6f %d"
                % (esc_tag(zone), esc_tag(host), esc_tag(path),
                   esc_tag(status), esc_tag(country), esc_tag(method),
-                  count, interval, ts))
+                  esc_tag(bot_category), esc_tag(security_source),
+                  esc_tag(client), count, interval, ts))
 
 
 # --- InfluxDB ---------------------------------------------------------------
@@ -535,8 +587,13 @@ def influx_write(cfg, lines):
             raise QueryFailed("InfluxDB write HTTP %s: %s" % (status, text[:500]))
 
 
-def influx_watermark(cfg):
-    """Newest point in the bucket, or None if the bucket has never been written.
+def influx_watermarks(cfg):
+    """{zone: newest point with that zone tag}; {} if the bucket was never written.
+
+    The key "" is the newest point carrying NO zone tag: the global
+    ingest_status marker written before 2026-10-20, when the watermark was one
+    value for every zone. main() reads it once as a floor for zones that
+    already have points.
 
     DO NOT "tidy" this into a bare group()/keep() over every field. That form
     collides whenever two fields in the bucket have different value types
@@ -546,17 +603,17 @@ def influx_watermark(cfg):
     before grouping is what makes the merge type-safe.
 
     `_field == "count"` covers both http_requests and ingest_status, so an hour
-    with genuinely zero traffic still moves the watermark. It deliberately does
-    NOT cover ingest_gap's `missing_hours`: a gap marker records a hole, it must
-    never claim the hole was filled.
+    with genuinely zero traffic still moves a zone's watermark. It deliberately
+    does NOT cover ingest_gap's `missing_hours`: a gap marker records a hole,
+    it must never claim the hole was filled.
     """
     flux = (
         'from(bucket:"%s")\n'
         '  |> range(start: 1970-01-01T00:00:00Z)\n'
         '  |> filter(fn: (r) => r._field == "count")\n'
-        '  |> group()\n'
+        '  |> group(columns: ["zone"])\n'
         '  |> max(column: "_time")\n'
-        '  |> keep(columns: ["_time"])\n' % cfg["bucket"]
+        '  |> keep(columns: ["zone", "_time"])\n' % cfg["bucket"]
     )
     url = "%s/api/v2/query?org=%s" % (cfg["url"], cfg["org"])
     headers = {
@@ -571,12 +628,23 @@ def influx_watermark(cfg):
     if text.lstrip().startswith("{") and '"code"' in text:
         raise QueryFailed("watermark query returned an error: %s" % text[:500])
 
-    newest = None
+    # Annotated CSV: annotations start "#", and EVERY TABLE HAS ITS OWN HEADER
+    # (",result,table,...") because the zone-less group has no `zone` column at
+    # all. Columns are therefore read per header, never by position.
+    newest = {}
+    columns = None
     for line in text.splitlines():
-        # Annotated CSV data rows start with ",_result,"; annotations start "#".
-        if not line.startswith(",_result,"):
+        line = line.rstrip("\r")
+        if not line.strip() or line.startswith("#"):
             continue
-        cell = line.rstrip("\r").split(",")[-1].strip()
+        cells = line.split(",")
+        if len(cells) > 1 and cells[1] == "result":
+            columns = cells
+            continue
+        if columns is None:
+            continue
+        cells = dict(zip(columns, cells))
+        cell = cells.get("_time", "").strip()
         if not cell:
             continue
         try:
@@ -584,8 +652,9 @@ def influx_watermark(cfg):
         except ValueError:
             raise QueryFailed("watermark row has unparseable _time %r" % cell)
         parsed = parsed.astimezone(timezone.utc)
-        if newest is None or parsed > newest:
-            newest = parsed
+        zone = cells.get("zone", "").strip()
+        if zone not in newest or parsed > newest[zone]:
+            newest[zone] = parsed
     return newest
 
 
@@ -647,7 +716,6 @@ def make_pusher(push_url):
 
 def main():
     cf_token = env("CF_API_TOKEN")
-    zones = parse_zone_tags(env("CF_ZONE_TAGS"))
     full_path_hosts = {
         h.strip() for h in os.environ.get("FULL_PATH_HOSTS", "").split(",")
         if h.strip()
@@ -662,109 +730,125 @@ def main():
 
     now = datetime.now(timezone.utc).replace(microsecond=0)
     retention_floor = now - timedelta(hours=RETENTION_HOURS)
+    budget = {"used": 0}
 
-    watermark = influx_watermark(influx)          # raises -> run fails, no writes
-    gap = None
-
-    if watermark is None:
-        # First run, or a restored-from-empty bucket. Nothing was lost, because
-        # nothing was ever held. Start at the oldest data Cloudflare still has.
-        start = retention_floor
-        log("no watermark: bucket is empty, seeding from %s" % iso(start))
-    else:
-        start = rewind(watermark)
-        log("watermark %s, rewound %dh and floored to %s"
-            % (iso(watermark), OVERLAP_HOURS, iso(start)))
-        if start < retention_floor:
-            missing_hours = int(
-                (retention_floor - start).total_seconds() // 3600)
-            gap = (start, retention_floor, missing_hours)
-            log("")
-            log("!!! UNRECOVERABLE GAP !!!")
-            log("!!! %s .. %s (%d hours) is older than Cloudflare's %d-hour"
-                % (iso(start), iso(retention_floor), missing_hours,
-                   RETENTION_HOURS))
-            log("!!! retention and can never be fetched. Writing an ingest_gap")
-            log("!!! marker and exiting non-zero so the monitor is pushed down.")
-            log("")
-            start = retention_floor
-
-    if start >= now:
-        # Deliberately NOT an early return. Falling through leaves the loop with
-        # nothing to do but still runs the gap-marker write and the exit-code
-        # logic below, so no code path can decide there is a permanent hole and
-        # then return before recording it.
-        log("watermark is already current; no chunks to fetch")
+    zones = cf_zones(cf_token)                    # raises -> run fails, no writes
+    log("%d zone(s) visible to the token" % len(zones))
+    watermarks = influx_watermarks(influx)        # raises -> run fails, no writes
+    # Before 2026-10-20 the ingest_status marker carried no zone tag and was
+    # one watermark for every zone then configured, so it proves every zone
+    # that has points was covered through it. A zone whose own newest point is
+    # older than that marker resumes from the marker, not from its last
+    # traffic: otherwise a quiet zone would be re-fetched and, having gained
+    # the `method` tag since, double-counted. A zone with no points at all is
+    # new and is seeded from Cloudflare's whole retention. The marker is never
+    # written again, so this floor is a constant.
+    legacy = watermarks.pop("", None)
 
     warnings = []
-    budget = {"used": 0}
-    chunks_done = 0
-    committed_through = None
+    gaps = []                      # (zone_name, g_start, g_end, missing_hours)
     failure = None
-    cursor = start
+    chunks_done = 0
     rows_total = 0
     series_total = 0
+    behind = 0                     # zones with chunks still outstanding
+    committed_through = None       # newest chunk end any zone committed
     gap_marker = "not-needed"
 
-    while cursor < now and chunks_done < MAX_CHUNKS:
-        chunk_end = min(cursor + timedelta(hours=CHUNK_HOURS), now)
-        log("chunk %d/%d: %s .. %s"
-            % (chunks_done + 1, MAX_CHUNKS, iso(cursor), iso(chunk_end)))
+    for zone_name, zone_tag in zones:
+        watermark = watermarks.get(zone_name)
+        if watermark is not None and legacy is not None:
+            watermark = max(watermark, legacy)
+        if watermark is None:
+            # New zone, or a restored-from-empty bucket. Nothing was lost,
+            # because nothing was ever held. Start at the oldest data
+            # Cloudflare still has.
+            start = retention_floor
+            log("%s: no watermark, seeding from %s" % (zone_name, iso(start)))
+        else:
+            start = rewind(watermark)
+            log("%s: watermark %s, rewound %dh and floored to %s"
+                % (zone_name, iso(watermark), OVERLAP_HOURS, iso(start)))
+            if start < retention_floor:
+                missing_hours = int(
+                    (retention_floor - start).total_seconds() // 3600)
+                gaps.append((zone_name, start, retention_floor, missing_hours))
+                log("!!! %s: UNRECOVERABLE GAP %s .. %s (%d hours) is older "
+                    "than Cloudflare's %d-hour retention and can never be "
+                    "fetched; writing an ingest_gap marker and exiting "
+                    "non-zero so the monitor is pushed down"
+                    % (zone_name, iso(start), iso(retention_floor),
+                       missing_hours, RETENTION_HOURS))
+                start = retention_floor
 
-        acc = {}
-        try:
-            # ALL zones or none. Committing a chunk in which one zone failed
-            # advances the watermark past hours that zone never covered, and
-            # Cloudflare's retention then deletes them.
-            for zone_name, zone_tag in zones:
+        cursor = start
+        zone_chunks = 0
+        while cursor < now and zone_chunks < MAX_CHUNKS:
+            chunk_end = min(cursor + timedelta(hours=CHUNK_HOURS), now)
+            acc = {}
+            try:
                 rows = cf_fetch(
                     cf_token, zone_tag, cursor, chunk_end, warnings, budget)
-                rows_total += len(rows)
-                log("  %s: %d rows" % (zone_name, len(rows)))
-                aggregate(rows, zone_name, full_path_hosts, acc)
-        except QueryFailed as exc:
-            failure = "chunk %s..%s: %s" % (iso(cursor), iso(chunk_end), exc)
-            log("  FAILED: %s" % exc)
-            break
+            except QueryFailed as exc:
+                failure = "%s chunk %s..%s: %s" % (
+                    zone_name, iso(cursor), iso(chunk_end), exc)
+                log("  FAILED: %s" % exc)
+                break
+            rows_total += len(rows)
+            aggregate(rows, zone_name, full_path_hosts, acc)
 
-        lines = list(points(acc))
-        # An empty chunk is a real answer and must still move the watermark,
-        # otherwise eight genuinely quiet days would be indistinguishable from
-        # eight days of broken ingestion and would raise a false gap alarm.
-        lines.append(
-            "ingest_status,source=cloudflare count=%di,chunk_seconds=%di %d"
-            % (len(acc), int((chunk_end - cursor).total_seconds()),
-               int(chunk_end.timestamp()) - 1))
+            lines = list(points(acc))
+            # An empty chunk is a real answer and must still move this zone's
+            # watermark, otherwise eight genuinely quiet days would be
+            # indistinguishable from eight days of broken ingestion and would
+            # raise a false gap alarm. Appended AFTER every data point: see
+            # points() for why the order matters.
+            lines.append(
+                "ingest_status,source=cloudflare,zone=%s "
+                "count=%di,chunk_seconds=%di %d"
+                % (esc_tag(zone_name), len(acc),
+                   int((chunk_end - cursor).total_seconds()),
+                   int(chunk_end.timestamp()) - 1))
+            try:
+                influx_write(influx, lines)
+            except QueryFailed as exc:
+                failure = "%s write %s..%s: %s" % (
+                    zone_name, iso(cursor), iso(chunk_end), exc)
+                log("  WRITE FAILED: %s" % exc)
+                break
 
-        try:
-            influx_write(influx, lines)
-        except QueryFailed as exc:
-            failure = "write for %s..%s: %s" % (iso(cursor), iso(chunk_end), exc)
-            log("  WRITE FAILED: %s" % exc)
-            break
-
-        series_total += len(acc)
-        log("  wrote %d series (%d line-protocol lines)" % (len(acc), len(lines)))
-        committed_through = chunk_end
-        cursor = chunk_end
-        chunks_done += 1
+            log("  %s: %s .. %s: %d rows, %d series"
+                % (zone_name, iso(cursor), iso(chunk_end), len(rows), len(acc)))
+            series_total += len(acc)
+            chunks_done += 1
+            zone_chunks += 1
+            if committed_through is None or chunk_end > committed_through:
+                committed_through = chunk_end
+            cursor = chunk_end
+            if cursor < now:
+                time.sleep(1)          # stay clear of the GraphQL rate limit
+        if failure:
+            break                      # the remaining zones wait for the next run
         if cursor < now:
-            time.sleep(1)          # stay clear of the GraphQL rate limit
+            behind += 1
+            log("  %s: chunk cap reached with %s .. %s outstanding; the next "
+                "run continues from this zone's watermark"
+                % (zone_name, iso(cursor), iso(now)))
 
-    if gap:
-        g_start, g_end, missing_hours = gap
+    if gaps:
         try:
             influx_write(influx, [
-                "ingest_gap,source=cloudflare,reason=retention "
+                "ingest_gap,source=cloudflare,reason=retention,zone=%s "
                 "missing_hours=%di,gap_end=%di %d"
-                % (missing_hours, int(g_end.timestamp()),
+                % (esc_tag(name), hours, int(g_end.timestamp()),
                    int(g_start.timestamp()))
+                for name, g_start, g_end, hours in gaps
             ])
             gap_marker = "written"
-            log("wrote ingest_gap marker at %s" % iso(g_start))
+            log("wrote %d ingest_gap marker(s)" % len(gaps))
         except QueryFailed as exc:
             gap_marker = "failed"
-            log("could not write the ingest_gap marker: %s" % exc)
+            log("could not write the ingest_gap marker(s): %s" % exc)
 
     for warning in warnings:
         log(warning)
@@ -772,27 +856,25 @@ def main():
     log("%d GraphQL call(s) of a %d budget"
         % (budget["used"], MAX_GRAPHQL_CALLS))
     if committed_through:
-        log("committed through %s (%d chunk(s))"
-            % (iso(committed_through), chunks_done))
-    if cursor < now and not failure:
-        log("chunk cap reached with %s .. %s still outstanding; the next hourly "
-            "run continues from the new watermark"
-            % (iso(cursor), iso(now)))
+        log("committed through %s (%d chunk(s) across %d zone(s))"
+            % (iso(committed_through), chunks_done, len(zones)))
 
     # --- heartbeat message ----------------------------------------------------
     # Counts, timestamps and classified verdicts only. Nothing derived from a
-    # QueryFailed message, a response body or an exception's repr - see the
+    # QueryFailed message, a response body or an exception's repr - and no
+    # zone NAME, which is a hostname and so remote-controlled text - see the
     # comment above hc_emit.
     #
     # COUNTERS FIRST, ONE TIMESTAMP LAST. The message is cut at 200 characters
-    # for the push, so the cheapest and most-read values go first. `watermark=`
-    # and `rewound_to=` are deliberately NOT emitted any more: two more ISO
-    # timestamps would crowd out the gap fields below on the one branch that
-    # fires once and is the only record of itself, and the log() call above
-    # already prints both.
-    hc_emit("chunks=%d/%d" % (chunks_done, MAX_CHUNKS))
+    # for the push, so the cheapest and most-read values go first. Per-zone
+    # watermarks are deliberately NOT emitted: the log() calls above print
+    # every one.
+    zone_count = len(zones)
+    hc_emit("zones=%d" % zone_count)
+    hc_emit("chunks=%d" % chunks_done)
     hc_emit("rows=%d" % rows_total)
     hc_emit("series=%d" % series_total)
+    hc_emit("catching_up=%d" % behind)
     if committed_through:
         lag_minutes = int((now - committed_through).total_seconds() // 60)
         hc_emit("lag=%dm" % lag_minutes)
@@ -804,21 +886,22 @@ def main():
         hc_emit("failure=queryfailed")
         hc_emit("detail=see pod log")
         return 1
-    if gap:
-        g_start, g_end, missing_hours = gap
-        # The summary names the FAULT (the job had not ingested for over a
+    if gaps:
+        # The summary names the FAULT (a zone had not ingested for over a
         # week) rather than only the symptom (which hours were lost), and
-        # cause=unknown stops the body reading as a complete account. This
-        # branch can only fire after the check has been red for eight days with
-        # nobody acting, and it fires ONCE, so the body is the only record.
-        # Ceiling, not floor: RETENTION_HOURS is `8 * 24 - 1`, an hour of
-        # margin under Cloudflare's stated 8 days, and `// 24` would round that
-        # to "7-day" - understating the window everything else in this repo
+        # cause=unknown stops the body reading as a complete account. The
+        # message carries the WORST gap; every zone's range is in the log
+        # above, which is the only record of itself. Ceiling, not floor:
+        # RETENTION_HOURS is `8 * 24 - 1`, an hour of margin under
+        # Cloudflare's stated 8 days, and `// 24` would round that to
+        # "7-day" - understating the window everything else in this repo
         # calls eight days.
-        log("GAP: job had not ingested since %s; %dh now past Cloudflare's "
-            "%d-day retention"
-            % (iso(g_start), missing_hours, (RETENTION_HOURS + 23) // 24))
+        _zone, g_start, g_end, missing_hours = max(gaps, key=lambda g: g[3])
+        log("GAP: %d zone(s) had not ingested for over %d days; the worst "
+            "since %s" % (len(gaps), (RETENTION_HOURS + 23) // 24, iso(g_start)))
         hc_summary("gap")
+        gap_zones = len(gaps)      # an int: the tuples carry zone names
+        hc_emit("gap_zones=%d" % gap_zones)
         hc_emit("gap_hours=%d" % missing_hours)
         hc_emit("gap_start=%s" % iso(g_start))
         hc_emit("gap_end=%s" % iso(g_end))
@@ -828,9 +911,9 @@ def main():
     if warnings:
         # Bound to an int BEFORE it reaches a sink. `warnings` itself must never
         # be on check-ping-bodies.py's value allowlist: each element splices in
-        # zone_tag, from the CF_ZONE_TAGS Secret, so allowlisting the name would
-        # pass `warnings[0]` as well as `len(warnings)`. An int cannot carry a
-        # zone ID.
+        # zone_tag, from the Cloudflare zone listing, so allowlisting the name
+        # would pass `warnings[0]` as well as `len(warnings)`. An int cannot
+        # carry a zone ID.
         truncated = len(warnings)
         log("RUN INCOMPLETE: %d truncated window(s)" % truncated)
         hc_summary("incomplete")
@@ -838,8 +921,8 @@ def main():
         hc_emit("detail=see pod log")
         return 1
     if committed_through:
-        log("RUN OK: %d chunks, %d series, committed through %s"
-            % (chunks_done, series_total, iso(committed_through)))
+        log("RUN OK: %d chunks over %d zones, %d series, committed through %s"
+            % (chunks_done, len(zones), series_total, iso(committed_through)))
     else:
         log("RUN OK: nothing new to ingest")
     hc_summary("ok")

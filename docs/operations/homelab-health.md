@@ -378,13 +378,13 @@ This job is the retention fix; nothing about the Cloudflare configuration change
 
 | | |
 |---|---|
-| Zones | Every zone in the Cloudflare account, as the `name=zonetag` list in `op://Homelab/cloudflare/zone-ids`; a zone absent from that list is never ingested |
+| Zones | Every zone the API token can see, enumerated with `GET /zones` on every run (since 2026-10-20); a zone added to the account is ingested from its next run, seeded from Cloudflare's whole retention window |
 | Dataset | `httpRequestsAdaptiveGroups`, grouped by `datetimeHour` |
 | Bucket | `cloudflare`, **infinite** retention, raw hourly rows, no downsampling |
-| Measurement | `http_requests`; tags `zone`, `host`, `path`, `status`, `country`, `method` (since 2026-10-20; older points have no `method` tag); fields `count`, `sample_interval` |
+| Measurement | `http_requests`; tags `zone`, `host`, `path`, `status`, `country`, and since 2026-10-20 `method`, `bot_category` (Cloudflare's `verifiedBotCategory`, empty stored as `none`), `security_source` (`securitySource`) and `client` (`uptime-kuma` for a `Uptime-Kuma/` user agent, `other` for everything else; the raw user agent is never stored); fields `count`, `sample_interval`. Older points lack the newer tags |
 | Monitoring | The `homelab-cloudflare-analytics` uptime-kuma push monitor: `up` on exit 0, `down` otherwise |
 
-Two bookkeeping measurements share the bucket: `ingest_status` (one point per committed chunk) and `ingest_gap` (see below).
+Two bookkeeping measurements share the bucket: `ingest_status` (one point per zone per committed chunk, tagged `zone`; points from before 2026-10-20 carry no `zone` tag and were one marker for every zone) and `ingest_gap` (see below).
 
 ### Why the script is Python
 
@@ -401,9 +401,12 @@ Standard library only, so there is no `pip install` at run time and the job depe
 
 ### The resume rule
 
-The watermark is `max(_time)` over the `cloudflare` bucket, read back from InfluxDB on every run.
+The watermark is `max(_time)` **per zone** over the `cloudflare` bucket (every `count` point carrying that zone's tag, `http_requests` and `ingest_status` alike), read back from InfluxDB on every run.
 There is no state file, no PVC and no ConfigMap cursor, because all three can disagree with what was stored — after a restore, after a manual delete, after a partial write.
 The data is its own watermark and cannot drift from itself.
+A zone with no points at all is new and is seeded from Cloudflare's retention floor, about 8 days back, so a zone added to the account gets the history Cloudflare still holds.
+A zone that has points resumes from the later of its own newest point and the zone-less `ingest_status` marker written before 2026-10-20, because that global marker proves every zone configured then was covered through it; without that floor a quiet zone would be re-fetched and, having gained tags since, double-counted.
+That marker is never written again, so the floor is a constant that only matters to zones which were already in the bucket on 2026-10-20.
 
 Every run then rewinds **2 hours** behind that watermark and **floors the result to the hour**, because the final hour of the previous run was almost certainly still in progress when it was written.
 Re-ingestion is free: same measurement, same tag set and same timestamp overwrite in InfluxDB.
@@ -414,11 +417,12 @@ The watermark is the previous run's wall-clock minute, so before the fix every h
 
 That same overwrite is why **adding a tag double-counts roughly the two hours around the change**, and that is an accepted residual.
 The first run with a new tag cannot overwrite the overlap window's old-tag-set points, so it writes a second series beside them, and nothing in the script can avoid that without deleting points.
-Observed when the `method` tag was added on 2026-10-20: hour 19 UTC is stored twice (2,076 requests in each tag set) and hour 20 carries its old 20:00–20:37 slice (1,264) beside the full method-tagged hour (2,367), an over-count of 3,340 requests across those two hours and none after.
-A panel that sums `count` by hour reads those two hours high; a by-`method` panel is exact from 19:00 UTC that day.
+Observed on 2026-10-20, when the schema changed twice (the `method` tag, then `bot_category`, `security_source` and `client` together), for `cynexia.com`: hour 19 UTC is stored three times (2,076 requests in each of the three tag sets), hour 20 carries its old 20:00–20:37 slice (1,264) and a method-only copy (2,367) beside the full hour (2,367), and hour 21 carries a method-only partial (1,121) beside the full hour; about 8,900 extra requests across those three hours and none after.
+A panel that sums `count` by hour reads those hours high; a panel filtered on `exists r.client` is exact from 19:00 UTC that day.
 
 Backfill runs in **23-hour chunks** (Cloudflare rejects anything wider than a day), at most **8 chunks per run**.
-Chunks are committed oldest-first and only when *every* zone succeeded for that chunk — commit a chunk in which one zone failed and the watermark jumps past hours that zone never covered, which Cloudflare then deletes.
+Each zone's chunks are committed oldest-first and the run stops at the first failed chunk; because the watermark is per zone, a failed chunk leaves that zone where it was and the next run resumes it there, so no zone's watermark can move past hours it never fetched.
+The first run after a zone appears is the expensive one: up to 8 chunks for that zone, one GraphQL call each, inside the 180-call budget shared by every zone in the run.
 
 A successfully-queried chunk with **zero rows** still writes its `ingest_status` point.
 Without that, eight genuinely quiet days would look identical to eight days of broken ingestion and would trip the gap alarm below for no reason.
@@ -453,8 +457,12 @@ Path is by far the highest-cardinality dimension — karakeep alone emits a dist
 Hosts listed in the CronJob's `FULL_PATH_HOSTS` env var keep their full path.
 It is empty by default; every host added there trades series cardinality for path detail.
 
+The series key gained `method`, `bot_category`, `security_source` and `client` on 2026-10-20, so a series is now one combination of all nine tags per hour.
+Of those, `client` is the deliberate collapse of Cloudflare's `userAgent` dimension into two values, because the raw user agent is unbounded, attacker-chosen text; the dimension is still requested so Cloudflare splits the groups by it, which inflates the rows a query returns before aggregation collapses them again.
+That inflation is what the row-cap subdivision below absorbs.
+
 Privacy is a second, per-zone collapse on top of that, in `PRIVATE_PATH_PREFIXES` in the script: for `family-foqos.app`, any path under `/profile/` or `/navigate/` is stored as `/profile/*` or `/navigate/*`, because the next segment names a person.
-It is keyed by the zone's name in `CF_ZONE_TAGS`, not by hostname, and the counts under a prefix sum into the one masked series.
+It is keyed by the zone's name as Cloudflare lists it, not by hostname, and the counts under a prefix sum into the one masked series.
 
 ### Sampling
 
@@ -473,20 +481,16 @@ Cloudflare's user limit is 300 queries per 5 minutes and burning it would break 
 
 ### First-run setup
 
-The job cannot run until four things exist.
+The job cannot run until three things exist.
 None of them are created by `make apply-homelab`.
 
-1. **Cloudflare API token**, scoped **`Zone.Analytics: Read` only**, covering every zone in the list.
-   The job never writes to Cloudflare, so any edit scope is blast radius bought for nothing.
+1. **Cloudflare API token**, scoped **`Zone: Read` and `Zone.Analytics: Read` only**, on every zone in the account.
+   The job lists the zones with `GET /zones` on every run and reads analytics for each; it never writes to Cloudflare, so any edit scope is blast radius bought for nothing.
    Store as `op://Homelab/cloudflare/api-token`.
-2. **Zone tags**, as one field `op://Homelab/cloudflare/zone-ids` holding `name=<zoneid>,name=<zoneid>,...` for every zone in the account (`GET /client/v4/zones` with the token lists them).
-   A new zone in the account means a new entry here; nothing discovers it.
-   The service-account token cannot edit this item, so the operator makes the change in the 1Password app.
-   Zone IDs are not passwords, but they identify the account and this repo is public, so they are resolved at apply time like everything else.
-   Mark it `[text]`, not concealed — it is an identifier, and a concealed value makes the vault harder to debug.
-3. **uptime-kuma push monitor** `homelab-cloudflare-analytics`, 3600s interval with one retry at 7200s.
+   The `zone-ids` field on that item is read by nothing since 2026-10-20.
+2. **uptime-kuma push monitor** `homelab-cloudflare-analytics`, 3600s interval with one retry at 7200s.
    Token into `op://Homelab/health-healthchecks/cloudflare-kuma-push-token`.
-4. **InfluxDB bucket and token**: `make health-influx-bucket-bootstrap BUCKET=cloudflare`, in a plain terminal.
+3. **InfluxDB bucket and token**: `make health-influx-bucket-bootstrap BUCKET=cloudflare`, in a plain terminal.
    See below.
 
 Then `make apply-homelab`, and force the first run rather than waiting an hour:

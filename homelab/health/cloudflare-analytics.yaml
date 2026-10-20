@@ -101,16 +101,13 @@ spec:
                 # `make check-script-substitution` enforces it.
                 - name: PUSH_URL
                   value: "https://uptime.cynexia.com/api/push/${HEALTH_KUMA_CLOUDFLARE_TOKEN}"
-                # Cloudflare API token — Zone.Analytics:Read ONLY. This job never
-                # writes to Cloudflare, so an edit scope here would be a strictly
-                # unnecessary blast radius.
+                # Cloudflare API token — Zone:Read (to list the zones) and
+                # Zone.Analytics:Read, nothing else. This job never writes to
+                # Cloudflare, so an edit scope here would be a strictly
+                # unnecessary blast radius. The zone list is enumerated from
+                # the API on every run, so there is no zone list to configure.
                 - name: CF_API_TOKEN
                   valueFrom: { secretKeyRef: { name: health-cloudflare, key: api-token } }
-                # `name=zonetag,name=zonetag`. Zone IDs live in 1Password rather
-                # than in this manifest because the repo is public and a zone ID
-                # identifies the account.
-                - name: CF_ZONE_TAGS
-                  valueFrom: { secretKeyRef: { name: health-cloudflare, key: zone-tags } }
                 # Read AND write on the `cloudflare` bucket: the watermark is
                 # read back out of the data itself, so this job needs both.
                 - name: INFLUX_TOKEN
