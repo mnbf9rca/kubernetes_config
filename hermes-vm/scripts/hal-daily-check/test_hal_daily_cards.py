@@ -3,6 +3,7 @@ import datetime as dt
 import json
 from pathlib import Path
 import tempfile
+import threading
 import unittest
 from unittest.mock import patch
 import hal_daily_cards as c
@@ -191,6 +192,40 @@ class Devices(unittest.TestCase):
    b=Board();tid=b.create('look',dict(schema='hal-daily.device.v1',situation=dict(key='s',members=[dict(device_id='x',condition='offline')],line='Lamp offline')),'hal','hal-daily:device:s')
    c.publish(b,tid,'The hub is down. Check its power.',Path(tmp),lambda *a:{'success':False},AT)
    self.assertEqual(b.tasks[tid]['status'],'scheduled')
+
+class PublishLock(unittest.TestCase):
+ def test_second_publish_waits_for_first_send_then_both_have_receipts(self):
+  with tempfile.TemporaryDirectory() as tmp:
+   b=Board();ids=[b.create('look',dict(schema='hal-daily.device.v1',situation=dict(key=name)), 'hal','hal-daily:device:'+name) for name in ('first','second')]
+   entered=threading.Event();release=threading.Event();attempted=threading.Event();finished=threading.Event();results={};sent=[]
+   flock=d.fcntl.flock
+   def observed_flock(*args):
+    if threading.current_thread().name=='second':attempted.set()
+    return flock(*args)
+   def send(subject,text):
+    sent.append(text)
+    if threading.current_thread().name=='first':
+     entered.set()
+     if not release.wait(5):raise AssertionError('first send was not released')
+    return dict(success=True,message_id='<'+threading.current_thread().name+'@test>')
+   def run(index):
+    try:results[index]=c.publish(b,ids[index],'Device: Check its power.',Path(tmp),send,AT)
+    finally:
+     if index==1:finished.set()
+   threads=[threading.Thread(target=run,args=(i,),name=name) for i,name in enumerate(('first','second'))]
+   with patch.object(d.fcntl,'flock',side_effect=observed_flock):
+    threads[0].start()
+    try:
+     self.assertTrue(entered.wait(5));threads[1].start();self.assertTrue(attempted.wait(5))
+     self.assertFalse(finished.wait(.1),'second publish refused while the first was sending')
+    finally:
+     release.set()
+     for thread in threads:
+      if thread.ident is not None:thread.join(5)
+   self.assertFalse(any(t.is_alive() for t in threads));self.assertEqual(len(sent),2)
+   self.assertTrue(all(results[i]['success'] for i in range(2)));self.assertEqual(b.calls,[])
+   saved=json.loads((Path(tmp)/'daily-check-device-notes.json').read_text())
+   self.assertTrue(all(saved['batches'][tid]['receipt'] for tid in ids))
 
 class NativeCommand(unittest.TestCase):
  def test_create_body_stdin_idempotency_and_parent_argv(self):

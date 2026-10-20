@@ -113,10 +113,19 @@ def atomic_json(path,value,secrets=()):
 
 
 @contextlib.contextmanager
-def lock(directory):
+def lock(directory,wait=0):
     fd=os.open(directory,os.O_RDONLY)
     try:
-        fcntl.flock(fd,fcntl.LOCK_EX|fcntl.LOCK_NB)
+        deadline=time.monotonic()+wait
+        while True:
+            try:
+                fcntl.flock(fd,fcntl.LOCK_EX|fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                remaining=deadline-time.monotonic()
+                if remaining<=0:
+                    raise
+                time.sleep(min(.1,remaining))
         yield
     finally:
         os.close(fd)

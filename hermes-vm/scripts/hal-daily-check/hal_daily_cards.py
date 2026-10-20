@@ -219,7 +219,7 @@ def publish(board,card_id,drafts,home,send,at=None,secrets=(),note=None):
     # A stable directory inode survives atomic replacement of the data files.
     (home/'scripts').mkdir(exist_ok=True,parents=True)
     try:
-        with d.lock(home/'scripts'):
+        with d.lock(home/'scripts',wait=d.MAIL_SECONDS):
             task=board.show(card_id);data=body(task)
             if task.get('assignee')!='hal' or task.get('status')=='archived':
                 raise ValueError('publication not allowed')
