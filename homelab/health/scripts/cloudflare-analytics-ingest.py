@@ -62,15 +62,7 @@ MAX_CHUNKS = 8
 
 # Rewind this far behind the watermark on every run. The final hour of the
 # previous run was almost certainly still in progress when it was written.
-#
-# Overridable from the environment for ONE reason: a schema change. Idempotency
-# is point overwrite on (measurement, tag set, timestamp), so the first run
-# after a tag is added cannot overwrite the overlap window's old-schema points;
-# it writes a second series beside them and double-counts those hours. Run
-# that first run by hand with OVERLAP_HOURS=0 so it starts at the watermark and
-# touches only hours the old schema never wrote. The `method` tag was added on
-# 2026-10-20 this way.
-OVERLAP_HOURS = int(os.environ.get("OVERLAP_HOURS", "2"))
+OVERLAP_HOURS = 2
 
 # Cloudflare's stated retention, less an hour of margin: the boundary is not
 # sharp and a query that straddles it returns silently truncated data.
@@ -230,6 +222,20 @@ def env(name, default=None):
 
 def iso(dt):
     return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def rewind(watermark):
+    """Where a run resumes: OVERLAP_HOURS behind the watermark, FLOORED TO THE HOUR.
+
+    Cloudflare applies datetime_geq to the raw request time and only then
+    groups by datetimeHour, so a start of 18:37 returns hour 18 as the
+    18:37..19:00 slice, and the write then overwrites that hour's full count
+    with the slice (measured 2026-10-20: 1982 requests from :00, 568 from :37).
+    The watermark is the previous run's wall-clock minute, so without the floor
+    every hour two behind a run was cut down to its last 23 minutes.
+    """
+    return (watermark - timedelta(hours=OVERLAP_HOURS)).replace(
+        minute=0, second=0, microsecond=0)
 
 
 def parse_zone_tags(raw):
@@ -666,8 +672,8 @@ def main():
         start = retention_floor
         log("no watermark: bucket is empty, seeding from %s" % iso(start))
     else:
-        start = watermark - timedelta(hours=OVERLAP_HOURS)
-        log("watermark %s, rewound %dh to %s"
+        start = rewind(watermark)
+        log("watermark %s, rewound %dh and floored to %s"
             % (iso(watermark), OVERLAP_HOURS, iso(start)))
         if start < retention_floor:
             missing_hours = int(

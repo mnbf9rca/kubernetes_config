@@ -132,6 +132,18 @@ class TruncatePath(unittest.TestCase):
         self.assertEqual(len(cf.truncate_path(long_path, False)), 256)
 
 
+class Rewind(unittest.TestCase):
+    def test_floors_to_the_hour(self):
+        # Cloudflare honours a sub-hour datetime_geq, so a start of 18:37 would
+        # overwrite hour 18 with its 18:37..19:00 slice. The watermark is the
+        # previous run's wall-clock minute; the rewind must land on :00.
+        wm = datetime(2026, 8, 20, 20, 37, 52, tzinfo=UTC)
+        self.assertEqual(cf.rewind(wm), hour(18))
+
+    def test_exact_hour_is_unchanged(self):
+        self.assertEqual(cf.rewind(hour(20)), hour(18))
+
+
 class ParseHour(unittest.TestCase):
     def test_parses_zulu(self):
         self.assertEqual(cf.parse_hour("2026-08-20T10:00:00Z"), hour(10))

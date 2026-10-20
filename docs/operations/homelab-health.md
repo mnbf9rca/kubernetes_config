@@ -405,13 +405,17 @@ The watermark is `max(_time)` over the `cloudflare` bucket, read back from Influ
 There is no state file, no PVC and no ConfigMap cursor, because all three can disagree with what was stored — after a restore, after a manual delete, after a partial write.
 The data is its own watermark and cannot drift from itself.
 
-Every run then rewinds **2 hours** behind that watermark, because the final hour of the previous run was almost certainly still in progress when it was written.
+Every run then rewinds **2 hours** behind that watermark and **floors the result to the hour**, because the final hour of the previous run was almost certainly still in progress when it was written.
 Re-ingestion is free: same measurement, same tag set and same timestamp overwrite in InfluxDB.
 
-That overwrite is also why **adding a tag is a schema change that the rewind double-counts**: the first run with the new tag cannot overwrite the overlap window's old points, so it writes a second series beside them.
-The script reads `OVERLAP_HOURS` from the environment for exactly that run: create the one-off job from the CronJob with `OVERLAP_HOURS=0` so it starts at the watermark and writes only hours the old schema never wrote.
-The hour in progress at the previous run is then split between an old-schema series and a new-schema one, which sums correctly per hour.
-The `method` tag was added this way on 2026-10-20.
+The floor is load-bearing (fixed 2026-10-20).
+Cloudflare applies `datetime_geq` to the raw request time and only then groups by `datetimeHour`, so a window starting at 18:37 returns hour 18 as its 18:37–19:00 slice, and the write overwrites that hour's full count with the slice: measured at 1,982 requests from :00 against 568 from :37.
+The watermark is the previous run's wall-clock minute, so before the fix every hour two behind a run was cut down to its last 23 minutes; those hours are permanently short, and nothing is backfilled.
+
+That same overwrite is why **adding a tag double-counts roughly the two hours around the change**, and that is an accepted residual.
+The first run with a new tag cannot overwrite the overlap window's old-tag-set points, so it writes a second series beside them, and nothing in the script can avoid that without deleting points.
+Observed when the `method` tag was added on 2026-10-20: hour 19 UTC is stored twice (2,076 requests in each tag set) and hour 20 carries its old 20:00–20:37 slice (1,264) beside the full method-tagged hour (2,367), an over-count of 3,340 requests across those two hours and none after.
+A panel that sums `count` by hour reads those two hours high; a by-`method` panel is exact from 19:00 UTC that day.
 
 Backfill runs in **23-hour chunks** (Cloudflare rejects anything wider than a day), at most **8 chunks per run**.
 Chunks are committed oldest-first and only when *every* zone succeeded for that chunk — commit a chunk in which one zone failed and the watermark jumps past hours that zone never covered, which Cloudflare then deletes.
@@ -472,7 +476,7 @@ Cloudflare's user limit is 300 queries per 5 minutes and burning it would break 
 The job cannot run until four things exist.
 None of them are created by `make apply-homelab`.
 
-1. **Cloudflare API token**, scoped **`Zone.Analytics: Read` only**, covering both zones.
+1. **Cloudflare API token**, scoped **`Zone.Analytics: Read` only**, covering every zone in the list.
    The job never writes to Cloudflare, so any edit scope is blast radius bought for nothing.
    Store as `op://Homelab/cloudflare/api-token`.
 2. **Zone tags**, as one field `op://Homelab/cloudflare/zone-ids` holding `name=<zoneid>,name=<zoneid>,...` for every zone in the account (`GET /client/v4/zones` with the token lists them).
