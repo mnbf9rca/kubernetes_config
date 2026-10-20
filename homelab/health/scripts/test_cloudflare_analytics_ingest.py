@@ -56,7 +56,7 @@ def hour(h):
 
 
 def row(host="a.example", path="/x", status=200, country="GB",
-        dt="2026-08-20T10:00:00Z", count=1, interval=1.0):
+        dt="2026-08-20T10:00:00Z", count=1, interval=1.0, method="GET"):
     return {
         "count": count,
         "avg": {"sampleInterval": interval},
@@ -64,6 +64,7 @@ def row(host="a.example", path="/x", status=200, country="GB",
             "datetimeHour": dt,
             "clientRequestHTTPHost": host,
             "clientRequestPath": path,
+            "clientRequestHTTPMethodName": method,
             "edgeResponseStatus": status,
             "clientCountryName": country,
         },
@@ -227,6 +228,32 @@ class Aggregate(unittest.TestCase):
         (key,) = acc
         self.assertEqual(key[1], "unknown")   # host
         self.assertEqual(key[4], "unknown")   # country
+        self.assertEqual(key[5], "unknown")   # method
+
+    def test_method_is_part_of_the_key(self):
+        acc = {}
+        cf.aggregate([row(method="GET"), row(method="POST")], "z", set(), acc)
+        self.assertEqual(sorted(key[5] for key in acc), ["GET", "POST"])
+
+    def test_private_paths_collapse_and_sum(self):
+        # family-foqos.app's /profile/<person> and /navigate/<person> must never
+        # reach InfluxDB: every raw path under a prefix is one masked series
+        # and the counts add up, exactly as truncation does.
+        acc = {}
+        cf.aggregate([row(path="/profile/alice", count=2),
+                      row(path="/profile/bob/settings", count=3),
+                      row(path="/navigate/carol", count=5),
+                      row(path="/profile", count=7)],
+                     "family-foqos.app", set(), acc)
+        by_path = {key[2]: count for key, (count, _) in acc.items()}
+        self.assertEqual(by_path,
+                         {"/profile/*": 5, "/navigate/*": 5, "/profile": 7})
+
+    def test_private_prefixes_are_per_zone(self):
+        acc = {}
+        cf.aggregate([row(path="/profile/alice")], "cynexia.com", set(), acc)
+        (key,) = acc
+        self.assertEqual(key[2], "/profile/alice")
 
 
 class Points(unittest.TestCase):
@@ -237,6 +264,7 @@ class Points(unittest.TestCase):
         self.assertTrue(line.startswith("http_requests,"))
         self.assertIn("zone=myzone", line)
         self.assertIn("host=a.example", line)
+        self.assertIn(",method=GET ", line)
         self.assertIn("count=2i", line)
         self.assertTrue(line.endswith(" %d" % int(hour(10).timestamp())))
 

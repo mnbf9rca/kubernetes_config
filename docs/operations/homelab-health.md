@@ -378,10 +378,10 @@ This job is the retention fix; nothing about the Cloudflare configuration change
 
 | | |
 |---|---|
-| Zones | `cynexia.com` and `making-tracks.app` |
+| Zones | Every zone in the Cloudflare account, as the `name=zonetag` list in `op://Homelab/cloudflare/zone-ids`; a zone absent from that list is never ingested |
 | Dataset | `httpRequestsAdaptiveGroups`, grouped by `datetimeHour` |
 | Bucket | `cloudflare`, **infinite** retention, raw hourly rows, no downsampling |
-| Measurement | `http_requests`; tags `zone`, `host`, `path`, `status`, `country`; fields `count`, `sample_interval` |
+| Measurement | `http_requests`; tags `zone`, `host`, `path`, `status`, `country`, `method` (since 2026-10-20; older points have no `method` tag); fields `count`, `sample_interval` |
 | Monitoring | The `homelab-cloudflare-analytics` uptime-kuma push monitor: `up` on exit 0, `down` otherwise |
 
 Two bookkeeping measurements share the bucket: `ingest_status` (one point per committed chunk) and `ingest_gap` (see below).
@@ -407,6 +407,11 @@ The data is its own watermark and cannot drift from itself.
 
 Every run then rewinds **2 hours** behind that watermark, because the final hour of the previous run was almost certainly still in progress when it was written.
 Re-ingestion is free: same measurement, same tag set and same timestamp overwrite in InfluxDB.
+
+That overwrite is also why **adding a tag is a schema change that the rewind double-counts**: the first run with the new tag cannot overwrite the overlap window's old points, so it writes a second series beside them.
+The script reads `OVERLAP_HOURS` from the environment for exactly that run: create the one-off job from the CronJob with `OVERLAP_HOURS=0` so it starts at the watermark and writes only hours the old schema never wrote.
+The hour in progress at the previous run is then split between an old-schema series and a new-schema one, which sums correctly per hour.
+The `method` tag was added this way on 2026-10-20.
 
 Backfill runs in **23-hour chunks** (Cloudflare rejects anything wider than a day), at most **8 chunks per run**.
 Chunks are committed oldest-first and only when *every* zone succeeded for that chunk — commit a chunk in which one zone failed and the watermark jumps past hours that zone never covered, which Cloudflare then deletes.
@@ -444,6 +449,9 @@ Path is by far the highest-cardinality dimension — karakeep alone emits a dist
 Hosts listed in the CronJob's `FULL_PATH_HOSTS` env var keep their full path.
 It is empty by default; every host added there trades series cardinality for path detail.
 
+Privacy is a second, per-zone collapse on top of that, in `PRIVATE_PATH_PREFIXES` in the script: for `family-foqos.app`, any path under `/profile/` or `/navigate/` is stored as `/profile/*` or `/navigate/*`, because the next segment names a person.
+It is keyed by the zone's name in `CF_ZONE_TAGS`, not by hostname, and the counts under a prefix sum into the one masked series.
+
 ### Sampling
 
 `sample_interval` is stored per point and **never applied**.
@@ -467,7 +475,9 @@ None of them are created by `make apply-homelab`.
 1. **Cloudflare API token**, scoped **`Zone.Analytics: Read` only**, covering both zones.
    The job never writes to Cloudflare, so any edit scope is blast radius bought for nothing.
    Store as `op://Homelab/cloudflare/api-token`.
-2. **Zone tags**, as one field `op://Homelab/cloudflare/zone-ids` holding `cynexia.com=<zoneid>,making-tracks.app=<zoneid>`.
+2. **Zone tags**, as one field `op://Homelab/cloudflare/zone-ids` holding `name=<zoneid>,name=<zoneid>,...` for every zone in the account (`GET /client/v4/zones` with the token lists them).
+   A new zone in the account means a new entry here; nothing discovers it.
+   The service-account token cannot edit this item, so the operator makes the change in the 1Password app.
    Zone IDs are not passwords, but they identify the account and this repo is public, so they are resolved at apply time like everything else.
    Mark it `[text]`, not concealed — it is an identifier, and a concealed value makes the vault harder to debug.
 3. **uptime-kuma push monitor** `homelab-cloudflare-analytics`, 3600s interval with one retry at 7200s.

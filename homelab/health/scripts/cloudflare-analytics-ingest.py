@@ -62,7 +62,15 @@ MAX_CHUNKS = 8
 
 # Rewind this far behind the watermark on every run. The final hour of the
 # previous run was almost certainly still in progress when it was written.
-OVERLAP_HOURS = 2
+#
+# Overridable from the environment for ONE reason: a schema change. Idempotency
+# is point overwrite on (measurement, tag set, timestamp), so the first run
+# after a tag is added cannot overwrite the overlap window's old-schema points;
+# it writes a second series beside them and double-counts those hours. Run
+# that first run by hand with OVERLAP_HOURS=0 so it starts at the watermark and
+# touches only hours the old schema never wrote. The `method` tag was added on
+# 2026-10-20 this way.
+OVERLAP_HOURS = int(os.environ.get("OVERLAP_HOURS", "2"))
 
 # Cloudflare's stated retention, less an hour of margin: the boundary is not
 # sharp and a query that straddles it returns silently truncated data.
@@ -102,6 +110,7 @@ query ZoneHourly($zoneTag: string!, $start: Time!, $end: Time!, $limit: Int!) {
           datetimeHour
           clientRequestHTTPHost
           clientRequestPath
+          clientRequestHTTPMethodName
           edgeResponseStatus
           clientCountryName
         }
@@ -383,6 +392,23 @@ def truncate_path(path, keep_full):
     return head[:256]
 
 
+# Path prefixes, per zone NAME (the left half of a CF_ZONE_TAGS entry), whose
+# next segment identifies a person. Everything beneath them collapses to
+# `<prefix>*` before the series key is built, so the raw paths never reach
+# InfluxDB and their counts sum into the one masked series.
+PRIVATE_PATH_PREFIXES = {
+    "family-foqos.app": ("/profile/", "/navigate/"),
+}
+
+
+def mask_private(zone_name, path):
+    """Collapse a person-identifying path to its prefix for the zones above."""
+    for prefix in PRIVATE_PATH_PREFIXES.get(zone_name, ()):
+        if path.startswith(prefix):
+            return prefix + "*"
+    return path
+
+
 def parse_hour(value):
     """Cloudflare's datetimeHour, e.g. 2026-08-20T10:00:00Z, to a UTC datetime."""
     if not value:
@@ -415,9 +441,11 @@ def aggregate(rows, zone_name, full_path_hosts, acc):
         key = (
             zone_name,
             host,
-            truncate_path(dims.get("clientRequestPath"), keep_full),
+            mask_private(zone_name, truncate_path(
+                dims.get("clientRequestPath"), keep_full)),
             str(dims.get("edgeResponseStatus", "unknown")),
             dims.get("clientCountryName") or "unknown",
+            dims.get("clientRequestHTTPMethodName") or "unknown",
             int(hour.timestamp()),
         )
         count = int(row.get("count") or 0)
@@ -465,16 +493,17 @@ def points(acc):
     kept in the sort only to make the output deterministic.
     """
     def oldest_first(item):
-        zone, host, path, status, country, ts = item[0]
-        return (ts, zone, host, path, status, country)
+        zone, host, path, status, country, method, ts = item[0]
+        return (ts, zone, host, path, status, country, method)
 
     for key, (count, weighted) in sorted(acc.items(), key=oldest_first):
-        zone, host, path, status, country, ts = key
+        zone, host, path, status, country, method, ts = key
         interval = (weighted / count) if count else 1.0
-        yield ("http_requests,zone=%s,host=%s,path=%s,status=%s,country=%s "
-               "count=%di,sample_interval=%.6f %d"
+        yield ("http_requests,zone=%s,host=%s,path=%s,status=%s,country=%s,"
+               "method=%s count=%di,sample_interval=%.6f %d"
                % (esc_tag(zone), esc_tag(host), esc_tag(path),
-                  esc_tag(status), esc_tag(country), count, interval, ts))
+                  esc_tag(status), esc_tag(country), esc_tag(method),
+                  count, interval, ts))
 
 
 # --- InfluxDB ---------------------------------------------------------------
