@@ -164,8 +164,32 @@ The body carries everything: the instruction, any answer shape wanted inside `an
 The reader always returns its five-key envelope; a requester's own schema arrives wrapped inside `answer`, never at the top level.
 Validate the envelope first (`status: UNASSESSED` or a malformed envelope is the transport-level fail-closed), then unwrap `answer` and validate the requested shape, where a domain-level verdict such as `risk: unassessed` lives.
 
-The worked requester workflow — kanban enablement for an orchestrator profile, the card template, and the post-completion validation checklist — is the `untrusted-web-content-analysis` skill, promoted into the shared Hermes skill library on August 30, 2026 so every profile receives it, and exercised live the same day.
-Its canonical copy is `hermes-vm/skills/security/untrusted-web-content-analysis/` in this repository; the authoritative VM copy sits as an untracked file inside the Hermes checkout at `~/.hermes/hermes-agent/skills/security/`, which survives `hermes update` but not a hand-run `git clean -fdx` there — re-seed from the repo copy if it vanishes.
+The worked requester workflow — kanban enablement, the card template and post-completion validation — is the `untrusted-web-content-analysis` skill.
+It was promoted into the shared Hermes library and exercised live on August 30, 2026.
+
+### Shared and Hal skill revisions
+
+Only Hal's existing profile-local copy received the revised skill during the approved guide installation on October 20, 2026.
+That brief covered Hal's guide, persona and changed skill text; shared and reader copies were deliberately left unchanged.
+The current repository directory `hermes-vm/skills/security/untrusted-web-content-analysis/` records Hal's installed revision, not a revision deployed to every profile.
+
+| Copy | VM skill directory | Source revision |
+|---|---|---|
+| Hal | `/home/hermes/.hermes/profiles/hal/skills/security/untrusted-web-content-analysis/` | `3766c5e` |
+| Shared library in the Hermes checkout | `/home/hermes/.hermes/hermes-agent/skills/security/untrusted-web-content-analysis/` | `de7a6a8` |
+| Default profile/shared skills directory | `/home/hermes/.hermes/skills/security/untrusted-web-content-analysis/` | `de7a6a8` |
+| emh | `/home/hermes/.hermes/profiles/emh/skills/security/untrusted-web-content-analysis/` | `de7a6a8` |
+| Reader | `/home/hermes/.hermes/profiles/safer_web_reader/skills/security/untrusted-web-content-analysis/` | `de7a6a8` |
+
+Each revision covers `SKILL.md`, `references/hermes-kanban-isolated-analyst.md` and `references/release-note-analysis-contract.md`.
+Hal's local skill has precedence over shared external copies.
+The reader's generic template remains older; Hal's release-reader cards supply the daily summary and exact release-version contract.
+No reader persona, broker, tool or quarantine setting changed during this installation.
+
+The shared library is untracked inside the Hermes checkout and survives `hermes update`, but a hand-run `git clean -fdx` can delete it.
+Restore each copy from its recorded revision.
+Preserve this split during maintenance instead of copying Hal's revision over every profile.
+The local `guide-install-report.md` and `guide-install-review.md` under `.superpowers/sdd/hal-watchers/` record the hashes and installation scope.
 
 ### What a requester sees when a run goes wrong
 

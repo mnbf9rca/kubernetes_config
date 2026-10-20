@@ -52,7 +52,7 @@ There is no scheduled application updater.
    5. Remove the disposable plaintext extraction.
    6. Retain the credential-bearing archive until the operator explicitly deletes it.
 5. Prepare the next source advance.
-   1. Compare `skills/security/untrusted-web-content-analysis/` with the canonical promoted skill and installed copies.
+   1. Compare each `untrusted-web-content-analysis` copy with its [recorded profile revision](safer-web-reader.md#shared-and-hal-skill-revisions).
    2. Establish its ownership and recoverable home.
    3. Move `hermes_cli/.web_dist-build-vZVavf/` to private recovery storage.
    Preserve both paths until this work is complete; never `git clean` them.
