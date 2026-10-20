@@ -149,7 +149,7 @@ On an app that does demand a credential, a bypass path is no substitute for the 
 
 ### The push path is bypassed at the edge
 
-Every push monitor in this estate is driven by something that holds no Access credential — a CronJob inside a cluster, or, for `hermes-app-alive`, a cron job inside the hermes agent on the off-cluster VM — so without a bypass the edge answers 302 and no push monitor could ever report UP.
+Every push monitor in this estate is driven by something that holds no Access credential — a CronJob inside a cluster, or a native cron job on the off-cluster Hermes VM — so without a bypass the edge answers 302 and no push monitor could ever report UP.
 An Access application named **`uptime-kuma push`** carries that bypass, created **August 26, 2026**.
 It covers two destinations: `uptime.cynexia.com/api/push/*` and the bare `uptime.cynexia.com/api/push`.
 The wildcard is the load-bearing one — a push URL always carries its token as a path segment, so every real request matches it — and the bare form is present only because `/foo/*` does not match bare `/foo`, so the pair is written together and neither is "tidied" away later.
@@ -312,16 +312,18 @@ Widening a set to swallow whatever appears stops the monitor being a monitor.
 ## Push monitors
 
 A push monitor receives a heartbeat instead of sending a request, which is what lets a job inside a cluster drive it without exposing anything.
-Each token lives in 1Password and reaches its manifest through the `op run` + envsubst pipeline, typed `[text]` because it is a tier-2 spam-target identifier and not a secret: holding one lets a stranger push a heartbeat and mask a real failure, and grants nothing else.
+Each token lives in 1Password, typed `[text]` because it lets a stranger report a heartbeat and mask a failure, but grants no access.
+Cluster jobs receive it through `op run` and envsubst; the two VM runners use profile-scoped 1Password references.
 So it stays out of the public repository, needs no rotation, and earns no honesty-box row if it turns up in a transcript or a pod log.
 
 There is **no `/start` equivalent** on this API and there must not be a synthetic one: a push is a heartbeat carrying a status.
-The hang bound is the job's own `activeDeadlineSeconds`; the silence bound is the interval plus retries below.
+Cluster jobs use `activeDeadlineSeconds` as their hang bound; VM scripts use their own guards and the native scheduler timeout.
+The silence bound is the interval plus retries below.
 
 **Almost every push in this estate is made from inside a cluster, outbound, through the Cloudflare Access bypass described above.**
 That outbound direction is what lets the private homelab cluster — which uptime-kuma cannot reach, because it probes from a Hetzner IP and every `*.cynexia.net` name resolves to a LAN address — report to a monitor at all.
 It is also why the bypass is load-bearing rather than a convenience: without it every push monitor here would be permanently DOWN.
-The one exception to "from inside a cluster", `hermes-app-alive`, is described below the table — and it needs the same bypass, from further away.
+The two VM exceptions, `hermes-app-alive` and `hal-daily-check`, need the same bypass.
 
 **Some monitors deliberately receive nothing on some runs, so silence is not always a fault.**
 `health-garmin-and-apple-ingest` pushes only when both its buckets are fresh, and `homelab-update-watch` pushes nothing on API errors or an unreadable dashboard body.
@@ -331,16 +333,17 @@ Read the last message it did receive, and the pod log, before treating a gap as 
 
 **One trap is Python-only and it is silent.**
 Cloudflare answers urllib's default `Python-urllib/3.x` User-Agent with HTTP 403 and `error code: 1010` before the request reaches kuma — measured in-cluster on August 26, 2026, where the default agent got 403/1010 and a named one got kuma's own 404 for a bogus token, from the same URL in the same process.
-All three Python jobs therefore set an explicit `User-Agent` on the push and all three suites assert it; curl and wget are unaffected.
+Python push runners set an explicit `User-Agent`; curl and wget are unaffected.
 It matters because a failed push is swallowed by design, so the only symptom would be a monitor that never goes UP.
 
-**A silent runner is proof the heartbeat landed.** kuma answers an unknown or inactive token with `404 {"ok":false,"msg":"Monitor not found or not active."}`, which `curl -f` and busybox `wget` both treat as a failure, and every runner prints a fixed line when its push fails.
-So a forced run whose log carries no push-failure line has already proved the token, the bypass and the monitor.
+**A successful push attempt is proof the heartbeat landed.** kuma answers an unknown or inactive token with `404 {"ok":false,"msg":"Monitor not found or not active."}`, which `curl -f` and busybox `wget` both treat as a failure, and every runner prints a fixed line when its push fails.
+For a runner that actually attempted its push, success proves the token, bypass and monitor.
+Silence alone proves nothing for a preview, trial, lock-losing run or an intentional no-push branch.
 Confirming UP in the UI is the second half, not the first.
 
 Create one by hand in the kuma UI — see the note on monitor creation above.
 Set the type to **Push**, take the token from the generated push URL — the last path segment, and nothing else — and store it in 1Password.
-The manifest, never the script, assembles the URL: the `env:` block sets `PUSH_URL: "https://uptime.cynexia.com/api/push/${TOKEN_VAR}"`, and only `PUSH_URL` reaches the runner.
+For cluster jobs, the manifest assembles the URL: the `env:` block sets `PUSH_URL: "https://uptime.cynexia.com/api/push/${TOKEN_VAR}"`, and only `PUSH_URL` reaches the runner.
 A generated script rides the same envsubst stream as its manifest and envsubst rewrites the bare `$NAME` form too, so a script naming the allowlisted variable would publish the token inside a ConfigMap; `make check-script-substitution` enforces the rename.
 
 The last column records when each job pushes and what it reports.
@@ -362,7 +365,7 @@ Read it per row rather than assuming up-on-success everywhere.
 | `homelab-update-watch` | `op://Homelab/update-watch/kuma-push-token` | 86400s, 1 retry at 21600s | `update-watch` CronJob in `ops`: `down` for lookup failures or a missing dashboard, `up` for a readable dashboard without lookup-failure markers, and **nothing** for indeterminate reads; the one-line `msg` starts with `verdict=`, then `run_epoch=`, fixed `next=` advice and any lookup-failure count |
 | `jottacloud-backup` | `op://Homelab/jottacloud-backup/kuma-push-token` | 21600s, 1 retry at 7200s | The `jottacloud-backup-scheduled` CronJob's own image, on success only. This repo does not build that image and does not control the request — see the note below |
 | `hermes-app-alive` | `op://hermes/hermes-app-alive/kuma-push-token` | 86400s, 1 retry at 21600s | A `no_agent` cron job inside `hermes-gateway` on the hermes VM at 05:45 UTC, `up` on exit 0 and `down` on failure, from an EXIT trap |
-| `hal-daily-check` | `op://hermes/hal-daily-check/kuma-push-token` | 86400s, 1 retry at 7200s | Hal’s 09:00 Europe/London native cron runner on the hermes VM: `up` after accepted/already-accepted morning mail, `down` on owned state/mail failure; no push from preview or a lock-losing run. Later assessment mail does not gate this heartbeat |
+| `hal-daily-check` | `op://hermes/hal-daily-check/kuma-push-token` | 86400s, 1 retry at 7200s | Hal’s 09:00 Europe/London native no-agent runner `e6a2fb6484b8`: up after accepted/already-accepted morning mail, down on state/mail or other owned failure when a token is available; no push from preview, trial or a lock-losing production run. Later card mail does not gate it. [Verdict enum](hal-daily-check.md#diagnostics-and-the-kuma-heartbeat) |
 
 The keel image floors are exactly **25 for homelab** and **12 for VPS**, counting distinct floating images across all containers in keel-annotated workloads.
 The former homelab count of 20 matched the live Keel gauge after the printer services were applied on 2026-10-08; Homepage, NetAlertX and Netdisco were added later.
@@ -373,7 +376,11 @@ Each migrated row's interval and retry mirror the period and grace of the health
 Its interval tracks its CronJob's period, so both moved when the schedule went from six-hourly to every 15 minutes on September 3, 2026: 1800s with 1 retry at 900s, which tolerates one missed run before it alerts.
 Nothing in this repo sets those two numbers — change them by hand in the uptime-kuma UI on the monitor's edit page, because a CronJob schedule change does not reach the monitor.
 
-`hermes-app-alive` and `hal-daily-check` run outside both clusters on the Hermes VM; neither replaced a healthchecks.io check. Hal’s monitor was created by the operator on October 18, 2026, with one two-hour retry so a missed 09:00 email alarms around 11:00.
+`hermes-app-alive` and `hal-daily-check` run outside both clusters on the Hermes VM; neither replaced a healthchecks.io check.
+Hal’s monitor was created on October 18, 2026.
+Its last accepted heartbeat expires after 24 hours plus one two-hour retry, normally around 11:00 London time the next day.
+Hal’s host runner resolves `HAL_DAILY_CHECK_PUSH_TOKEN` and assembles its URL in memory; it does not use a Kubernetes manifest.
+The [Hal runbook](hal-daily-check.md) owns the email, receipt, retry and local-output details.
 
 The following details describe `hermes-app-alive`.
 Three things about it are unlike every other row here.

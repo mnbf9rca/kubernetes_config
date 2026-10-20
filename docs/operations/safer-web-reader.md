@@ -26,6 +26,13 @@ Everything else about the VM, including stable application updates, is in [herme
 Hal’s daily check creates public release-reader cards on board `hal`, assigned to `safer_web_reader`.
 Their logs are `~/.hermes/kanban/boards/hal/logs/<task>.log` or `hermes kanban --board hal log <task>`.
 Household inventory stays in Hal’s planner and assembly cards; the host publish tool validates full reader envelopes before accepting advice.
+The [Hal daily-check runbook](hal-daily-check.md) describes the complete morning-to-assessment flow.
+Hal’s reader request asks for a focused summary, not a page reproduction or routine pull-request catalogue.
+It requires the complete substance of breaking changes and migrations with exact attributed quotes, relevant fixes and new behavior, and pre/post upgrade steps.
+For Core, a fully covered monthly release post is sufficient primary material; every linked pull request is not required.
+`changed_components` includes only components needed to explain substantive changes.
+The five change-list fields are plain strings, and `version_match` is a JSON Boolean.
+The exact task-specific fields live in `READER_INSTRUCTION` in `hal_daily_cards.py`, inside the standard five-key envelope.
 
 The profile has no messaging adapters or separate gateway unit; its owner context is served by the shared multiplexer.
 The kanban dispatcher runs inside a gateway under a machine-global advisory lock at `~/.hermes/kanban/.dispatcher.lock`, held by the shared `hermes-gateway.service`, and it enumerates every non-archived board on each 60-second tick.
@@ -60,6 +67,7 @@ Later calls only slice that snapshot; they do not fetch again or recheck an expi
 Each piece carries at most 15,000 characters; the total is derived from the full text, with no new page-length cap.
 The broker applies the native inline-image cleanup before slicing.
 A short uncached result can be returned directly; a truncated response without its full cached extraction returns an error rather than masquerading as complete.
+That fallback currently recognizes the native literal `[TRUNCATED]` marker; a marker change needs a broker compatibility check.
 Native extraction/cache failures remain failures; this does not change provider storage or availability.
 
 The input has no file path, cache identifier or other-task identifier.
@@ -83,7 +91,7 @@ The profile holds nothing worth leaking, and the non-sensitive-context rule belo
 
 **What this does not contain** is arbitrary code execution arising from an implementation flaw — an HTML or PDF parser bug, a provider SDK flaw, a regression in Hermes's own trusted tool code.
 That is an accepted residual, on a par with every other process on the VM.
-The guarantee stated honestly: prompt injection can corrupt the research result, cause public-web requests inside the run's budget, disclose model-visible context to public sites, and waste the run's bounded resources; it cannot reach local services, files, secrets, other tasks or higher-authority agents, because no exposed tool permits it.
+The guarantee stated honestly: prompt injection can corrupt the research result, cause public-web requests, disclose model-visible context to public sites, and consume provider resources; it cannot reach local services, files, secrets, other tasks or higher-authority agents, because no exposed tool permits it.
 
 That guarantee has a consumer-side half, and it is conditional: it holds only where the requester validates the envelope mechanically and never interprets a model-controlled string as an instruction.
 
@@ -169,7 +177,8 @@ The kanban worker runtime nudges any worker that tries to exit without calling `
 Every run in the verification battery ended that way.
 Read the board — the task's status and its `completed` event — rather than the tail of the log.
 Across runs, three clean-exit protocol violations end the task as `blocked`, where the requester sees it, with the cause in the per-task worker log.
-There is no wall-clock bound and none is asked for: turns bound the spend and the web tools bound a wedged call.
+The reader has no additional wall-clock guard; native web-call timeouts and the existing worker turn setting still apply.
+Hal adds no spending counter or content-length allowance.
 The dispatcher's stale-claim reclaim (`kanban.dispatch_stale_timeout_seconds`, 14400) is not a substitute for one — it needs a worker wedged for an hour, four hours into its run, and the agent loop heartbeats the board every 60 seconds on its own.
 
 ## Deployed configuration
@@ -293,7 +302,7 @@ The refusal is deliberately not a `kanban_` prefix test, because the routes that
 A list the guard cannot trust — symbol missing, list empty, or list not naming the tool that is executing — is a soft fail: one log line and carry on, because the guard is defence in depth and an upstream rename must not take completion down with it.
 A trustworthy list showing an unexpected tool is a hard refusal, so the operator sees it the first time a task runs.
 
-There is no routine out-of-process containment check attached to application updates.
+The [application-update procedure](hermes-vm.md#application-updates) requires a dispatched tool-surface check; it is not an automated scheduled monitor.
 An update or restore can change the effective tool surface; the in-process check remains, with the soft-failure limitation above.
 
 Everything else about the broker fails closed and reads the same way.
@@ -310,7 +319,7 @@ The October 15 repair uses only our broker and the reader's explicit override gr
 
 ### October 15, 2026: scoped-override repair
 
-The canonical and installed broker are version 1.1.0; only the reader CLI selection and its plugin grant changed in YAML.
+At this repair, the canonical and installed broker were version 1.1.0; only the reader CLI selection and plugin grant changed in YAML.
 No unit restart was needed: the existing multiplexed owner admitted a fresh managed worker from disk.
 The strict guard and envelope validator were not changed.
 
@@ -341,6 +350,16 @@ All 54 broker tests passed locally and in the installed runtime.
 The trial then stopped at a separate requester handoff: Hal's board tool spilled the large accepted reader result to a file unavailable inside its execution backend.
 Hal could not inspect that complete result, so it published only an unchanged pending notice, silently; no Core assessment or email was produced.
 The local report holds trial card IDs, the publisher outcome and the independent quarantine verdict.
+
+### October 19–20, 2026: Hal summary and assembly follow-ups
+
+The later Hal instruction asks for the household summary above, including complete breaking-change substance and concise relevant component changes.
+Hal received a read-only identity bind for its own spilled tool results; the reader gained no mount or tool.
+The host clarified the five string-list fields and accepts all-string object elements as shape normalization.
+It still refuses negative version matches, incomplete retrieval and uncertain provenance.
+The successful Core trial stored its assessment and SMTP receipt on October 19.
+Those requester changes did not widen the four-tool quarantine or alter the reader’s envelope guard.
+The earlier paging trial’s spillover failure is historical, not the current Core status.
 
 ### August 30, 2026: historical battery
 
@@ -376,7 +395,8 @@ Take the list from a dispatched worker's own report, not from `hermes tools list
 
 **There is no monitor and no dead-man's-switch, deliberately.**
 This is on-demand work that reports to its caller: a requester that gets no envelope, a malformed one, or a task sitting in `blocked` already knows.
-The estate's rule that scheduled work gets a dead-man's-switch does not apply, because nothing here is scheduled.
+The reader itself runs only when a caller files a card; Hal’s morning job is a scheduled caller.
+The Hal heartbeat covers morning-mail acceptance, not the reader’s later result or assessment mail.
 
 Two consequences worth stating plainly.
 A profile that is quietly broken — a plugin that stopped loading after an update, a model that lost its credential — announces itself only when somebody files a task.

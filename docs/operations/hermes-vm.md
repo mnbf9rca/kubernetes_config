@@ -2,7 +2,7 @@
 
 VM 103 (`hermes.cynexia.net`) runs the Hermes agent, one multiplexed gateway serving four messaging profiles, the dashboard and the WebUI the Hermex iOS app talks to.
 It is not a Kubernetes cluster, so none of this repository's cluster machinery reaches it.
-What it has instead lives in `hermes-vm/`: a daily liveness check, a weekly docker-sandbox refresh, a hand-run helper that finishes a new profile's docker setup, the reviewer persona/plugin and closed-report sweep, the managed-scope Hermes config and the `unattended-upgrades` configuration.
+What it has instead lives in `hermes-vm/`: a daily liveness check, a weekly docker-sandbox refresh, a hand-run helper that finishes a new profile's docker setup, the Hal morning runner and publication plugins, the reviewer persona/plugin and closed-report sweep, the managed-scope Hermes config and the `unattended-upgrades` configuration.
 
 This page covers that machinery — how to read it, how to install it — and the VM facts that keep being rediscovered.
 Update core, its bundled dashboard and external hermes-webui together using [Application updates](#application-updates).
@@ -12,8 +12,9 @@ The canonical copy of every file named here is in `hermes-vm/`.
 The VM holds installed copies.
 Edit the repository, then reinstall.
 
-**Four things this repository owns run on a schedule here, and only one is systemd's.**
+**Scheduled work spans VM maintenance, reviewer cleanup and the Hal morning check.**
 `unattended-upgrades` patches Debian security-only overnight and reboots at 04:45 UTC; the `hermes-app-alive` **cron job inside the default gateway** pushes a liveness verdict at 05:45 UTC; and `hermes-sandbox-refresh`, a cron job in the same place, replaces stale docker sandbox containers at 05:15 UTC on Sundays. The security_reviewer profile runs its closed-report sweep at 06:15 UTC daily.
+Hal’s no-agent house check runs at 09:00 Europe/London; its [runbook](hal-daily-check.md) owns the detailed flow.
 Nothing under `hermes-vm/` is scheduled by systemd any more — the `systemd/` directory and its two units were deleted on August 27, 2026.
 Application updates never run on a schedule at all.
 The `hal` profile also carries four agent-authored systemd timers that this repository does not own — see [Topology: what runs where](#topology-what-runs-where).
@@ -105,7 +106,7 @@ There is no scheduled application updater.
     4. Read existing expected-bank memory without printing content.
     5. Check the existing scheduled backend canary.
     6. Exercise used HA calls read-only.
-    7. Preserve hal `watch_all:false`, empty watch lists and emh's settings.
+    7. Preserve Hal’s disabled native HA plugin, runner-only HA credentials, read-only MCP address and emh’s settings.
     Never print passwords, cookies or memory text.
     Do not repeat diagnostic memory writes or create backend Jobs.
 12. Verify serving topology.
@@ -260,7 +261,7 @@ The four `hal-ha-observer-{analyze,health,inventory,logbook}.timer` units are ag
 
 The **gateway** is the shared always-on owner for the profiles: it holds the connections that arrive unprompted.
 It runs the platform adapters (a Telegram bot connection, an email adapter polling IMAP), it runs that profile's cron jobs, and it starts that profile's MCP servers as child processes.
-The shared gateway runs the default profile’s the daily alive check and the weekly sandbox refresh ([step 5](#5-create-the-daily-checks-cron-job), [step 6](#6-install-the-sandbox-refresh-job)).
+The shared gateway runs the default profile’s daily alive check and the weekly sandbox refresh ([step 5](#5-create-the-daily-checks-cron-job), [step 6](#6-install-the-sandbox-refresh-job)).
 
 The **dashboard** is an administration panel for the default profile: configuration, credentials, sessions, logs and cron.
 It is reached at `https://hermes.cynexia.com`, and it starts a mail MCP server of its own.
@@ -489,7 +490,7 @@ Two things follow from the job living inside the agent rather than in systemd:
 
 - **The push now proves the default gateway executes.**
   A wedged-but-running `hermes-gateway` used to be invisible to every check on this page; a beat arriving at all means its scheduler ran a subprocess.
-  The `emh` and `hal` gateways gain nothing from this.
+  This proves scheduler execution in the shared gateway, not each profile’s mailbox or worker health.
 - **The cron store is agent state, not a file this repository owns.**
   A job lost to a rebuild, a restore or a hand edit produces silence, and silence is not reported until the monitor's 24-hour heartbeat and 6-hour retry lapse.
   `hermes cron list` is the check; run it after any restore.
@@ -655,7 +656,8 @@ Every one of them fails silently if it is wrong.
    On a machine whose stamp is already fresh, confirm the mechanism tomorrow instead, by checking that its date has advanced.
 
 5. **The VM's timezone is still UTC.**
-   Every schedule on this page is UTC, and a drift moves the 05:45 daily check into the 04:45 reboot window:
+   The VM maintenance schedules use UTC; Hal’s house check uses Europe/London.
+   A timezone drift can move maintenance into the reboot window:
 
    ```sh
    timedatectl | grep 'Time zone'
@@ -814,7 +816,8 @@ Nothing consumes it — it is the renamed remains of the pre-fix `MAIL_PASSWORD`
 `web_watcher` carries the prefixed names with no `mcp_servers` block at all, for uniformity: it runs the email platform but no mail MCP server.
 
 **A restart is what applies any of this**, because the 1Password provider resolves the map at start.
-Restart the profile's own gateway first, then `hermes-dashboard`, then `hermes-webui`, and read `1Password: applied N secrets` in each journal — `N` must equal the number of entries in the map the unit loaded.
+Restart the shared `hermes-gateway`, then the dashboard and WebUI when their cached configuration needs refreshing.
+Read the profile’s `1Password: applied N secrets` log; compare N with that profile’s configured secret map.
 
 Mail profiles also need an explicit `EMAIL_AUTHSERV_ID` pin established from the topmost Authentication-Results header using read-only IMAP sampling. The current Purelymail profiles use `purelymail.com`; an empty mailbox remains unverified until its first permitted message.
 
@@ -853,13 +856,20 @@ Hermes saves large tool results under `$HERMES_HOME/cache/spillover` and can ret
 The native spillover directory is fixed, so Hal adds one read-only identity bind rather than changing native storage.
 This exposes only Hal's own tool results; the reader profile and other profiles get no additional mount.
 
-1. Append `/home/hermes/.hermes/profiles/hal/cache/spillover:/home/hermes/.hermes/profiles/hal/cache/spillover:ro` to Hal's saved YAML `terminal.docker_volumes`, preserving all existing entries.
-2. Run `/home/hermes/.hermes/scripts/hermes-profile-docker-setup.sh hal --sync-mounts` to mirror that list into the single-quoted JSON env value. Compare the core and WebUI runtime readers.
-3. Let fresh card workers take the new scope. Recreate only proven-idle stale Hal containers when needed; preserve their host-backed home and workspace. Restart the WebUI only if its cached scope needs clearing.
-4. Check the new container's mount is `RW=false` at that exact path. Read a known spillover file through the sandbox and confirm a write to the bind fails.
+1. Preserve Hal’s existing YAML `terminal.docker_volumes` entries.
+2. Append `/home/hermes/.hermes/profiles/hal/cache/spillover:/home/hermes/.hermes/profiles/hal/cache/spillover:ro`.
+3. Run `/home/hermes/.hermes/scripts/hermes-profile-docker-setup.sh hal --sync-mounts` to mirror the list into `.env`.
+4. Compare the core and WebUI runtime mount lists.
+5. Let fresh card workers use the new scope.
+6. Recreate only idle stale Hal containers, preserving their host-backed home and workspace.
+7. Restart the WebUI only if its cached scope needs clearing.
+8. Check the exact bind has `RW=false`.
+9. Read a known spillover file through Hal’s sandbox.
+10. Confirm a write through that bind fails.
 
 The native `/root/.hermes/cache/spillover` alias alone did not cover the host path handed to Hal on 19 October.
-No whole-profile home, board database, other profile's cache or credential directory is mounted for this fix.
+No whole-profile home, board database, other profile’s cache or credential directory is mounted for this fix.
+A spilled `kanban_show` reader result is still untrusted data when Hal reads it with `read_file`.
 
 ### 8. Shared gateway admission
 
@@ -907,7 +917,8 @@ Do not delete it as redundant.
 | 05:45 | `hermes-app-alive`, as a cron job inside the default gateway | **One hour** after the reboot, so the reboot has finished and the lingering user units have come back before anything looks at them |
 | 06:15 | `security-reviewer-sweep.py`, a no-agent job owned by security_reviewer | Removes only expired final reports for closed reviewer tickets |
 
-The three cron rows have no jitter: they are cron expressions in the agent's scheduler rather than systemd timers, and neither `RandomizedDelaySec` nor `Persistent=` applies to them.
+Hal’s separate house-check schedule is 09:00 Europe/London, outside this UTC maintenance table.
+The three maintenance cron rows have no jitter: they are cron expressions in the agent's scheduler rather than systemd timers, and neither `RandomizedDelaySec` nor `Persistent=` applies to them.
 Catch-up after a missed window comes from the scheduler's ticker picking up past-due jobs instead.
 
 Both apt drop-ins set `FixedRandomDelay=true`, so the offset is derived from the machine ID and unit name rather than re-rolled nightly.
@@ -936,14 +947,16 @@ The VM has no MTA, so `unattended-upgrades` mail would be a silent failure; the 
 
 ## What the daily check does not watch
 
-The daily check verifies the final three units, fresh PM WebUI/agent imports and WebUI `/health`; its arrival proves the shared gateway scheduler executed.
+This section describes `hermes-app-alive`; the [Hal house-check limits](hal-daily-check.md#what-this-check-does-not-watch) are separate.
+
+The alive check verifies the final three units, fresh PM WebUI/agent imports and WebUI `/health`; its arrival proves the shared gateway scheduler executed.
 It makes **no chat turn**, memory write, adapter login or reader-containment test.
 A secondary profile can fail while the shared process remains active; neither a unit count nor the aggregate runtime record proves each mailbox works.
 A fresh import can succeed while a long-lived process has stale modules: restart affected serving processes after repair and use actual authenticated panels.
 Hindsight's backend canary checks the backend, not every profile's admission/bank credentials or asynchronous retain path.
 A failed reader plugin or changed dispatch surface can leave research unavailable or widen its capabilities with every scheduled monitor green.
 Detection is daily; a missing heartbeat alarms only after its 24-hour interval and 6-hour retry. The external dashboard monitor catches a dead VM sooner.
-Losing any cron job is agent-state loss: the alive job eventually alarms by silence, while refresh and reviewer cleanup have no heartbeat. Read the default and reviewer cron stores after restore.
+Losing any cron job is agent-state loss: the alive job eventually alarms by silence, while refresh and reviewer cleanup have no heartbeat. Read the default, Hal and reviewer cron stores after restore.
 The daily check says nothing about apt timer age, Docker images, busy sandboxes or the weekly refresh's success; its run history remains the diagnostic record.
 No extra monitors were added.
 
@@ -1044,7 +1057,7 @@ HAL also has the writable scripts and read-only tool-result spillover identity m
 | `<workspace>:/workspace` | The sandbox's working directory, matching `terminal.cwd` |
 | `/home/hermes/.hermes/webui/attachments:/home/hermes/.hermes/webui/attachments:ro` | Chat uploads, read-only, at the host path the WebUI pastes into the prompt |
 | `<workspace>:<workspace>` | The workspace again, at the host path the WebUI advertises in its `[Workspace::v1: …]` label |
-| HAL only: `<scripts>:<scripts>:rw` | HAL owns its cron scripts at `/home/hermes/.hermes/profiles/hal/scripts/`, shared with the host |
+| HAL only: `<scripts>:<scripts>:rw` | Shared script directory at `/home/hermes/.hermes/profiles/hal/scripts/`; the daily runner is repository-maintained |
 | HAL only: `<spillover>:<spillover>:ro` | Oversized tool results at `/home/hermes/.hermes/profiles/hal/cache/spillover/`, readable at the host path returned to the worker |
 
 The identity mounts exist because the WebUI hands the agent **host** paths as text, and a path that does not resolve inside the container is a file the agent cannot read.
@@ -1097,12 +1110,15 @@ The scheduler runs them as plain host subprocesses (`subprocess.Popen` in `cron/
 
 ### HAL's own script cron jobs
 
-HAL owns `ha-update-watchdog` (`e6a2fb6484b8`, daily 09:00 UTC) and `ha-observer-weekly-audit` (`ea2df3246202`, weekly interval).
-The first is a `no_agent` script job; the second uses an agent and currently cannot deliver to its old `webui` origin.
-Neither is a default-profile job: normal cron list, edit and run operations use the owning profile's store under the multiplexed gateway.
+Hal’s active daily job is `ha-daily-health-email` (`e6a2fb6484b8`), at 09:00 Europe/London.
+It runs the repository-maintained `hal-daily-check-morning.py` without an agent.
+The old 08:15 producer `9f6d4108c6a6` is paused; the former watchdog name no longer describes this job.
+Older observer jobs and agent-authored timers are separate from this pipeline.
+Profile-owned cron list, edit and run operations use Hal’s store under the shared gateway.
 The default profile owns the alive and sandbox-refresh jobs above.
 
-HAL's scripts are agent state at `/home/hermes/.hermes/profiles/hal/scripts/`, not source maintained in this repository.
+Hal’s script directory is `/home/hermes/.hermes/profiles/hal/scripts/`.
+It contains the installed repository files and can also contain legacy agent-authored scripts.
 Its config adds one writable identity bind:
 
 ```yaml
@@ -1113,7 +1129,7 @@ terminal:
 ```
 
 HAL writes, reads and edits a script at that identical absolute path inside Docker and on the host.
-It schedules only the relative filename, such as `ha-update-watchdog.sh`, with `no_agent=true`.
+A no-agent script job names only the relative filename, such as `hal-daily-check-morning.py`.
 The host gateway resolves it beneath HAL's own `scripts/` and executes it as the host `hermes` user, without a model turn.
 The workspace's `/workspace` alias and host-path identity mount do not cover this directory.
 A script written to the sandbox's `/root/.hermes/scripts/` instead lands in its persistent container home, not the scheduler's script directory.
@@ -1129,30 +1145,27 @@ An existing container retains its old bind layout until recreation.
 Verify the scripts path through an authenticated HAL WebUI chat as well as the gateway path.
 The [canonical HAL persona](../../hermes-vm/profiles/hal/SOUL.md) records this convention.
 On rebuild, copy it to `/home/hermes/.hermes/profiles/hal/SOUL.md`.
-HAL already reads its watchdog design through `skills/smart-home/homeassistant-integration/references/` and deployment notes through its mounted workspace.
+The current Hal guide lives at `/home/hermes/.hermes/profiles/hal/workspace/HA-WATCH.md`.
 `deliver=local` keeps stdout in the host cron run record; that output directory is not part of the scripts bind.
 No repository checkout or cron-store mount is needed.
 
 ### Hal daily house check
 
-Hal’s 09:00 Europe/London native `no_agent` job `e6a2fb6484b8` runs `scripts/hal-daily-check-morning.py`; the old 08:15 producer is paused. The script collects facts and sends the deterministic morning email without waiting for an agent. Native cards on board `hal` let Hal assess updates and investigate grouped device situations later, through the two `kanban_hal_daily_plan` and `kanban_hal_daily_publish` tools. The [Hal guide](../../hermes-vm/profiles/hal/HA-WATCH.md) records the scope and receipt limits.
+The [Hal daily-check runbook](hal-daily-check.md) owns the end-to-end flow, files, state, retries, diagnostics, monitor verdicts, trial command and rollback layout.
+The [canonical Hal guide](../../hermes-vm/profiles/hal/HA-WATCH.md) and [persona](../../hermes-vm/profiles/hal/SOUL.md) describe Hal’s own task and prose rules.
+The morning script collects facts and sends without an agent; later native cards provide update assessments and device look-overs.
 
-The native Home Assistant plugin is disabled and privately archived. HASS credentials are absent from Hal’s agent/worker mapping; only the host runner resolves `daily_check.runner_secrets` into a private mapping. Hal’s MCP entry uses the operator’s readonly address, which restricts that address rather than other clients using the same credential. Ordinary daily-check rollback keeps this separation and the old producer’s host-only credential adaptation.
+### The former Home Assistant event feed on `hal`
 
-The `hal-daily-check` Kuma push monitor follows morning-mail acceptance, with a 24-hour heartbeat and one two-hour retry. A refused later publication parks its own card in native scheduled state; the next morning wakes it. SMTP acceptance is not inbox receipt, and a crash before saving the local receipt can repeat an identical email.
+The native Home Assistant plugin was disabled and privately archived on October 18, 2026.
+`HASS_TOKEN` and HA credentials were removed from agent/worker mappings.
+Hal now uses the operator’s read-only MCP address; only the host morning runner resolves the separate runner credential reference.
+The old producer’s host-only credential adaptation is retained for rollback, without restoring agent access.
 
-### The Home Assistant event feed on `hal`
-
-**`hal` is the only profile that watches Home Assistant.**
-Before the native plugin was removed on October 18, 2026, its event-feed settings lived in `platforms.homeassistant.extra` in `~/.hermes/profiles/hal/config.yaml` — agent state on the VM, carried by the nightly `hermes backup` zip, with no copy in this repository — so a change is made on the VM and recorded here.
-
-**`enabled: false` under `platforms.homeassistant` does not disable the platform.**
-The gateway marks an explicit enable or disable only for a **top-level** platform block (`enabled_was_explicit`, `gateway/config.py`), so a nested block never sets that marker and the later env-driven pass re-enables the platform on the presence of `HASS_TOKEN`.
-Empty `watch_domains` and `watch_entities` with `watch_all: false` is the control that holds.
-The same trap applies to any plugin platform whose token is injected: read the enable state out of the journal after a restart, not out of the file.
-
-On September 3, 2026 the operator emptied `hal`'s watch lists, and removed the default profile's `homeassistant` block, its `HA_AUTH_TOKEN` reference and its `homeassistant` toolset entry.
-Every watched state change was a full agent turn and so a hindsight retain, which made `hal` about 99% of hindsight's LLM spend.
+Before removal, an empty native watch list limited unsolicited HA event turns.
+A nested `platforms.homeassistant.enabled: false` alone did not hold when `HASS_TOKEN` could re-enable the adapter.
+Those historical settings are not the current restriction; restoring that plugin or token would reopen the gap.
+Current read-only scope and ordinary rollback are described in [Home Assistant access and mounts](hal-daily-check.md#home-assistant-access-and-mounts).
 
 ### `hermes` CLI spellings
 
