@@ -381,3 +381,38 @@ class EarlierAssessments(unittest.TestCase):
    saved['pairs'][updates[0]['key']]['sent_receipt']=None
    self.assertEqual(d.already_assessed([updates[0]],saved['pairs']),[])
    self.assertEqual(d.email_sections(needs=['- new'],already=[]),'## Needs you\n- new')
+
+class FirstRealRun(unittest.TestCase):
+ def fixture_publish(self,remove_saved=None,note=None):
+  from test_hal_daily_check import error_context_fixture
+  fixture=json.loads((Path(__file__).parent/'fixtures/first-real-run-publish-20261020.json').read_text());saved=error_context_fixture()['assessments']
+  if remove_saved:saved['pairs'].pop(remove_saved)
+  with tempfile.TemporaryDirectory() as tmp:
+   home=Path(tmp);(home/'daily-check-assessments.json').write_text(json.dumps(saved));b=Board();key=fixture['updates'][0]['key']
+   root=b.create('assess',dict(schema='hal-daily.batch.v1',updates=fixture['updates'],pending_updates=fixture['pending_updates']), 'hal','fixture')
+   asm=c.plan(b,root,choice(key))['assembly'];reader=next(t for t in b.tasks.values() if t['assignee']=='safer_web_reader');reader.update(status='done',result=json.dumps(envelope()))
+   sent=[];args=fixture['arguments'];result=c.publish(b,asm,args['assessments'],home,lambda *a:(sent.append(a) or dict(success=True)),AT,note=args['note'] if note is None else note)
+   self.assertTrue(result['success']);self.assertEqual(len(sent),1);return sent[0]
+ def test_captured_assessed_pairs_never_reappear_as_could_not_finish(self):
+  subject,body=self.fixture_publish();self.assertNotIn('## Could not finish',body)
+  already=body.split('## Already assessed')[1]
+  for name in ('Presence Simulation','Spook','Home Assistant Core'):self.assertEqual(body.count('**'+name+' '),1);self.assertIn(name,already)
+  self.assertNotIn('not assessed because',body)
+ def test_pending_note_gets_package_and_pair_instead_of_bare_version(self):
+  fixture=json.loads((Path(__file__).parent/'fixtures/first-real-run-publish-20261020.json').read_text());pair=next(u for u in fixture['pending_updates'] if u['available']=='v7.0')
+  body=self.fixture_publish(remove_saved=pair['key'])[1]
+  self.assertIn('**Presence Simulation v6.1 → v7.0:',body);self.assertNotIn('**v7.0**',body)
+  self.assertIn('## Updates',body);self.assertEqual(body.count('no verified release analysis'),1)
+ def test_supplied_changelog_link_suppresses_only_the_missing_link_fallback(self):
+  body=self.fixture_publish()[1];self.assertIn('https://github.com/home-assistant/addons/blob/master/mosquitto/CHANGELOG.md',body);self.assertNotIn('release link unavailable',body)
+  self.assertIn('release link unavailable',c.assessment_bullet('Package 1 → 2','hold until reviewed','release link unavailable'))
+ def device_instruction(self):
+  b=Board();report=dict(updates=[],inventory=[],situations=[dict(key='s',members=[dict(device_id='d',condition='offline')],line='Device offline')])
+  c.Tickets(b).ensure(report,{},{},'2026-10-20',AT);return c.body(b.show(next(iter(b.tasks))))['instruction']
+ def test_emitted_device_instruction_and_guide_apply_assessment_prose_rules(self):
+  instruction=self.device_instruction();guide=(Path(__file__).resolve().parents[2]/'profiles/hal/HA-WATCH.md').read_text()
+  for text in (instruction,guide):
+   for rule in ('Simplified Technical English','does not establish','not proof','one finding per device'):self.assertIn(rule,text)
+  self.assertIn('last report',instruction);self.assertIn('battery',instruction)
+ def test_checked_and_fine_integration_is_not_a_separate_finding(self):
+  instruction=self.device_instruction();self.assertIn('not a finding',instruction);self.assertIn('fold',instruction);self.assertIn('omit',instruction)

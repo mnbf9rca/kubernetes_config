@@ -409,7 +409,7 @@ def error_context_fixture():
 class ErrorContext(unittest.TestCase):
  def test_live_errors_show_display_name_log_times_count_and_current_availability(self):
   data=error_context_fixture();at=d.stamp(data['captured_at']);data.update(devices=[],traces=[],repairs=[],gaps=[]);data['states'].append(dict(state('sensor.offline_devices','0',devices=[],integrations={}),last_reported=at.isoformat()))
-  report=d.findings(data,at,at-dt.timedelta(days=1));subject,body=d.render(report,{},{},at)
+  report=d.findings(data,at,at-dt.timedelta(days=7));subject,body=d.render(report,{},{},at)
   self.assertEqual(subject,'House: nothing needs you')
   self.assertIn('**Ohme**: could not reach its cloud service, once at 17 October 11:33; working now; unavailable:',body)
   self.assertIn('**OpenEPaperLink**: its WebSocket connection failed (HTTP 404), 3 times between 17 October 03:56 and 19 October 03:56; working now; unavailable:',body)
@@ -417,10 +417,10 @@ class ErrorContext(unittest.TestCase):
   self.assertEqual(body.count('Heatmiser Neo Climate'),1);self.assertNotIn('ssl:default',body)
   # A current failure wins over readable entities; missing reads never claim recovery.
   data['logs']=[x for x in data['logs'] if '.heatmiserneo.' in x['name']][:1]
-  data['entries'][0]['state']='setup_retry';subject,body=d.render(d.findings(data,at,at-dt.timedelta(days=1)),{},{},at)
+  data['entries'][0]['state']='setup_retry';subject,body=d.render(d.findings(data,at,at-dt.timedelta(days=7)),{},{},at)
   self.assertEqual(subject,'House: 1 thing needs you');self.assertIn('; still failing.',body);self.assertNotIn('## Resolved overnight',body)
   data['entries']=[];data['entities']=[];data['states']=[]
-  body=d.render(d.findings(data,at,at-dt.timedelta(days=1)),{},{},at)[1]
+  body=d.render(d.findings(data,at,at-dt.timedelta(days=7)),{},{},at)[1]
   self.assertIn('; unknown.',body)
  def test_core_logger_name_and_unreadable_timing_are_not_guessed(self):
   data=snapshot();data['states']=[];data['logs']=[dict(name='homeassistant.components.mqtt.client',level='ERROR',message=['Connection failed. Second sentence.'])];data['manifests']=[dict(domain='mqtt',name='MQTT')]
@@ -455,7 +455,7 @@ class ReviewErrorContext(unittest.TestCase):
  def test_partial_availability_is_explicit_and_uncounted_total_outage_still_fails(self):
   data=error_context_fixture();at=d.stamp(data['captured_at']);data.update(devices=[],traces=[],repairs=[],gaps=[])
   data['states'].append(dict(state('sensor.offline_devices','0',devices=[],integrations={}),last_reported=at.isoformat()))
-  subject,body=d.render(d.findings(data,at,at-dt.timedelta(days=1)),{},{},at)
+  subject,body=d.render(d.findings(data,at,at-dt.timedelta(days=7)),{},{},at)
   self.assertEqual(subject,'House: nothing needs you');self.assertNotIn('## Needs you',body)
   needs=body.split('## Resolved overnight\n')[1]
   self.assertIn('**Ohme**: could not reach its cloud service, once at 17 October 11:33; working now; unavailable:',needs)
@@ -483,16 +483,16 @@ class AvailabilityRules(unittest.TestCase):
  def test_live_partial_availability_names_entities_under_uncounted_resolved_and_six_use_count(self):
   import copy
   live=availability_fixture();at=d.stamp(live['captured_at']);data=snapshot();data.update(entries=live['entries'],entities=live['entities'],states=live['states']+[dict(state('sensor.offline_devices','0',devices=[],integrations={}),last_reported=at.isoformat())],logs=error_context_fixture()['logs'],manifests=error_context_fixture()['manifests'])
-  subject,body=d.render(d.findings(data,at,at-dt.timedelta(days=1)),{},{},at)
+  subject,body=d.render(d.findings(data,at,at-dt.timedelta(days=7)),{},{},at)
   self.assertEqual(subject,'House: nothing needs you');self.assertNotIn('## Needs you',body)
   self.assertIn('## Resolved overnight',body)
   for name in ['Ohme Home Pro Approve charge','Ohme Home Pro State of charge input','Ohme Home Pro Charge mode','F2CFC7CA3E326240 Temperature','F2CFC7CA3E326240 Battery Percentage','F2CFC7CA3E326240 Content','F2CFC7CA3E326240 Alias']:self.assertIn(name,body)
   self.assertIn('working now; unavailable:',body)
   # An arbitrary domain proves there is no integration allowlist.
-  sample=copy.deepcopy(data);entry=next(e for e in sample['entries'] if e['domain']=='ohme');entry['domain']='arbitrary';sample['logs']=[dict(name='custom_components.arbitrary.client',level='ERROR',message=['Connection failed.'])]
+  sample=copy.deepcopy(data);entry=next(e for e in sample['entries'] if e['domain']=='ohme');entry['domain']='arbitrary';sample['logs']=[dict(name='custom_components.arbitrary.client',level='ERROR',message=['Connection failed.'],timestamp=at.timestamp())]
   for i in range(3):
    eid='sensor.extra_'+str(i);sample['states'].append(state(eid,'unavailable',friendly_name='Extra '+str(i)));sample['entities'].append(dict(entity_id=eid,config_entry_id=entry['entry_id']))
-  subject,body=d.render(d.findings(sample,at,at-dt.timedelta(days=1)),{},{},at)
+  subject,body=d.render(d.findings(sample,at,at-dt.timedelta(days=7)),{},{},at)
   self.assertEqual(subject,'House: nothing needs you');self.assertIn('working now; 6 of its 7 entities are unavailable.',body);self.assertNotIn('Extra 0',body)
  def test_today_monitor_uses_live_state_fields_and_keeps_real_timer_staleness_visible(self):
   import copy
@@ -531,3 +531,24 @@ class MonitorReadTransport(unittest.TestCase):
    self.assertEqual(client.read('render_template',template=d.MONITOR_TEMPLATE),live)
    self.assertEqual(captured,[('/api/template','Bearer fixture-token',{'template':d.MONITOR_TEMPLATE})])
   finally:server.shutdown();server.server_close();thread.join()
+
+class FirstRealMorning(unittest.TestCase):
+ def test_resolved_only_after_previous_cutoff_with_persisted_today_logs(self):
+  live=json.loads((Path(__file__).parent/'fixtures/first-real-run-logs-20261020.json').read_text());at=dt.datetime(2026,10,20,8,tzinfo=dt.timezone.utc);cutoff=d.stamp('2026-10-19T08:00:43.048961+00:00')
+  data=snapshot();data['states']=[dict(state('sensor.offline_devices','0',devices=[],integrations={}),last_reported=at.isoformat())];data['logs']=live['logs'];data['manifests']=live['manifests']
+  for domain in ('ohme','heatmiserneo','open_epaper_link'):
+   eid='sensor.'+domain;data['entries'].append(dict(entry_id=domain,domain=domain,state='loaded'));data['entities'].append(dict(entity_id=eid,config_entry_id=domain));data['states'].append(state(eid,'on'))
+  report=d.findings(data,at,cutoff);body=d.render(report,{},{},at)[1]
+  self.assertIn('Heatmiser Neo Climate',body);self.assertIn('OpenEPaperLink',body);self.assertNotIn('Ohme',body)
+  # Still failing remains a finding even when its original error is old.
+  data['states'][-3]['state']='unavailable';self.assertIn('Ohme',d.render(d.findings(data,at,cutoff),{},{},at)[1])
+ def test_battery_for_offline_device_is_folded_by_id_counted_once(self):
+  data=snapshot();data['states']=data['states'][:1]+[state('sensor.offline_devices','1',devices=[dict(id='plant',name='Monstera')],integrations={'zha':1})];data['states'][0]['attributes']['friendly_name']='Different battery display name'
+  report=d.findings(data,AT,AT-dt.timedelta(days=1));subject,body=d.render(report,{},{},AT)
+  self.assertEqual(subject,'House: 1 thing needs you');self.assertEqual(len(report['items']),1)
+  self.assertIn('**Monstera** is offline; its last battery reading was 0%, so charge it first, then check its connection.',body)
+  self.assertNotIn('battery is flat',body);self.assertEqual(len(report['situations']),1)
+ def test_missing_update_link_is_omitted_without_removing_real_links(self):
+  report=d.findings(snapshot(),AT,AT-dt.timedelta(days=1));report['updates'][0]['release_url']=None
+  body=d.render(report,{},{},AT)[1];self.assertNotIn('No release link supplied',body);self.assertIn('assessment pending.',body)
+  report['updates'][0]['release_url']='https://example.org/release';self.assertIn('https://example.org/release',d.render(report,{},{},AT)[1])

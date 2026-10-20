@@ -1,0 +1,63 @@
+{
+  "logs": [
+    {
+      "name": "custom_components.open_epaper_link.coordinator",
+      "level": "ERROR",
+      "message": [
+        "WebSocket connection error: 404, message='Invalid response status', url='ws://10.0.2.169/ws'"
+      ],
+      "first_occurred": 1792205766.166715,
+      "timestamp": 1792464965.5008843,
+      "count": 4
+    },
+    {
+      "name": "custom_components.heatmiserneo.coordinator",
+      "level": "ERROR",
+      "message": [
+        "Unexpected error fetching Heatmiser NeoHub : 192.168.17.82 data"
+      ],
+      "first_occurred": 1792284964.124507,
+      "timestamp": 1792461490.1058583,
+      "count": 8
+    },
+    {
+      "name": "custom_components.heatmiserneo.coordinator",
+      "level": "ERROR",
+      "message": [
+        "Unexpected error fetching Heatmiser NeoHub : 192.168.17.82 data"
+      ],
+      "first_occurred": 1792284931.1136253,
+      "timestamp": 1792461361.0442939,
+      "count": 2
+    },
+    {
+      "name": "homeassistant.components.ohme.coordinator",
+      "level": "ERROR",
+      "message": [
+        "Error requesting Ohme Charge Sessions data: Cannot connect to host api.ohme.io:443 ssl:default [Connect call failed ('54.247.171.145', 443)]"
+      ],
+      "first_occurred": 1792233208.788501,
+      "timestamp": 1792233208.788501,
+      "count": 1
+    }
+  ],
+  "manifests": [
+    {
+      "domain": "heatmiserneo",
+      "name": "Heatmiser Neo Climate",
+      "loggers": [
+        "neohub"
+      ]
+    },
+    {
+      "domain": "ohme",
+      "name": "Ohme",
+      "loggers": null
+    },
+    {
+      "domain": "open_epaper_link",
+      "name": "OpenEPaperLink",
+      "loggers": null
+    }
+  ]
+}

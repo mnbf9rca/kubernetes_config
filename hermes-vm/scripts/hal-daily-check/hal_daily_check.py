@@ -286,7 +286,7 @@ def findings(snapshot,at,cutoff):
     dr={x['id']:x for x in snapshot.get('devices',[])}
     entries={e['entry_id']:e for e in snapshot.get('entries',[])}
     names={eid:label(s.get('attributes',{}).get('friendly_name'),dr.get(er.get(eid,{}).get('device_id'),{}).get('name_by_user') or dr.get(er.get(eid,{}).get('device_id'),{}).get('name') or ('automation' if eid.startswith('automation.') else 'device')) for eid,s in states.items()}
-    battery_devices=set()
+    battery_devices=set();battery_findings={}
     for eid,s in states.items():
         a=s.get('attributes',{});registry=er.get(eid,{})
         if registry.get('disabled_by'):
@@ -304,6 +304,7 @@ def findings(snapshot,at,cutoff):
             if value is not None and math.isfinite(value) and 0<=value<=10 and owner not in battery_devices:
                 name=re.sub(r'(?:\s+battery)+$','',names[eid],flags=re.I)
                 items.append(f'The {name} battery is {"flat" if value==0 else "low"}; replace or recharge it.')
+                battery_findings[owner]=dict(line=items[-1],reading=f'{value:g}%' if eid.startswith('sensor.') else None)
                 battery_devices.add(owner)
         if eid.startswith('update.'):
             if s['state'] in ('unknown','unavailable'):
@@ -358,6 +359,17 @@ def findings(snapshot,at,cutoff):
     situations=group_devices(unhealthy,list(dr.values()),eligible,entry_names,parent_down)
     if any(g.get('grouping_unavailable') for g in situations):
         diagnostics.append('device grouping: complete monitor scope or registry ancestry was unavailable')
+    for group in situations:
+        for member in group['members']:
+            battery=battery_findings.get(member['device_id'])
+            if not battery:
+                continue
+            items.remove(battery['line'])
+            fact='its last battery reading was '+battery['reading'] if battery['reading'] else 'its battery reports low'
+            if len(group['members'])==1:
+                group['line']=f'The {label(member["name"])} is {member["condition"]}; {fact}, so charge it first, then check its connection.'
+            else:
+                group['line']+=f' For {label(member["name"])}, {fact}; charge it first, then check its connection.'
     items.extend(g['line'] for g in situations)
     buckets={}
     for row in snapshot.get('traces',[]):
@@ -397,6 +409,12 @@ def findings(snapshot,at,cutoff):
         if domain in reported_errors:
             continue
         if line:
+            if status=='working now':
+                try:
+                    if dt.datetime.fromtimestamp(log['timestamp'],dt.timezone.utc)<=cutoff:
+                        continue
+                except (KeyError,TypeError,ValueError,OverflowError,OSError):
+                    diagnostics.append(f'{name}: resolved error timing was unreadable');continue
             (resolved if status=='working now' else items).append(line)
             reported_errors.add(domain)
         else:
@@ -460,14 +478,14 @@ def render(report,assessments,notes,at):
     for update in report.get('updates',[]):
         saved=pairs.get(update['key'],{});target=label(update.get('available'),'unknown version')
         title=f'{update["name"]} {label(update.get("installed"),"unknown version")} → {target}'
-        link=update.get('release_url') or 'No release link supplied.'
+        link='\n  '+update['release_url'] if update.get('release_url') else ''
         if saved.get('outcome')=='no_public_notes':
-            needs.append(f'- **{title}**: no release notes to assess; review the release link.\n  {link}')
+            needs.append(f'- **{title}**: no release notes to assess; review the release link.{link}')
         elif saved.get('assessment') and saved.get('sent_receipt'):
             when=assessment_email_time(saved)
-            needs.append(f'- **{title}**: still waiting to be installed; assessed in the email of {when}. Review that assessment before installing.\n  {link}')
+            needs.append(f'- **{title}**: still waiting to be installed; assessed in the email of {when}. Review that assessment before installing.{link}')
         else:
-            updates.append(f'- **{title}**: assessment pending.\n  {link}')
+            updates.append(f'- **{title}**: assessment pending.{link}')
     updates.extend(item_bullet(line) for line in report.get('notices',[]))
     return email_subject(len(needs),bool(gaps)),email_sections(needs,updates,[item_bullet(label(x)) for x in sorted(set(gaps))],resolved=[item_bullet(line) for line in report.get('resolved',[])])
 
