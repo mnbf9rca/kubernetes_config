@@ -56,7 +56,8 @@ def hour(h):
 
 
 def row(host="a.example", path="/x", status=200, country="GB",
-        dt="2026-08-20T10:00:00Z", count=1, interval=1.0):
+        dt="2026-08-20T10:00:00Z", count=1, interval=1.0, method="GET",
+        bot="", security="unknown", agent="Mozilla/5.0"):
     return {
         "count": count,
         "avg": {"sampleInterval": interval},
@@ -64,37 +65,114 @@ def row(host="a.example", path="/x", status=200, country="GB",
             "datetimeHour": dt,
             "clientRequestHTTPHost": host,
             "clientRequestPath": path,
+            "clientRequestHTTPMethodName": method,
             "edgeResponseStatus": status,
             "clientCountryName": country,
+            "verifiedBotCategory": bot,
+            "securitySource": security,
+            "userAgent": agent,
         },
     }
 
 
-class ParseZoneTags(unittest.TestCase):
-    def test_pairs_in_order(self):
-        self.assertEqual(cf.parse_zone_tags("a=1,b=2"), [("a", "1"), ("b", "2")])
+class CfZones(unittest.TestCase):
+    """Zone enumeration, with http_get stubbed so no network is touched."""
 
-    def test_tolerates_whitespace_and_blank_entries(self):
-        self.assertEqual(cf.parse_zone_tags(" a = 1 , , b=2 "),
-                         [("a", "1"), ("b", "2")])
+    def setUp(self):
+        self.real_get = cf.http_get
+        self.urls = []
 
-    def test_zone_tag_may_contain_equals(self):
-        self.assertEqual(cf.parse_zone_tags("a=x=y"), [("a", "x=y")])
+    def tearDown(self):
+        cf.http_get = self.real_get
 
-    def test_rejects_entry_without_equals(self):
-        with self.assertRaises(SystemExit):
-            cf.parse_zone_tags("a=1,broken")
+    def stub(self, pages, status=200):
+        def _get(url, headers, timeout=None):
+            self.urls.append(url)
+            page = int(urllib.parse.parse_qs(url.split("?", 1)[1])["page"][0])
+            return status, json.dumps(pages[page - 1])
+        cf.http_get = _get
 
-    def test_rejects_empty_half(self):
-        with self.assertRaises(SystemExit):
-            cf.parse_zone_tags("=1")
-        with self.assertRaises(SystemExit):
-            cf.parse_zone_tags("a=")
+    @staticmethod
+    def page(zones, total_pages=1):
+        return {"success": True, "errors": [],
+                "result": [{"name": n, "id": t} for n, t in zones],
+                "result_info": {"total_pages": total_pages}}
 
-    def test_rejects_empty_input(self):
-        # An empty CF_ZONE_TAGS must fail loudly, not silently ingest nothing.
-        with self.assertRaises(SystemExit):
-            cf.parse_zone_tags("  ,  ")
+    def test_lists_every_page_sorted_by_name(self):
+        self.stub([self.page([("b.example", "2"), ("c.example", "3")], 2),
+                   self.page([("a.example", "1")], 2)])
+        self.assertEqual(cf.cf_zones("t"), [("a.example", "1"),
+                                            ("b.example", "2"),
+                                            ("c.example", "3")])
+        self.assertEqual(len(self.urls), 2)
+
+    def test_api_failure_raises_not_empties(self):
+        # A failed listing must never read as "no zones": that would ingest
+        # nothing and move no watermark, which is at least loud - but a
+        # partial listing would silently skip a zone, so success is checked.
+        self.stub([{"success": False, "errors": [{"message": "denied"}],
+                    "result": None}])
+        with self.assertRaises(cf.QueryFailed):
+            cf.cf_zones("t")
+
+    def test_empty_account_raises(self):
+        self.stub([self.page([])])
+        with self.assertRaises(cf.QueryFailed):
+            cf.cf_zones("t")
+
+    def test_entry_without_id_raises(self):
+        self.stub([{"success": True, "result": [{"name": "x.example"}],
+                    "result_info": {"total_pages": 1}}])
+        with self.assertRaises(cf.QueryFailed):
+            cf.cf_zones("t")
+
+
+class Watermarks(unittest.TestCase):
+    """influx_watermarks() parses annotated CSV where every table has its own
+    header and the zone-less table has no `zone` column at all."""
+
+    CSV = ("#group,false,false,false\r\n"
+           "#datatype,string,long,dateTime:RFC3339\r\n"
+           "#default,_result,,\r\n"
+           ",result,table,_time\r\n"
+           ",_result,0,2026-10-20T21:33:18Z\r\n"
+           "\r\n"
+           "#group,false,false,false,true\r\n"
+           "#datatype,string,long,dateTime:RFC3339,string\r\n"
+           "#default,_result,,,\r\n"
+           ",result,table,_time,zone\r\n"
+           ",_result,1,2026-10-20T21:00:00Z,cynexia.com\r\n"
+           ",_result,2,2026-10-20T17:00:00Z,making-tracks.app\r\n")
+
+    def setUp(self):
+        self.real_post = cf.http_post
+
+    def tearDown(self):
+        cf.http_post = self.real_post
+
+    def query(self, status, text):
+        cf.http_post = lambda url, body, headers, timeout=None: (status, text)
+        return cf.influx_watermarks(
+            {"url": "u", "org": "o", "bucket": "b", "token": "t"})
+
+    def test_one_watermark_per_zone_plus_the_legacy_global_one(self):
+        got = self.query(200, self.CSV)
+        self.assertEqual(got, {
+            "": datetime(2026, 10, 20, 21, 33, 18, tzinfo=UTC),
+            "cynexia.com": datetime(2026, 10, 20, 21, 0, tzinfo=UTC),
+            "making-tracks.app": datetime(2026, 10, 20, 17, 0, tzinfo=UTC),
+        })
+
+    def test_empty_bucket_is_an_empty_dict(self):
+        self.assertEqual(self.query(200, ""), {})
+
+    def test_influx_error_body_raises_not_empties(self):
+        # The 25-days-of-STALE regression: an error that parses as "no data"
+        # would seed every zone from the retention floor.
+        with self.assertRaises(cf.QueryFailed):
+            self.query(200, '{"code":"invalid","message":"schema collision"}')
+        with self.assertRaises(cf.QueryFailed):
+            self.query(500, "boom")
 
 
 class TruncatePath(unittest.TestCase):
@@ -129,6 +207,18 @@ class TruncatePath(unittest.TestCase):
         long_path = "/" + "z" * 500
         self.assertEqual(len(cf.truncate_path(long_path, True)), 256)
         self.assertEqual(len(cf.truncate_path(long_path, False)), 256)
+
+
+class Rewind(unittest.TestCase):
+    def test_floors_to_the_hour(self):
+        # Cloudflare honours a sub-hour datetime_geq, so a start of 18:37 would
+        # overwrite hour 18 with its 18:37..19:00 slice. The watermark is the
+        # previous run's wall-clock minute; the rewind must land on :00.
+        wm = datetime(2026, 8, 20, 20, 37, 52, tzinfo=UTC)
+        self.assertEqual(cf.rewind(wm), hour(18))
+
+    def test_exact_hour_is_unchanged(self):
+        self.assertEqual(cf.rewind(hour(20)), hour(18))
 
 
 class ParseHour(unittest.TestCase):
@@ -227,6 +317,65 @@ class Aggregate(unittest.TestCase):
         (key,) = acc
         self.assertEqual(key[1], "unknown")   # host
         self.assertEqual(key[4], "unknown")   # country
+        self.assertEqual(key[5], "unknown")   # method
+
+    def test_method_is_part_of_the_key(self):
+        acc = {}
+        cf.aggregate([row(method="GET"), row(method="POST")], "z", set(), acc)
+        self.assertEqual(sorted(key[5] for key in acc), ["GET", "POST"])
+
+    def test_private_paths_collapse_and_sum(self):
+        # family-foqos.app's /profile/<person> and /navigate/<person> must never
+        # reach InfluxDB: every raw path under a prefix is one masked series
+        # and the counts add up, exactly as truncation does.
+        acc = {}
+        cf.aggregate([row(path="/profile/alice", count=2),
+                      row(path="/profile/bob/settings", count=3),
+                      row(path="/navigate/carol", count=5),
+                      row(path="/profile", count=7)],
+                     "family-foqos.app", set(), acc)
+        by_path = {key[2]: count for key, (count, _) in acc.items()}
+        self.assertEqual(by_path,
+                         {"/profile/*": 5, "/navigate/*": 5, "/profile": 7})
+
+    def test_private_prefixes_are_per_zone(self):
+        acc = {}
+        cf.aggregate([row(path="/profile/alice")], "cynexia.com", set(), acc)
+        (key,) = acc
+        self.assertEqual(key[2], "/profile/alice")
+
+    def test_bot_category_and_security_source_are_tags(self):
+        acc = {}
+        cf.aggregate([row(bot="Search Engine Crawler", security="waf")],
+                     "z", set(), acc)
+        (key,) = acc
+        self.assertEqual(key[6], "Search Engine Crawler")
+        self.assertEqual(key[7], "waf")
+
+    def test_empty_bot_category_is_none_and_missing_source_is_unknown(self):
+        acc = {}
+        cf.aggregate([{"count": 1, "avg": {},
+                       "dimensions": {"datetimeHour": "2026-08-20T10:00:00Z",
+                                      "verifiedBotCategory": ""}}],
+                     "z", set(), acc)
+        (key,) = acc
+        self.assertEqual(key[6], "none")
+        self.assertEqual(key[7], "unknown")
+
+    def test_user_agent_collapses_to_client_and_sums(self):
+        # The raw user agent must never reach InfluxDB: three agents, two
+        # classes, and the counts within a class add up.
+        acc = {}
+        cf.aggregate([row(agent="Uptime-Kuma/2.0.0", count=2),
+                      row(agent="Uptime-Kuma/1.23.16", count=3),
+                      row(agent="curl/8.0", count=5),
+                      row(agent="", count=7)],
+                     "z", set(), acc)
+        by_client = {key[8]: count for key, (count, _) in acc.items()}
+        self.assertEqual(by_client, {"uptime-kuma": 5, "other": 12})
+        for line in cf.points(acc):
+            self.assertNotIn("Uptime-Kuma/", line)
+            self.assertNotIn("curl", line)
 
 
 class Points(unittest.TestCase):
@@ -237,6 +386,10 @@ class Points(unittest.TestCase):
         self.assertTrue(line.startswith("http_requests,"))
         self.assertIn("zone=myzone", line)
         self.assertIn("host=a.example", line)
+        self.assertIn(",method=GET,", line)
+        self.assertIn(",bot_category=none,", line)
+        self.assertIn(",security_source=unknown,", line)
+        self.assertIn(",client=other ", line)
         self.assertIn("count=2i", line)
         self.assertTrue(line.endswith(" %d" % int(hour(10).timestamp())))
 
@@ -559,7 +712,7 @@ class Pusher(unittest.TestCase):
 
     def test_push_failure_log_names_the_class_not_the_repr(self):
         # repr(exc) is banned: the exception in hand may be a QueryFailed whose
-        # message carries a zone tag from CF_ZONE_TAGS or a raw response body.
+        # message carries a zone tag from the zone listing or a raw response body.
         def boom(request, data=None, timeout=None):
             raise cf.QueryFailed("zone tag abc123 said: <secret payload>")
         cf.urllib.request.urlopen = boom

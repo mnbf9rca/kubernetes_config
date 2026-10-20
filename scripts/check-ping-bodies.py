@@ -141,8 +141,8 @@ SUSPICIOUS_NAME = re.compile(
 # classified verdict, and never a response body or an exception message.
 #
 # `warnings` USED TO BE ON THIS LIST AND MUST NOT GO BACK. Its elements are
-# formatted strings that splice in `zone_tag`, the value of the CF_ZONE_TAGS
-# Secret - the one value spec 9.1 names as "the one that nearly shipped". The
+# formatted strings that splice in `zone_tag`, a zone ID from the Cloudflare
+# zone listing - the one value spec 9.1 names as "the one that nearly shipped". The
 # allowlist admits a NAME, not a subexpression, so `warnings[0]` and `warnings`
 # both passed while only `len(warnings)` was ever intended. The count is bound to
 # `truncated` at the call site instead, and an int cannot carry a zone ID.
@@ -152,6 +152,12 @@ PY_VALUE_ALLOWLIST = frozenset({
     "watermark", "start", "now", "committed_through",
     "g_start", "g_end", "missing_hours", "gap_marker",
     "truncated", "rc", "lag_minutes",
+    # cloudflare-analytics-ingest.py since the zones were enumerated from the
+    # API (2026-10-20): three ints bound at the emit site to len() of a list
+    # the script built or to a counter it kept. The lists themselves hold zone
+    # NAMES - hostnames, remote-controlled text - and are deliberately not
+    # listed, so `zones[0]` and `gaps[0]` stay refused.
+    "zone_count", "behind", "gap_zones",
     # homelab/ops/scripts/update-watch.py. Every name below is bound at the
     # emit site to `int(...)` of a value the script derived, or to a member of
     # that script's VERDICTS enum. Nothing GitHub sent can reach any of them —
@@ -436,7 +442,7 @@ def _py_reason(node):
     `type(exc).__name__` is the one shape that may name an out-of-allowlist
     variable. An exception's CLASS NAME is safe; its `repr` is not, because the
     exception in hand may be a QueryFailed whose message splices in `zone_tag`
-    (from the CF_ZONE_TAGS Secret) or up to 800 bytes of raw response body.
+    (from the Cloudflare zone listing) or up to 800 bytes of raw response body.
     """
     permitted = set()
     for child in ast.walk(node):

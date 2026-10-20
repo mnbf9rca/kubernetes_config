@@ -370,21 +370,20 @@ A temporary pinned image needs its keel annotations removed.
 Hourly CronJob at `37 * * * *` that copies Cloudflare edge traffic data into the `cloudflare` bucket before Cloudflare deletes it.
 
 Cloudflare's Free plan keeps **8 days** of per-hostname analytics and rejects any GraphQL query wider than **1 day**.
-That window answers "what is happening right now" and is useless for "was this normal?"
-— the question a webshell sweep raises.
+That window answers "what is happening right now" and is useless for "was this normal?", the question a webshell sweep raises.
 This job is the retention fix; nothing about the Cloudflare configuration changes, and the token is read-only.
 
 ### Shape
 
 | | |
 |---|---|
-| Zones | `cynexia.com` and `making-tracks.app` |
+| Zones | Every zone the API token can see, enumerated with `GET /zones` on every run (since 2026-10-20); a zone added to the account is ingested from its next run, seeded from Cloudflare's whole retention window |
 | Dataset | `httpRequestsAdaptiveGroups`, grouped by `datetimeHour` |
 | Bucket | `cloudflare`, **infinite** retention, raw hourly rows, no downsampling |
-| Measurement | `http_requests`; tags `zone`, `host`, `path`, `status`, `country`; fields `count`, `sample_interval` |
+| Measurement | `http_requests`; tags `zone`, `host`, `path`, `status`, `country`, and since 2026-10-20 `method`, `bot_category` (Cloudflare's `verifiedBotCategory`, empty stored as `none`), `security_source` (`securitySource`) and `client` (`uptime-kuma` for a `Uptime-Kuma/` user agent, `other` for everything else; the raw user agent is never stored); fields `count`, `sample_interval`. Older points lack the newer tags |
 | Monitoring | The `homelab-cloudflare-analytics` uptime-kuma push monitor: `up` on exit 0, `down` otherwise |
 
-Two bookkeeping measurements share the bucket: `ingest_status` (one point per committed chunk) and `ingest_gap` (see below).
+Two bookkeeping measurements share the bucket: `ingest_status` (one point per zone per committed chunk, tagged `zone`; points from before 2026-10-20 carry no `zone` tag and were one marker for every zone) and `ingest_gap` (see below).
 
 ### Why the script is Python
 
@@ -401,15 +400,30 @@ Standard library only, so there is no `pip install` at run time and the job depe
 
 ### The resume rule
 
-The watermark is `max(_time)` over the `cloudflare` bucket, read back from InfluxDB on every run.
+The watermark is `max(_time)` **per zone** over the `cloudflare` bucket (every `count` point carrying that zone's tag, `http_requests` and `ingest_status` alike), read back from InfluxDB on every run.
 There is no state file, no PVC and no ConfigMap cursor, because all three can disagree with what was stored — after a restore, after a manual delete, after a partial write.
 The data is its own watermark and cannot drift from itself.
+A zone with no points at all is new and is seeded from Cloudflare's retention floor, about 8 days back, so a zone added to the account gets the history Cloudflare still holds.
+A zone that has points resumes from its own newest point and nothing else.
+The zone-less `ingest_status` marker written before 2026-10-20 was used as a floor on the first enumerated run, to stop the two already-covered zones re-fetching their history, and it lifted the 19 new zones past the hours their first run had not reached: 14:46 to 19:00 UTC on 2026-10-20 were never fetched for them, and hour 14 is partial.
+The floor is gone; those hours are recoverable only by deleting the new zones' points from 14:46:14 UTC onward so the next run rewinds to 12:00 and refetches them, which is the operator's call.
 
-Every run then rewinds **2 hours** behind that watermark, because the final hour of the previous run was almost certainly still in progress when it was written.
+Every run then rewinds **2 hours** behind that watermark and **floors the result to the hour**, because the final hour of the previous run was almost certainly still in progress when it was written.
 Re-ingestion is free: same measurement, same tag set and same timestamp overwrite in InfluxDB.
 
+The floor is load-bearing (fixed 2026-10-20).
+Cloudflare applies `datetime_geq` to the raw request time and only then groups by `datetimeHour`, so a window starting at 18:37 returns hour 18 as its 18:37–19:00 slice, and the write overwrites that hour's full count with the slice: measured at 1,982 requests from :00 against 568 from :37.
+The watermark is the previous run's wall-clock minute, so before the fix every hour two behind a run was cut down to its last 23 minutes; those hours are permanently short, and nothing is backfilled.
+
+That same overwrite is why **adding a tag double-counts roughly the two hours around the change**, and that is an accepted residual.
+The first run with a new tag cannot overwrite the overlap window's old-tag-set points, so it writes a second series beside them, and nothing in the script can avoid that without deleting points.
+Observed on 2026-10-20, when the schema changed twice (the `method` tag, then `bot_category`, `security_source` and `client` together), for `cynexia.com`: hour 19 UTC is stored three times (2,076 requests in each of the three tag sets), hour 20 carries its old 20:00–20:37 slice (1,264) and a method-only copy (2,367) beside the full hour (2,367), and hour 21 carries a method-only partial (1,121) beside the full hour; about 8,900 extra requests across those three hours and none after.
+A panel that sums `count` by hour reads those hours high; a panel filtered on `exists r.client` is exact from 19:00 UTC that day.
+
 Backfill runs in **23-hour chunks** (Cloudflare rejects anything wider than a day), at most **8 chunks per run**.
-Chunks are committed oldest-first and only when *every* zone succeeded for that chunk — commit a chunk in which one zone failed and the watermark jumps past hours that zone never covered, which Cloudflare then deletes.
+Each zone's chunks are committed oldest-first; a failed chunk ends that zone for the run and the other zones carry on, so a zone that fails every run cannot starve the zones sorted after it.
+Because the watermark is per zone, the failed zone resumes from its last committed chunk next run and no zone's watermark can move past hours it never fetched; the run still exits non-zero with `verdict=failed`, naming the first failure.
+The first run after a zone appears is the expensive one: up to 8 chunks for that zone, one call each plus any row-cap subdivision, inside the 180-call budget shared by every zone in the run.
 
 A successfully-queried chunk with **zero rows** still writes its `ingest_status` point.
 Without that, eight genuinely quiet days would look identical to eight days of broken ingestion and would trip the gap alarm below for no reason.
@@ -444,6 +458,13 @@ Path is by far the highest-cardinality dimension — karakeep alone emits a dist
 Hosts listed in the CronJob's `FULL_PATH_HOSTS` env var keep their full path.
 It is empty by default; every host added there trades series cardinality for path detail.
 
+The series key gained `method`, `bot_category`, `security_source` and `client` on 2026-10-20, so a series is now one combination of all nine tags per hour.
+Of those, `client` is the deliberate collapse of Cloudflare's `userAgent` dimension into two values, because the raw user agent is unbounded, attacker-chosen text; the dimension is still requested so Cloudflare splits the groups by it, which inflates the rows a query returns before aggregation collapses them again.
+That inflation is what the row-cap subdivision below absorbs.
+
+Privacy is a second, per-zone collapse on top of that, in `PRIVATE_PATH_PREFIXES` in the script: for `family-foqos.app`, any path under `/profile/` or `/navigate/` is stored as `/profile/*` or `/navigate/*`, because the next segment names a person.
+It is keyed by the zone's name as Cloudflare lists it, not by hostname, and the counts under a prefix sum into the one masked series.
+
 ### Sampling
 
 `sample_interval` is stored per point and **never applied**.
@@ -456,23 +477,21 @@ Observed values are 1.03–1.14 — effectively unsampled at this volume.
 `httpRequestsAdaptiveGroups` caps a response at 10,000 rows and this dataset offers no cursor.
 A chunk returning exactly the cap is assumed truncated, halved, and re-queried — recursively, down to a 1-minute floor.
 Aggregation makes the halves recombine into the same per-hour totals.
-A run is capped at 180 GraphQL calls; exhausting that budget is a loud failure, not a silent truncation, so the watermark stays put and the next run retries.
+A run is capped at 180 GraphQL calls; exhausting that budget is a loud failure, not a silent truncation, so each affected zone's watermark stays put at its last committed chunk and the next run resumes it there.
 Cloudflare's user limit is 300 queries per 5 minutes and burning it would break the next several hourly runs too.
 
 ### First-run setup
 
-The job cannot run until four things exist.
+The job cannot run until three things exist.
 None of them are created by `make apply-homelab`.
 
-1. **Cloudflare API token**, scoped **`Zone.Analytics: Read` only**, covering both zones.
-   The job never writes to Cloudflare, so any edit scope is blast radius bought for nothing.
+1. **Cloudflare API token**, scoped **`Zone: Read` and `Zone.Analytics: Read` only**, on every zone in the account.
+   The job lists the zones with `GET /zones` on every run and reads analytics for each; it never writes to Cloudflare, so any edit scope is blast radius bought for nothing.
    Store as `op://Homelab/cloudflare/api-token`.
-2. **Zone tags**, as one field `op://Homelab/cloudflare/zone-ids` holding `cynexia.com=<zoneid>,making-tracks.app=<zoneid>`.
-   Zone IDs are not passwords, but they identify the account and this repo is public, so they are resolved at apply time like everything else.
-   Mark it `[text]`, not concealed — it is an identifier, and a concealed value makes the vault harder to debug.
-3. **uptime-kuma push monitor** `homelab-cloudflare-analytics`, 3600s interval with one retry at 7200s.
+   The `zone-ids` field on that item is read by nothing since 2026-10-20.
+2. **uptime-kuma push monitor** `homelab-cloudflare-analytics`, 3600s interval with one retry at 7200s.
    Token into `op://Homelab/health-healthchecks/cloudflare-kuma-push-token`.
-4. **InfluxDB bucket and token**: `make health-influx-bucket-bootstrap BUCKET=cloudflare`, in a plain terminal.
+3. **InfluxDB bucket and token**: `make health-influx-bucket-bootstrap BUCKET=cloudflare`, in a plain terminal.
    See below.
 
 Then `make apply-homelab`, and force the first run rather than waiting an hour:
