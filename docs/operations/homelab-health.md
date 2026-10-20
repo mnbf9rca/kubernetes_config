@@ -404,8 +404,9 @@ The watermark is `max(_time)` **per zone** over the `cloudflare` bucket (every `
 There is no state file, no PVC and no ConfigMap cursor, because all three can disagree with what was stored — after a restore, after a manual delete, after a partial write.
 The data is its own watermark and cannot drift from itself.
 A zone with no points at all is new and is seeded from Cloudflare's retention floor, about 8 days back, so a zone added to the account gets the history Cloudflare still holds.
-A zone that has points resumes from the later of its own newest point and the zone-less `ingest_status` marker written before 2026-10-20, because that global marker proves every zone configured then was covered through it; without that floor a quiet zone would be re-fetched and, having gained tags since, double-counted.
-That marker is never written again, so the floor is a constant that only matters to zones which were already in the bucket on 2026-10-20.
+A zone that has points resumes from its own newest point and nothing else.
+The zone-less `ingest_status` marker written before 2026-10-20 was used as a floor on the first enumerated run, to stop the two already-covered zones re-fetching their history, and it lifted the 19 new zones past the hours their first run had not reached: 14:46 to 19:00 UTC on 2026-10-20 were never fetched for them, and hour 14 is partial.
+The floor is gone; those hours are recoverable only by deleting the new zones' points from 14:46:14 UTC onward so the next run rewinds to 12:00 and refetches them, which is the operator's call.
 
 Every run then rewinds **2 hours** behind that watermark and **floors the result to the hour**, because the final hour of the previous run was almost certainly still in progress when it was written.
 Re-ingestion is free: same measurement, same tag set and same timestamp overwrite in InfluxDB.

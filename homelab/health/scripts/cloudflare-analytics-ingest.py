@@ -736,15 +736,13 @@ def main():
     zones = cf_zones(cf_token)                    # raises -> run fails, no writes
     log("%d zone(s) visible to the token" % len(zones))
     watermarks = influx_watermarks(influx)        # raises -> run fails, no writes
-    # Before 2026-10-20 the ingest_status marker carried no zone tag and was
-    # one watermark for every zone then configured, so it proves every zone
-    # that has points was covered through it. A zone whose own newest point is
-    # older than that marker resumes from the marker, not from its last
-    # traffic: otherwise a quiet zone would be re-fetched and, having gained
-    # the `method` tag since, double-counted. A zone with no points at all is
-    # new and is seeded from Cloudflare's whole retention. The marker is never
-    # written again, so this floor is a constant.
-    legacy = watermarks.pop("", None)
+    # The "" key is the zone-less ingest_status marker from before 2026-10-20,
+    # when the watermark was one value for every zone. It is NOT a floor for
+    # any zone: it was used as one on the first enumerated run and lifted the
+    # 19 new zones past hours their first run had not reached (14:46 to 19:00
+    # UTC that day, never fetched). Every zone has its own markers now; only
+    # its own points may say where it resumes.
+    watermarks.pop("", None)
 
     warnings = []
     gaps = []                      # (zone_name, g_start, g_end, missing_hours)
@@ -759,8 +757,6 @@ def main():
 
     for zone_name, zone_tag in zones:
         watermark = watermarks.get(zone_name)
-        if watermark is not None and legacy is not None:
-            watermark = max(watermark, legacy)
         if watermark is None:
             # New zone, or a restored-from-empty bucket. Nothing was lost,
             # because nothing was ever held. Start at the oldest data
