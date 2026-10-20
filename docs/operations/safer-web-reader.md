@@ -355,7 +355,8 @@ The local report holds trial card IDs, the publisher outcome and the independent
 
 The later Hal instruction asks for the household summary above, including complete breaking-change substance and concise relevant component changes.
 Hal received a read-only identity bind for its own spilled tool results; the reader gained no mount or tool.
-The host clarified the five string-list fields and accepts all-string object elements as shape normalization.
+The host clarified the five string-list fields and joins an object containing only strings into one list item.
+It accepts the string `true` as well as Boolean `true` for the version match.
 It still refuses negative version matches, incomplete retrieval and uncertain provenance.
 The successful Core trial stored its assessment and SMTP receipt on October 19.
 Those requester changes did not widen the four-tool quarantine or alter the reader’s envelope guard.

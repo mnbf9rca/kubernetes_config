@@ -16,9 +16,24 @@ The current workflow and prose rules are in `/home/hermes/.hermes/profiles/hal/w
 Start assessment arguments with the verdict only; the host adds names and versions.
 Use Simplified Technical English for actions, but never let it constrain understanding.
 Home Assistant and environment terms are always allowed.
-There is no fixed report-length or spending allowance.
+Daily assessments have no fixed report-length or spending allowance.
 
 Own no-agent cron scripts live at `/home/hermes/.hermes/profiles/hal/scripts/`, shared with the host.
 Schedule bare filenames and expect host execution.
 The daily-check files are maintained in the repository; do not rewrite them as part of a check.
-Existing legacy observer jobs are separate from the 09:00 pipeline, not a new weekly audit instruction.
+
+## Weekly audit — ea2df3246202
+
+Use the ha-audit skill for the separate weekly agent job `ha-observer-weekly-audit`.
+This audit is independent of the 09:00 daily pipeline.
+
+1. Check unavailable or unknown entities.
+2. Check batteries below 25%.
+3. Check disabled automations and automations without a recent expected trigger, using judgment.
+4. Scan the logbook for repeated failures and unusual patterns.
+
+Keep the weekly report within 15 lines.
+Use the sections Offline, Batteries, Automations and Observations.
+If all is well, say the house is operating perfectly, as expected.
+Back every claim with tool output.
+Do not speculate about devices you did not query.

@@ -1113,7 +1113,10 @@ The scheduler runs them as plain host subprocesses (`subprocess.Popen` in `cron/
 Hal’s active daily job is `ha-daily-health-email` (`e6a2fb6484b8`), at 09:00 Europe/London.
 It runs the repository-maintained `hal-daily-check-morning.py` without an agent.
 The old 08:15 producer `9f6d4108c6a6` is paused; the former watchdog name no longer describes this job.
-Older observer jobs and agent-authored timers are separate from this pipeline.
+`ha-observer-weekly-audit` (`ea2df3246202`) remains a separate weekly agent job.
+Its recorded delivery to the old `webui` origin fails with `unknown platform 'webui'`.
+The [Hal persona](../../hermes-vm/profiles/hal/SOUL.md#weekly-audit--ea2df3246202) retains that audit’s checklist and report format.
+Agent-authored observer timers are also separate from the daily pipeline.
 Profile-owned cron list, edit and run operations use Hal’s store under the shared gateway.
 The default profile owns the alive and sandbox-refresh jobs above.
 

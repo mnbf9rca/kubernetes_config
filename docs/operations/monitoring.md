@@ -607,7 +607,8 @@ It also holds **push monitors**, driven by jobs that send a heartbeat rather tha
 Ten were created on August 26, 2026: `homelab-keel-fresh` and `vps-keel-fresh`, and the eight that took over the routine heartbeats — `health-influx-backup`, `health-garmin-and-apple-ingest`, `homelab-cloudflare-analytics`, `homelab-hermes-pull`, `hindsight-pg-dump`, `hindsight-canary`, `homelab-update-watch` and `jottacloud-backup`.
 **`hermes-app-alive`** runs **outside** both clusters: a `no_agent` cron job inside the hermes agent on the off-cluster VM at 05:45 UTC, `up` on exit 0 and `down` otherwise ([hermes-vm.md](hermes-vm.md#reading-a-down-hermes-app-alive)).
 **`hal-daily-check`** runs on that VM at 09:00 Europe/London through profile-owned no-agent job `e6a2fb6484b8`.
-It follows morning-mail acceptance and saved receipts, including an honest incomplete check; later assessment and look-over mail do not gate it.
+It follows morning-mail acceptance and saved receipts, including an email that says the check could not finish.
+Later assessment and look-over mail do not gate it.
 Its 24-hour heartbeat and one two-hour retry alarm about 26 hours after the last beat, normally around 11:00 London time.
 The message is a fixed `verdict=` value: `accepted` or `already-accepted` is up; state, send, credential, timeout or internal failures are down when a push token is available.
 The exact [verdict enum and missing-mail procedure](hal-daily-check.md#diagnostics-and-the-kuma-heartbeat) belong to the Hal runbook.

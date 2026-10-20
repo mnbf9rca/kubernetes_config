@@ -30,7 +30,7 @@
    A batch produces one assessment email, including any pending package reasons and earlier-assessed reminders; a look-over produces one email per situation root.
    Concurrent publishers wait for the exclusive lock for up to the existing 180-second mail timeout.
 6. The morning receipt suppresses another accepted morning email on the same London date; card work can continue later that day.
-   Refused publications remain scheduled, and the next 09:00 run wakes scheduled and runtime-blocked Hal cards.
+   Refused publications remain scheduled, and the next 09:00 run wakes scheduled and blocked Hal cards.
    A recovered device's episode is archived quietly when the device check is complete.
    Still-pending installed updates get the next morning's reminder; unchanged pending-only assessments can close silently after their first notice.
    A quiet day needs only the morning email.
@@ -117,7 +117,6 @@ Two existing scheduled look-over cards from 20 October retain older body instruc
 A guide or instruction-source edit does not rewrite existing card bodies.
 Their next ordinary wake is 21 October at 09:00 BST; no manual replay or reset is needed.
 The emitted instruction still has one old “device or integration name” clause; the guide requires device names and no healthy-integration finding.
-This docs-only update does not change that runtime string or the stored cards.
 
 ## Diagnostics and the Kuma heartbeat
 
@@ -127,11 +126,10 @@ The scheduler does not email this file; the script sends the separate morning em
 The execution database records start, completion and result; a scheduler `delivery_outcome: suppressed` does not prove mail failed.
 Successful no-agent runs discard stderr, so stderr alone is not a durable diagnostic surface.
 A recovered log with unreadable timing is currently omitted from email and reported only in stdout.
-That deferred behavior remains unchanged; it is not silently described as a runtime fix here.
 
 The `hal-daily-check` push monitor uses a 24-hour interval and one two-hour retry.
 A missing daily beat therefore alarms about 26 hours after the last accepted beat, near 11:00 London time on an ordinary day.
-It monitors morning-mail acceptance, including honest incomplete checks; it does not monitor later Hal mail.
+It monitors morning-mail acceptance, including an email that says the check could not finish; it does not monitor later Hal mail.
 The token reference is `op://hermes/hal-daily-check/kuma-push-token`; the profile mapping names `HAL_DAILY_CHECK_PUSH_TOKEN`.
 The [monitor inventory](uptime-kuma.md#push-monitors) and [failure triage](monitoring.md#layers-3-and-4-uptime-kuma) describe its place in estate monitoring.
 
@@ -192,7 +190,6 @@ For an approved code rollback:
 
 Restoring the native HA plugin, token mappings or paused producer is not an ordinary code rollback.
 The retained old producer already uses the runner-only credential reference; it must not export that token to agents.
-Guide and persona changes in a docs-only commit are canonical edits, not an installation.
 
 ## What this check does not watch
 
@@ -206,7 +203,10 @@ Only retained automation failures are reported; disabled automations are not fau
 HA normally retains five traces per automation and can lose unsaved traces on restart; coverage diagnostics do not recover missing history.
 A trace-retention setting below five defeats the script’s coverage inference.
 Recent errors are the structured records still retained by HA, not a complete log archive since yesterday.
-Loaded integrations with some unavailable entities belong under non-counting Resolved overnight; setup retry/error or all-unavailable means still failing.
+An error goes under non-counting Resolved overnight when its integration is loaded and at least one entity is available.
+The error must have last occurred after the previous cutoff.
+Partial unavailability adds entity names or a count; it does not create an error finding on its own.
+Setup retry/error or all entities unavailable means still failing.
 Names are listed for up to five unavailable entities; larger groups use a count.
 Ignored repairs stay ignored, and an empty repair list does not prove configuration validity.
 

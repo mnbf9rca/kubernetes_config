@@ -37,7 +37,9 @@ Only a complete device check can close a cleared episode; a recurrence gets a ne
 Recent errors are currently retained structured records, not an archive since yesterday.
 Each integration contributes its first usable error message, with first/last occurrence, count and current setup/entity status.
 Setup failures or all entities unavailable mean still failing.
-A loaded integration with some unavailable entities goes under non-counting Resolved overnight.
+An error goes under non-counting Resolved overnight when its integration is loaded and at least one entity is available.
+The error must have last occurred after the previous cutoff.
+Partial unavailability adds entity names or a count; it does not create an error finding on its own.
 Recovered records must have a readable last occurrence after the previous cutoff.
 An unreadable recovered-error timestamp currently produces only a stdout diagnostic, not an email item.
 Hermes saves successful-run stdout in the local cron output file and discards stderr.
@@ -92,13 +94,20 @@ Explain a term when useful.
 Address the operator as “you”, never “Rob” in the third person.
 
 Keep details about what was not proven, covered or retrieved in the card.
-Do not email “I have not established”, “insufficient to prove”, “did not provide coverage” or similar hedges.
-Do not email “does not establish”, “not proof” or similar hedges.
+Do not email these hedges:
+
+- “I have not established”
+- “insufficient to prove”
+- “did not provide coverage”
+- “does not establish”
+- “not proof”
+
 Thin evidence gets “not assessed” and one reason.
 A pending package appears once.
 For a batch note, start each pending package's line with its available version and a colon, then “not assessed” and one reason.
 The host adds the package name and version pair.
-Do not repeat assessed packages in the note or pending packages under Could not finish.
+Do not put assessed packages in the note.
+Do not repeat pending packages under Could not finish.
 A batch call can contain assessments and a note together; at least one payload must be non-empty.
 There is no overall sentence, word, character or token allowance, and no code validates the prose style.
 
@@ -115,7 +124,6 @@ Fold useful normal integration status into the device line or omit it; never cou
 Existing cards retain the instruction stored when they were created.
 The two scheduled 20 October look-overs therefore still carry the older prose rules.
 The emitted instruction also retains one old “device or integration name” clause; this guide requires the device name.
-This docs-only clarification neither edits those cards nor changes that runtime string.
 
 ## Email composition and retries
 
@@ -138,7 +146,7 @@ Refused mail or failed publication parks its own card in native scheduled state.
 If publish returns scheduled, stop without completing or blocking the card.
 Never call `kanban_block` for daily publication failures.
 Other daily-tool refusals get a short pending completion rather than invented advice.
-The next morning wakes scheduled and runtime-blocked Hal cards.
+The next morning wakes scheduled and blocked Hal cards.
 A parked card stays open, preventing a duplicate batch even if a wake fails.
 A frozen draft retries identically without repeating assessment work.
 An unchanged pending-only batch can close silently after its pending notice has already been sent.
@@ -151,5 +159,6 @@ Hal's writable scripts bind is an existing trust boundary.
 Fixture previews send nothing, create no cards, write no state and push no heartbeat.
 An explicit morning trial sends once with a `[trial] ` prefix and no production lock, cards, state writes or heartbeat.
 A production run that loses its profile lock pushes nothing.
-The Kuma monitor follows morning-mail acceptance only: honest incomplete mail is up, refused mail is down, and silence catches a missed run.
+The Kuma monitor follows morning-mail acceptance, including an email that says the check could not finish.
+Accepted mail is up, refused mail is down, and silence catches a missed run.
 Later assessment and look-over mail do not gate that heartbeat.

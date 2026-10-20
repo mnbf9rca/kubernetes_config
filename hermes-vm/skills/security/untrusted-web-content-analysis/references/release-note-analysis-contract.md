@@ -86,6 +86,6 @@ The following shape belongs inside `answer`, not at the top level:
 - Keep quotes attributable and enough to support the requested findings; do not send the raw document.
 - Compare private installation facts only inside Hal after the public summary returns.
 
-The host tolerates the string `true` for a version match and joins an all-string object inside a change list.
-Those are shape normalizations, not permission to accept incomplete or contradictory content.
+The host accepts the string `true` for a version match and joins an object containing only strings into one list item.
+It still refuses incomplete or contradictory content.
 Source URLs and quote text remain model claims; schema checks do not prove that a page was fetched or quoted accurately.
