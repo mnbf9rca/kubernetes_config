@@ -409,6 +409,7 @@ Take the document from the render rather than retyping it, so what you apply is 
 **Don't chase it.**
 
 - Every Secret shows `configured` on every apply, forever: `stringData` is write-only server-side (the API server never stores it back for comparison), so client-side apply's `last-applied-configuration` can never converge.
+  The same write-only fold has a sharp edge: removing a `stringData` key from a Secret manifest does not remove the folded `data` key on apply, and `kubectl diff` never shows it, so remove the live key with a JSON patch — `kubectl -n <ns> patch secret <name> --type=json -p '[{"op":"remove","path":"/data/<key>"}]'` (hit on 2026-10-20 with `health-cloudflare`'s `zone-tags`).
 - Same for objects whose fields the API server silently normalises away — a PV declaring `storageClassName: ""`, for example, which the server drops from `spec` entirely.
 - Same for cert-manager's webhook configs, whose `caBundle` is injected post-apply by cainjector.
 

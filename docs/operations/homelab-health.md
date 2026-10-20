@@ -370,8 +370,7 @@ A temporary pinned image needs its keel annotations removed.
 Hourly CronJob at `37 * * * *` that copies Cloudflare edge traffic data into the `cloudflare` bucket before Cloudflare deletes it.
 
 Cloudflare's Free plan keeps **8 days** of per-hostname analytics and rejects any GraphQL query wider than **1 day**.
-That window answers "what is happening right now" and is useless for "was this normal?"
-— the question a webshell sweep raises.
+That window answers "what is happening right now" and is useless for "was this normal?", the question a webshell sweep raises.
 This job is the retention fix; nothing about the Cloudflare configuration changes, and the token is read-only.
 
 ### Shape
@@ -421,8 +420,9 @@ Observed on 2026-10-20, when the schema changed twice (the `method` tag, then `b
 A panel that sums `count` by hour reads those hours high; a panel filtered on `exists r.client` is exact from 19:00 UTC that day.
 
 Backfill runs in **23-hour chunks** (Cloudflare rejects anything wider than a day), at most **8 chunks per run**.
-Each zone's chunks are committed oldest-first and the run stops at the first failed chunk; because the watermark is per zone, a failed chunk leaves that zone where it was and the next run resumes it there, so no zone's watermark can move past hours it never fetched.
-The first run after a zone appears is the expensive one: up to 8 chunks for that zone, one GraphQL call each, inside the 180-call budget shared by every zone in the run.
+Each zone's chunks are committed oldest-first; a failed chunk ends that zone for the run and the other zones carry on, so a zone that fails every run cannot starve the zones sorted after it.
+Because the watermark is per zone, the failed zone resumes from its last committed chunk next run and no zone's watermark can move past hours it never fetched; the run still exits non-zero with `verdict=failed`, naming the first failure.
+The first run after a zone appears is the expensive one: up to 8 chunks for that zone, one call each plus any row-cap subdivision, inside the 180-call budget shared by every zone in the run.
 
 A successfully-queried chunk with **zero rows** still writes its `ingest_status` point.
 Without that, eight genuinely quiet days would look identical to eight days of broken ingestion and would trip the gap alarm below for no reason.
@@ -476,7 +476,7 @@ Observed values are 1.03–1.14 — effectively unsampled at this volume.
 `httpRequestsAdaptiveGroups` caps a response at 10,000 rows and this dataset offers no cursor.
 A chunk returning exactly the cap is assumed truncated, halved, and re-queried — recursively, down to a 1-minute floor.
 Aggregation makes the halves recombine into the same per-hour totals.
-A run is capped at 180 GraphQL calls; exhausting that budget is a loud failure, not a silent truncation, so the watermark stays put and the next run retries.
+A run is capped at 180 GraphQL calls; exhausting that budget is a loud failure, not a silent truncation, so each affected zone's watermark stays put at its last committed chunk and the next run resumes it there.
 Cloudflare's user limit is 300 queries per 5 minutes and burning it would break the next several hourly runs too.
 
 ### First-run setup

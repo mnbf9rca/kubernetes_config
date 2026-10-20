@@ -30,11 +30,12 @@ THE FOUR RULES THIS SCRIPT EXISTS TO ENFORCE. Read them before changing anything
      `homelab-cloudflare-analytics` monitor is pushed DOWN. Quietly resuming
      would be the same bug as a probe that stays green through an outage.
 
-  4. COMMIT IN ORDER, STOP AT THE FIRST FAILURE. Each zone's chunks are
-     processed oldest first and the run stops at the first failed chunk. A
-     zone's watermark is its own, so a failed chunk leaves that zone where it
-     was and the next run resumes it there; no zone's watermark can move past
-     hours it never fetched.
+  4. COMMIT IN ORDER, AND A FAILURE STOPS ONLY ITS ZONE. Each zone's chunks
+     are processed oldest first; a failed chunk ends that zone for this run and
+     the other zones carry on, so a zone that fails every run cannot starve the
+     zones sorted after it. A zone's watermark is its own, so the failed zone
+     resumes from its last committed chunk next run; no zone's watermark can
+     move past hours it never fetched. The run still exits non-zero.
 
 Idempotency comes from InfluxDB point overwrite: same measurement, same tag set
 and same timestamp replaces. Every run deliberately rewinds OVERLAP_HOURS behind
@@ -747,7 +748,8 @@ def main():
 
     warnings = []
     gaps = []                      # (zone_name, g_start, g_end, missing_hours)
-    failure = None
+    failure = None                 # the first failed chunk, for the log
+    failures = 0                   # zones that failed a chunk this run
     chunks_done = 0
     rows_total = 0
     series_total = 0
@@ -783,6 +785,7 @@ def main():
 
         cursor = start
         zone_chunks = 0
+        zone_failure = None
         while cursor < now and zone_chunks < MAX_CHUNKS:
             chunk_end = min(cursor + timedelta(hours=CHUNK_HOURS), now)
             acc = {}
@@ -790,7 +793,7 @@ def main():
                 rows = cf_fetch(
                     cf_token, zone_tag, cursor, chunk_end, warnings, budget)
             except QueryFailed as exc:
-                failure = "%s chunk %s..%s: %s" % (
+                zone_failure = "%s chunk %s..%s: %s" % (
                     zone_name, iso(cursor), iso(chunk_end), exc)
                 log("  FAILED: %s" % exc)
                 break
@@ -812,7 +815,7 @@ def main():
             try:
                 influx_write(influx, lines)
             except QueryFailed as exc:
-                failure = "%s write %s..%s: %s" % (
+                zone_failure = "%s write %s..%s: %s" % (
                     zone_name, iso(cursor), iso(chunk_end), exc)
                 log("  WRITE FAILED: %s" % exc)
                 break
@@ -827,8 +830,14 @@ def main():
             cursor = chunk_end
             if cursor < now:
                 time.sleep(1)          # stay clear of the GraphQL rate limit
-        if failure:
-            break                      # the remaining zones wait for the next run
+        if zone_failure:
+            # THE OTHER ZONES CARRY ON. Each zone's watermark is its own, so a
+            # zone that fails on every run cannot starve the zones sorted after
+            # it; this zone resumes from its last committed chunk next run. The
+            # run still exits non-zero, and reports the FIRST failure.
+            failures += 1
+            failure = failure or zone_failure
+            continue
         if cursor < now:
             behind += 1
             log("  %s: chunk cap reached with %s .. %s outstanding; the next "
@@ -881,7 +890,8 @@ def main():
         hc_emit("committed_through=%s" % iso(committed_through))
 
     if failure:
-        log("RUN FAILED: %s" % failure)
+        log("RUN FAILED: %d zone(s) failed a chunk; first: %s"
+            % (failures, failure))
         hc_summary("failed")
         hc_emit("failure=queryfailed")
         hc_emit("detail=see pod log")
