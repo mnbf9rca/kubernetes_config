@@ -152,3 +152,29 @@ class MultipleIntegrationErrors(unittest.TestCase):
   report=d.findings(s,AT,AT-dt.timedelta(days=1),error_history=history)
   self.assertIn(key,report['error_observations']);self.assertEqual(sum('New repeated error' in line for line in report['items']),1)
   self.assertFalse(any('Old retained error' in line for line in report['items']))
+
+class RestartURL(unittest.TestCase):
+ def run_with_scope(self,value):
+  import importlib.util,sys,types
+  from unittest.mock import AsyncMock,patch
+  path=Path(d.__file__).resolve().parent.parent/'hal-reply-actions.py'
+  spec=importlib.util.spec_from_file_location('restart_runner',path);runner=importlib.util.module_from_spec(spec);spec.loader.exec_module(runner)
+  hydrate=Mock();build=Mock(return_value={'HAL_HA_MCP_URL':value});token=object();bind=Mock(return_value=token);reset=Mock();get=Mock(return_value=value)
+  class Context:
+   def __init__(self,value):self.value=value
+   async def __aenter__(self):return self.value
+   async def __aexit__(self,*args):pass
+  session=types.SimpleNamespace(initialize=AsyncMock(),call_tool=AsyncMock(return_value=types.SimpleNamespace(is_error=False,content=[types.SimpleNamespace(text='{"success":true}')])));transport=Mock(return_value=Context((None,None)))
+  modules={'utils':types.SimpleNamespace(load_yaml_file_readonly=Mock(side_effect=AssertionError('raw YAML must not supply the URL'))),'agent.secret_scope':types.SimpleNamespace(build_profile_secret_scope=build,set_secret_scope=bind,reset_secret_scope=reset,get_secret=get),'hermes_cli.env_loader':types.SimpleNamespace(hydrate_profile_secret_sources=hydrate),'mcp':types.SimpleNamespace(ClientSession=lambda *a:Context(session)),'mcp.client.streamable_http':types.SimpleNamespace(streamable_http_client=transport)}
+  with patch.dict(sys.modules,modules):
+   if value:
+    self.assertEqual(runner.call_mcp('ha_call_service',{'domain':'homeassistant','service':'restart'}),{'success':True})
+    transport.assert_called_once_with(value)
+   else:
+    with self.assertRaisesRegex(ValueError,'HAL_HA_MCP_URL'):runner.call_mcp('ha_call_service',{})
+    transport.assert_not_called()
+  hydrate.assert_called_once_with(d.PROFILE);build.assert_called_once_with(d.PROFILE);bind.assert_called_once_with(build.return_value,profile_home=str(d.PROFILE));get.assert_called_once_with('HAL_HA_MCP_URL');reset.assert_called_once_with(token)
+ def test_restart_uses_profile_secret_instead_of_literal_yaml_or_process_env(self):
+  self.run_with_scope('http://fixture.invalid:9584/fixture-mcp')
+ def test_missing_profile_url_refuses_without_transport_and_restores_scope(self):
+  self.run_with_scope(None)

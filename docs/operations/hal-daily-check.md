@@ -87,6 +87,8 @@ The native concurrent-create race is accepted: it can cost one duplicate card.
 ### Home Assistant access and mounts
 
 The operator switched Hal's MCP address to read/write on 22 October 2026.
+Hal's HA-MCP URL comes from 1Password through the profile secret map and native substitution.
+Hermes does not redact 1Password-resolved values automatically, so Hal uses a LAN-only direct-access URL.
 Hal uses native HA-MCP write tools directly on explicit authenticated email replies; the usual install, reload and restart services are examples, not a whitelist.
 Cards and audits remain read-only by instruction, and no new pre-tool block restricts the MCP surface.
 The native Home Assistant plugin is disabled and privately archived; `HASS_TOKEN` and HA credentials are absent from agent/worker mappings.
