@@ -106,7 +106,7 @@ There is no scheduled application updater.
     4. Read existing expected-bank memory without printing content.
     5. Check the existing scheduled backend canary.
     6. Exercise used HA calls read-only.
-    7. Preserve Hal’s disabled native HA plugin, runner-only HA credentials, read-only MCP address and emh’s settings.
+    7. Preserve Hal’s disabled native HA plugin, runner-only HA credentials, operator-managed MCP address and emh’s settings.
     Never print passwords, cookies or memory text.
     Do not repeat diagnostic memory writes or create backend Jobs.
 12. Verify serving topology.
@@ -1162,13 +1162,14 @@ The morning script collects facts and sends without an agent; later native cards
 
 The native Home Assistant plugin was disabled and privately archived on October 18, 2026.
 `HASS_TOKEN` and HA credentials were removed from agent/worker mappings.
-Hal now uses the operator’s read-only MCP address; only the host morning runner resolves the separate runner credential reference.
+Hal uses the operator’s read/write MCP address for explicit authenticated email-reply instructions, under the 22 October 2026 ruling.
+The host morning runner alone resolves the separate runner credential reference.
 The old producer’s host-only credential adaptation is retained for rollback, without restoring agent access.
 
 Before removal, an empty native watch list limited unsolicited HA event turns.
 A nested `platforms.homeassistant.enabled: false` alone did not hold when `HASS_TOKEN` could re-enable the adapter.
 Those historical settings are not the current restriction; restoring that plugin or token would reopen the gap.
-Current read-only scope and ordinary rollback are described in [Home Assistant access and mounts](hal-daily-check.md#home-assistant-access-and-mounts).
+Current reply-action scope and ordinary rollback are described in [Home Assistant access and mounts](hal-daily-check.md#home-assistant-access-and-mounts).
 
 ### `hermes` CLI spellings
 

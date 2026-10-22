@@ -112,13 +112,13 @@ class OutputBoundaries(unittest.TestCase):
    self.assertNotIn('CANARY',(Path(tmp)/'daily-check-state.json').read_text())
 
 class DeviceReminder(unittest.TestCase):
- def test_note_prose_not_repeated_but_receipted_date_is_shown(self):
+ def test_note_prose_and_observed_date_replace_device_line(self):
   situation=dict(key='s',line='The lamp is offline; check its power.',members=[])
   report=dict(items=[situation['line']],updates=[],situations=[situation],situation_roots={'s':'t_1'},gaps=[])
   notes={'pairs':{'t_1':dict(note='PRIVATE DIAGNOSIS',observed_at=AT.isoformat(),sent_receipt={'accepted_at':AT.isoformat()})}}
   body=d.render(report,{},notes,AT)[1]
-  self.assertIn('looked at this on 18 October',body);self.assertNotIn('PRIVATE DIAGNOSIS',body)
-  notes['pairs']['t_1']['sent_receipt']=None;self.assertNotIn('looked at this',d.render(report,{},notes,AT)[1])
+  self.assertIn('looked at this on 18 October',body);self.assertIn('PRIVATE DIAGNOSIS',body)
+  notes['pairs']['t_1']['sent_receipt']=None;self.assertIn('looked at this',d.render(report,{},notes,AT)[1])
 
 class APIBoundary(unittest.TestCase):
  def test_authentication_refusal_stops_subsequent_network_reads(self):
@@ -281,16 +281,18 @@ class MorningEmailFaults(unittest.TestCase):
   self.assertNotIn('Battery battery',body);self.assertNotIn('homie Update',body);self.assertNotIn('Firmware',body)
  def test_log_warning_names_the_actual_first_error_in_one_line(self):
   data=snapshot();data['logs']=[dict(level='ERROR',name='homeassistant.components.ohme',message=['Could not connect to the charger.\nTraceback: implementation detail','Another error'])]
-  report=d.findings(data,AT,AT-dt.timedelta(days=1));body=d.render(report,{},{},AT)[1]
+  report=d.findings(data,AT,AT-dt.timedelta(days=1));body='\n'.join(d.item_bullet(x) for x in report['diagnostics'])
   self.assertIn('- **Home Assistant (Ohme)**: Could not connect to the charger, time and count unknown; unknown.',body.splitlines())
   self.assertNotIn('ask Hal',body);self.assertNotIn('Traceback',body);self.assertNotIn('Another error',body)
 
  def test_multiple_error_records_are_one_action_per_integration(self):
   data=snapshot();data['logs']=[dict(level='ERROR',name=name,message=[message]) for name,message in [('homeassistant.components.ohme.coordinator','First charger error.'),('homeassistant.components.ohme.client','Second charger error.'),('custom_components.ohme.client','Third charger error.')]]
+  data['entries'].append(dict(entry_id='ohme',domain='ohme',state='setup_retry',title='Ohme'));data['manifests']=[dict(domain='ohme',name='Ohme')]
   report=d.findings(data,AT,AT-dt.timedelta(days=1));subject,body=d.render(report,{},{},AT)
-  self.assertEqual(subject,'House: 2 things need you')
-  self.assertEqual([line for line in body.splitlines() if line.startswith('- **Home Assistant (Ohme)**:')],['- **Home Assistant (Ohme)**: First charger error, time and count unknown; unknown.'])
-  self.assertNotIn('Second charger error',body);self.assertNotIn('Third charger error',body)
+  self.assertEqual(subject,'House: 2 things need you');self.assertEqual(body.count('- **Ohme**:'),1)
+  self.assertIn('First charger error',body);self.assertNotIn('Second charger error',body);self.assertNotIn('Third charger error',body)
+  self.assertTrue(any('Second charger error' in line for line in report['diagnostics']))
+
  def test_blockers_name_timeouts_only_when_a_timeout_occurs(self):
   from unittest.mock import patch
   class Client:
@@ -338,7 +340,7 @@ class EmailComposition(unittest.TestCase):
   self.assertEqual(sum(x.startswith('- ') for x in body.splitlines()),2)
  def test_real_error_is_one_sentence_and_keeps_environment_terms(self):
   data=snapshot();data['logs']=[dict(level='ERROR',name='custom_components.ohme.client',message=['Cannot connect to api.ohme.io:443. Retry later. Extra diagnostic.'])]
-  body=d.render(d.findings(data,AT,AT-dt.timedelta(days=1)),{},{},AT)[1]
+  report=d.findings(data,AT,AT-dt.timedelta(days=1));body='\n'.join(d.item_bullet(x) for x in report['diagnostics'])
   self.assertIn('- **Ohme**: could not reach its cloud service, time and count unknown; unknown.',body)
   self.assertNotIn('Retry later',body);self.assertNotIn('Extra diagnostic',body);self.assertNotIn('Check its log',body)
 
@@ -411,20 +413,21 @@ class ErrorContext(unittest.TestCase):
   data=error_context_fixture();at=d.stamp(data['captured_at']);data.update(devices=[],traces=[],repairs=[],gaps=[]);data['states'].append(dict(state('sensor.offline_devices','0',devices=[],integrations={}),last_reported=at.isoformat()))
   report=d.findings(data,at,at-dt.timedelta(days=7));subject,body=d.render(report,{},{},at)
   self.assertEqual(subject,'House: nothing needs you')
+  self.assertNotIn('Ohme',body);body='\n'.join(d.item_bullet(x) for x in report['diagnostics'])
   self.assertIn('**Ohme**: could not reach its cloud service, once at 17 October 11:33; working now; unavailable:',body)
   self.assertIn('**OpenEPaperLink**: its WebSocket connection failed (HTTP 404), 3 times between 17 October 03:56 and 19 October 03:56; working now; unavailable:',body)
-  self.assertIn('## Resolved overnight\n- **Heatmiser Neo Climate**: could not reach the device at 192.168.17.82, 4 times between 18 October 01:56 and 18 October 01:57; working now.',body)
-  self.assertEqual(body.count('Heatmiser Neo Climate'),1);self.assertNotIn('ssl:default',body)
+  self.assertIn('- **Heatmiser Neo Climate**: could not reach the device at 192.168.17.82, 4 times between 18 October 01:56 and 18 October 01:57; working now.',body)
+  self.assertNotIn('Heatmiser Neo Climate',d.render(report,{},{},at)[1])
   # A current failure wins over readable entities; missing reads never claim recovery.
   data['logs']=[x for x in data['logs'] if '.heatmiserneo.' in x['name']][:1]
   data['entries'][0]['state']='setup_retry';subject,body=d.render(d.findings(data,at,at-dt.timedelta(days=7)),{},{},at)
   self.assertEqual(subject,'House: 1 thing needs you');self.assertIn('; still failing.',body);self.assertNotIn('## Resolved overnight',body)
   data['entries']=[];data['entities']=[];data['states']=[]
-  body=d.render(d.findings(data,at,at-dt.timedelta(days=7)),{},{},at)[1]
-  self.assertIn('; unknown.',body)
+  report=d.findings(data,at,at-dt.timedelta(days=7));body=d.render(report,{},{},at)[1]
+  self.assertNotIn('; unknown.',body);self.assertTrue(any('; unknown.' in line for line in report['diagnostics']))
  def test_core_logger_name_and_unreadable_timing_are_not_guessed(self):
   data=snapshot();data['states']=[];data['logs']=[dict(name='homeassistant.components.mqtt.client',level='ERROR',message=['Connection failed. Second sentence.'])];data['manifests']=[dict(domain='mqtt',name='MQTT')]
-  subject,body=d.render(d.findings(data,AT,AT-dt.timedelta(days=1)),{},{},AT)
+  report=d.findings(data,AT,AT-dt.timedelta(days=1));subject,body=d.render(report,{},{},AT);body='\n'.join(d.item_bullet(x) for x in report['diagnostics'])
   self.assertIn('**Home Assistant (MQTT)**: Connection failed, time and count unknown; unknown.',body);self.assertNotIn('Second sentence',body)
  def test_morning_reminders_use_email_receipt_time_not_assessment_time(self):
   data=error_context_fixture();pairs=data['assessments']['pairs'];report=dict(items=[],updates=data['updates'],gaps=[])
@@ -457,7 +460,7 @@ class ReviewErrorContext(unittest.TestCase):
   data['states'].append(dict(state('sensor.offline_devices','0',devices=[],integrations={}),last_reported=at.isoformat()))
   subject,body=d.render(d.findings(data,at,at-dt.timedelta(days=7)),{},{},at)
   self.assertEqual(subject,'House: nothing needs you');self.assertNotIn('## Needs you',body)
-  needs=body.split('## Resolved overnight\n')[1]
+  self.assertNotIn('Resolved overnight',body);needs='\n'.join(d.item_bullet(x) for x in d.findings(data,at,at-dt.timedelta(days=7))['diagnostics'])
   self.assertIn('**Ohme**: could not reach its cloud service, once at 17 October 11:33; working now; unavailable:',needs)
   self.assertIn('working now; unavailable:',needs)
   ohme=next(log for log in data['logs'] if '.ohme.' in log['name']);ids={e['entry_id'] for e in data['entries'] if e['domain']=='ohme'};eids={e['entity_id'] for e in data['entities'] if e.get('config_entry_id') in ids}
@@ -472,20 +475,20 @@ class ReviewErrorContext(unittest.TestCase):
   data['logs']=[dict(name=name,level='ERROR',message=['Connection failed.']) for name in names]
   for log in data['logs']:
    key,name,line,status=d.error_context(log,data,AT);self.assertEqual(name,'Home Assistant');self.assertEqual(key,'homeassistant')
-  report=d.findings(data,AT,AT-dt.timedelta(days=1));self.assertEqual(len(report['items']),1)
-  subject,body=d.render(report,{},{},AT);self.assertIn('1 thing needs you',subject);self.assertEqual(body.count('- **Home Assistant**:'),1);self.assertNotIn('Homeassistant.',body);self.assertNotIn('Aiohttp.',body)
+  report=d.findings(data,AT,AT-dt.timedelta(days=1));self.assertEqual(len(report['items']),0)
+  subject,body=d.render(report,{},{},AT);self.assertNotIn('## Needs you',body);body='\n'.join(d.item_bullet(x) for x in report['diagnostics']);self.assertEqual(body.count('- **Home Assistant**:'),1);self.assertNotIn('Homeassistant.',body);self.assertNotIn('Aiohttp.',body)
 
 
 def availability_fixture():
  return json.loads((Path(__file__).parent/'fixtures/availability-rules-20261019.json').read_text())
 
 class AvailabilityRules(unittest.TestCase):
- def test_live_partial_availability_names_entities_under_uncounted_resolved_and_six_use_count(self):
+ def test_live_partial_availability_names_entities_in_diagnostics_and_six_use_count(self):
   import copy
   live=availability_fixture();at=d.stamp(live['captured_at']);data=snapshot();data.update(entries=live['entries'],entities=live['entities'],states=live['states']+[dict(state('sensor.offline_devices','0',devices=[],integrations={}),last_reported=at.isoformat())],logs=error_context_fixture()['logs'],manifests=error_context_fixture()['manifests'])
   subject,body=d.render(d.findings(data,at,at-dt.timedelta(days=7)),{},{},at)
   self.assertEqual(subject,'House: nothing needs you');self.assertNotIn('## Needs you',body)
-  self.assertIn('## Resolved overnight',body)
+  self.assertNotIn('## Resolved overnight',body);body='\n'.join(d.item_bullet(x) for x in d.findings(data,at,at-dt.timedelta(days=7))['diagnostics'])
   for name in ['Ohme Home Pro Approve charge','Ohme Home Pro State of charge input','Ohme Home Pro Charge mode','F2CFC7CA3E326240 Temperature','F2CFC7CA3E326240 Battery Percentage','F2CFC7CA3E326240 Content','F2CFC7CA3E326240 Alias']:self.assertIn(name,body)
   self.assertIn('working now; unavailable:',body)
   # An arbitrary domain proves there is no integration allowlist.
@@ -493,7 +496,7 @@ class AvailabilityRules(unittest.TestCase):
   for i in range(3):
    eid='sensor.extra_'+str(i);sample['states'].append(state(eid,'unavailable',friendly_name='Extra '+str(i)));sample['entities'].append(dict(entity_id=eid,config_entry_id=entry['entry_id']))
   subject,body=d.render(d.findings(sample,at,at-dt.timedelta(days=7)),{},{},at)
-  self.assertEqual(subject,'House: nothing needs you');self.assertIn('working now; 6 of its 7 entities are unavailable.',body);self.assertNotIn('Extra 0',body)
+  self.assertEqual(subject,'House: nothing needs you');body='\n'.join(d.findings(sample,at,at-dt.timedelta(days=7))['diagnostics']);self.assertIn('working now; 6 of its 7 entities are unavailable.',body);self.assertNotIn('Extra 0',body)
  def test_today_monitor_uses_live_state_fields_and_keeps_real_timer_staleness_visible(self):
   import copy
   live=availability_fixture();at=d.stamp(live['captured_at']);values=dict(zip(['get_states','config/entity_registry/list','config/device_registry/list','config_entries/get','trace/list','system_log/list','repairs/list_issues','manifest/list','render_template'],[[live['serialized_monitor']],[],live['devices'],[],[],[],[],[],live['live_monitor']]))
@@ -533,13 +536,13 @@ class MonitorReadTransport(unittest.TestCase):
   finally:server.shutdown();server.server_close();thread.join()
 
 class FirstRealMorning(unittest.TestCase):
- def test_resolved_only_after_previous_cutoff_with_persisted_today_logs(self):
+ def test_recovered_records_are_diagnostic_and_old_current_failure_still_counts(self):
   live=json.loads((Path(__file__).parent/'fixtures/first-real-run-logs-20261020.json').read_text());at=dt.datetime(2026,10,20,8,tzinfo=dt.timezone.utc);cutoff=d.stamp('2026-10-19T08:00:43.048961+00:00')
   data=snapshot();data['states']=[dict(state('sensor.offline_devices','0',devices=[],integrations={}),last_reported=at.isoformat())];data['logs']=live['logs'];data['manifests']=live['manifests']
   for domain in ('ohme','heatmiserneo','open_epaper_link'):
    eid='sensor.'+domain;data['entries'].append(dict(entry_id=domain,domain=domain,state='loaded'));data['entities'].append(dict(entity_id=eid,config_entry_id=domain));data['states'].append(state(eid,'on'))
   report=d.findings(data,at,cutoff);body=d.render(report,{},{},at)[1]
-  self.assertIn('Heatmiser Neo Climate',body);self.assertIn('OpenEPaperLink',body);self.assertNotIn('Ohme',body)
+  self.assertNotIn('Heatmiser Neo Climate',body);self.assertNotIn('OpenEPaperLink',body);self.assertNotIn('Ohme',body);self.assertTrue(any('Heatmiser Neo Climate' in x for x in report['diagnostics']))
   # Still failing remains a finding even when its original error is old.
   data['states'][-3]['state']='unavailable';self.assertIn('Ohme',d.render(d.findings(data,at,cutoff),{},{},at)[1])
  def test_battery_for_offline_device_is_folded_by_id_counted_once(self):

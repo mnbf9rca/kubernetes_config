@@ -1,7 +1,9 @@
 name: hal-daily-check
 version: 1.0.0
 author: cynexia
-description: Two scoped tools for Hal daily batch planning and receipt-guarded publication.
+description: Hal daily planning, publication, operator reply rules and native HA write records.
 provides_tools:
   - kanban_hal_daily_plan
   - kanban_hal_daily_publish
+  - hal_reply_rules
+  - hal_reply_restart_at

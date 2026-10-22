@@ -184,19 +184,24 @@ class Publication(unittest.TestCase):
    c.publish(b,asm,{},Path(tmp),send,AT)
    # A new morning batch with the same pending pair is a distinct assembly.
    b.tasks[asm]['idempotency_key']='old';other=b.create('assemble',json.loads(b.tasks[asm]['body']),'hal','hal-daily:assemble:other')
-   c.publish(b,other,{},Path(tmp),send,AT+dt.timedelta(days=1));self.assertEqual(len(sent),1)
+   c.publish(b,other,{},Path(tmp),send,AT+dt.timedelta(days=1));self.assertEqual(len(sent),0)
 
 class Devices(unittest.TestCase):
- def test_episode_receipt_and_refused_send_park(self):
+ def test_episode_note_saved_without_send_or_schedule(self):
   with tempfile.TemporaryDirectory() as tmp:
    b=Board();tid=b.create('look',dict(schema='hal-daily.device.v1',situation=dict(key='s',members=[dict(device_id='x',condition='offline')],line='Lamp offline')),'hal','hal-daily:device:s')
-   c.publish(b,tid,'The hub is down. Check its power.',Path(tmp),lambda *a:{'success':False},AT)
-   self.assertEqual(b.tasks[tid]['status'],'scheduled')
+   result=c.publish(b,tid,{},Path(tmp),lambda *a:self.fail('look-over email'),AT,note='The hub is down. Check its power.')
+   self.assertTrue(result['silent']);self.assertNotEqual(b.tasks[tid]['status'],'scheduled')
 
 class PublishLock(unittest.TestCase):
  def test_second_publish_waits_for_first_send_then_both_have_receipts(self):
   with tempfile.TemporaryDirectory() as tmp:
-   b=Board();ids=[b.create('look',dict(schema='hal-daily.device.v1',situation=dict(key=name)), 'hal','hal-daily:device:'+name) for name in ('first','second')]
+   b=Board();ids=[];drafts=[]
+   for name in ('first','second'):
+    root,key=batch(b);data=json.loads(b.tasks[root]['body']);data['updates'][0]['key']=name;data['updates'][0]['package']=name;b.tasks[root]['body']=json.dumps(data)
+    asm=c.plan(b,root,choice(name))['assembly'];ids.append(asm);drafts.append({name:'Update now.'})
+    for tid in json.loads(b.tasks[asm]['body'])['readers'][name]:b.tasks[tid].update(status='done',result=json.dumps(envelope()))
+    b.tasks[root]['status']='archived'
    entered=threading.Event();release=threading.Event();attempted=threading.Event();finished=threading.Event();results={};sent=[]
    flock=d.fcntl.flock
    def observed_flock(*args):
@@ -209,7 +214,7 @@ class PublishLock(unittest.TestCase):
      if not release.wait(5):raise AssertionError('first send was not released')
     return dict(success=True,message_id='<'+threading.current_thread().name+'@test>')
    def run(index):
-    try:results[index]=c.publish(b,ids[index],'Device: Check its power.',Path(tmp),send,AT)
+    try:results[index]=c.publish(b,ids[index],drafts[index],Path(tmp),send,AT)
     finally:
      if index==1:finished.set()
    threads=[threading.Thread(target=run,args=(i,),name=name) for i,name in enumerate(('first','second'))]
@@ -224,7 +229,7 @@ class PublishLock(unittest.TestCase):
       if thread.ident is not None:thread.join(5)
    self.assertFalse(any(t.is_alive() for t in threads));self.assertEqual(len(sent),2)
    self.assertTrue(all(results[i]['success'] for i in range(2)));self.assertEqual(b.calls,[])
-   saved=json.loads((Path(tmp)/'daily-check-device-notes.json').read_text())
+   saved=json.loads((Path(tmp)/'daily-check-assessments.json').read_text())
    self.assertTrue(all(saved['batches'][tid]['receipt'] for tid in ids))
 
 class NativeCommand(unittest.TestCase):
@@ -289,17 +294,17 @@ class CachedEvidenceBoundary(unittest.TestCase):
    reader['status']='done';reader['result']=json.dumps(dict(status='UNASSESSED',answer={},sources=[],quotes=[],reason='not fetched'))
    d.atomic_json(Path(tmp)/'daily-check-assessments.json',{'pairs':{key:dict(assessment='CACHED UNSENT ADVICE',assessed_at=AT.isoformat(),sent_receipt=None)}})
    sent=[];out=c.publish(b,asm,{},Path(tmp),lambda *a:(sent.append(a) or {'success':True}),AT)
-   self.assertIn(key,out['refused']);self.assertNotIn('CACHED UNSENT ADVICE',sent[0][1])
+   self.assertIn(key,out['refused']);self.assertEqual(sent,[]);self.assertTrue(out['silent'])
 
 
 class DeviceNag(unittest.TestCase):
- def test_saved_unsent_note_still_gets_three_day_reminder(self):
+ def test_saved_note_needs_no_reminder_but_missing_note_does(self):
   b=Board();adapter=c.Tickets(b)
   def report():return dict(updates=[],inventory=[],gaps=[],situations=[dict(key='s',members=[],line='Lamp offline')],device_complete=True)
   first=report();adapter.ensure(first,{}, {},'2026-10-18',AT);root=first['situation_roots']['s']
   notes={'pairs':{root:dict(note='Saved advice',observed_at=AT.isoformat())}}
   later=report();adapter.ensure(later,{},notes,'2026-10-21',AT+dt.timedelta(days=3))
-  self.assertTrue(any('look at the board' in line for line in later['items']))
+  self.assertFalse(later.get('items'));missing=report();adapter.ensure(missing,{}, {},'2026-10-21',AT+dt.timedelta(days=3));self.assertTrue(any('look at the board' in line for line in missing['items']))
   notes['pairs'][root]['sent_receipt']={'accepted_at':AT.isoformat()}
   sent=report();adapter.ensure(sent,{},notes,'2026-10-22',AT+dt.timedelta(days=4))
   self.assertEqual(sent['gaps'],[])
@@ -318,17 +323,17 @@ class FullBoardBoundary(unittest.TestCase):
    self.assertEqual(json.loads(b.tasks[second['assembly']]['body'])['readers'][key],[reader['id']])
    self.assertEqual(len([t for t in b.tasks.values() if t['assignee']=='safer_web_reader']),1)
    self.assertIn('Useful complete advice.',sent[0][1])
- def test_incomplete_device_check_never_clears_episode_and_recurrence_emails(self):
+ def test_incomplete_device_check_never_clears_episode_and_recurrence_gets_new_note(self):
   with tempfile.TemporaryDirectory() as tmp:
    b=Board();tickets=c.Tickets(b);sent=[];send=lambda *a:(sent.append(a) or {'success':True})
    def report(rows,complete=True):return dict(updates=[],inventory=[],gaps=[],situations=rows,device_complete=complete)
    situation=dict(key='s',members=[dict(device_id='a',condition='offline')],line='Lamp offline')
    first=report([situation]);tickets.ensure(first,{}, {},'2026-10-18',AT);root=first['situation_roots']['s']
-   c.publish(b,root,'Check its power.',Path(tmp),send,AT);c.publish(b,root,'No second email.',Path(tmp),send,AT)
+   c.publish(b,root,{},Path(tmp),send,AT,note='Check its power.');c.publish(b,root,{},Path(tmp),send,AT,note='No second note.')
    tickets.ensure(report([],False),{}, {},'2026-10-19',AT);self.assertNotEqual(b.tasks[root]['status'],'archived')
    tickets.ensure(report([]),{}, {},'2026-10-20',AT);self.assertEqual(b.tasks[root]['status'],'archived')
    again=report([situation]);tickets.ensure(again,{}, {},'2026-10-21',AT);new=again['situation_roots']['s'];self.assertNotEqual(root,new)
-   c.publish(b,new,'A new episode.',Path(tmp),send,AT);self.assertEqual(len(sent),2)
+   c.publish(b,new,{},Path(tmp),send,AT,note='A new episode.');self.assertEqual(len(sent),0);self.assertEqual(json.loads((Path(tmp)/'daily-check-device-notes.json').read_text())['pairs'][new]['note'],'A new episode.')
 
 
 class RunnerBoardPin(unittest.TestCase):
@@ -361,11 +366,11 @@ class AssessmentComposition(unittest.TestCase):
    subject,body=sent[0];self.assertIn('1',subject);self.assertIn('## Needs you',body);self.assertIn('## Updates',body)
    self.assertEqual(body.count('Spook'),1);self.assertIn('The release post could not be read.',body);self.assertNotIn('Could not assess',body)
    self.assertNotIn('## Could not finish',body);self.assertLess(body.index('Check the Repairs'),body.index('Spook'))
- def test_device_note_has_one_bold_bullet_per_item_and_a_counted_subject(self):
+ def test_device_note_is_saved_for_morning_without_its_own_email(self):
   with tempfile.TemporaryDirectory() as tmp:
    b=Board();tid=b.create('look',dict(schema='hal-daily.device.v1',situation=dict(key='s',members=[],line='Lamp offline')),'hal','hal-daily:device:s')
    sent=[];c.publish(b,tid,{},Path(tmp),lambda *a:(sent.append(a) or {'success':True}),AT,note='Zigbee: Check the hub power.\nLamp: Check its battery.')
-   self.assertEqual(sent[0],('House: 2 things need you','## Needs you\n- **Zigbee**: Check the hub power.\n- **Lamp**: Check its battery.'))
+   self.assertEqual(sent,[]);self.assertIn('Lamp: Check its battery.',json.loads((Path(tmp)/'daily-check-device-notes.json').read_text())['pairs'][tid]['note'])
 
 
 class ReviewB1(unittest.TestCase):
@@ -378,9 +383,12 @@ class ReviewB1(unittest.TestCase):
    b=Board();root,key=batch(b);data=json.loads(b.tasks[root]['body'])
    data['updates']=[dict(data['updates'][0],key='spook',name='Spook 👻 Your homie',installed='v5.11.0',available='v5.11.1'),dict(data['updates'][0],key='core',name='Home Assistant Core',installed='2026.10.1',available='2026.10.2')]
    b.tasks[root]['body']=json.dumps(data)
-   asm=c.plan(b,root,{'spook':{'missing':['release unavailable']},'core':{'missing':['release unavailable']}})['assembly']
+   data['updates'].append(dict(data['updates'][0],key=key,name='Assessed package',installed='3',available='4'));b.tasks[root]['body']=json.dumps(data)
+   asm=c.plan(b,root,dict(choice(key),spook={'missing':['release unavailable']},core={'missing':['release unavailable']}))['assembly']
+   for task in b.tasks.values():
+    if task['assignee']=='safer_web_reader':task.update(status='done',result=json.dumps(envelope()))
    sent=[];note='Spook v5.11.0 → v5.11.1: not assessed. The Spook post was unavailable.\n2026.10.2: not assessed. The Core post was unavailable.'
-   c.publish(b,asm,{},Path(tmp),lambda *a:(sent.append(a) or {'success':True}),AT,note=note)
+   c.publish(b,asm,{key:'Update now.'},Path(tmp),lambda *a:(sent.append(a) or {'success':True}),AT,note=note)
    body=sent[0][1]
    self.assertEqual(body.count('v5.11.0'),1);self.assertEqual(body.count('2026.10.1'),1)
    self.assertEqual(body.count('v5.11.1'),1);self.assertEqual(body.count('2026.10.2'),1)

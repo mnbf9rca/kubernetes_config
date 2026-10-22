@@ -288,8 +288,10 @@ def already_assessed(updates,pairs):
     return lines
 
 
-def findings(snapshot,at,cutoff):
+def findings(snapshot,at,cutoff,rules=(),error_history=None):
     items=[];gaps=list(snapshot.get('gaps',[]));diagnostics=list(snapshot.get('diagnostics',[]));updates=[];development=[]
+    ignored={kind:{r['target'] for r in rules if r['kind']==kind} for kind in ('device','error','update')}
+    error_history=error_history or {};error_observations=[]
     states={s['entity_id']:s for s in snapshot.get('states',[])}
     er={e['entity_id']:e for e in snapshot.get('entities',[])}
     dr={x['id']:x for x in snapshot.get('devices',[])}
@@ -300,7 +302,7 @@ def findings(snapshot,at,cutoff):
         a=s.get('attributes',{});registry=er.get(eid,{})
         if registry.get('disabled_by'):
             continue
-        if a.get('device_class')=='battery' and eid.startswith(('sensor.','binary_sensor.')):
+        if a.get('device_class')=='battery' and eid.startswith(('sensor.','binary_sensor.')) and (registry.get('device_id') or eid) not in ignored['device']:
             value=None
             if eid.startswith('binary_sensor.'):
                 value=0 if s['state']=='on' else None
@@ -315,7 +317,7 @@ def findings(snapshot,at,cutoff):
                 items.append(f'The {name} battery is {"flat" if value==0 else "low"}; replace or recharge it.')
                 battery_findings[owner]=dict(line=items[-1],reading=f'{value:g}%' if eid.startswith('sensor.') else None)
                 battery_devices.add(owner)
-        if eid.startswith('update.'):
+        if eid.startswith('update.') and eid not in ignored['update']:
             if s['state'] in ('unknown','unavailable'):
                 continue
             name=re.sub(r'(?:\s+(?:update|firmware))+$','',label(a.get('title'),names[eid]),flags=re.I)
@@ -350,6 +352,8 @@ def findings(snapshot,at,cutoff):
                 dev=er.get(source,{}).get('device_id') or (source if source in dr else None)
                 if not dev:
                     raise ValueError('device identity')
+                if dev in ignored['device']:
+                    continue
                 if row.get('condition','offline') not in ('offline','stale'):
                     raise ValueError('unknown unhealthy condition')
                 unhealthy.append(dict(device_id=dev,entity_ids=[eid] if eid else [],condition=row.get('condition','offline'),name=label(row.get('name'),names.get(source,'device')),since=row.get('since'),integration=row.get('integration')))
@@ -407,7 +411,7 @@ def findings(snapshot,at,cutoff):
                 diagnostics.append(f'{name} run timing was unreadable');continue
             if cutoff<end<=at and failed_trace(row,row.get('full')):
                 items.append(f'The {name} automation failed; check its trace in Home Assistant.')
-    reported_errors=set();resolved=[]
+    reported_errors=set()
     for log in snapshot.get('logs',[]):
         if str(log.get('level','')).upper() not in ('ERROR','CRITICAL'):
             continue
@@ -415,21 +419,25 @@ def findings(snapshot,at,cutoff):
         if logger.startswith('homeassistant.components.automation'):
             continue
         domain,name,line,status=error_context(log,snapshot,at)
-        if domain in reported_errors:
+        if not line:
+            diagnostics.append(f'{name}: a recent error had no readable message');continue
+        diagnostics.append(line)
+        if domain in ignored['error'] or status=='unknown':
             continue
-        if line:
-            if status=='working now':
-                try:
-                    if dt.datetime.fromtimestamp(log['timestamp'],dt.timezone.utc)<=cutoff:
-                        continue
-                except (KeyError,TypeError,ValueError,OverflowError,OSError):
-                    diagnostics.append(f'{name}: resolved error timing was unreadable');continue
-            (resolved if status=='working now' else items).append(line)
-            reported_errors.add(domain)
-        else:
-            diagnostics.append(f'{name}: a recent error had no readable message')
+        message=log.get('message')
+        fingerprint=digest([domain,message])
+        try:
+            recent=cutoff<dt.datetime.fromtimestamp(log['timestamp'],dt.timezone.utc)<=at
+        except (KeyError,TypeError,ValueError,OverflowError,OSError):
+            recent=False
+        if recent:
+            error_observations.append(fingerprint)
+        day=at.astimezone(LONDON).date()
+        repeated=recent and all(fingerprint in error_history.get((day-dt.timedelta(days=n)).isoformat(),[]) for n in (1,2))
+        if (status=='still failing' or repeated) and domain not in reported_errors:
+            items.append(line);reported_errors.add(domain)
     for entry in entries.values():
-        if entry.get('state') in ('setup_error','setup_retry','migration_error') and entry.get('domain') not in reported_errors:
+        if entry.get('state') in ('setup_error','setup_retry','migration_error') and entry.get('domain') not in reported_errors|ignored['error']:
             items.append(f'The {label(entry.get("title"),entry.get("domain"))} integration could not start; check its connection and setup.')
     for issue in snapshot.get('repairs',[]):
         if issue.get('ignored') or issue.get('severity') not in ('warning','error','critical'):
@@ -444,7 +452,7 @@ def findings(snapshot,at,cutoff):
         else:
             items.append(f'{domain} reports a configuration issue; review its repair notice.')
     inventory=sorted({e.get('domain') for e in entries.values() if not e.get('disabled_by') and e.get('domain')}|{e['platform'] for e in er.values() if not e.get('disabled_by') and e.get('platform')})
-    return dict(development=development,items=sorted(set(items)),resolved=sorted(set(resolved)),updates=sorted(updates,key=lambda x:(x['package'],str(x['available']))),situations=situations,gaps=sorted(set(gaps)),diagnostics=sorted(set(diagnostics)),device_complete=device_complete,inventory=inventory,cutoff=at.isoformat())
+    return dict(development=development,items=sorted(set(items)),error_observations=sorted(set(error_observations)),ignored_devices=sorted(ignored['device']),updates=sorted(updates,key=lambda x:(x['package'],str(x['available']))),situations=situations,gaps=sorted(set(gaps)),diagnostics=sorted(set(diagnostics)),device_complete=device_complete,inventory=inventory,cutoff=at.isoformat())
 
 
 def item_bullet(text):
@@ -462,9 +470,9 @@ def item_bullet(text):
     return '- **'+text[:end]+'**'+text[end:]
 
 
-def email_sections(needs=(),updates=(),gaps=(),resolved=(),already=()):
+def email_sections(needs=(),updates=(),gaps=(),already=(),done=()):
     sections=[f'## {heading}\n'+'\n'.join(items) for heading,items in
-              [('Needs you',needs),('Resolved overnight',resolved),('Updates',updates),('Could not finish',gaps),('Already assessed',already)] if items]
+              [('Needs you',needs),('Done for you',done),('Updates',updates),('Could not finish',gaps),('Already assessed',already)] if items]
     return '\n\n'.join(sections) or 'Nothing needs your attention today.'
 
 
@@ -480,23 +488,24 @@ def render(report,assessments,notes,at):
     for situation in report.get('situations',[]):
         root=report.get('situation_roots',{}).get(situation['key'])
         saved=notes.get('pairs',{}).get(root,{})
-        if saved.get('sent_receipt') and saved.get('observed_at') and situation['line'] in lines:
+        if saved.get('note') and saved.get('observed_at') and situation['line'] in lines:
             when=stamp(saved['observed_at']).astimezone(LONDON).strftime('%-d %B')
-            index=lines.index(situation['line']);lines[index]+=f' Hal looked at this on {when}.'
+            lines.remove(situation['line'])
+            lines.extend(line.strip()+f' Hal looked at this on {when}.' for line in saved['note'].splitlines() if line.strip())
     needs=[item_bullet(line) for line in lines];updates=[]
     for update in report.get('updates',[]):
         saved=pairs.get(update['key'],{});target=label(update.get('available'),'unknown version')
         title=f'{update["name"]} {label(update.get("installed"),"unknown version")} → {target}'
         link='\n  '+update['release_url'] if update.get('release_url') else ''
         if saved.get('outcome')=='no_public_notes':
-            needs.append(f'- **{title}**: no release notes to assess; review the release link.{link}')
+            needs.append(f'- **{title}**: no release notes to assess; this is permanent for this version. Review the update before installing.{link}')
         elif saved.get('assessment') and saved.get('sent_receipt'):
             when=assessment_email_time(saved)
             needs.append(f'- **{title}**: still waiting to be installed; assessed in the email of {when}. Review that assessment before installing.{link}')
         else:
             updates.append(f'- **{title}**: assessment pending.{link}')
     updates.extend(item_bullet(line) for line in report.get('notices',[]))
-    return email_subject(len(needs),bool(gaps)),email_sections(needs,updates,[item_bullet(label(x)) for x in sorted(set(gaps))],resolved=[item_bullet(line) for line in report.get('resolved',[])])
+    return email_subject(len(needs),bool(gaps)),email_sections(needs,updates,[item_bullet(label(x)) for x in sorted(set(gaps))],done=[item_bullet(line) for line in report.get('done',[])])
 
 
 class HA:
@@ -592,7 +601,10 @@ class Daily:
     def run(self,trial=False):
         at=self.clock();saved=read_json(self.home/'daily-check-state.json',{}) if trial else {}
         cutoff=stamp(saved['accepted_cutoff']) if saved.get('accepted_cutoff') else at-dt.timedelta(days=1)
-        r=findings(self.collect(),at,cutoff)
+        import hal_reply_actions as replies
+        snapshot=self.collect()
+        r=findings(snapshot,at,cutoff,rules=replies.active_rules(self.home,at),error_history=saved.get('error_history',{}))
+        replies.add_action_lines(r,self.home,cutoff,snapshot,at)
         if trial:
             r['notices']=[x['line'] for x in r.get('development',[]) if saved.get('development_notices',{}).get(x['package'])!=x['signature']]
         subject,body=render(r,read_json(self.home/'daily-check-assessments.json',{}),read_json(self.home/'daily-check-device-notes.json',{}),at)
@@ -620,7 +632,10 @@ class Daily:
         if saved.get('day')!=day or not saved.get('subject'):
             cutoff=stamp(saved['accepted_cutoff']) if saved.get('accepted_cutoff') else at-dt.timedelta(days=1)
             try:
-                report=findings(self.collect(),at,cutoff)
+                import hal_reply_actions as replies
+                snapshot=self.collect()
+                report=findings(snapshot,at,cutoff,rules=replies.active_rules(self.home,at,expire=True),error_history=saved.get('error_history',{}))
+                replies.add_action_lines(report,self.home,cutoff,snapshot,at)
             except Exception:
                 report=dict(items=[],updates=[],situations=[],gaps=[f'I could not check {area} because the Home Assistant data could not be read.' for area in AREAS],device_complete=False,inventory=[],cutoff=at.isoformat())
             notice_updates={}
@@ -642,7 +657,8 @@ class Daily:
                         blocker+=' The three-minute wait for the task board timed out.'
                     report['gaps'].append(blocker)
             subject,body=render(report,assessments,notes,at)
-            saved=sanitize(dict(day=day,subject=subject,body=body,cutoff=report['cutoff'],accepted_cutoff=saved.get('accepted_cutoff'),receipt=None,notice_updates=notice_updates,development_notices=saved.get('development_notices',{})),self.secrets)
+            history=dict(saved.get('error_history',{}));history[day]=report.get('error_observations',[])
+            saved=sanitize(dict(day=day,subject=subject,body=body,cutoff=report['cutoff'],accepted_cutoff=saved.get('accepted_cutoff'),receipt=None,notice_updates=notice_updates,development_notices=saved.get('development_notices',{}),error_history=history),self.secrets)
             try:
                 atomic_json(path,saved,self.secrets)
             except Exception:
