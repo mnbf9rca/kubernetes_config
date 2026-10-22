@@ -504,7 +504,7 @@ So the delete and the manual run must happen in the **same UTC clock hour**: ear
 The sequence, done on 2026-10-21 for `content_type`:
 
 1. Suspend: `kubectl -n health patch cronjob cloudflare-analytics -p '{"spec":{"suspend":true}}'`, then `make apply-homelab` from the branch, then the same patch again at once, because the manifest declares `suspend: false` and the apply reset it (that declaration is what lets step 4 end the suspension with an apply instead of a patch).
-2. Measure the floor: run the settings query, confirm with a one-hour edge query at the resulting hour and one just before it (the first must return rows and the second must be refused), and take the first refetchable hour plus two.
+2. Measure the floor: run the settings query, confirm with a one-hour edge query at the resulting hour and one just before it (the first must return rows and the second must be refused), and take the refused hour plus two, which is the first accepted hour plus one and what the `START` expression below computes.
 3. Delete, as the operator, inside the pod (`$DOCKER_INFLUXDB_INIT_ADMIN_TOKEN` expands inside the pod's single-quoted shell; the `--start` is computed on the Mac in the same clock hour as the run that follows):
 
    ```bash
