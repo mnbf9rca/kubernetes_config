@@ -84,11 +84,13 @@ OVERLAP_HOURS = 2
 # Cloudflare's retention is READ FROM THE GRAPHQL SETTINGS NODE on every run
 # (`notOlderThan`, in seconds), never assumed: it was 8 days when this job was
 # written and 31 days when measured on 2026-10-21. The floor is that instant
-# rounded DOWN to the hour plus this margin, so the first hour fetched is
-# between one and two hours inside the window and a run that takes most of an
-# hour never straddles it. A straddling query is refused loudly (`code:
-# quota`), not truncated, but a refused chunk fails its stream for the run.
-RETENTION_MARGIN_HOURS = 1
+# rounded DOWN to the hour plus this margin, so the first hour fetched starts
+# between one and two hours inside the window (the rounding gives back up to
+# 59 minutes of the margin) and a run that takes most of an hour never
+# straddles it, whatever minute it starts at. A straddling query is refused
+# loudly (`code: quota`), not truncated, but a refused chunk fails its stream
+# for the run, and a stream with no watermark then skips that hour silently.
+RETENTION_MARGIN_HOURS = 2
 
 # Both datasets cap a single response at this many rows. A chunk that returns
 # exactly this many is assumed truncated and is subdivided.
@@ -326,8 +328,9 @@ def rewind(watermark):
 
 def retention_floor(now, not_older_than_seconds):
     """The first hour a run may fetch: Cloudflare's floor, rounded down to the
-    hour, plus RETENTION_MARGIN_HOURS. Constant across a clock hour, so a
-    delete-and-refetch can name it in advance."""
+    hour, plus RETENTION_MARGIN_HOURS, which puts it between one and two hours
+    inside the window. Constant across a clock hour, so a delete-and-refetch
+    can name it in advance."""
     return (floor_hour(now - timedelta(seconds=not_older_than_seconds))
             + timedelta(hours=RETENTION_MARGIN_HOURS))
 
@@ -663,6 +666,7 @@ BEACON_EXCLUDED_ZONES = ("family-foqos.app",)
 
 
 def beacon_excluded(host):
+    host = host.lower()
     return any(host == z or host.endswith("." + z) for z in BEACON_EXCLUDED_ZONES)
 
 

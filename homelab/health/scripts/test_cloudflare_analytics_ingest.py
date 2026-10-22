@@ -267,12 +267,23 @@ class Rewind(unittest.TestCase):
 class RetentionFloor(unittest.TestCase):
     def test_rounds_down_then_adds_the_margin(self):
         # 31 days before 18:18:48 is 18:18:48 on the 20th; floored to 18:00,
-        # plus the margin, so the first fetched hour is inside the window
-        # however long the run takes within its clock hour.
+        # plus two hours.
         now = datetime(2026, 10, 21, 18, 18, 48, tzinfo=UTC)
-        self.assertEqual(
-            cf.retention_floor(now, 31 * 86400),
-            datetime(2026, 9, 20, 18 + cf.RETENTION_MARGIN_HOURS, 0, tzinfo=UTC))
+        self.assertEqual(cf.retention_floor(now, 31 * 86400),
+                         datetime(2026, 9, 20, 20, 0, tzinfo=UTC))
+
+    def test_floor_is_between_one_and_two_hours_inside_the_window(self):
+        # THE REAL GUARANTEE. The rounding gives back up to 59 minutes of the
+        # margin, so the floor must still sit more than an hour inside
+        # Cloudflare's boundary at every minute of the clock hour: a run that
+        # takes most of an hour (activeDeadlineSeconds is 20 minutes) then
+        # never straddles it, whatever minute the Job was created at.
+        for minute, second in ((0, 0), (0, 1), (18, 48), (37, 0), (59, 59)):
+            now = datetime(2026, 10, 21, 18, minute, second, tzinfo=UTC)
+            margin = cf.retention_floor(now, 31 * 86400) - (
+                now - timedelta(days=31))
+            self.assertGreater(margin, timedelta(hours=1), (minute, second))
+            self.assertLessEqual(margin, timedelta(hours=2), (minute, second))
 
     def test_constant_across_a_clock_hour(self):
         a = datetime(2026, 10, 21, 18, 0, 0, tzinfo=UTC)
@@ -476,6 +487,7 @@ class AggregateBeacon(unittest.TestCase):
         cf.aggregate_beacon(
             [beacon_row(host="family-foqos.app"),
              beacon_row(host="www.family-foqos.app"),
+             beacon_row(host="WWW.Family-Foqos.App"),
              beacon_row(host="blog.example"),
              beacon_row(host="notfamily-foqos.app")],
             set(), acc)
@@ -831,9 +843,11 @@ class Tunables(unittest.TestCase):
         self.assertLess(cf.BUDGET_RESERVE, cf.MAX_GRAPHQL_CALLS)
         self.assertGreaterEqual(cf.BUDGET_RESERVE, 2)
 
-    def test_retention_margin_is_at_least_an_hour(self):
-        # A run at :59 must still be inside the window at :00 plus the run.
-        self.assertGreaterEqual(cf.RETENTION_MARGIN_HOURS, 1)
+    def test_retention_margin_covers_the_rounding_and_a_run(self):
+        # The floor rounds down by up to 59 minutes and a run may take 20; one
+        # hour of margin would leave as little as a minute. The guarantee
+        # itself is asserted in RetentionFloor.
+        self.assertGreaterEqual(cf.RETENTION_MARGIN_HOURS, 2)
 
 
 class Pusher(unittest.TestCase):

@@ -408,8 +408,8 @@ A stream with no points at all is new and is seeded from Cloudflare's retention 
 A stream that has points resumes from its own newest point and nothing else.
 
 **The retention floor is read, not assumed.**
-Each run makes one GraphQL settings query (`viewer.zones.settings.httpRequestsAdaptiveGroups.notOlderThan` for the first zone, applied to all because every zone is on the same plan, and `viewer.accounts.settings.rumPageloadEventsAdaptiveGroups.notOlderThan` for the beacon), subtracts it from the run's start, rounds **down** to the hour and adds a one-hour margin.
-The floor is therefore constant across a clock hour, between one and two hours inside Cloudflare's window, and a run that takes most of an hour never straddles it; a query that does straddle it is refused loudly (`code: quota`, "cannot request data older than"), not truncated, which fails that stream for the run.
+Each run makes one GraphQL settings query (`viewer.zones.settings.httpRequestsAdaptiveGroups.notOlderThan` for the first zone, applied to all because every zone is on the same plan, and `viewer.accounts.settings.rumPageloadEventsAdaptiveGroups.notOlderThan` for the beacon), subtracts it from the run's start, rounds **down** to the hour and adds a two-hour margin.
+The floor is therefore constant across a clock hour and starts between one and two hours inside Cloudflare's window (the rounding gives back up to 59 minutes of the margin), so a run that takes most of an hour never straddles it whatever minute it starts at; a query that does straddle it is refused loudly (`code: quota`, "cannot request data older than"), not truncated, which fails that stream for the run, and a stream with no watermark then skips that hour silently next run.
 Measured on 2026-10-21 at 18:18:48 UTC: `notOlderThan` 2,678,400 s (31 days) for the edge and 15,897,600 s (184 days) for the beacon; the hour 2026-09-20T19:00Z returned 64 rows for `cynexia.com` and 18:00Z was refused.
 The zone-less `ingest_status` marker written before 2026-10-20 was used as a floor on the first enumerated run, to stop the two already-covered zones re-fetching their history, and it lifted the 19 new zones past the hours their first run had not reached: 14:46 to 19:00 UTC on 2026-10-20 were never fetched for them, and hour 14 is partial.
 The floor is gone; those hours are recoverable only by deleting the new zones' points from 14:46:14 UTC onward so the next run rewinds to 12:00 and refetches them, which is the operator's call.
@@ -498,17 +498,17 @@ Cloudflare's user limit is 300 queries per 5 minutes and burning it would break 
 A new tag cannot be added in place without a double-counted window (see the resume rule above), so the way to add one is to delete every point the job can refetch and let it refetch them, with the CronJob suspended between the apply and the delete so no run writes the new tag set beside the old one.
 Rows older than the floor keep the old tag set for good: nothing can refetch them.
 
-The delete's `--start` must equal the floor the refetching run will compute, which is the hour Cloudflare's `notOlderThan` lands in plus the one-hour margin, and that floor is constant across a clock hour.
+The delete's `--start` must equal the floor the refetching run will compute, which is the hour Cloudflare's `notOlderThan` lands in plus the two-hour margin, and that floor is constant across a clock hour.
 So the delete and the manual run must happen in the **same UTC clock hour**: earlier and the surviving old-tag hour just below the floor is refetched beside itself (one double-counted hour), later and the hour at the old floor is deleted and never refetched (one lost hour, reported as `verdict=gap` once).
 `influx delete` accepts only `=` and `AND` in a predicate, so the three measurements take three commands.
 The sequence, done on 2026-10-21 for `content_type`:
 
 1. Suspend: `kubectl -n health patch cronjob cloudflare-analytics -p '{"spec":{"suspend":true}}'`, then `make apply-homelab` from the branch, then the same patch again at once, because the manifest declares `suspend: false` and the apply reset it (that declaration is what lets step 4 end the suspension with an apply instead of a patch).
-2. Measure the floor: run the settings query, confirm with a one-hour edge query at the resulting hour and one just before it (the first must return rows and the second must be refused), and take the first refetchable hour plus one.
+2. Measure the floor: run the settings query, confirm with a one-hour edge query at the resulting hour and one just before it (the first must return rows and the second must be refused), and take the first refetchable hour plus two.
 3. Delete, as the operator, inside the pod (`$DOCKER_INFLUXDB_INIT_ADMIN_TOKEN` expands inside the pod's single-quoted shell; the `--start` is computed on the Mac in the same clock hour as the run that follows):
 
    ```bash
-   START="$(date -u -v-31d -v+1H '+%Y-%m-%dT%H:00:00Z')"
+   START="$(date -u -v-31d -v+2H '+%Y-%m-%dT%H:00:00Z')"
    for m in http_requests ingest_status ingest_gap; do
      kubectl -n health exec deploy/influxdb -- sh -c '
        influx delete -o cynexia --bucket cloudflare \
@@ -519,13 +519,30 @@ The sequence, done on 2026-10-21 for `content_type`:
    ```
 
    The `ingest_gap` delete is harmless and keeps the bucket honest: a gap marker inside the refetched window would describe a hole the refetch fills.
-4. One manual run (`kubectl -n health create job --from=cronjob/cloudflare-analytics cf-analytics-<reason>`), then unsuspend with `make apply-homelab` from the branch and confirm `make diff-homelab` is empty.
+4. Run one manual job: `kubectl -n health create job --from=cronjob/cloudflare-analytics cf-analytics-<reason>`.
+   Expect `verdict=gap` from its first pod for every zone that has no `count` point in the hour below the floor; let the `backoffLimit: 1` retry run and report `verdict=ok`.
+5. Delete each false `ingest_gap` marker the first pod wrote: every marker whose `_time` is between the floor minus 23 hours and the floor.
+   Read them first, then delete one zone at a time:
+
+   ```bash
+   kubectl -n health exec deploy/influxdb -- sh -c '
+     influx delete -o cynexia --bucket cloudflare \
+       --start "$1" --stop "$2" \
+       --predicate "_measurement=\"ingest_gap\" AND zone=\"$3\"" \
+       -t "$DOCKER_INFLUXDB_INIT_ADMIN_TOKEN"' sh "<floor minus 23h>" "<floor>" "<zone>"
+   ```
+
+6. Unsuspend with `make apply-homelab` from the branch and confirm `make diff-homelab` is empty.
    The refetch converges over several hourly runs under the call budget; each one reports `catching_up=` until it is done.
 
-Two artefacts of the 2026-10-22 run are worth knowing.
-A zone whose only points before the floor are sparse can raise a false gap on the refetch run: `making-tracks.app` had no traffic in the two hours before the floor, so its newest surviving point sat at 2026-09-21T15:00Z and the first run wrote an `ingest_gap` marker for 16:00–18:00Z, hours that never had requests; the pre-2026-10-20 zone-less marker that covered them is not a watermark any more.
-The Job's `backoffLimit: 1` retry then ran with every zone's watermark advanced and reported `verdict=ok`, which is the intended shape, but the marker is a record of a hole that does not exist and the operator deletes it (`_measurement="ingest_gap" AND zone="making-tracks.app"` at 2026-09-21T16:00:00Z).
-And the first run of a long catch-up stops at the call budget: that run committed 8 chunks per zone, 172 chunks and 173 of 180 calls, and the beacon reached only six chunks.
+The false gap in step 4 is a standing artefact of this runbook, not of normal operation, and it will recur on every re-ingest.
+In normal operation every hourly run writes a zone-tagged `ingest_status` marker at `now - 1s` for every zone, traffic or not, so a zone's watermark is at most about an hour old and `resume()` can only report a gap after a 31-day outage, which is a real gap.
+The delete removes every `count` point from the floor `F` onward, markers included, so a zone's watermark becomes its newest surviving point below `F`.
+A zone then fires when it has no `count` point in `[F - 1h, F)`, which needs two things at once: the hour below `F` was ingested as part of a 23-hour catch-up chunk (a seed or a post-outage run), so its markers sit 23 hours apart instead of hourly, and the zone had no requests in that hour.
+Zones with no surviving point at all seed from `F` with no gap, and zones busy every hour have an `http_requests` point at `F - 1h`, which is why only `making-tracks.app` fired on 2026-10-22 (its newest point below the floor was `http_requests` at 15:00Z, two silent hours before the floor).
+The whole 31-day window was re-ingested in 23-hour chunks on 2026-10-22, so a re-ingest before roughly 2026-11-23 fires it again for every sparse-but-not-silent zone.
+No tolerance for short gaps is added, because it would mask the real one-to-two-hour gap a 31-day outage produces.
+The first run of a long catch-up also stops at the call budget: the 2026-10-22 run committed 8 chunks per zone, 172 chunks and 173 of 180 calls, and the beacon reached only six chunks.
 
 ### First-run setup
 
