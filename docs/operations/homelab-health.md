@@ -206,7 +206,7 @@ Token extraction uses `--json | jq -r .token`, not `--hide-headers` plus awk col
 
 Three choices the target makes, which its comment no longer has room for:
 
-- **Retention is `-r 0`, infinite.** These buckets exist to outlive the source they copy from — Cloudflare's 8-day analytics window is the sharpest case — so expiring the copy would defeat the pipeline.
+- **Retention is `-r 0`, infinite.** These buckets exist to outlive the source they copy from — Cloudflare's 31-day edge analytics window is the sharpest case — so expiring the copy would defeat the pipeline.
 - **The ingest token reads as well as writes.** Each polling job's resume point is `max(_time)` read back out of its own bucket, not a stored cursor, so it reads before it writes. The Apple ingester is the exception and no flow re-mints it. The `withings_flags` token also reads and writes its queue, shared only by MCP and ingest.
 - **The shared read token is not touched.** It reads every bucket in the organization, present and future, so a new bucket is visible to Grafana Cloud and the MCP connector with no re-mint.
 
@@ -367,9 +367,9 @@ A temporary pinned image needs its keel annotations removed.
 ## Cloudflare analytics ingest
 
 `homelab/health/cloudflare-analytics.yaml`.
-Hourly CronJob at `37 * * * *` that copies Cloudflare edge traffic data into the `cloudflare` bucket before Cloudflare deletes it.
+Hourly CronJob at `37 * * * *` that copies Cloudflare edge traffic data and page-load beacon data into the `cloudflare` bucket before Cloudflare deletes them.
 
-Cloudflare's Free plan keeps **8 days** of per-hostname analytics and rejects any GraphQL query wider than **1 day**.
+Cloudflare keeps a bounded window of analytics: **31 days** of per-zone edge requests and **184 days** of account-level page-load beacons, as measured on 2026-10-21 (the job was written when the edge window was 8 days and a query could not span more than a day; both have since widened, so the script reads the live figures from the GraphQL settings node on every run instead of assuming them).
 That window answers "what is happening right now" and is useless for "was this normal?", the question a webshell sweep raises.
 This job is the retention fix; nothing about the Cloudflare configuration changes, and the token is read-only.
 
@@ -377,13 +377,14 @@ This job is the retention fix; nothing about the Cloudflare configuration change
 
 | | |
 |---|---|
-| Zones | Every zone the API token can see, enumerated with `GET /zones` on every run (since 2026-10-20); a zone added to the account is ingested from its next run, seeded from Cloudflare's whole retention window |
-| Dataset | `httpRequestsAdaptiveGroups`, grouped by `datetimeHour` |
+| Zones | Every zone the API token can see, enumerated with `GET /zones` on every run (since 2026-10-20); a zone added to the account is ingested from its next run, seeded from Cloudflare's whole retention window. The account id comes from the same listing (`result[].account.id`) and the job expects exactly one |
+| Datasets | `httpRequestsAdaptiveGroups` per zone and, since 2026-10-21, `rumPageloadEventsAdaptiveGroups` for the account under `viewer.accounts`; both grouped by `datetimeHour` |
 | Bucket | `cloudflare`, **infinite** retention, raw hourly rows, no downsampling |
-| Measurement | `http_requests`; tags `zone`, `host`, `path`, `status`, `country`, and since 2026-10-20 `method`, `bot_category` (Cloudflare's `verifiedBotCategory`, empty stored as `none`), `security_source` (`securitySource`) and `client` (`uptime-kuma` for a `Uptime-Kuma/` user agent, `other` for everything else; the raw user agent is never stored); fields `count`, `sample_interval`. Older points lack the newer tags |
+| Measurement `http_requests` | Tags `zone`, `host`, `path`, `status`, `country`, and since 2026-10-20 `method`, `bot_category` (Cloudflare's `verifiedBotCategory`, empty stored as `none`), `security_source` (`securitySource`) and `client` (`uptime-kuma` for a `Uptime-Kuma/` user agent, `other` for everything else; the raw user agent is never stored), and since 2026-10-21 `content_type` (`edgeResponseContentTypeName`, empty stored as `none`); fields `count`, `sample_interval`. Points older than the re-ingest floor described below lack the newer tags. A referrer tag was planned and is not possible on this plan: `clientRefererHost` is refused (`code: authz`) and is absent from the dataset's `availableFields`; referrers come from the beacon |
+| Measurement `page_loads` | One point per hour per `host` (`requestHost`), `path` (`requestPath`, truncated exactly as the edge path is, `FULL_PATH_HOSTS` included), `referer_host` (`refererHost`, empty stored as `none`), `country` (`countryName`) and `device` (`deviceType`), plus the constant tag `source=beacon`; fields `count` (page loads), `visits` (`sum.visits`) and `sample_interval`. `refererPath` is never requested. Every host that is `family-foqos.app` or beneath it is dropped before the write, by operator ruling. Only hosts that carry the Cloudflare beacon script appear at all |
 | Monitoring | The `homelab-cloudflare-analytics` uptime-kuma push monitor: `up` on exit 0, `down` otherwise |
 
-Two bookkeeping measurements share the bucket: `ingest_status` (one point per zone per committed chunk, tagged `zone`; points from before 2026-10-20 carry no `zone` tag and were one marker for every zone) and `ingest_gap` (see below).
+Two bookkeeping measurements share the bucket: `ingest_status` (one point per stream per committed chunk, tagged `source=cloudflare,zone=<zone>` for an edge stream and `source=beacon` for the beacon; points from before 2026-10-20 carry no `zone` tag and were one marker for every zone) and `ingest_gap` (see below).
 
 ### Why the script is Python
 
@@ -400,11 +401,16 @@ Standard library only, so there is no `pip install` at run time and the job depe
 
 ### The resume rule
 
-The watermark is `max(_time)` **per zone** over the `cloudflare` bucket (every `count` point carrying that zone's tag, `http_requests` and `ingest_status` alike), read back from InfluxDB on every run.
+The watermark is `max(_time)` **per stream** over the `cloudflare` bucket, read back from InfluxDB on every run: for a zone, every `count` point carrying that zone's tag (`http_requests` and `ingest_status` alike); for the beacon, every `count` point carrying `source=beacon` (`page_loads` and its own `ingest_status` marker).
 There is no state file, no PVC and no ConfigMap cursor, because all three can disagree with what was stored — after a restore, after a manual delete, after a partial write.
 The data is its own watermark and cannot drift from itself.
-A zone with no points at all is new and is seeded from Cloudflare's retention floor, about 8 days back, so a zone added to the account gets the history Cloudflare still holds.
-A zone that has points resumes from its own newest point and nothing else.
+A stream with no points at all is new and is seeded from Cloudflare's retention floor, so a zone added to the account gets the history Cloudflare still holds, and the beacon's first run started 184 days back.
+A stream that has points resumes from its own newest point and nothing else.
+
+**The retention floor is read, not assumed.**
+Each run makes one GraphQL settings query (`viewer.zones.settings.httpRequestsAdaptiveGroups.notOlderThan` for the first zone, applied to all because every zone is on the same plan, and `viewer.accounts.settings.rumPageloadEventsAdaptiveGroups.notOlderThan` for the beacon), subtracts it from the run's start, rounds **down** to the hour and adds a one-hour margin.
+The floor is therefore constant across a clock hour, between one and two hours inside Cloudflare's window, and a run that takes most of an hour never straddles it; a query that does straddle it is refused loudly (`code: quota`, "cannot request data older than"), not truncated, which fails that stream for the run.
+Measured on 2026-10-21 at 18:18:48 UTC: `notOlderThan` 2,678,400 s (31 days) for the edge and 15,897,600 s (184 days) for the beacon; the hour 2026-09-20T19:00Z returned 64 rows for `cynexia.com` and 18:00Z was refused.
 The zone-less `ingest_status` marker written before 2026-10-20 was used as a floor on the first enumerated run, to stop the two already-covered zones re-fetching their history, and it lifted the 19 new zones past the hours their first run had not reached: 14:46 to 19:00 UTC on 2026-10-20 were never fetched for them, and hour 14 is partial.
 The floor is gone; those hours are recoverable only by deleting the new zones' points from 14:46:14 UTC onward so the next run rewinds to 12:00 and refetches them, which is the operator's call.
 
@@ -419,14 +425,18 @@ That same overwrite is why **adding a tag double-counts roughly the two hours ar
 The first run with a new tag cannot overwrite the overlap window's old-tag-set points, so it writes a second series beside them, and nothing in the script can avoid that without deleting points.
 Observed on 2026-10-20, when the schema changed twice (the `method` tag, then `bot_category`, `security_source` and `client` together), for `cynexia.com`: hour 19 UTC is stored three times (2,076 requests in each of the three tag sets), hour 20 carries its old 20:00–20:37 slice (1,264) and a method-only copy (2,367) beside the full hour (2,367), and hour 21 carries a method-only partial (1,121) beside the full hour; about 8,900 extra requests across those three hours and none after.
 A panel that sums `count` by hour reads those hours high; a panel filtered on `exists r.client` is exact from 19:00 UTC that day.
+The `content_type` tag of 2026-10-21 was added the other way, with a delete-and-refetch of the whole window ([below](#re-ingesting-with-a-new-tag-set)), so it has no double-counted hours; points older than that refetch's floor keep the nine-tag set.
 
-Backfill runs in **23-hour chunks** (Cloudflare rejects anything wider than a day), at most **8 chunks per run**.
-Each zone's chunks are committed oldest-first; a failed chunk ends that zone for the run and the other zones carry on, so a zone that fails every run cannot starve the zones sorted after it.
-Because the watermark is per zone, the failed zone resumes from its last committed chunk next run and no zone's watermark can move past hours it never fetched; the run still exits non-zero with `verdict=failed`, naming the first failure.
-The first run after a zone appears is the expensive one: up to 8 chunks for that zone, one call each plus any row-cap subdivision, inside the 180-call budget shared by every zone in the run.
+Backfill runs in **23-hour chunks**, at most **8 chunks per zone per run**; the beacon stream is bounded by the call budget alone.
+Chunks stay under a day even though the settings node now allows 30-day edge and 93-day beacon spans, because **adaptive sampling coarsens with the span**: the same beacon week fetched as one span came back at `sampleInterval` 10 (44 rows), and as seven one-day windows at `sampleInterval` 1 (353 rows, 398 loads).
+Each stream's chunks are committed oldest-first; a failed chunk ends that stream for the run and the other streams carry on, so a zone that fails every run cannot starve the zones sorted after it.
+Because the watermark is per stream, the failed stream resumes from its last committed chunk next run and no watermark can move past hours it never fetched; the run still exits non-zero with `verdict=failed`, naming the first failure.
+The first run after a stream appears is the expensive one: up to 8 chunks for a zone, or as many as the budget allows for the beacon, one call each plus any row-cap subdivision, inside the 180-call budget shared by every stream in the run.
+A stream does not start a chunk with fewer than 8 calls left; it stops cleanly and counts as `catching_up=` in the heartbeat, so a catch-up longer than one run — 21 zones after an outage, the 31-day re-ingest, the beacon's 192-chunk seed — converges over successive hourly runs with the heartbeat green.
+A chunk that fans out past the budget once started still fails loudly: a stream that cannot finish one chunk inside the reserve is stuck, and stuck must not read as catching up.
 
 A successfully-queried chunk with **zero rows** still writes its `ingest_status` point.
-Without that, eight genuinely quiet days would look identical to eight days of broken ingestion and would trip the gap alarm below for no reason.
+Without that, a genuinely quiet month would look identical to a month of broken ingestion and would trip the gap alarm below for no reason.
 
 **A chunk's points are written oldest-first, and that ordering is part of the resume rule.**
 A chunk over 5,000 series is sent to InfluxDB in several batches, so a later batch can fail with earlier ones already durably stored.
@@ -436,7 +446,8 @@ The `ingest_status` marker is appended after every data point for the same reaso
 
 ### Gaps are permanent, so they are loud
 
-If the rewound start is older than Cloudflare's retention, those hours are gone and no future run can recover them.
+If an hour **after the watermark's hour** is older than Cloudflare's retention floor, it is gone and no future run can recover it.
+Hours at or before the watermark that have fallen behind the floor are not a gap: they are stored, and the fetch simply starts at the floor instead of rewinding (changed 2026-10-21; before that any rewind below the floor was reported as a gap, which raised a false alarm whenever the two-hour overlap alone crossed it, and would have turned every delete-and-refetch into 21 gap markers).
 The job then:
 
 1. logs the exact missing range,
@@ -458,7 +469,8 @@ Path is by far the highest-cardinality dimension — karakeep alone emits a dist
 Hosts listed in the CronJob's `FULL_PATH_HOSTS` env var keep their full path.
 It is empty by default; every host added there trades series cardinality for path detail.
 
-The series key gained `method`, `bot_category`, `security_source` and `client` on 2026-10-20, so a series is now one combination of all nine tags per hour.
+The series key gained `method`, `bot_category`, `security_source` and `client` on 2026-10-20 and `content_type` on 2026-10-21, so a series is now one combination of all ten tags per hour.
+`content_type` is low-cardinality (15 values on `cynexia.com` over a day, 3 on `robertaleck.com`) and changed no zone's row count: the two zones at the 10,000-row cap were already there, and the rest are far under it.
 Of those, `client` is the deliberate collapse of Cloudflare's `userAgent` dimension into two values, because the raw user agent is unbounded, attacker-chosen text; the dimension is still requested so Cloudflare splits the groups by it, which inflates the rows a query returns before aggregation collapses them again.
 That inflation is what the row-cap subdivision below absorbs.
 
@@ -467,25 +479,60 @@ It is keyed by the zone's name as Cloudflare lists it, not by hostname, and the 
 
 ### Sampling
 
-`sample_interval` is stored per point and **never applied**.
-Whether Cloudflare's `count` is already extrapolated is a property of the dataset, not something this job should silently assume, and a chart that quietly switches from real counts to estimates is the kind of lie this repo has a rule about.
-Observed values are 1.03–1.14 — effectively unsampled at this volume.
-**Confirm the relationship once against the Cloudflare dashboard for a known hour before building any panel that multiplies by it.**
+`sample_interval` is stored per point and **never applied**, on both measurements.
+Measured on 2026-10-21, Cloudflare's `count` is **already extrapolated**: a beacon week fetched as one span returned 44 rows at `sampleInterval` 10 with `count` 440, and every single-sample row in either dataset carries `count` equal to its interval (edge rows of `(40, 40)`, `(6, 6)`; beacon rows of `(10, 10)`), which is what Cloudflare's own sampling page describes as "an estimate derived from the sampled value".
+Multiplying by the interval would therefore apply the sampling twice; a panel sums `count` as it is.
+The stored interval is the estimate's precision, and it is why chunks stay narrow: edge values in 23-hour windows are 1.03–1.14, effectively unsampled, and beacon values in 23-hour windows are 1 for recent weeks and up to 20 for days several weeks old, which are stored more coarsely whatever the span.
 
 ### Row-cap subdivision
 
-`httpRequestsAdaptiveGroups` caps a response at 10,000 rows and this dataset offers no cursor.
+Both datasets cap a response at 10,000 rows and offer no cursor.
 A chunk returning exactly the cap is assumed truncated, halved, and re-queried — recursively, down to a 1-minute floor.
 Aggregation makes the halves recombine into the same per-hour totals.
-A run is capped at 180 GraphQL calls; exhausting that budget is a loud failure, not a silent truncation, so each affected zone's watermark stays put at its last committed chunk and the next run resumes it there.
+`cynexia.com` and `robertaleck.com` hit the cap in every 23-hour window (the `userAgent` dimension splits their groups finely before `client` collapses them again) and subdivide once or twice; no other zone comes near it, and the beacon returns a few hundred rows a week.
+A run is capped at 180 GraphQL calls; exhausting that budget mid-chunk is a loud failure, not a silent truncation, so each affected stream's watermark stays put at its last committed chunk and the next run resumes it there.
 Cloudflare's user limit is 300 queries per 5 minutes and burning it would break the next several hourly runs too.
+
+### Re-ingesting with a new tag set
+
+A new tag cannot be added in place without a double-counted window (see the resume rule above), so the way to add one is to delete every point the job can refetch and let it refetch them, with the CronJob suspended between the apply and the delete so no run writes the new tag set beside the old one.
+Rows older than the floor keep the old tag set for good: nothing can refetch them.
+
+The delete's `--start` must equal the floor the refetching run will compute, which is the hour Cloudflare's `notOlderThan` lands in plus the one-hour margin, and that floor is constant across a clock hour.
+So the delete and the manual run must happen in the **same UTC clock hour**: earlier and the surviving old-tag hour just below the floor is refetched beside itself (one double-counted hour), later and the hour at the old floor is deleted and never refetched (one lost hour, reported as `verdict=gap` once).
+`influx delete` accepts only `=` and `AND` in a predicate, so the three measurements take three commands.
+The sequence, done on 2026-10-21 for `content_type`:
+
+1. Suspend: `kubectl -n health patch cronjob cloudflare-analytics -p '{"spec":{"suspend":true}}'`, then `make apply-homelab` from the branch, then the same patch again at once, because the manifest declares `suspend: false` and the apply reset it (that declaration is what lets step 4 end the suspension with an apply instead of a patch).
+2. Measure the floor: run the settings query, confirm with a one-hour edge query at the resulting hour and one just before it (the first must return rows and the second must be refused), and take the first refetchable hour plus one.
+3. Delete, as the operator, inside the pod (`$DOCKER_INFLUXDB_INIT_ADMIN_TOKEN` expands inside the pod's single-quoted shell; the `--start` is computed on the Mac in the same clock hour as the run that follows):
+
+   ```bash
+   START="$(date -u -v-31d -v+1H '+%Y-%m-%dT%H:00:00Z')"
+   for m in http_requests ingest_status ingest_gap; do
+     kubectl -n health exec deploy/influxdb -- sh -c '
+       influx delete -o cynexia --bucket cloudflare \
+         --start "$1" --stop 2262-04-11T23:47:16Z \
+         --predicate "_measurement=\"$2\"" \
+         -t "$DOCKER_INFLUXDB_INIT_ADMIN_TOKEN"' sh "$START" "$m"
+   done
+   ```
+
+   The `ingest_gap` delete is harmless and keeps the bucket honest: a gap marker inside the refetched window would describe a hole the refetch fills.
+4. One manual run (`kubectl -n health create job --from=cronjob/cloudflare-analytics cf-analytics-<reason>`), then unsuspend with `make apply-homelab` from the branch and confirm `make diff-homelab` is empty.
+   The refetch converges over several hourly runs under the call budget; each one reports `catching_up=` until it is done.
+
+Two artefacts of the 2026-10-22 run are worth knowing.
+A zone whose only points before the floor are sparse can raise a false gap on the refetch run: `making-tracks.app` had no traffic in the two hours before the floor, so its newest surviving point sat at 2026-09-21T15:00Z and the first run wrote an `ingest_gap` marker for 16:00–18:00Z, hours that never had requests; the pre-2026-10-20 zone-less marker that covered them is not a watermark any more.
+The Job's `backoffLimit: 1` retry then ran with every zone's watermark advanced and reported `verdict=ok`, which is the intended shape, but the marker is a record of a hole that does not exist and the operator deletes it (`_measurement="ingest_gap" AND zone="making-tracks.app"` at 2026-09-21T16:00:00Z).
+And the first run of a long catch-up stops at the call budget: that run committed 8 chunks per zone, 172 chunks and 173 of 180 calls, and the beacon reached only six chunks.
 
 ### First-run setup
 
 The job cannot run until three things exist.
 None of them are created by `make apply-homelab`.
 
-1. **Cloudflare API token**, scoped **`Zone: Read` and `Zone.Analytics: Read` only**, on every zone in the account.
+1. **Cloudflare API token**, read-only and account-wide (operator ruling, 2026-10-21): **`Zone: Read`** to list the zones, **`Zone Analytics: Read`** for the edge dataset, **`Account Analytics: Read`** for the page-load beacons and **`Account Settings: Read`** for the settings node that reports retention.
    The job lists the zones with `GET /zones` on every run and reads analytics for each; it never writes to Cloudflare, so any edit scope is blast radius bought for nothing.
    Store as `op://Homelab/cloudflare/api-token`.
    The `zone-ids` field on that item is read by nothing since 2026-10-20.
@@ -501,11 +548,11 @@ kubectl -n health create job --from=cronjob/cloudflare-analytics cf-analytics-ma
 kubectl -n health logs job/cf-analytics-manual
 ```
 
-The first run seeds from the retention floor (~8 days back) and reports no gap, because nothing was ever lost.
-Read the log: it names every chunk, the row count per zone, and the GraphQL budget consumed.
+The first run seeds every stream from its retention floor and reports no gap, because nothing was ever lost; it stops at the call budget and the following hourly runs finish the seed with `catching_up=` in the heartbeat.
+Read the log: it names the retention it read, every chunk, the row count per stream, and the GraphQL budget consumed.
 
 **Smoke-test the query shape on that first run.**
-The `avg { sampleInterval }` selection is taken from the GraphQL schema, not from a doc page that spells it out; if Cloudflare names it differently the run fails loudly with the `errors` array in the log, and the fix is one line in `homelab/health/scripts/cloudflare-analytics-ingest.py`.
+The `avg { sampleInterval }` and `sum { visits }` selections are taken from the GraphQL schema, not from a doc page that spells them out; if Cloudflare names one differently the run fails loudly with the `errors` array in the log, and the fix is one line in `homelab/health/scripts/cloudflare-analytics-ingest.py`.
 It cannot fail silently.
 
 ## Withings ingest

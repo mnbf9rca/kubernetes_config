@@ -1,13 +1,19 @@
 #!/usr/bin/env python3
-"""Pull Cloudflare edge analytics into InfluxDB.
+"""Pull Cloudflare edge and browser-beacon analytics into InfluxDB.
 
-Cloudflare's Free plan keeps 8 days of per-hostname analytics and rejects any
-GraphQL query wider than 1 day. This job copies that window into InfluxDB before
-it expires, so the record outlives Cloudflare's retention.
+Cloudflare keeps a bounded window of analytics (31 days of per-zone edge
+requests and 184 days of account-level page-load beacons, as measured on
+2026-10-21; the job reads the live figure from the GraphQL settings node on
+every run rather than assuming either). This job copies those windows into
+InfluxDB before they expire, so the record outlives Cloudflare's retention.
+
+Two streams share one bucket and one loop: one edge stream per zone
+(`httpRequestsAdaptiveGroups` -> `http_requests`) and one beacon stream for the
+account (`rumPageloadEventsAdaptiveGroups` -> `page_loads`).
 
 THE FOUR RULES THIS SCRIPT EXISTS TO ENFORCE. Read them before changing anything.
 
-  1. THE DATA IS ITS OWN WATERMARK. The resume point is max(_time) PER ZONE
+  1. THE DATA IS ITS OWN WATERMARK. The resume point is max(_time) PER STREAM
      over the `cloudflare` bucket, read back from InfluxDB on every run. There
      is no state file, no PVC and no ConfigMap cursor, because all three can
      disagree with what was actually stored — after a restore, after a manual
@@ -19,23 +25,25 @@ THE FOUR RULES THIS SCRIPT EXISTS TO ENFORCE. Read them before changing anything
   2. A FAILED QUERY IS NOT AN EMPTY ONE. Cloudflare answers a broken query with
      HTTP 200 and a non-empty `errors` array in the body. Treating that as "no
      traffic" would advance the watermark over hours that were never fetched and
-     lose them permanently once Cloudflare's 8 days roll past. Zero rows from a
+     lose them permanently once Cloudflare's window rolls past. Zero rows from a
      clean response is a real answer and may advance the watermark; anything else
      may not.
 
-  3. AN UNRECOVERABLE GAP IS LOUD. If the resume point is older than Cloudflare's
-     retention, those hours are gone and no future run can get them. The job logs
-     the exact range, writes an `ingest_gap` marker so the hole is visible in
-     Grafana instead of reading as zero traffic, and exits non-zero so the
+  3. AN UNRECOVERABLE GAP IS LOUD. If an hour after the watermark is older than
+     Cloudflare's retention, it is gone and no future run can get it. The job
+     logs the exact range, writes an `ingest_gap` marker so the hole is visible
+     in Grafana instead of reading as zero traffic, and exits non-zero so the
      `homelab-cloudflare-analytics` monitor is pushed DOWN. Quietly resuming
      would be the same bug as a probe that stays green through an outage.
+     Hours AT OR BEFORE the watermark that have fallen behind the floor are not
+     a gap: they are stored, and the fetch simply starts at the floor.
 
-  4. COMMIT IN ORDER, AND A FAILURE STOPS ONLY ITS ZONE. Each zone's chunks
-     are processed oldest first; a failed chunk ends that zone for this run and
-     the other zones carry on, so a zone that fails every run cannot starve the
-     zones sorted after it. A zone's watermark is its own, so the failed zone
-     resumes from its last committed chunk next run; no zone's watermark can
-     move past hours it never fetched. The run still exits non-zero.
+  4. COMMIT IN ORDER, AND A FAILURE STOPS ONLY ITS STREAM. Each stream's chunks
+     are processed oldest first; a failed chunk ends that stream for this run and
+     the other streams carry on, so a zone that fails every run cannot starve the
+     zones sorted after it. A stream's watermark is its own, so the failed stream
+     resumes from its last committed chunk next run; no watermark can move past
+     hours it never fetched. The run still exits non-zero.
 
 Idempotency comes from InfluxDB point overwrite: same measurement, same tag set
 and same timestamp replaces. Every run deliberately rewinds OVERLAP_HOURS behind
@@ -55,26 +63,35 @@ from datetime import datetime, timedelta, timezone
 
 # --- tunables ---------------------------------------------------------------
 
-# Cloudflare rejects any query wider than 1 day, so chunks must be strictly
-# under 24h. 23h leaves an hour of headroom against boundary interpretation.
+# Chunk width for both streams. The settings node reports a 30-day maximum
+# query span for the edge dataset and 93 days for the beacon (measured
+# 2026-10-21), but chunks stay under a day for two reasons: the 10,000-row cap
+# below, and ADAPTIVE SAMPLING COARSENS WITH THE SPAN. The same beacon week
+# fetched as one span came back at sampleInterval 10 (44 rows), and as seven
+# 1-day windows at sampleInterval 1 (353 rows, 398 loads). Narrow windows are
+# what make the stored hours exact.
 CHUNK_HOURS = 23
 
-# Cloudflare Free keeps 8 days. Beyond 8 chunks there is nothing left to fetch,
-# so a runaway backfill loop would only burn rate limit. 8 * 23h = 184h, a little
-# short of the 191h retention floor below; a catch-up run therefore converges
-# over two hourly runs rather than one, which only ever happens after an outage.
+# Chunks per ZONE per run. 21 zones at 8 chunks is the whole call budget below,
+# so no one zone can starve the rest; a catch-up longer than 8 chunks converges
+# over successive hourly runs. The beacon stream is bounded by the budget alone.
 MAX_CHUNKS = 8
 
 # Rewind this far behind the watermark on every run. The final hour of the
 # previous run was almost certainly still in progress when it was written.
 OVERLAP_HOURS = 2
 
-# Cloudflare's stated retention, less an hour of margin: the boundary is not
-# sharp and a query that straddles it returns silently truncated data.
-RETENTION_HOURS = 8 * 24 - 1
+# Cloudflare's retention is READ FROM THE GRAPHQL SETTINGS NODE on every run
+# (`notOlderThan`, in seconds), never assumed: it was 8 days when this job was
+# written and 31 days when measured on 2026-10-21. The floor is that instant
+# rounded DOWN to the hour plus this margin, so the first hour fetched is
+# between one and two hours inside the window and a run that takes most of an
+# hour never straddles it. A straddling query is refused loudly (`code:
+# quota`), not truncated, but a refused chunk fails its stream for the run.
+RETENTION_MARGIN_HOURS = 1
 
-# httpRequestsAdaptiveGroups caps a single response at this many rows. A chunk
-# that returns exactly this many is assumed truncated and is subdivided.
+# Both datasets cap a single response at this many rows. A chunk that returns
+# exactly this many is assumed truncated and is subdivided.
 GRAPHQL_ROW_LIMIT = 10000
 
 # Floor for subdivision. Below this the halving cannot help and the run reports
@@ -85,17 +102,30 @@ MIN_SUBDIVIDE_SECONDS = 60
 # pathological chunk could fan out to ~2000 queries and trip Cloudflare's
 # 300-queries-per-5-minutes user limit — at which point every remaining query
 # fails and the rate limit is burned for the next several hourly runs too.
-# Exhausting the budget is a loud failure, not a silent truncation: the
-# watermark stays put and the next run retries.
+# Exhausting the budget MID-CHUNK is a loud failure, not a silent truncation:
+# the watermark stays put and the next run retries.
 MAX_GRAPHQL_CALLS = 180
+
+# A stream does not START a chunk with fewer than this many calls left; it
+# stops cleanly and reports itself as catching up instead, so a multi-run
+# catch-up (21 zones after an outage, or the beacon's first 184 days) stays
+# green. A chunk that fans out past the budget once started still fails loudly:
+# a stream that cannot finish one chunk inside the reserve is stuck, and stuck
+# must not read as catching up. Sized to one 23-hour chunk of the busiest zone
+# after two halvings.
+BUDGET_RESERVE = 8
 
 CF_GRAPHQL_URL = "https://api.cloudflare.com/client/v4/graphql"
 HTTP_TIMEOUT = 60
 
+# The edge dataset. `clientRefererHost` is NOT requested: the plan refuses it
+# (`code: authz`, "does not have access to the field 'clientrefererhost'",
+# measured 2026-10-21) and it is absent from the dataset's availableFields.
+# Referrers come from the beacon stream instead.
 QUERY = """
-query ZoneHourly($zoneTag: string!, $start: Time!, $end: Time!, $limit: Int!) {
+query ZoneHourly($tag: string!, $start: Time!, $end: Time!, $limit: Int!) {
   viewer {
-    zones(filter: {zoneTag: $zoneTag}) {
+    zones(filter: {zoneTag: $tag}) {
       httpRequestsAdaptiveGroups(
         limit: $limit
         filter: {datetime_geq: $start, datetime_lt: $end}
@@ -113,8 +143,53 @@ query ZoneHourly($zoneTag: string!, $start: Time!, $end: Time!, $limit: Int!) {
           verifiedBotCategory
           securitySource
           userAgent
+          edgeResponseContentTypeName
         }
       }
+    }
+  }
+}
+"""
+
+# The browser-beacon dataset, account-scoped. `refererPath` is deliberately
+# never requested: a referring page's path can carry a person's name or a
+# search query, and the host alone answers "where do readers come from".
+BEACON_QUERY = """
+query AccountHourly($tag: string!, $start: Time!, $end: Time!, $limit: Int!) {
+  viewer {
+    accounts(filter: {accountTag: $tag}) {
+      rumPageloadEventsAdaptiveGroups(
+        limit: $limit
+        filter: {datetime_geq: $start, datetime_lt: $end}
+        orderBy: [datetimeHour_ASC]
+      ) {
+        count
+        sum { visits }
+        avg { sampleInterval }
+        dimensions {
+          datetimeHour
+          requestHost
+          requestPath
+          refererHost
+          countryName
+          deviceType
+        }
+      }
+    }
+  }
+}
+"""
+
+# One settings query answers both streams' retention. The zone half is read
+# from the first zone and applied to all: every zone is on the same plan.
+SETTINGS_QUERY = """
+query Settings($zoneTag: string!, $accountTag: string!) {
+  viewer {
+    zones(filter: {zoneTag: $zoneTag}) {
+      settings { httpRequestsAdaptiveGroups { notOlderThan } }
+    }
+    accounts(filter: {accountTag: $accountTag}) {
+      settings { rumPageloadEventsAdaptiveGroups { notOlderThan } }
     }
   }
 }
@@ -232,6 +307,10 @@ def iso(dt):
     return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def floor_hour(dt):
+    return dt.replace(minute=0, second=0, microsecond=0)
+
+
 def rewind(watermark):
     """Where a run resumes: OVERLAP_HOURS behind the watermark, FLOORED TO THE HOUR.
 
@@ -242,8 +321,33 @@ def rewind(watermark):
     The watermark is the previous run's wall-clock minute, so without the floor
     every hour two behind a run was cut down to its last 23 minutes.
     """
-    return (watermark - timedelta(hours=OVERLAP_HOURS)).replace(
-        minute=0, second=0, microsecond=0)
+    return floor_hour(watermark - timedelta(hours=OVERLAP_HOURS))
+
+
+def retention_floor(now, not_older_than_seconds):
+    """The first hour a run may fetch: Cloudflare's floor, rounded down to the
+    hour, plus RETENTION_MARGIN_HOURS. Constant across a clock hour, so a
+    delete-and-refetch can name it in advance."""
+    return (floor_hour(now - timedelta(seconds=not_older_than_seconds))
+            + timedelta(hours=RETENTION_MARGIN_HOURS))
+
+
+def resume(watermark, floor):
+    """(start, missing_hours) for one stream.
+
+    A new stream seeds from the floor. An existing one rewinds, but never below
+    the floor: hours at or before the watermark that have fallen behind it are
+    STORED and stay as they are. Only hours strictly after the watermark's hour
+    that are older than the floor are missing, and those are the gap (rule 3).
+    Before 2026-10-21 any rewind below the floor was reported as a gap, which
+    raised a false alarm whenever the two-hour overlap alone crossed it.
+    """
+    if watermark is None:
+        return floor, 0
+    next_hour = floor_hour(watermark) + timedelta(hours=1)
+    if next_hour < floor:
+        return floor, int((floor - next_hour).total_seconds() // 3600)
+    return max(rewind(watermark), floor), 0
 
 
 # --- HTTP -------------------------------------------------------------------
@@ -280,7 +384,7 @@ CF_ZONES_URL = "https://api.cloudflare.com/client/v4/zones"
 
 
 def cf_zones(token):
-    """Every zone the token can see, as [(name, tag), ...] sorted by name.
+    """([(name, tag), ...] sorted by name, account_tag) for everything the token sees.
 
     Enumerated on every run rather than configured, so a zone added to the
     account is ingested from its next run without anyone editing a list; the
@@ -288,9 +392,13 @@ def cf_zones(token):
     honoured because an account can outgrow one page. Anything short of a
     clean, complete listing raises QueryFailed: a silently shortened list would
     skip a zone, which is the same loss as treating a failed query as empty.
+
+    The account tag comes from the same listing (`result[].account.id`); the
+    beacon stream is account-scoped, and this job handles exactly one account.
     """
     headers = {"Authorization": "Bearer %s" % token}
     zones = []
+    accounts = set()
     page = 1
     while True:
         status, text = http_get(
@@ -306,40 +414,35 @@ def cf_zones(token):
                 % (status, json.dumps(doc.get("errors"))[:800]))
         for zone in doc.get("result") or []:
             name, tag = zone.get("name"), zone.get("id")
-            if not name or not tag:
+            account = (zone.get("account") or {}).get("id")
+            if not name or not tag or not account:
                 raise QueryFailed(
-                    "zone listing entry without name or id: %s"
+                    "zone listing entry without name, id or account: %s"
                     % json.dumps(zone)[:200])
             zones.append((name, tag))
+            accounts.add(account)
         info = doc.get("result_info") or {}
         if page >= int(info.get("total_pages") or 1):
             break
         page += 1
     if not zones:
         raise QueryFailed("the token can see no zones at all")
-    return sorted(zones)
+    if len(accounts) != 1:
+        raise QueryFailed(
+            "zones span %d accounts; the beacon stream expects exactly one"
+            % len(accounts))
+    return sorted(zones), accounts.pop()
 
 
-def cf_query(token, zone_tag, start, end, limit, budget):
-    """Return the raw group rows for one zone and window.
-
-    Raises QueryFailed for every outcome that is not a clean, complete answer.
-    """
+def cf_graphql(token, query, variables, budget):
+    """POST one GraphQL query and return its `viewer`, or raise QueryFailed."""
     if budget["used"] >= MAX_GRAPHQL_CALLS:
         raise QueryFailed(
             "GraphQL call budget of %d exhausted; refusing to keep querying"
             % MAX_GRAPHQL_CALLS)
     budget["used"] += 1
 
-    payload = json.dumps({
-        "query": QUERY,
-        "variables": {
-            "zoneTag": zone_tag,
-            "start": iso(start),
-            "end": iso(end),
-            "limit": limit,
-        },
-    }).encode()
+    payload = json.dumps({"query": query, "variables": variables}).encode()
     headers = {
         "Authorization": "Bearer %s" % token,
         "Content-Type": "application/json",
@@ -367,48 +470,89 @@ def cf_query(token, zone_tag, start, end, limit, budget):
         raise QueryFailed("HTTP %s: %s" % (status, text[:500]))
 
     try:
-        zones = doc["data"]["viewer"]["zones"]
+        viewer = doc["data"]["viewer"]
     except (KeyError, TypeError):
         raise QueryFailed("unexpected response shape: %s" % text[:500])
+    if not isinstance(viewer, dict):
+        raise QueryFailed("`viewer` is not an object: %s" % text[:500])
+    return viewer
 
-    if not isinstance(zones, list):
-        raise QueryFailed("`zones` is not a list: %s" % text[:500])
-    if not zones:
-        # An empty zones list means the token cannot see this zone at all, which
-        # is a configuration fault, not an absence of traffic.
+
+def _scope(viewer, scope, tag):
+    """The one zone or account object under `viewer`, or raise QueryFailed."""
+    objs = viewer.get(scope)
+    if not isinstance(objs, list):
+        raise QueryFailed("`%s` is not a list: %s"
+                          % (scope, json.dumps(viewer)[:500]))
+    if not objs:
+        # An empty list means the token cannot see this zone or account at
+        # all, which is a configuration fault, not an absence of traffic.
         raise QueryFailed(
-            "zone %s returned no zone object — token cannot read it" % zone_tag)
+            "%s %s returned no object — token cannot read it" % (scope, tag))
+    return objs[0]
 
-    rows = zones[0].get("httpRequestsAdaptiveGroups")
+
+def cf_retention(token, zone_tag, account_tag, budget):
+    """(edge_seconds, beacon_seconds): each dataset's `notOlderThan`."""
+    viewer = cf_graphql(token, SETTINGS_QUERY,
+                        {"zoneTag": zone_tag, "accountTag": account_tag}, budget)
+    try:
+        edge = int(_scope(viewer, "zones", zone_tag)["settings"]
+                   ["httpRequestsAdaptiveGroups"]["notOlderThan"])
+        beacon = int(_scope(viewer, "accounts", account_tag)["settings"]
+                     ["rumPageloadEventsAdaptiveGroups"]["notOlderThan"])
+    except (KeyError, TypeError, ValueError):
+        raise QueryFailed("settings node is missing notOlderThan: %s"
+                          % json.dumps(viewer)[:500])
+    if edge <= 0 or beacon <= 0:
+        raise QueryFailed("settings node reports a non-positive retention")
+    return edge, beacon
+
+
+# The two datasets: (query, scope under `viewer`, groups field).
+EDGE = (QUERY, "zones", "httpRequestsAdaptiveGroups")
+BEACON = (BEACON_QUERY, "accounts", "rumPageloadEventsAdaptiveGroups")
+
+
+def cf_query(token, tag, start, end, limit, budget, dataset=EDGE):
+    """Return the raw group rows for one zone (or account) and window.
+
+    Raises QueryFailed for every outcome that is not a clean, complete answer.
+    """
+    query, scope, groups = dataset
+    viewer = cf_graphql(token, query, {
+        "tag": tag, "start": iso(start), "end": iso(end), "limit": limit,
+    }, budget)
+    rows = _scope(viewer, scope, tag).get(groups)
     if rows is None:
-        raise QueryFailed("no httpRequestsAdaptiveGroups in %s" % text[:500])
+        raise QueryFailed("no %s in %s" % (groups, json.dumps(viewer)[:500]))
     return rows
 
 
-def cf_fetch(token, zone_tag, start, end, warnings, budget):
+def cf_fetch(token, tag, start, end, warnings, budget, dataset=EDGE):
     """Fetch a window, subdividing when the response looks truncated.
 
-    Cloudflare offers no cursor for this dataset, so the only way past the row
-    cap is a narrower window. Halving works because the caller aggregates: two
-    half-windows summed give the same per-hour totals as one whole window.
+    Cloudflare offers no cursor for these datasets, so the only way past the
+    row cap is a narrower window. Halving works because the caller aggregates:
+    two half-windows summed give the same per-hour totals as one whole window.
     """
-    rows = cf_query(token, zone_tag, start, end, GRAPHQL_ROW_LIMIT, budget)
+    rows = cf_query(token, tag, start, end, GRAPHQL_ROW_LIMIT, budget, dataset)
     if len(rows) < GRAPHQL_ROW_LIMIT:
         return rows
 
     span = int((end - start).total_seconds())
     if span <= MIN_SUBDIVIDE_SECONDS:
         warnings.append(
-            "TRUNCATED: zone %s window %s..%s returned the %d-row cap at the "
+            "TRUNCATED: %s %s window %s..%s returned the %d-row cap at the "
             "%ds subdivision floor; this window's data is incomplete"
-            % (zone_tag, iso(start), iso(end), GRAPHQL_ROW_LIMIT, span))
+            % (dataset[1], tag, iso(start), iso(end), GRAPHQL_ROW_LIMIT, span))
         return rows
 
     mid = start + timedelta(seconds=span // 2)
     log("  row cap hit for %s %s..%s — subdividing at %s"
-        % (zone_tag, iso(start), iso(end), iso(mid)))
-    return (cf_fetch(token, zone_tag, start, mid, warnings, budget)
-            + cf_fetch(token, zone_tag, mid, end, warnings, budget))
+        % (tag, iso(start), iso(end), iso(mid)))
+    return (cf_fetch(token, tag, start, mid, warnings, budget, dataset)
+            + cf_fetch(token, tag, mid, end, warnings, budget, dataset))
 
 
 # --- shaping ----------------------------------------------------------------
@@ -503,12 +647,54 @@ def aggregate(rows, zone_name, full_path_hosts, acc):
             dims.get("verifiedBotCategory") or "none",
             dims.get("securitySource") or "unknown",
             client,
+            dims.get("edgeResponseContentTypeName") or "none",
             int(hour.timestamp()),
         )
         count = int(row.get("count") or 0)
         interval = float((row.get("avg") or {}).get("sampleInterval") or 1.0)
         total, weighted = acc.get(key, (0, 0.0))
         acc[key] = (total + count, weighted + count * interval)
+
+
+# Beacon hosts whose page loads are never stored, by operator ruling: the app
+# is a family's, and its referrers and paths are theirs. Matched on the zone
+# apex and every host beneath it.
+BEACON_EXCLUDED_ZONES = ("family-foqos.app",)
+
+
+def beacon_excluded(host):
+    return any(host == z or host.endswith("." + z) for z in BEACON_EXCLUDED_ZONES)
+
+
+def aggregate_beacon(rows, full_path_hosts, acc):
+    """Fold beacon rows into acc, keyed by the page_loads series.
+
+    Same shape as aggregate(): paths truncate the same way, counts and visits
+    sum, sample_interval is count-weighted and stored, never applied. `count`
+    is ALREADY EXTRAPOLATED by Cloudflare (measured 2026-10-21: a 7-day span
+    returned 44 rows at sampleInterval 10 with count 440, and every
+    single-sample row carries count == sampleInterval), so multiplying by the
+    interval would apply the sampling twice. `refererPath` is never requested.
+    """
+    for row in rows:
+        dims = row.get("dimensions") or {}
+        hour = parse_hour(dims.get("datetimeHour"))
+        host = dims.get("requestHost") or "unknown"
+        if beacon_excluded(host):
+            continue
+        key = (
+            host,
+            truncate_path(dims.get("requestPath"), host in full_path_hosts),
+            dims.get("refererHost") or "none",
+            dims.get("countryName") or "unknown",
+            dims.get("deviceType") or "unknown",
+            int(hour.timestamp()),
+        )
+        count = int(row.get("count") or 0)
+        visits = int((row.get("sum") or {}).get("visits") or 0)
+        interval = float((row.get("avg") or {}).get("sampleInterval") or 1.0)
+        total, seen, weighted = acc.get(key, (0, 0, 0.0))
+        acc[key] = (total + count, seen + visits, weighted + count * interval)
 
 
 # --- line protocol ----------------------------------------------------------
@@ -554,15 +740,33 @@ def points(acc):
 
     for key, (count, weighted) in sorted(acc.items(), key=oldest_first):
         (zone, host, path, status, country, method,
-         bot_category, security_source, client, ts) = key
+         bot_category, security_source, client, content_type, ts) = key
         interval = (weighted / count) if count else 1.0
         yield ("http_requests,zone=%s,host=%s,path=%s,status=%s,country=%s,"
-               "method=%s,bot_category=%s,security_source=%s,client=%s "
-               "count=%di,sample_interval=%.6f %d"
+               "method=%s,bot_category=%s,security_source=%s,client=%s,"
+               "content_type=%s count=%di,sample_interval=%.6f %d"
                % (esc_tag(zone), esc_tag(host), esc_tag(path),
                   esc_tag(status), esc_tag(country), esc_tag(method),
                   esc_tag(bot_category), esc_tag(security_source),
-                  esc_tag(client), count, interval, ts))
+                  esc_tag(client), esc_tag(content_type), count, interval, ts))
+
+
+def beacon_points(acc):
+    """Line protocol for the page_loads series, oldest first (see points()).
+
+    `source=beacon` is on every point so the stream's watermark is its own
+    data, exactly as a zone's is: influx_watermarks() groups on it.
+    """
+    def oldest_first(item):
+        return (item[0][-1],) + item[0][:-1]
+
+    for key, (count, visits, weighted) in sorted(acc.items(), key=oldest_first):
+        host, path, referer_host, country, device, ts = key
+        interval = (weighted / count) if count else 1.0
+        yield ("page_loads,source=beacon,host=%s,path=%s,referer_host=%s,"
+               "country=%s,device=%s count=%di,visits=%di,sample_interval=%.6f %d"
+               % (esc_tag(host), esc_tag(path), esc_tag(referer_host),
+                  esc_tag(country), esc_tag(device), count, visits, interval, ts))
 
 
 # --- InfluxDB ---------------------------------------------------------------
@@ -589,12 +793,13 @@ def influx_write(cfg, lines):
 
 
 def influx_watermarks(cfg):
-    """{zone: newest point with that zone tag}; {} if the bucket was never written.
+    """{(zone, source): newest `count` point with those tags}; {} if never written.
 
-    The key "" is the newest point carrying NO zone tag: the global
-    ingest_status marker written before 2026-10-20, when the watermark was one
-    value for every zone. main() reads it once as a floor for zones that
-    already have points.
+    Edge data points carry `zone` and no `source`; edge markers carry both
+    (`source=cloudflare`); the beacon's points and marker carry
+    `source=beacon` and no `zone`. main() folds that into one watermark per
+    zone and one for the beacon. The pair ("", "cloudflare") is the global
+    ingest_status marker from before 2026-10-20 and is ignored.
 
     DO NOT "tidy" this into a bare group()/keep() over every field. That form
     collides whenever two fields in the bucket have different value types
@@ -603,18 +808,18 @@ def influx_watermarks(cfg):
     reported STALE for 25 straight days. Filtering to a single integer field
     before grouping is what makes the merge type-safe.
 
-    `_field == "count"` covers both http_requests and ingest_status, so an hour
-    with genuinely zero traffic still moves a zone's watermark. It deliberately
-    does NOT cover ingest_gap's `missing_hours`: a gap marker records a hole,
-    it must never claim the hole was filled.
+    `_field == "count"` covers http_requests, page_loads and ingest_status, so
+    an hour with genuinely zero traffic still moves a stream's watermark. It
+    deliberately does NOT cover ingest_gap's `missing_hours`: a gap marker
+    records a hole, it must never claim the hole was filled.
     """
     flux = (
         'from(bucket:"%s")\n'
         '  |> range(start: 1970-01-01T00:00:00Z)\n'
         '  |> filter(fn: (r) => r._field == "count")\n'
-        '  |> group(columns: ["zone"])\n'
+        '  |> group(columns: ["zone", "source"])\n'
         '  |> max(column: "_time")\n'
-        '  |> keep(columns: ["zone", "_time"])\n' % cfg["bucket"]
+        '  |> keep(columns: ["zone", "source", "_time"])\n' % cfg["bucket"]
     )
     url = "%s/api/v2/query?org=%s" % (cfg["url"], cfg["org"])
     headers = {
@@ -630,8 +835,8 @@ def influx_watermarks(cfg):
         raise QueryFailed("watermark query returned an error: %s" % text[:500])
 
     # Annotated CSV: annotations start "#", and EVERY TABLE HAS ITS OWN HEADER
-    # (",result,table,...") because the zone-less group has no `zone` column at
-    # all. Columns are therefore read per header, never by position.
+    # (",result,table,...") because a group lacking a tag has no column for it
+    # at all. Columns are therefore read per header, never by position.
     newest = {}
     columns = None
     for line in text.splitlines():
@@ -653,9 +858,9 @@ def influx_watermarks(cfg):
         except ValueError:
             raise QueryFailed("watermark row has unparseable _time %r" % cell)
         parsed = parsed.astimezone(timezone.utc)
-        zone = cells.get("zone", "").strip()
-        if zone not in newest or parsed > newest[zone]:
-            newest[zone] = parsed
+        key = (cells.get("zone", "").strip(), cells.get("source", "").strip())
+        if key not in newest or parsed > newest[key]:
+            newest[key] = parsed
     return newest
 
 
@@ -730,124 +935,155 @@ def main():
     }
 
     now = datetime.now(timezone.utc).replace(microsecond=0)
-    retention_floor = now - timedelta(hours=RETENTION_HOURS)
     budget = {"used": 0}
 
-    zones = cf_zones(cf_token)                    # raises -> run fails, no writes
+    zones, account_tag = cf_zones(cf_token)       # raises -> run fails, no writes
     log("%d zone(s) visible to the token" % len(zones))
-    watermarks = influx_watermarks(influx)        # raises -> run fails, no writes
-    # The "" key is the zone-less ingest_status marker from before 2026-10-20,
-    # when the watermark was one value for every zone. It is NOT a floor for
-    # any zone: it was used as one on the first enumerated run and lifted the
-    # 19 new zones past hours their first run had not reached (14:46 to 19:00
-    # UTC that day, never fetched). Every zone has its own markers now; only
-    # its own points may say where it resumes.
-    watermarks.pop("", None)
+    edge_seconds, beacon_seconds = cf_retention(
+        cf_token, zones[0][1], account_tag, budget)
+    edge_floor = retention_floor(now, edge_seconds)
+    beacon_floor = retention_floor(now, beacon_seconds)
+    log("retention: edge %dh (floor %s), beacon %dh (floor %s)"
+        % (edge_seconds // 3600, iso(edge_floor),
+           beacon_seconds // 3600, iso(beacon_floor)))
+
+    marks = influx_watermarks(influx)             # raises -> run fails, no writes
+    # Fold (zone, source) pairs into one watermark per stream. The pair
+    # ("", "cloudflare") is the zone-less ingest_status marker from before
+    # 2026-10-20, when the watermark was one value for every zone. It is NOT a
+    # floor for any zone: it was used as one on the first enumerated run and
+    # lifted the 19 new zones past hours their first run had not reached
+    # (14:46 to 19:00 UTC that day, never fetched). Only a stream's own points
+    # may say where it resumes.
+    watermarks = {}
+    for (zone, source), newest in marks.items():
+        key = "beacon" if source == "beacon" else zone
+        if key and (key not in watermarks or newest > watermarks[key]):
+            watermarks[key] = newest
+
+    # One stream per zone, then the beacon. `tags` is the tag set of the
+    # stream's ingest_status and ingest_gap markers, and the field in which
+    # its watermark is found again.
+    streams = [{
+        "name": zone_name, "tag": zone_tag, "dataset": EDGE,
+        "floor": edge_floor, "chunk_cap": MAX_CHUNKS,
+        "tags": "source=cloudflare,zone=%s" % esc_tag(zone_name),
+    } for zone_name, zone_tag in zones]
+    streams.append({
+        "name": "beacon", "tag": account_tag, "dataset": BEACON,
+        "floor": beacon_floor, "chunk_cap": MAX_GRAPHQL_CALLS,
+        "tags": "source=beacon",
+    })
 
     warnings = []
-    gaps = []                      # (zone_name, g_start, g_end, missing_hours)
+    gaps = []                      # (stream, g_start, g_end, missing_hours)
     failure = None                 # the first failed chunk, for the log
-    failures = 0                   # zones that failed a chunk this run
+    failures = 0                   # streams that failed a chunk this run
     chunks_done = 0
     rows_total = 0
     series_total = 0
-    behind = 0                     # zones with chunks still outstanding
-    committed_through = None       # newest chunk end any zone committed
+    behind = 0                     # streams with chunks still outstanding
+    committed_through = None       # newest chunk end any stream committed
     gap_marker = "not-needed"
+    beacon_state = "ok"            # ok | behind | failed, a fixed enum
 
-    for zone_name, zone_tag in zones:
-        watermark = watermarks.get(zone_name)
+    for stream in streams:
+        name, floor = stream["name"], stream["floor"]
+        watermark = watermarks.get(name)
+        start, missing_hours = resume(watermark, floor)
         if watermark is None:
-            # New zone, or a restored-from-empty bucket. Nothing was lost,
+            # New stream, or a restored-from-empty bucket. Nothing was lost,
             # because nothing was ever held. Start at the oldest data
             # Cloudflare still has.
-            start = retention_floor
-            log("%s: no watermark, seeding from %s" % (zone_name, iso(start)))
+            log("%s: no watermark, seeding from %s" % (name, iso(start)))
         else:
-            start = rewind(watermark)
-            log("%s: watermark %s, rewound %dh and floored to %s"
-                % (zone_name, iso(watermark), OVERLAP_HOURS, iso(start)))
-            if start < retention_floor:
-                missing_hours = int(
-                    (retention_floor - start).total_seconds() // 3600)
-                gaps.append((zone_name, start, retention_floor, missing_hours))
-                log("!!! %s: UNRECOVERABLE GAP %s .. %s (%d hours) is older "
-                    "than Cloudflare's %d-hour retention and can never be "
-                    "fetched; writing an ingest_gap marker and exiting "
-                    "non-zero so the monitor is pushed down"
-                    % (zone_name, iso(start), iso(retention_floor),
-                       missing_hours, RETENTION_HOURS))
-                start = retention_floor
+            log("%s: watermark %s, resuming from %s"
+                % (name, iso(watermark), iso(start)))
+        if missing_hours:
+            g_start = floor_hour(watermark) + timedelta(hours=1)
+            gaps.append((stream, g_start, floor, missing_hours))
+            log("!!! %s: UNRECOVERABLE GAP %s .. %s (%d hours) is older than "
+                "Cloudflare's retention and can never be fetched; writing an "
+                "ingest_gap marker and exiting non-zero so the monitor is "
+                "pushed down" % (name, iso(g_start), iso(floor), missing_hours))
 
         cursor = start
-        zone_chunks = 0
-        zone_failure = None
-        while cursor < now and zone_chunks < MAX_CHUNKS:
+        stream_chunks = 0
+        stream_failure = None
+        while cursor < now and stream_chunks < stream["chunk_cap"]:
+            if budget["used"] > MAX_GRAPHQL_CALLS - BUDGET_RESERVE:
+                log("  %s: budget reserve reached; stopping cleanly" % name)
+                break
             chunk_end = min(cursor + timedelta(hours=CHUNK_HOURS), now)
             acc = {}
             try:
-                rows = cf_fetch(
-                    cf_token, zone_tag, cursor, chunk_end, warnings, budget)
+                rows = cf_fetch(cf_token, stream["tag"], cursor, chunk_end,
+                                warnings, budget, stream["dataset"])
             except QueryFailed as exc:
-                zone_failure = "%s chunk %s..%s: %s" % (
-                    zone_name, iso(cursor), iso(chunk_end), exc)
+                stream_failure = "%s chunk %s..%s: %s" % (
+                    name, iso(cursor), iso(chunk_end), exc)
                 log("  FAILED: %s" % exc)
                 break
             rows_total += len(rows)
-            aggregate(rows, zone_name, full_path_hosts, acc)
-
-            lines = list(points(acc))
-            # An empty chunk is a real answer and must still move this zone's
-            # watermark, otherwise eight genuinely quiet days would be
-            # indistinguishable from eight days of broken ingestion and would
+            if stream["dataset"] is BEACON:
+                aggregate_beacon(rows, full_path_hosts, acc)
+                lines = list(beacon_points(acc))
+            else:
+                aggregate(rows, name, full_path_hosts, acc)
+                lines = list(points(acc))
+            # An empty chunk is a real answer and must still move this
+            # stream's watermark, otherwise a genuinely quiet month would be
+            # indistinguishable from a month of broken ingestion and would
             # raise a false gap alarm. Appended AFTER every data point: see
             # points() for why the order matters.
             lines.append(
-                "ingest_status,source=cloudflare,zone=%s "
-                "count=%di,chunk_seconds=%di %d"
-                % (esc_tag(zone_name), len(acc),
+                "ingest_status,%s count=%di,chunk_seconds=%di %d"
+                % (stream["tags"], len(acc),
                    int((chunk_end - cursor).total_seconds()),
                    int(chunk_end.timestamp()) - 1))
             try:
                 influx_write(influx, lines)
             except QueryFailed as exc:
-                zone_failure = "%s write %s..%s: %s" % (
-                    zone_name, iso(cursor), iso(chunk_end), exc)
+                stream_failure = "%s write %s..%s: %s" % (
+                    name, iso(cursor), iso(chunk_end), exc)
                 log("  WRITE FAILED: %s" % exc)
                 break
 
             log("  %s: %s .. %s: %d rows, %d series"
-                % (zone_name, iso(cursor), iso(chunk_end), len(rows), len(acc)))
+                % (name, iso(cursor), iso(chunk_end), len(rows), len(acc)))
             series_total += len(acc)
             chunks_done += 1
-            zone_chunks += 1
+            stream_chunks += 1
             if committed_through is None or chunk_end > committed_through:
                 committed_through = chunk_end
             cursor = chunk_end
             if cursor < now:
                 time.sleep(1)          # stay clear of the GraphQL rate limit
-        if zone_failure:
-            # THE OTHER ZONES CARRY ON. Each zone's watermark is its own, so a
-            # zone that fails on every run cannot starve the zones sorted after
-            # it; this zone resumes from its last committed chunk next run. The
-            # run still exits non-zero, and reports the FIRST failure.
+        if stream_failure:
+            # THE OTHER STREAMS CARRY ON. Each stream's watermark is its own,
+            # so one that fails on every run cannot starve those sorted after
+            # it; it resumes from its last committed chunk next run. The run
+            # still exits non-zero, and reports the FIRST failure.
             failures += 1
-            failure = failure or zone_failure
+            failure = failure or stream_failure
+            if stream["dataset"] is BEACON:
+                beacon_state = "failed"
             continue
         if cursor < now:
             behind += 1
-            log("  %s: chunk cap reached with %s .. %s outstanding; the next "
-                "run continues from this zone's watermark"
-                % (zone_name, iso(cursor), iso(now)))
+            if stream["dataset"] is BEACON:
+                beacon_state = "behind"
+            log("  %s: %s .. %s outstanding; the next run continues from "
+                "this stream's watermark" % (name, iso(cursor), iso(now)))
 
     if gaps:
         try:
             influx_write(influx, [
-                "ingest_gap,source=cloudflare,reason=retention,zone=%s "
+                "ingest_gap,%s,reason=retention "
                 "missing_hours=%di,gap_end=%di %d"
-                % (esc_tag(name), hours, int(g_end.timestamp()),
+                % (stream["tags"], hours, int(g_end.timestamp()),
                    int(g_start.timestamp()))
-                for name, g_start, g_end, hours in gaps
+                for stream, g_start, g_end, hours in gaps
             ])
             gap_marker = "written"
             log("wrote %d ingest_gap marker(s)" % len(gaps))
@@ -861,8 +1097,8 @@ def main():
     log("%d GraphQL call(s) of a %d budget"
         % (budget["used"], MAX_GRAPHQL_CALLS))
     if committed_through:
-        log("committed through %s (%d chunk(s) across %d zone(s))"
-            % (iso(committed_through), chunks_done, len(zones)))
+        log("committed through %s (%d chunk(s) across %d stream(s))"
+            % (iso(committed_through), chunks_done, len(streams)))
 
     # --- heartbeat message ----------------------------------------------------
     # Counts, timestamps and classified verdicts only. Nothing derived from a
@@ -880,33 +1116,30 @@ def main():
     hc_emit("rows=%d" % rows_total)
     hc_emit("series=%d" % series_total)
     hc_emit("catching_up=%d" % behind)
+    hc_emit("beacon=%s" % beacon_state)
     if committed_through:
         lag_minutes = int((now - committed_through).total_seconds() // 60)
         hc_emit("lag=%dm" % lag_minutes)
         hc_emit("committed_through=%s" % iso(committed_through))
 
     if failure:
-        log("RUN FAILED: %d zone(s) failed a chunk; first: %s"
+        log("RUN FAILED: %d stream(s) failed a chunk; first: %s"
             % (failures, failure))
         hc_summary("failed")
         hc_emit("failure=queryfailed")
         hc_emit("detail=see pod log")
         return 1
     if gaps:
-        # The summary names the FAULT (a zone had not ingested for over a
-        # week) rather than only the symptom (which hours were lost), and
-        # cause=unknown stops the body reading as a complete account. The
-        # message carries the WORST gap; every zone's range is in the log
-        # above, which is the only record of itself. Ceiling, not floor:
-        # RETENTION_HOURS is `8 * 24 - 1`, an hour of margin under
-        # Cloudflare's stated 8 days, and `// 24` would round that to
-        # "7-day" - understating the window everything else in this repo
-        # calls eight days.
-        _zone, g_start, g_end, missing_hours = max(gaps, key=lambda g: g[3])
-        log("GAP: %d zone(s) had not ingested for over %d days; the worst "
-            "since %s" % (len(gaps), (RETENTION_HOURS + 23) // 24, iso(g_start)))
+        # The summary names the FAULT (a stream had not ingested for longer
+        # than Cloudflare keeps data) rather than only the symptom (which hours
+        # were lost), and cause=unknown stops the body reading as a complete
+        # account. The message carries the WORST gap; every stream's range is
+        # in the log above, which is the only record of itself.
+        _stream, g_start, g_end, missing_hours = max(gaps, key=lambda g: g[3])
+        log("GAP: %d stream(s) fell behind Cloudflare's retention; the worst "
+            "since %s" % (len(gaps), iso(g_start)))
         hc_summary("gap")
-        gap_zones = len(gaps)      # an int: the tuples carry zone names
+        gap_zones = len(gaps)      # an int: the tuples carry stream names
         hc_emit("gap_zones=%d" % gap_zones)
         hc_emit("gap_hours=%d" % missing_hours)
         hc_emit("gap_start=%s" % iso(g_start))
@@ -927,8 +1160,8 @@ def main():
         hc_emit("detail=see pod log")
         return 1
     if committed_through:
-        log("RUN OK: %d chunks over %d zones, %d series, committed through %s"
-            % (chunks_done, len(zones), series_total, iso(committed_through)))
+        log("RUN OK: %d chunks over %d streams, %d series, committed through %s"
+            % (chunks_done, len(streams), series_total, iso(committed_through)))
     else:
         log("RUN OK: nothing new to ingest")
     hc_summary("ok")

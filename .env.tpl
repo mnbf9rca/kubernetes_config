@@ -100,9 +100,12 @@ HEALTH_INFLUX_WITHINGS_FLAGS_TOKEN=op://Homelab/health-influxdb/withings_flags-t
 HEALTH_WITHINGS_CLIENT_ID=op://Homelab/health-withings/client-id
 HEALTH_WITHINGS_CLIENT_SECRET=op://Homelab/health-withings/client-secret
 
-# health namespace — Cloudflare analytics ingest. The API token must carry
-# Zone:Read (the job lists the account's zones on every run) and
-# Zone.Analytics:Read, and NOTHING else (the job never writes to Cloudflare).
+# health namespace — Cloudflare analytics ingest. The API token is read-only
+# and account-wide (operator ruling, 2026-10-21): Zone:Read (the job lists the
+# account's zones on every run), Zone Analytics:Read (the edge dataset),
+# Account Analytics:Read (the page-load beacon dataset) and Account
+# Settings:Read (the GraphQL settings node that reports each dataset's
+# retention). Nothing else: the job never writes to Cloudflare.
 HEALTH_CF_API_TOKEN=op://Homelab/cloudflare/api-token
 
 # health namespace — Health Auto Export (HAE) ingest auth token

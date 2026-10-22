@@ -57,7 +57,7 @@ def hour(h):
 
 def row(host="a.example", path="/x", status=200, country="GB",
         dt="2026-08-20T10:00:00Z", count=1, interval=1.0, method="GET",
-        bot="", security="unknown", agent="Mozilla/5.0"):
+        bot="", security="unknown", agent="Mozilla/5.0", content_type="html"):
     return {
         "count": count,
         "avg": {"sampleInterval": interval},
@@ -71,6 +71,25 @@ def row(host="a.example", path="/x", status=200, country="GB",
             "verifiedBotCategory": bot,
             "securitySource": security,
             "userAgent": agent,
+            "edgeResponseContentTypeName": content_type,
+        },
+    }
+
+
+def beacon_row(host="blog.example", path="/post", referer="", country="GB",
+               device="desktop", dt="2026-08-20T10:00:00Z", count=1, visits=1,
+               interval=1.0):
+    return {
+        "count": count,
+        "sum": {"visits": visits},
+        "avg": {"sampleInterval": interval},
+        "dimensions": {
+            "datetimeHour": dt,
+            "requestHost": host,
+            "requestPath": path,
+            "refererHost": referer,
+            "countryName": country,
+            "deviceType": device,
         },
     }
 
@@ -93,18 +112,32 @@ class CfZones(unittest.TestCase):
         cf.http_get = _get
 
     @staticmethod
-    def page(zones, total_pages=1):
+    def page(zones, total_pages=1, account="acct"):
         return {"success": True, "errors": [],
-                "result": [{"name": n, "id": t} for n, t in zones],
+                "result": [{"name": n, "id": t, "account": {"id": account}}
+                           for n, t in zones],
                 "result_info": {"total_pages": total_pages}}
 
-    def test_lists_every_page_sorted_by_name(self):
+    def test_lists_every_page_sorted_by_name_with_the_account(self):
         self.stub([self.page([("b.example", "2"), ("c.example", "3")], 2),
                    self.page([("a.example", "1")], 2)])
-        self.assertEqual(cf.cf_zones("t"), [("a.example", "1"),
-                                            ("b.example", "2"),
-                                            ("c.example", "3")])
+        self.assertEqual(cf.cf_zones("t"), ([("a.example", "1"),
+                                             ("b.example", "2"),
+                                             ("c.example", "3")], "acct"))
         self.assertEqual(len(self.urls), 2)
+
+    def test_two_accounts_raise(self):
+        # The beacon stream is account-scoped and this job handles one account.
+        self.stub([self.page([("a.example", "1")], 2, account="one"),
+                   self.page([("b.example", "2")], 2, account="two")])
+        with self.assertRaises(cf.QueryFailed):
+            cf.cf_zones("t")
+
+    def test_entry_without_account_raises(self):
+        self.stub([{"success": True, "result": [{"name": "x.example", "id": "1"}],
+                    "result_info": {"total_pages": 1}}])
+        with self.assertRaises(cf.QueryFailed):
+            cf.cf_zones("t")
 
     def test_api_failure_raises_not_empties(self):
         # A failed listing must never read as "no zones": that would ingest
@@ -129,20 +162,27 @@ class CfZones(unittest.TestCase):
 
 class Watermarks(unittest.TestCase):
     """influx_watermarks() parses annotated CSV where every table has its own
-    header and the zone-less table has no `zone` column at all."""
+    header and a table lacking a tag has no column for it at all."""
 
-    CSV = ("#group,false,false,false\r\n"
-           "#datatype,string,long,dateTime:RFC3339\r\n"
-           "#default,_result,,\r\n"
-           ",result,table,_time\r\n"
-           ",_result,0,2026-10-20T21:33:18Z\r\n"
+    CSV = ("#group,false,false,false,true\r\n"
+           "#datatype,string,long,dateTime:RFC3339,string\r\n"
+           "#default,_result,,,\r\n"
+           ",result,table,_time,source\r\n"
+           ",_result,0,2026-10-20T21:33:18Z,cloudflare\r\n"
+           ",_result,1,2026-10-21T18:36:59Z,beacon\r\n"
            "\r\n"
            "#group,false,false,false,true\r\n"
            "#datatype,string,long,dateTime:RFC3339,string\r\n"
            "#default,_result,,,\r\n"
            ",result,table,_time,zone\r\n"
-           ",_result,1,2026-10-20T21:00:00Z,cynexia.com\r\n"
-           ",_result,2,2026-10-20T17:00:00Z,making-tracks.app\r\n")
+           ",_result,2,2026-10-20T21:00:00Z,cynexia.com\r\n"
+           ",_result,3,2026-10-20T17:00:00Z,making-tracks.app\r\n"
+           "\r\n"
+           "#group,false,false,false,true,true\r\n"
+           "#datatype,string,long,dateTime:RFC3339,string,string\r\n"
+           "#default,_result,,,,\r\n"
+           ",result,table,_time,source,zone\r\n"
+           ",_result,4,2026-10-20T21:36:59Z,cloudflare,cynexia.com\r\n")
 
     def setUp(self):
         self.real_post = cf.http_post
@@ -155,12 +195,15 @@ class Watermarks(unittest.TestCase):
         return cf.influx_watermarks(
             {"url": "u", "org": "o", "bucket": "b", "token": "t"})
 
-    def test_one_watermark_per_zone_plus_the_legacy_global_one(self):
+    def test_one_watermark_per_zone_and_source_pair(self):
         got = self.query(200, self.CSV)
         self.assertEqual(got, {
-            "": datetime(2026, 10, 20, 21, 33, 18, tzinfo=UTC),
-            "cynexia.com": datetime(2026, 10, 20, 21, 0, tzinfo=UTC),
-            "making-tracks.app": datetime(2026, 10, 20, 17, 0, tzinfo=UTC),
+            ("", "cloudflare"): datetime(2026, 10, 20, 21, 33, 18, tzinfo=UTC),
+            ("", "beacon"): datetime(2026, 10, 21, 18, 36, 59, tzinfo=UTC),
+            ("cynexia.com", ""): datetime(2026, 10, 20, 21, 0, tzinfo=UTC),
+            ("making-tracks.app", ""): datetime(2026, 10, 20, 17, 0, tzinfo=UTC),
+            ("cynexia.com", "cloudflare"):
+                datetime(2026, 10, 20, 21, 36, 59, tzinfo=UTC),
         })
 
     def test_empty_bucket_is_an_empty_dict(self):
@@ -219,6 +262,47 @@ class Rewind(unittest.TestCase):
 
     def test_exact_hour_is_unchanged(self):
         self.assertEqual(cf.rewind(hour(20)), hour(18))
+
+
+class RetentionFloor(unittest.TestCase):
+    def test_rounds_down_then_adds_the_margin(self):
+        # 31 days before 18:18:48 is 18:18:48 on the 20th; floored to 18:00,
+        # plus the margin, so the first fetched hour is inside the window
+        # however long the run takes within its clock hour.
+        now = datetime(2026, 10, 21, 18, 18, 48, tzinfo=UTC)
+        self.assertEqual(
+            cf.retention_floor(now, 31 * 86400),
+            datetime(2026, 9, 20, 18 + cf.RETENTION_MARGIN_HOURS, 0, tzinfo=UTC))
+
+    def test_constant_across_a_clock_hour(self):
+        a = datetime(2026, 10, 21, 18, 0, 0, tzinfo=UTC)
+        b = datetime(2026, 10, 21, 18, 59, 59, tzinfo=UTC)
+        self.assertEqual(cf.retention_floor(a, 3600), cf.retention_floor(b, 3600))
+
+
+class Resume(unittest.TestCase):
+    """resume() decides where a stream starts and whether hours were lost."""
+
+    def test_new_stream_seeds_from_the_floor(self):
+        self.assertEqual(cf.resume(None, hour(5)), (hour(5), 0))
+
+    def test_current_stream_rewinds_the_overlap(self):
+        wm = datetime(2026, 8, 20, 20, 37, 52, tzinfo=UTC)
+        self.assertEqual(cf.resume(wm, hour(5)), (hour(18), 0))
+
+    def test_overlap_below_the_floor_is_clamped_not_a_gap(self):
+        # The watermark is hour 18 and the floor is hour 19: hours 16 to 18
+        # are stored and merely cannot be rewritten. Nothing after the
+        # watermark is older than the floor, so there is no gap. This is the
+        # refetch-after-delete case, and it used to raise a false alarm.
+        wm = datetime(2026, 8, 20, 18, 36, 59, tzinfo=UTC)
+        self.assertEqual(cf.resume(wm, hour(19)), (hour(19), 0))
+
+    def test_hours_after_the_watermark_below_the_floor_are_the_gap(self):
+        # Watermark in hour 10, floor at hour 14: hours 11, 12 and 13 were
+        # never stored and can no longer be fetched.
+        wm = datetime(2026, 8, 20, 10, 36, 59, tzinfo=UTC)
+        self.assertEqual(cf.resume(wm, hour(14)), (hour(14), 3))
 
 
 class ParseHour(unittest.TestCase):
@@ -318,6 +402,13 @@ class Aggregate(unittest.TestCase):
         self.assertEqual(key[1], "unknown")   # host
         self.assertEqual(key[4], "unknown")   # country
         self.assertEqual(key[5], "unknown")   # method
+        self.assertEqual(key[9], "none")      # content type
+
+    def test_content_type_is_part_of_the_key_and_empty_is_none(self):
+        acc = {}
+        cf.aggregate([row(content_type="html"), row(content_type="json"),
+                      row(content_type="")], "z", set(), acc)
+        self.assertEqual(sorted(key[9] for key in acc), ["html", "json", "none"])
 
     def test_method_is_part_of_the_key(self):
         acc = {}
@@ -378,6 +469,67 @@ class Aggregate(unittest.TestCase):
             self.assertNotIn("curl", line)
 
 
+class AggregateBeacon(unittest.TestCase):
+    def test_excluded_zone_and_its_subdomains_are_never_stored(self):
+        # Operator ruling: nothing under family-foqos.app reaches InfluxDB.
+        acc = {}
+        cf.aggregate_beacon(
+            [beacon_row(host="family-foqos.app"),
+             beacon_row(host="www.family-foqos.app"),
+             beacon_row(host="blog.example"),
+             beacon_row(host="notfamily-foqos.app")],
+            set(), acc)
+        self.assertEqual(sorted(key[0] for key in acc),
+                         ["blog.example", "notfamily-foqos.app"])
+
+    def test_counts_and_visits_sum_and_interval_is_count_weighted(self):
+        acc = {}
+        cf.aggregate_beacon([beacon_row(count=2, visits=1, interval=1.0),
+                             beacon_row(count=6, visits=5, interval=3.0)],
+                            set(), acc)
+        (count, visits, weighted), = acc.values()
+        self.assertEqual((count, visits), (8, 6))
+        self.assertAlmostEqual(weighted / count, (2 * 1.0 + 6 * 3.0) / 8)
+
+    def test_paths_truncate_like_the_edge_and_full_path_hosts_apply(self):
+        acc = {}
+        cf.aggregate_beacon([beacon_row(path="/a/b/c/d"),
+                             beacon_row(host="full.example", path="/a/b/c/d")],
+                            {"full.example"}, acc)
+        self.assertEqual(sorted(key[1] for key in acc), ["/a/b/*", "/a/b/c/d"])
+
+    def test_empty_referer_is_none_and_missing_dimensions_fall_back(self):
+        acc = {}
+        cf.aggregate_beacon([beacon_row(referer=""),
+                             {"count": 1, "sum": {}, "avg": {},
+                              "dimensions": {"datetimeHour": "2026-08-20T10:00:00Z"}}],
+                            set(), acc)
+        by_host = {key[0]: key for key in acc}
+        self.assertEqual(by_host["blog.example"][2], "none")
+        self.assertEqual(by_host["unknown"][2:5], ("none", "unknown", "unknown"))
+
+    def test_line_protocol_shape_and_no_referer_path(self):
+        acc = {}
+        cf.aggregate_beacon([beacon_row(referer="news.example", count=3, visits=2)],
+                            set(), acc)
+        (line,) = list(cf.beacon_points(acc))
+        self.assertTrue(line.startswith("page_loads,source=beacon,"))
+        self.assertIn(",host=blog.example,", line)
+        self.assertIn(",referer_host=news.example,", line)
+        self.assertIn(",device=desktop ", line)
+        self.assertIn(" count=3i,visits=2i,sample_interval=", line)
+        self.assertNotIn("referer_path", line)
+        self.assertTrue(line.endswith(" %d" % int(hour(10).timestamp())))
+
+    def test_lines_are_ordered_oldest_first(self):
+        acc = {}
+        cf.aggregate_beacon([beacon_row(dt="2026-08-20T12:00:00Z", host="a.example"),
+                             beacon_row(dt="2026-08-20T10:00:00Z", host="z.example")],
+                            set(), acc)
+        stamps = [int(line.rsplit(" ", 1)[1]) for line in cf.beacon_points(acc)]
+        self.assertEqual(stamps, sorted(stamps))
+
+
 class Points(unittest.TestCase):
     def test_line_protocol_shape(self):
         acc = {}
@@ -389,7 +541,8 @@ class Points(unittest.TestCase):
         self.assertIn(",method=GET,", line)
         self.assertIn(",bot_category=none,", line)
         self.assertIn(",security_source=unknown,", line)
-        self.assertIn(",client=other ", line)
+        self.assertIn(",client=other,", line)
+        self.assertIn(",content_type=html ", line)
         self.assertIn("count=2i", line)
         self.assertTrue(line.endswith(" %d" % int(hour(10).timestamp())))
 
@@ -482,8 +635,53 @@ class StubbedQuery(unittest.TestCase):
         return {"data": {"viewer": {"zones": [
             {"httpRequestsAdaptiveGroups": rows}]}}}
 
+    def ok_beacon(self, rows):
+        return {"data": {"viewer": {"accounts": [
+            {"rumPageloadEventsAdaptiveGroups": rows}]}}}
+
+
+class CfRetention(StubbedQuery):
+    def settings(self, edge, beacon):
+        return {"data": {"viewer": {
+            "zones": [{"settings": {"httpRequestsAdaptiveGroups":
+                                    {"notOlderThan": edge}}}],
+            "accounts": [{"settings": {"rumPageloadEventsAdaptiveGroups":
+                                       {"notOlderThan": beacon}}}]}}}
+
+    def test_reads_both_datasets(self):
+        self.stub(200, self.settings(2678400, 15897600))
+        self.assertEqual(cf.cf_retention("t", "z", "a", self.budget),
+                         (2678400, 15897600))
+        self.assertEqual(self.calls[0]["zoneTag"], "z")
+        self.assertEqual(self.calls[0]["accountTag"], "a")
+        self.assertEqual(self.budget["used"], 1)
+
+    def test_missing_or_non_positive_retention_raises(self):
+        # A floor of zero would seed every stream from "now" and silently
+        # skip the whole window; an absent one must not default.
+        self.stub(200, self.settings(0, 15897600))
+        with self.assertRaises(cf.QueryFailed):
+            cf.cf_retention("t", "z", "a", self.budget)
+        self.stub(200, {"data": {"viewer": {"zones": [{"settings": {}}],
+                                            "accounts": [{}]}}})
+        with self.assertRaises(cf.QueryFailed):
+            cf.cf_retention("t", "z", "a", self.budget)
+
 
 class CfQuery(StubbedQuery):
+    def test_beacon_dataset_reads_the_account_scope(self):
+        self.stub(200, self.ok_beacon([beacon_row()]))
+        got = cf.cf_query("t", "a", hour(0), hour(1), 10, self.budget, cf.BEACON)
+        self.assertEqual(len(got), 1)
+        self.assertEqual(self.calls[0]["tag"], "a")
+        self.assertIn("rumPageloadEventsAdaptiveGroups", cf.BEACON[0])
+        self.assertNotIn("refererPath", cf.BEACON[0])
+
+    def test_beacon_dataset_rejects_the_zone_shape(self):
+        self.stub(200, self.ok([beacon_row()]))
+        with self.assertRaises(cf.QueryFailed):
+            cf.cf_query("t", "a", hour(0), hour(1), 10, self.budget, cf.BEACON)
+
     def test_clean_response_returns_rows(self):
         self.stub(200, self.ok([row()]))
         got = cf.cf_query("t", "z", hour(0), hour(1), 10, self.budget)
@@ -551,7 +749,7 @@ class CfQuery(StubbedQuery):
         cf.cf_query("t", "zt", hour(0), hour(1), 10, self.budget)
         self.assertEqual(self.calls[0]["start"], "2026-08-20T00:00:00Z")
         self.assertEqual(self.calls[0]["end"], "2026-08-20T01:00:00Z")
-        self.assertEqual(self.calls[0]["zoneTag"], "zt")
+        self.assertEqual(self.calls[0]["tag"], "zt")
 
 
 class CfFetch(StubbedQuery):
@@ -626,12 +824,16 @@ class Tunables(unittest.TestCase):
     def test_chunk_is_under_cloudflares_one_day_ceiling(self):
         self.assertLess(cf.CHUNK_HOURS, 24)
 
-    def test_backfill_cannot_outrun_retention(self):
-        # MAX_CHUNKS * CHUNK_HOURS is what one run can reach back. It is
-        # deliberately a little short of RETENTION_HOURS; if it ever exceeded
-        # it, a run would query windows Cloudflare has already dropped.
-        self.assertLessEqual(cf.MAX_CHUNKS * cf.CHUNK_HOURS,
-                             cf.RETENTION_HOURS)
+    def test_zones_at_the_chunk_cap_fit_the_call_budget(self):
+        # 21 zones at MAX_CHUNKS each is the shape of a full catch-up; the
+        # budget reserve must leave room for one more zone's first chunk to
+        # subdivide rather than fail.
+        self.assertLess(cf.BUDGET_RESERVE, cf.MAX_GRAPHQL_CALLS)
+        self.assertGreaterEqual(cf.BUDGET_RESERVE, 2)
+
+    def test_retention_margin_is_at_least_an_hour(self):
+        # A run at :59 must still be inside the window at :00 plus the run.
+        self.assertGreaterEqual(cf.RETENTION_MARGIN_HOURS, 1)
 
 
 class Pusher(unittest.TestCase):

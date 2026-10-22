@@ -194,6 +194,9 @@ PY_VALUE_ALLOWLIST = frozenset({
     # InfluxDB sent can reach any of them: a response body goes to `log`, which
     # is not a sink.
     "groups_total", "points_written", "STAGE",
+    # homelab/health/scripts/cloudflare-analytics-ingest.py: the beacon
+    # stream's state, assigned only the literals ok, behind and failed.
+    "beacon_state",
 })
 
 # Python: calls a sink argument may make. `iso` formats a datetime; `len`, `int`
