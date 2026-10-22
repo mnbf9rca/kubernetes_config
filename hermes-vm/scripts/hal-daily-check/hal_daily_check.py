@@ -352,8 +352,6 @@ def findings(snapshot,at,cutoff,rules=(),error_history=None):
                 dev=er.get(source,{}).get('device_id') or (source if source in dr else None)
                 if not dev:
                     raise ValueError('device identity')
-                if dev in ignored['device']:
-                    continue
                 if row.get('condition','offline') not in ('offline','stale'):
                     raise ValueError('unknown unhealthy condition')
                 unhealthy.append(dict(device_id=dev,entity_ids=[eid] if eid else [],condition=row.get('condition','offline'),name=label(row.get('name'),names.get(source,'device')),since=row.get('since'),integration=row.get('integration')))
@@ -369,7 +367,8 @@ def findings(snapshot,at,cutoff,rules=(),error_history=None):
         gaps.append('The offline-devices monitor is unavailable, so I could not check for offline devices.')
     parent_down={er[eid].get('device_id') for eid,s in states.items() if eid in er and s.get('state')=='unavailable'}
     entry_names={k:label(v.get('title'),v.get('domain')) for k,v in entries.items()}
-    situations=group_devices(unhealthy,list(dr.values()),eligible,entry_names,parent_down)
+    situations=[g for g in group_devices(unhealthy,list(dr.values()),eligible,entry_names,parent_down)
+                if any(m['device_id'] not in ignored['device'] for m in g['members'])]
     if any(g.get('grouping_unavailable') for g in situations):
         diagnostics.append('device grouping: complete monitor scope or registry ancestry was unavailable')
     for group in situations:
@@ -489,9 +488,14 @@ def render(report,assessments,notes,at):
         root=report.get('situation_roots',{}).get(situation['key'])
         saved=notes.get('pairs',{}).get(root,{})
         if saved.get('note') and saved.get('observed_at') and situation['line'] in lines:
-            when=stamp(saved['observed_at']).astimezone(LONDON).strftime('%-d %B')
-            lines.remove(situation['line'])
-            lines.extend(line.strip()+f' Hal looked at this on {when}.' for line in saved['note'].splitlines() if line.strip())
+            names={''.join(m['name'].casefold().split()) for m in situation['members']
+                   if m['device_id'] not in report.get('ignored_devices',[])}
+            matched=[line.strip() for line in saved['note'].splitlines()
+                     if ':' in line and ''.join(line.split(':',1)[0].casefold().split()) in names]
+            if matched:
+                when=stamp(saved['observed_at']).astimezone(LONDON).strftime('%-d %B')
+                lines.remove(situation['line'])
+                lines.extend(line+f' Hal looked at this on {when}.' for line in matched)
     needs=[item_bullet(line) for line in lines];updates=[]
     for update in report.get('updates',[]):
         saved=pairs.get(update['key'],{});target=label(update.get('available'),'unknown version')

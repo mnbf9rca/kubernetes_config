@@ -454,7 +454,6 @@ The rules that must not be broken:
   Operator ruling, 2026-09-06: the operator reviews under time pressure and an instruction that takes two readings is a fault.
   Operator ruling, 2026-09-20: use absolute paths for every file named in messages to the operator, so links are clickable.
 - **A message to the operator answers "what do I need to know or do", in plain English, and nothing else.**
-  Hal acts on explicit operator instructions sent by email reply; it does not act unasked.
   This covers every channel an agent writes for the operator to read: a chief-of-staff reply, a Hal email, a heartbeat message, a pull request body.
   Lead with the verdict.
   Then list the items that need the operator, each as what happened, why it matters and what to do.
@@ -465,6 +464,7 @@ The rules that must not be broken:
   A quiet day is a verdict and two lines.
   Plain English throughout: no jargon, no codes, no invented terms.
   Operator ruling, 2026-10-17, after the first Hal morning email arrived as 84 lines of diagnostics with the summary at the bottom: the operator read it as unusable, and the fault was a class of message, not one layout.
+  Hal acts on explicit operator instructions sent by email reply; it does not act unasked.
 - **Documentation, not agent memories.**
   Do not record repo, cluster, or account state in an agent's private memory system — that hides operational knowledge from the operator, from other agents, and from review.
   Anything worth remembering goes in `docs/` (or this file, per the rule above), where it is versioned, diffable and shared.

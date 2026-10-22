@@ -113,9 +113,9 @@ class OutputBoundaries(unittest.TestCase):
 
 class DeviceReminder(unittest.TestCase):
  def test_note_prose_and_observed_date_replace_device_line(self):
-  situation=dict(key='s',line='The lamp is offline; check its power.',members=[])
+  situation=dict(key='s',line='The lamp is offline; check its power.',members=[dict(device_id='lamp',name='Lamp')])
   report=dict(items=[situation['line']],updates=[],situations=[situation],situation_roots={'s':'t_1'},gaps=[])
-  notes={'pairs':{'t_1':dict(note='PRIVATE DIAGNOSIS',observed_at=AT.isoformat(),sent_receipt={'accepted_at':AT.isoformat()})}}
+  notes={'pairs':{'t_1':dict(note='Lamp: PRIVATE DIAGNOSIS',observed_at=AT.isoformat(),sent_receipt={'accepted_at':AT.isoformat()})}}
   body=d.render(report,{},notes,AT)[1]
   self.assertIn('looked at this on 18 October',body);self.assertIn('PRIVATE DIAGNOSIS',body)
   notes['pairs']['t_1']['sent_receipt']=None;self.assertIn('looked at this',d.render(report,{},notes,AT)[1])
@@ -555,3 +555,26 @@ class FirstRealMorning(unittest.TestCase):
   report=d.findings(snapshot(),AT,AT-dt.timedelta(days=1));report['updates'][0]['release_url']=None
   body=d.render(report,{},{},AT)[1];self.assertNotIn('No release link supplied',body);self.assertIn('assessment pending.',body)
   report['updates'][0]['release_url']='https://example.org/release';self.assertIn('https://example.org/release',d.render(report,{},{},AT)[1])
+
+class ReplyReviewDevices(unittest.TestCase):
+ def test_ignore_after_grouping_keeps_hub_key_and_drops_only_fully_ignored_groups(self):
+  s=snapshot();s['devices']=[dict(id='hub',name='Coordinator',config_entries=['z'])]+[dict(id=x,name=x,via_device_id='hub',config_entries=['z']) for x in ('a','b','c')]
+  s['entities']=[dict(entity_id='sensor.'+x,device_id=x,config_entry_id='z',platform='zha') for x in ('a','b','c','hub')]
+  s['states']=[state('sensor.hub','unavailable'),state('sensor.offline_devices','3',devices=[dict(id=x,name=x,condition='offline') for x in ('a','b','c')],integrations={'zha':4})]
+  normal=d.findings(s,AT,AT-dt.timedelta(days=1));rule=lambda x:dict(kind='device',target=x)
+  mixed=d.findings(s,AT,AT-dt.timedelta(days=1),rules=[rule('a')])
+  self.assertEqual(len(normal['situations']),1);self.assertEqual(len(mixed['situations']),1)
+  self.assertEqual(mixed['situations'][0]['key'],normal['situations'][0]['key']);self.assertEqual(mixed['items'],normal['items'])
+  hidden=d.findings(s,AT,AT-dt.timedelta(days=1),rules=[rule(x) for x in ('a','b','c')])
+  self.assertEqual(hidden['situations'],[]);self.assertEqual(hidden['items'],[])
+ def note_report(self):
+  situation=dict(key='s',line='The hub looks down.',members=[dict(device_id='plant',name='Flower-plant'),dict(device_id='lamp',name='Lamp')])
+  return dict(items=[situation['line']],updates=[],situations=[situation],situation_roots={'s':'root'},gaps=[],ignored_devices=['lamp'])
+ def test_legacy_note_only_matches_non_ignored_member_names(self):
+  report=self.note_report();notes={'pairs':{'root':dict(note=' flower-plant : charge it.\nMQTT: healthy.\nLamp: check it.',observed_at=AT.isoformat())}}
+  subject,body=d.render(report,{},notes,AT)
+  self.assertIn('charge it',body);self.assertIn('Hal looked at this',body);self.assertNotIn('MQTT',body);self.assertNotIn('Lamp:',body);self.assertIn('1 thing',subject)
+ def test_unmatched_legacy_note_keeps_deterministic_finding(self):
+  report=self.note_report();notes={'pairs':{'root':dict(note='MQTT: healthy.\nLamp: check it.',observed_at=AT.isoformat())}}
+  body=d.render(report,{},notes,AT)[1]
+  self.assertIn('looks down',body);self.assertNotIn('MQTT',body);self.assertNotIn('Lamp:',body)

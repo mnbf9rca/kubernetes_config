@@ -164,3 +164,19 @@ class DuplicateReply(unittest.TestCase):
    replies.record_write(Path(home),'call','ha_manage_updates',{'action':'install'},{'success':True},reply)
    event=types.SimpleNamespace(source=types.SimpleNamespace(platform=types.SimpleNamespace(value='email'),user_id='alias@example.org',chat_id='alias@example.org'),message_id='<reply>',reply_to_message_id='<original>',text='Install Core.')
    self.assertEqual(plugin.capture_reply(event=event)['action'],'skip')
+
+class ReplyReviewReadActions(unittest.TestCase):
+ def test_read_actions_of_write_capable_tools_do_not_reach_actions_log(self):
+  import types
+  actions={'ha_manage_updates':['list','get'],'ha_manage_backup':['list','view','diff'],'ha_manage_blueprints':['list','get'],'ha_manage_pipeline':['list','get'],'ha_manage_theme':['list','get_engine_theme'],'ha_manage_radio':['diagnostics','network_status','ping']}
+  names={'mcp__HA_MCP__'+name:'HA-MCP' for name in actions}
+  modules={'tools.mcp_tool':types.SimpleNamespace(_mcp_tool_server_names=names),'tools.mcp_tool_handlers':types.SimpleNamespace(_tool_is_read_only=lambda *a:False)}
+  package=types.ModuleType('tools');package.mcp_tool=modules['tools.mcp_tool']
+  with tempfile.TemporaryDirectory() as home,patch.dict(sys.modules,dict(modules,tools=package)),patch.object(plugin,'PROFILE',Path(home)),patch.object(plugin,'_hal_profile',return_value=True),patch.object(plugin,'_reply_context',return_value={}):
+   for name,verbs in actions.items():
+    for action in verbs:
+     with self.subTest(name=name,action=action):
+      self.assertIsNone(plugin._mcp_write_name('mcp__HA_MCP__'+name,{'action':action}))
+      plugin.log_ha_write(tool_name='mcp__HA_MCP__'+name,args={'action':action},result={'success':True})
+    self.assertEqual(plugin._mcp_write_name('mcp__HA_MCP__'+name,{'action':'create'}),name)
+   self.assertFalse((Path(home)/'daily-check-actions.json').exists())

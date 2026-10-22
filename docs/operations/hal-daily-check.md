@@ -136,6 +136,20 @@ No agent address is allowed.
 In-Reply-To and Message-ID bind a reply to its new instruction; quoted original mail is context only.
 Addresses and mail credentials live in the private profile configuration, not this repository.
 
+Hal's native email home is the operator's direct address.
+Native email startup/restart/shutdown notifications are disabled.
+Email display settings suppress tool progress, reasoning, intermediate replies, busy acknowledgements, long-running status and warning notifications.
+Hal's profile also disables memory-update, background-process and credits notices, the optional turn-completion explanation and failed-file-mutation footer.
+These are native configuration settings; Hermes source is unchanged.
+Two native notices can still appear: a suspended-session reset means Hermes could not continue the old conversation, and a compression-exhaustion notice means its context could not be shortened enough and a new session was opened.
+Neither notice reports a Home Assistant action or fault.
+
+A home channel also supplies the destination for a bare email `send_message` target, including messages sent from another platform.
+Cron can use it for bare-platform delivery, broadcast delivery, or `origin` delivery without a saved origin.
+All seven current Hal cron records specify delivery: six use `local`, and weekly audit `ea2df3246202` uses its explicit WebUI origin.
+None gains email delivery from this home setting; the audit's existing WebUI delivery failure remains recorded in [the VM runbook](hermes-vm.md#hals-own-script-cron-jobs).
+Reply-created timed-restart jobs also specify `deliver=local`.
+
 Hal understands requests to ignore a device, ignore an integration's error, snooze/ignore an update, remove a rule, list current rules, install an update, reload an integration or restart HA now or at a stated time.
 It answers questions about the estate from its reads.
 For example, “Ignore Monstera through Friday” records a dated device rule, and “What are you ignoring?” lists active rules.
@@ -149,10 +163,13 @@ Device targets are registry IDs; error targets are integration domains; update t
 Rules without dates last until removed.
 An `until` date is inclusive in Europe/London; the morning script removes expired rules.
 Rules suppress both a device's offline line and its low-battery line, or the matching integration error/update, without a suppression notice.
+Devices are grouped before suppression: a partly ignored hub group keeps its key and shared-connection finding; an entirely ignored group is hidden.
+Saved look-over prose includes only lines named for current, non-ignored members; otherwise the deterministic finding remains.
 Suppressed devices are not mistaken for recovered episodes.
 
 Hal calls native HA-MCP write tools directly.
 A post-tool hook records every write's time, native instruction Message-ID, actual instruction, tool, arguments and result in `daily-check-actions.json`.
+Read actions of write-capable tools (`list`, `get`, `view`, `diff`, `diagnostics`, `network_status`, `ping`, `get_engine_theme`) are excluded from the write log.
 Hal does not have to remember a separate logging call.
 Rules changes are recorded there too.
 The next morning puts successful requested actions under Done for you and failed actions under Needs you, since its previous accepted cutoff.

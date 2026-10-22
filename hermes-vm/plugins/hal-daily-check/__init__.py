@@ -180,7 +180,8 @@ def _mcp_write_name(tool_name,args):
     name=tool_name.removeprefix('mcp__HA_MCP__')
     if name in ('list_resources','read_resource','list_prompts','get_prompt') or _tool_is_read_only('HA-MCP',name):
         return None
-    if name=='ha_manage_updates' and args.get('action','list') in ('list','get'):
+    action=args.get('action','list' if name=='ha_manage_updates' else None)
+    if action in ('list','get','view','diff','diagnostics','network_status','ping','get_engine_theme'):
         return None
     return name
 
