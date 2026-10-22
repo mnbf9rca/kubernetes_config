@@ -1,11 +1,13 @@
 ---
-# Cloudflare edge analytics -> InfluxDB.
+# Cloudflare edge and browser-beacon analytics -> InfluxDB.
 #
-# Cloudflare's Free plan keeps 8 days of per-hostname analytics and rejects any
-# GraphQL query wider than 1 day. This CronJob copies that window into the
-# health namespace's InfluxDB (bucket `cloudflare`, infinite retention) before it
-# expires, so the traffic record outlives Cloudflare's retention and is queryable
-# from Grafana Cloud through the PDC agent.
+# Cloudflare keeps a bounded window of analytics (31 days of per-zone edge
+# requests and 184 days of page-load beacons when measured on 2026-10-21; the
+# script reads the live figure from the GraphQL settings node on every run).
+# This CronJob copies those windows into the health namespace's InfluxDB
+# (bucket `cloudflare`, infinite retention) before they expire, so the traffic
+# record outlives Cloudflare's retention and is queryable from Grafana Cloud
+# through the PDC agent.
 #
 # The script itself is homelab/health/scripts/cloudflare-analytics-ingest.py,
 # mounted at /app/ingest.py by the configMapGenerator in this directory's
@@ -38,10 +40,16 @@ metadata:
   namespace: health
 spec:
   # Hourly, on an off-minute so it does not pile onto :00 with everything else.
-  # Hourly rather than daily because Cloudflare's 1-day query ceiling makes wide
-  # backfills awkward, so a gap is at most an hour of catching up.
+  # Hourly rather than daily because chunks are under a day (adaptive sampling
+  # coarsens with the query span), so a gap is at most an hour of catching up.
   schedule: "37 * * * *"
   timeZone: "UTC"                 # without this the schedule is read in kube-controller-manager's local zone
+  # Declared so that an apply from the tree is what ends a suspension: a
+  # `kubectl patch` to suspend is live state that an apply would otherwise
+  # leave in place for ever, because the field would be absent from the
+  # last-applied configuration. The re-ingest runbook in
+  # docs/operations/homelab-health.md relies on this.
+  suspend: false
   concurrencyPolicy: Forbid
   # A missed window is retried for 30 minutes, then dropped — the next hourly run
   # picks the same data up anyway, because the watermark comes from InfluxDB.
@@ -55,9 +63,9 @@ spec:
       backoffLimit: 1
       # With concurrencyPolicy: Forbid, a hung run blocks every later run with
       # nothing alerting until the monitor's own heartbeat window expires. A
-      # steady-state run is two GraphQL calls and one write; 20 minutes covers a
-      # full 8-chunk backfill with the per-chunk sleep and still bounds a wedged
-      # socket.
+      # steady-state run is one GraphQL call per stream and one write each; 20
+      # minutes covers the full 180-call budget with the per-chunk sleep and
+      # still bounds a wedged socket.
       activeDeadlineSeconds: 1200
       # 3 days, so a Friday failure is still forensically available on Monday.
       ttlSecondsAfterFinished: 259200
@@ -101,11 +109,13 @@ spec:
                 # `make check-script-substitution` enforces it.
                 - name: PUSH_URL
                   value: "https://uptime.cynexia.com/api/push/${HEALTH_KUMA_CLOUDFLARE_TOKEN}"
-                # Cloudflare API token — Zone:Read (to list the zones) and
-                # Zone.Analytics:Read, nothing else. This job never writes to
-                # Cloudflare, so an edit scope here would be a strictly
-                # unnecessary blast radius. The zone list is enumerated from
-                # the API on every run, so there is no zone list to configure.
+                # Cloudflare API token, read-only and account-wide: Zone:Read
+                # (to list the zones), Zone Analytics:Read (edge dataset),
+                # Account Analytics:Read (page-load beacons) and Account
+                # Settings:Read (the settings node that reports retention).
+                # This job never writes to Cloudflare, so an edit scope here
+                # would be a strictly unnecessary blast radius. The zone list
+                # and the account are enumerated from the API on every run.
                 - name: CF_API_TOKEN
                   valueFrom: { secretKeyRef: { name: health-cloudflare, key: api-token } }
                 # Read AND write on the `cloudflare` bucket: the watermark is

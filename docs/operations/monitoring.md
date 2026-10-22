@@ -355,7 +355,7 @@ A DOWN `homelab-hermes-pull` means no new zip landed that night; the restic gate
 A VM rebuild turns the monitor DOWN by design: the pinned host key in the `hermes-known-hosts` ConfigMap no longer matches, and the fix is `ssh-keyscan` from a trusted network into that ConfigMap, never `StrictHostKeyChecking=no`.
 
 `homelab-cloudflare-analytics` goes DOWN for one failure mode that is not a malfunction: **an unrecoverable gap**.
-Cloudflare keeps 8 days, so if the job has been down longer the missing hours no longer exist anywhere.
+Cloudflare keeps a bounded window (31 days of edge requests and 184 days of page-load beacons when measured on 2026-10-21; the job reads the live figure each run), so if the job has been down longer the missing hours no longer exist anywhere.
 It logs the range, writes an `ingest_gap` marker into InfluxDB so the hole reads as a hole rather than a quiet week, ingests what survives, and exits non-zero — once, since the next run's watermark is current again.
 The heartbeat carries `verdict=gap` with `gap_hours=`, `gap_start=` and `gap_end=`.
 Read a DOWN monitor here as "find out which hours were lost" ([homelab-health.md](homelab-health.md#gaps-are-permanent-so-they-are-loud)).
