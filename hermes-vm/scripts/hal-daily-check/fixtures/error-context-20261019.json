@@ -1,0 +1,1808 @@
+{
+  "_source": "19 October 2026 17:08 BST morning trial. Log fields, manifests, enabled-entity states and assessment receipts retained; entry/entity IDs anonymised and account titles omitted.",
+  "captured_at": "2026-10-19T16:08:57+00:00",
+  "logs": [
+    {
+      "name": "custom_components.open_epaper_link.coordinator",
+      "level": "ERROR",
+      "message": [
+        "WebSocket connection error: 404, message='Invalid response status', url='ws://10.0.2.169/ws'"
+      ],
+      "first_occurred": 1792205766.166715,
+      "timestamp": 1792378565.6433823,
+      "count": 3
+    },
+    {
+      "name": "custom_components.heatmiserneo.coordinator",
+      "level": "ERROR",
+      "message": [
+        "Unexpected error fetching Heatmiser NeoHub : 192.168.17.82 data"
+      ],
+      "first_occurred": 1792284964.124507,
+      "timestamp": 1792285063.0978973,
+      "count": 4
+    },
+    {
+      "name": "neohub",
+      "level": "ERROR",
+      "message": [
+        "Connection failed"
+      ],
+      "first_occurred": 1792284964.1195438,
+      "timestamp": 1792285063.0956028,
+      "count": 4
+    },
+    {
+      "name": "custom_components.heatmiserneo.coordinator",
+      "level": "ERROR",
+      "message": [
+        "Unexpected error fetching Heatmiser NeoHub : 192.168.17.82 data"
+      ],
+      "first_occurred": 1792284931.1136253,
+      "timestamp": 1792284931.1136253,
+      "count": 1
+    },
+    {
+      "name": "neohub",
+      "level": "ERROR",
+      "message": [
+        "Error sending message"
+      ],
+      "first_occurred": 1792284931.0412755,
+      "timestamp": 1792284931.0412755,
+      "count": 1
+    },
+    {
+      "name": "homeassistant.components.ohme.coordinator",
+      "level": "ERROR",
+      "message": [
+        "Error requesting Ohme Charge Sessions data: Cannot connect to host api.ohme.io:443 ssl:default [Connect call failed ('54.247.171.145', 443)]"
+      ],
+      "first_occurred": 1792233208.788501,
+      "timestamp": 1792233208.788501,
+      "count": 1
+    }
+  ],
+  "manifests": [
+    {
+      "domain": "heatmiserneo",
+      "name": "Heatmiser Neo Climate",
+      "loggers": [
+        "neohub"
+      ]
+    },
+    {
+      "domain": "ohme",
+      "name": "Ohme",
+      "loggers": null
+    },
+    {
+      "domain": "open_epaper_link",
+      "name": "OpenEPaperLink",
+      "loggers": null
+    }
+  ],
+  "entries": [
+    {
+      "entry_id": "heatmiserneo-0",
+      "domain": "heatmiserneo",
+      "state": "loaded"
+    },
+    {
+      "entry_id": "ohme-1",
+      "domain": "ohme",
+      "state": "loaded"
+    },
+    {
+      "entry_id": "open_epaper_link-2",
+      "domain": "open_epaper_link",
+      "state": "loaded"
+    },
+    {
+      "entry_id": "open_epaper_link-3",
+      "domain": "open_epaper_link",
+      "state": "not_loaded"
+    },
+    {
+      "entry_id": "open_epaper_link-4",
+      "domain": "open_epaper_link",
+      "state": "not_loaded"
+    },
+    {
+      "entry_id": "open_epaper_link-5",
+      "domain": "open_epaper_link",
+      "state": "not_loaded"
+    }
+  ],
+  "entities": [
+    {
+      "entity_id": "sensor.fixture_1",
+      "config_entry_id": "heatmiserneo-0"
+    },
+    {
+      "entity_id": "sensor.fixture_2",
+      "config_entry_id": "heatmiserneo-0"
+    },
+    {
+      "entity_id": "sensor.fixture_3",
+      "config_entry_id": "heatmiserneo-0"
+    },
+    {
+      "entity_id": "sensor.fixture_4",
+      "config_entry_id": "heatmiserneo-0"
+    },
+    {
+      "entity_id": "sensor.fixture_5",
+      "config_entry_id": "heatmiserneo-0"
+    },
+    {
+      "entity_id": "sensor.fixture_6",
+      "config_entry_id": "heatmiserneo-0"
+    },
+    {
+      "entity_id": "sensor.fixture_7",
+      "config_entry_id": "heatmiserneo-0"
+    },
+    {
+      "entity_id": "sensor.fixture_8",
+      "config_entry_id": "heatmiserneo-0"
+    },
+    {
+      "entity_id": "sensor.fixture_9",
+      "config_entry_id": "heatmiserneo-0"
+    },
+    {
+      "entity_id": "sensor.fixture_10",
+      "config_entry_id": "heatmiserneo-0"
+    },
+    {
+      "entity_id": "sensor.fixture_11",
+      "config_entry_id": "heatmiserneo-0"
+    },
+    {
+      "entity_id": "sensor.fixture_12",
+      "config_entry_id": "heatmiserneo-0"
+    },
+    {
+      "entity_id": "sensor.fixture_13",
+      "config_entry_id": "heatmiserneo-0"
+    },
+    {
+      "entity_id": "sensor.fixture_14",
+      "config_entry_id": "heatmiserneo-0"
+    },
+    {
+      "entity_id": "sensor.fixture_15",
+      "config_entry_id": "heatmiserneo-0"
+    },
+    {
+      "entity_id": "sensor.fixture_16",
+      "config_entry_id": "heatmiserneo-0"
+    },
+    {
+      "entity_id": "sensor.fixture_17",
+      "config_entry_id": "heatmiserneo-0"
+    },
+    {
+      "entity_id": "sensor.fixture_18",
+      "config_entry_id": "heatmiserneo-0"
+    },
+    {
+      "entity_id": "sensor.fixture_19",
+      "config_entry_id": "heatmiserneo-0"
+    },
+    {
+      "entity_id": "sensor.fixture_20",
+      "config_entry_id": "heatmiserneo-0"
+    },
+    {
+      "entity_id": "sensor.fixture_21",
+      "config_entry_id": "heatmiserneo-0"
+    },
+    {
+      "entity_id": "sensor.fixture_22",
+      "config_entry_id": "heatmiserneo-0"
+    },
+    {
+      "entity_id": "sensor.fixture_23",
+      "config_entry_id": "heatmiserneo-0"
+    },
+    {
+      "entity_id": "sensor.fixture_24",
+      "config_entry_id": "heatmiserneo-0"
+    },
+    {
+      "entity_id": "sensor.fixture_25",
+      "config_entry_id": "heatmiserneo-0"
+    },
+    {
+      "entity_id": "sensor.fixture_26",
+      "config_entry_id": "heatmiserneo-0"
+    },
+    {
+      "entity_id": "sensor.fixture_27",
+      "config_entry_id": "heatmiserneo-0"
+    },
+    {
+      "entity_id": "sensor.fixture_28",
+      "config_entry_id": "heatmiserneo-0"
+    },
+    {
+      "entity_id": "sensor.fixture_29",
+      "config_entry_id": "heatmiserneo-0"
+    },
+    {
+      "entity_id": "sensor.fixture_30",
+      "config_entry_id": "heatmiserneo-0"
+    },
+    {
+      "entity_id": "sensor.fixture_31",
+      "config_entry_id": "heatmiserneo-0"
+    },
+    {
+      "entity_id": "sensor.fixture_32",
+      "config_entry_id": "heatmiserneo-0"
+    },
+    {
+      "entity_id": "sensor.fixture_33",
+      "config_entry_id": "heatmiserneo-0"
+    },
+    {
+      "entity_id": "sensor.fixture_34",
+      "config_entry_id": "heatmiserneo-0"
+    },
+    {
+      "entity_id": "sensor.fixture_35",
+      "config_entry_id": "heatmiserneo-0"
+    },
+    {
+      "entity_id": "sensor.fixture_36",
+      "config_entry_id": "heatmiserneo-0"
+    },
+    {
+      "entity_id": "sensor.fixture_37",
+      "config_entry_id": "heatmiserneo-0"
+    },
+    {
+      "entity_id": "sensor.fixture_38",
+      "config_entry_id": "heatmiserneo-0"
+    },
+    {
+      "entity_id": "sensor.fixture_48",
+      "config_entry_id": "heatmiserneo-0"
+    },
+    {
+      "entity_id": "sensor.fixture_49",
+      "config_entry_id": "heatmiserneo-0"
+    },
+    {
+      "entity_id": "sensor.fixture_50",
+      "config_entry_id": "heatmiserneo-0"
+    },
+    {
+      "entity_id": "sensor.fixture_51",
+      "config_entry_id": "heatmiserneo-0"
+    },
+    {
+      "entity_id": "sensor.fixture_52",
+      "config_entry_id": "heatmiserneo-0"
+    },
+    {
+      "entity_id": "sensor.fixture_53",
+      "config_entry_id": "heatmiserneo-0"
+    },
+    {
+      "entity_id": "sensor.fixture_54",
+      "config_entry_id": "heatmiserneo-0"
+    },
+    {
+      "entity_id": "sensor.fixture_55",
+      "config_entry_id": "heatmiserneo-0"
+    },
+    {
+      "entity_id": "sensor.fixture_56",
+      "config_entry_id": "heatmiserneo-0"
+    },
+    {
+      "entity_id": "sensor.fixture_57",
+      "config_entry_id": "heatmiserneo-0"
+    },
+    {
+      "entity_id": "sensor.fixture_58",
+      "config_entry_id": "heatmiserneo-0"
+    },
+    {
+      "entity_id": "sensor.fixture_75",
+      "config_entry_id": "heatmiserneo-0"
+    },
+    {
+      "entity_id": "sensor.fixture_76",
+      "config_entry_id": "heatmiserneo-0"
+    },
+    {
+      "entity_id": "sensor.fixture_77",
+      "config_entry_id": "heatmiserneo-0"
+    },
+    {
+      "entity_id": "sensor.fixture_81",
+      "config_entry_id": "heatmiserneo-0"
+    },
+    {
+      "entity_id": "sensor.fixture_87",
+      "config_entry_id": "heatmiserneo-0"
+    },
+    {
+      "entity_id": "sensor.fixture_89",
+      "config_entry_id": "heatmiserneo-0"
+    },
+    {
+      "entity_id": "sensor.fixture_94",
+      "config_entry_id": "heatmiserneo-0"
+    },
+    {
+      "entity_id": "sensor.fixture_95",
+      "config_entry_id": "heatmiserneo-0"
+    },
+    {
+      "entity_id": "sensor.fixture_96",
+      "config_entry_id": "heatmiserneo-0"
+    },
+    {
+      "entity_id": "sensor.fixture_97",
+      "config_entry_id": "heatmiserneo-0"
+    },
+    {
+      "entity_id": "sensor.fixture_98",
+      "config_entry_id": "heatmiserneo-0"
+    },
+    {
+      "entity_id": "sensor.fixture_99",
+      "config_entry_id": "heatmiserneo-0"
+    },
+    {
+      "entity_id": "sensor.fixture_100",
+      "config_entry_id": "heatmiserneo-0"
+    },
+    {
+      "entity_id": "sensor.fixture_101",
+      "config_entry_id": "heatmiserneo-0"
+    },
+    {
+      "entity_id": "sensor.fixture_102",
+      "config_entry_id": "heatmiserneo-0"
+    },
+    {
+      "entity_id": "sensor.fixture_104",
+      "config_entry_id": "heatmiserneo-0"
+    },
+    {
+      "entity_id": "sensor.fixture_105",
+      "config_entry_id": "heatmiserneo-0"
+    },
+    {
+      "entity_id": "sensor.fixture_106",
+      "config_entry_id": "heatmiserneo-0"
+    },
+    {
+      "entity_id": "sensor.fixture_107",
+      "config_entry_id": "heatmiserneo-0"
+    },
+    {
+      "entity_id": "sensor.fixture_108",
+      "config_entry_id": "heatmiserneo-0"
+    },
+    {
+      "entity_id": "sensor.fixture_109",
+      "config_entry_id": "heatmiserneo-0"
+    },
+    {
+      "entity_id": "sensor.fixture_110",
+      "config_entry_id": "heatmiserneo-0"
+    },
+    {
+      "entity_id": "sensor.fixture_111",
+      "config_entry_id": "heatmiserneo-0"
+    },
+    {
+      "entity_id": "sensor.fixture_112",
+      "config_entry_id": "heatmiserneo-0"
+    },
+    {
+      "entity_id": "sensor.fixture_113",
+      "config_entry_id": "heatmiserneo-0"
+    },
+    {
+      "entity_id": "sensor.fixture_114",
+      "config_entry_id": "heatmiserneo-0"
+    },
+    {
+      "entity_id": "sensor.fixture_115",
+      "config_entry_id": "heatmiserneo-0"
+    },
+    {
+      "entity_id": "sensor.fixture_116",
+      "config_entry_id": "heatmiserneo-0"
+    },
+    {
+      "entity_id": "sensor.fixture_117",
+      "config_entry_id": "heatmiserneo-0"
+    },
+    {
+      "entity_id": "sensor.fixture_118",
+      "config_entry_id": "heatmiserneo-0"
+    },
+    {
+      "entity_id": "sensor.fixture_119",
+      "config_entry_id": "heatmiserneo-0"
+    },
+    {
+      "entity_id": "sensor.fixture_120",
+      "config_entry_id": "heatmiserneo-0"
+    },
+    {
+      "entity_id": "sensor.fixture_121",
+      "config_entry_id": "heatmiserneo-0"
+    },
+    {
+      "entity_id": "sensor.fixture_122",
+      "config_entry_id": "heatmiserneo-0"
+    },
+    {
+      "entity_id": "sensor.fixture_123",
+      "config_entry_id": "heatmiserneo-0"
+    },
+    {
+      "entity_id": "sensor.fixture_124",
+      "config_entry_id": "heatmiserneo-0"
+    },
+    {
+      "entity_id": "sensor.fixture_126",
+      "config_entry_id": "heatmiserneo-0"
+    },
+    {
+      "entity_id": "sensor.fixture_127",
+      "config_entry_id": "heatmiserneo-0"
+    },
+    {
+      "entity_id": "sensor.fixture_128",
+      "config_entry_id": "heatmiserneo-0"
+    },
+    {
+      "entity_id": "sensor.fixture_129",
+      "config_entry_id": "heatmiserneo-0"
+    },
+    {
+      "entity_id": "sensor.fixture_130",
+      "config_entry_id": "heatmiserneo-0"
+    },
+    {
+      "entity_id": "sensor.fixture_131",
+      "config_entry_id": "heatmiserneo-0"
+    },
+    {
+      "entity_id": "sensor.fixture_132",
+      "config_entry_id": "heatmiserneo-0"
+    },
+    {
+      "entity_id": "sensor.fixture_133",
+      "config_entry_id": "heatmiserneo-0"
+    },
+    {
+      "entity_id": "sensor.fixture_134",
+      "config_entry_id": "heatmiserneo-0"
+    },
+    {
+      "entity_id": "sensor.fixture_135",
+      "config_entry_id": "heatmiserneo-0"
+    },
+    {
+      "entity_id": "sensor.fixture_136",
+      "config_entry_id": "heatmiserneo-0"
+    },
+    {
+      "entity_id": "sensor.fixture_137",
+      "config_entry_id": "heatmiserneo-0"
+    },
+    {
+      "entity_id": "sensor.fixture_138",
+      "config_entry_id": "heatmiserneo-0"
+    },
+    {
+      "entity_id": "sensor.fixture_139",
+      "config_entry_id": "heatmiserneo-0"
+    },
+    {
+      "entity_id": "sensor.fixture_140",
+      "config_entry_id": "heatmiserneo-0"
+    },
+    {
+      "entity_id": "sensor.fixture_141",
+      "config_entry_id": "heatmiserneo-0"
+    },
+    {
+      "entity_id": "sensor.fixture_142",
+      "config_entry_id": "heatmiserneo-0"
+    },
+    {
+      "entity_id": "sensor.fixture_143",
+      "config_entry_id": "heatmiserneo-0"
+    },
+    {
+      "entity_id": "sensor.fixture_144",
+      "config_entry_id": "heatmiserneo-0"
+    },
+    {
+      "entity_id": "sensor.fixture_145",
+      "config_entry_id": "heatmiserneo-0"
+    },
+    {
+      "entity_id": "sensor.fixture_146",
+      "config_entry_id": "heatmiserneo-0"
+    },
+    {
+      "entity_id": "sensor.fixture_147",
+      "config_entry_id": "heatmiserneo-0"
+    },
+    {
+      "entity_id": "sensor.fixture_148",
+      "config_entry_id": "heatmiserneo-0"
+    },
+    {
+      "entity_id": "sensor.fixture_149",
+      "config_entry_id": "heatmiserneo-0"
+    },
+    {
+      "entity_id": "sensor.fixture_150",
+      "config_entry_id": "heatmiserneo-0"
+    },
+    {
+      "entity_id": "sensor.fixture_151",
+      "config_entry_id": "heatmiserneo-0"
+    },
+    {
+      "entity_id": "sensor.fixture_152",
+      "config_entry_id": "heatmiserneo-0"
+    },
+    {
+      "entity_id": "sensor.fixture_153",
+      "config_entry_id": "heatmiserneo-0"
+    },
+    {
+      "entity_id": "sensor.fixture_154",
+      "config_entry_id": "heatmiserneo-0"
+    },
+    {
+      "entity_id": "sensor.fixture_155",
+      "config_entry_id": "heatmiserneo-0"
+    },
+    {
+      "entity_id": "sensor.fixture_156",
+      "config_entry_id": "heatmiserneo-0"
+    },
+    {
+      "entity_id": "sensor.fixture_157",
+      "config_entry_id": "heatmiserneo-0"
+    },
+    {
+      "entity_id": "sensor.fixture_158",
+      "config_entry_id": "heatmiserneo-0"
+    },
+    {
+      "entity_id": "sensor.fixture_159",
+      "config_entry_id": "heatmiserneo-0"
+    },
+    {
+      "entity_id": "sensor.fixture_160",
+      "config_entry_id": "heatmiserneo-0"
+    },
+    {
+      "entity_id": "sensor.fixture_161",
+      "config_entry_id": "heatmiserneo-0"
+    },
+    {
+      "entity_id": "sensor.fixture_162",
+      "config_entry_id": "heatmiserneo-0"
+    },
+    {
+      "entity_id": "sensor.fixture_163",
+      "config_entry_id": "heatmiserneo-0"
+    },
+    {
+      "entity_id": "sensor.fixture_164",
+      "config_entry_id": "heatmiserneo-0"
+    },
+    {
+      "entity_id": "sensor.fixture_165",
+      "config_entry_id": "heatmiserneo-0"
+    },
+    {
+      "entity_id": "sensor.fixture_166",
+      "config_entry_id": "heatmiserneo-0"
+    },
+    {
+      "entity_id": "sensor.fixture_167",
+      "config_entry_id": "heatmiserneo-0"
+    },
+    {
+      "entity_id": "sensor.fixture_177",
+      "config_entry_id": "heatmiserneo-0"
+    },
+    {
+      "entity_id": "sensor.fixture_178",
+      "config_entry_id": "heatmiserneo-0"
+    },
+    {
+      "entity_id": "sensor.fixture_179",
+      "config_entry_id": "heatmiserneo-0"
+    },
+    {
+      "entity_id": "sensor.fixture_180",
+      "config_entry_id": "heatmiserneo-0"
+    },
+    {
+      "entity_id": "sensor.fixture_181",
+      "config_entry_id": "heatmiserneo-0"
+    },
+    {
+      "entity_id": "sensor.fixture_182",
+      "config_entry_id": "heatmiserneo-0"
+    },
+    {
+      "entity_id": "sensor.fixture_183",
+      "config_entry_id": "heatmiserneo-0"
+    },
+    {
+      "entity_id": "sensor.fixture_184",
+      "config_entry_id": "heatmiserneo-0"
+    },
+    {
+      "entity_id": "sensor.fixture_185",
+      "config_entry_id": "ohme-1"
+    },
+    {
+      "entity_id": "sensor.fixture_186",
+      "config_entry_id": "ohme-1"
+    },
+    {
+      "entity_id": "sensor.fixture_187",
+      "config_entry_id": "ohme-1"
+    },
+    {
+      "entity_id": "sensor.fixture_188",
+      "config_entry_id": "ohme-1"
+    },
+    {
+      "entity_id": "sensor.fixture_189",
+      "config_entry_id": "ohme-1"
+    },
+    {
+      "entity_id": "sensor.fixture_190",
+      "config_entry_id": "ohme-1"
+    },
+    {
+      "entity_id": "sensor.fixture_191",
+      "config_entry_id": "ohme-1"
+    },
+    {
+      "entity_id": "sensor.fixture_192",
+      "config_entry_id": "ohme-1"
+    },
+    {
+      "entity_id": "sensor.fixture_193",
+      "config_entry_id": "ohme-1"
+    },
+    {
+      "entity_id": "sensor.fixture_194",
+      "config_entry_id": "ohme-1"
+    },
+    {
+      "entity_id": "sensor.fixture_195",
+      "config_entry_id": "ohme-1"
+    },
+    {
+      "entity_id": "sensor.fixture_196",
+      "config_entry_id": "ohme-1"
+    },
+    {
+      "entity_id": "sensor.fixture_197",
+      "config_entry_id": "ohme-1"
+    },
+    {
+      "entity_id": "sensor.fixture_198",
+      "config_entry_id": "ohme-1"
+    },
+    {
+      "entity_id": "sensor.fixture_199",
+      "config_entry_id": "ohme-1"
+    },
+    {
+      "entity_id": "sensor.fixture_200",
+      "config_entry_id": "ohme-1"
+    },
+    {
+      "entity_id": "sensor.fixture_201",
+      "config_entry_id": "open_epaper_link-2"
+    },
+    {
+      "entity_id": "sensor.fixture_202",
+      "config_entry_id": "open_epaper_link-2"
+    },
+    {
+      "entity_id": "sensor.fixture_203",
+      "config_entry_id": "open_epaper_link-2"
+    },
+    {
+      "entity_id": "sensor.fixture_206",
+      "config_entry_id": "open_epaper_link-2"
+    },
+    {
+      "entity_id": "sensor.fixture_207",
+      "config_entry_id": "open_epaper_link-2"
+    },
+    {
+      "entity_id": "sensor.fixture_212",
+      "config_entry_id": "open_epaper_link-2"
+    },
+    {
+      "entity_id": "sensor.fixture_213",
+      "config_entry_id": "open_epaper_link-2"
+    },
+    {
+      "entity_id": "sensor.fixture_215",
+      "config_entry_id": "open_epaper_link-2"
+    },
+    {
+      "entity_id": "sensor.fixture_232",
+      "config_entry_id": "open_epaper_link-2"
+    },
+    {
+      "entity_id": "sensor.fixture_233",
+      "config_entry_id": "open_epaper_link-2"
+    },
+    {
+      "entity_id": "sensor.fixture_234",
+      "config_entry_id": "open_epaper_link-2"
+    },
+    {
+      "entity_id": "sensor.fixture_235",
+      "config_entry_id": "open_epaper_link-2"
+    },
+    {
+      "entity_id": "sensor.fixture_236",
+      "config_entry_id": "open_epaper_link-2"
+    },
+    {
+      "entity_id": "sensor.fixture_237",
+      "config_entry_id": "open_epaper_link-2"
+    },
+    {
+      "entity_id": "sensor.fixture_238",
+      "config_entry_id": "open_epaper_link-2"
+    },
+    {
+      "entity_id": "sensor.fixture_241",
+      "config_entry_id": "open_epaper_link-2"
+    },
+    {
+      "entity_id": "sensor.fixture_242",
+      "config_entry_id": "open_epaper_link-2"
+    },
+    {
+      "entity_id": "sensor.fixture_247",
+      "config_entry_id": "open_epaper_link-2"
+    },
+    {
+      "entity_id": "sensor.fixture_251",
+      "config_entry_id": "open_epaper_link-2"
+    },
+    {
+      "entity_id": "sensor.fixture_253",
+      "config_entry_id": "open_epaper_link-2"
+    },
+    {
+      "entity_id": "sensor.fixture_254",
+      "config_entry_id": "open_epaper_link-2"
+    },
+    {
+      "entity_id": "sensor.fixture_255",
+      "config_entry_id": "open_epaper_link-2"
+    },
+    {
+      "entity_id": "sensor.fixture_256",
+      "config_entry_id": "open_epaper_link-2"
+    },
+    {
+      "entity_id": "sensor.fixture_260",
+      "config_entry_id": "open_epaper_link-2"
+    },
+    {
+      "entity_id": "sensor.fixture_285",
+      "config_entry_id": "open_epaper_link-2"
+    },
+    {
+      "entity_id": "sensor.fixture_287",
+      "config_entry_id": "open_epaper_link-2"
+    },
+    {
+      "entity_id": "sensor.fixture_288",
+      "config_entry_id": "open_epaper_link-2"
+    },
+    {
+      "entity_id": "sensor.fixture_289",
+      "config_entry_id": "open_epaper_link-2"
+    },
+    {
+      "entity_id": "sensor.fixture_290",
+      "config_entry_id": "open_epaper_link-2"
+    },
+    {
+      "entity_id": "sensor.fixture_291",
+      "config_entry_id": "open_epaper_link-2"
+    },
+    {
+      "entity_id": "sensor.fixture_292",
+      "config_entry_id": "open_epaper_link-2"
+    },
+    {
+      "entity_id": "sensor.fixture_293",
+      "config_entry_id": "open_epaper_link-2"
+    },
+    {
+      "entity_id": "sensor.fixture_294",
+      "config_entry_id": "open_epaper_link-2"
+    },
+    {
+      "entity_id": "sensor.fixture_295",
+      "config_entry_id": "open_epaper_link-2"
+    },
+    {
+      "entity_id": "sensor.fixture_296",
+      "config_entry_id": "open_epaper_link-2"
+    },
+    {
+      "entity_id": "sensor.fixture_297",
+      "config_entry_id": "open_epaper_link-2"
+    },
+    {
+      "entity_id": "sensor.fixture_298",
+      "config_entry_id": "open_epaper_link-2"
+    },
+    {
+      "entity_id": "sensor.fixture_299",
+      "config_entry_id": "open_epaper_link-2"
+    },
+    {
+      "entity_id": "sensor.fixture_300",
+      "config_entry_id": "open_epaper_link-2"
+    },
+    {
+      "entity_id": "sensor.fixture_301",
+      "config_entry_id": "open_epaper_link-2"
+    },
+    {
+      "entity_id": "sensor.fixture_302",
+      "config_entry_id": "open_epaper_link-2"
+    },
+    {
+      "entity_id": "sensor.fixture_303",
+      "config_entry_id": "open_epaper_link-2"
+    },
+    {
+      "entity_id": "sensor.fixture_304",
+      "config_entry_id": "open_epaper_link-2"
+    },
+    {
+      "entity_id": "sensor.fixture_305",
+      "config_entry_id": "open_epaper_link-2"
+    },
+    {
+      "entity_id": "sensor.fixture_307",
+      "config_entry_id": "open_epaper_link-2"
+    },
+    {
+      "entity_id": "sensor.fixture_308",
+      "config_entry_id": "open_epaper_link-2"
+    },
+    {
+      "entity_id": "sensor.fixture_309",
+      "config_entry_id": "open_epaper_link-2"
+    },
+    {
+      "entity_id": "sensor.fixture_310",
+      "config_entry_id": "open_epaper_link-2"
+    },
+    {
+      "entity_id": "sensor.fixture_312",
+      "config_entry_id": "open_epaper_link-2"
+    },
+    {
+      "entity_id": "sensor.fixture_334",
+      "config_entry_id": "open_epaper_link-2"
+    },
+    {
+      "entity_id": "sensor.fixture_335",
+      "config_entry_id": "open_epaper_link-2"
+    }
+  ],
+  "states": [
+    {
+      "entity_id": "sensor.fixture_1",
+      "state": "on"
+    },
+    {
+      "entity_id": "sensor.fixture_2",
+      "state": "on"
+    },
+    {
+      "entity_id": "sensor.fixture_3",
+      "state": "on"
+    },
+    {
+      "entity_id": "sensor.fixture_4",
+      "state": "on"
+    },
+    {
+      "entity_id": "sensor.fixture_5",
+      "state": "on"
+    },
+    {
+      "entity_id": "sensor.fixture_6",
+      "state": "on"
+    },
+    {
+      "entity_id": "sensor.fixture_7",
+      "state": "on"
+    },
+    {
+      "entity_id": "sensor.fixture_8",
+      "state": "on"
+    },
+    {
+      "entity_id": "sensor.fixture_9",
+      "state": "on"
+    },
+    {
+      "entity_id": "sensor.fixture_10",
+      "state": "on"
+    },
+    {
+      "entity_id": "sensor.fixture_11",
+      "state": "off"
+    },
+    {
+      "entity_id": "sensor.fixture_12",
+      "state": "off"
+    },
+    {
+      "entity_id": "sensor.fixture_13",
+      "state": "off"
+    },
+    {
+      "entity_id": "sensor.fixture_14",
+      "state": "off"
+    },
+    {
+      "entity_id": "sensor.fixture_15",
+      "state": "off"
+    },
+    {
+      "entity_id": "sensor.fixture_16",
+      "state": "off"
+    },
+    {
+      "entity_id": "sensor.fixture_17",
+      "state": "off"
+    },
+    {
+      "entity_id": "sensor.fixture_18",
+      "state": "off"
+    },
+    {
+      "entity_id": "sensor.fixture_19",
+      "state": "off"
+    },
+    {
+      "entity_id": "sensor.fixture_20",
+      "state": "off"
+    },
+    {
+      "entity_id": "sensor.fixture_21",
+      "state": "on"
+    },
+    {
+      "entity_id": "sensor.fixture_22",
+      "state": "on"
+    },
+    {
+      "entity_id": "sensor.fixture_23",
+      "state": "on"
+    },
+    {
+      "entity_id": "sensor.fixture_24",
+      "state": "on"
+    },
+    {
+      "entity_id": "sensor.fixture_25",
+      "state": "on"
+    },
+    {
+      "entity_id": "sensor.fixture_26",
+      "state": "on"
+    },
+    {
+      "entity_id": "sensor.fixture_27",
+      "state": "on"
+    },
+    {
+      "entity_id": "sensor.fixture_28",
+      "state": "on"
+    },
+    {
+      "entity_id": "sensor.fixture_29",
+      "state": "on"
+    },
+    {
+      "entity_id": "sensor.fixture_30",
+      "state": "off"
+    },
+    {
+      "entity_id": "sensor.fixture_31",
+      "state": "off"
+    },
+    {
+      "entity_id": "sensor.fixture_32",
+      "state": "off"
+    },
+    {
+      "entity_id": "sensor.fixture_33",
+      "state": "off"
+    },
+    {
+      "entity_id": "sensor.fixture_34",
+      "state": "off"
+    },
+    {
+      "entity_id": "sensor.fixture_35",
+      "state": "off"
+    },
+    {
+      "entity_id": "sensor.fixture_36",
+      "state": "off"
+    },
+    {
+      "entity_id": "sensor.fixture_37",
+      "state": "off"
+    },
+    {
+      "entity_id": "sensor.fixture_38",
+      "state": "off"
+    },
+    {
+      "entity_id": "sensor.fixture_48",
+      "state": "on"
+    },
+    {
+      "entity_id": "sensor.fixture_49",
+      "state": "unknown"
+    },
+    {
+      "entity_id": "sensor.fixture_50",
+      "state": "unknown"
+    },
+    {
+      "entity_id": "sensor.fixture_51",
+      "state": "unknown"
+    },
+    {
+      "entity_id": "sensor.fixture_52",
+      "state": "unknown"
+    },
+    {
+      "entity_id": "sensor.fixture_53",
+      "state": "unknown"
+    },
+    {
+      "entity_id": "sensor.fixture_54",
+      "state": "unknown"
+    },
+    {
+      "entity_id": "sensor.fixture_55",
+      "state": "unknown"
+    },
+    {
+      "entity_id": "sensor.fixture_56",
+      "state": "unknown"
+    },
+    {
+      "entity_id": "sensor.fixture_57",
+      "state": "unknown"
+    },
+    {
+      "entity_id": "sensor.fixture_58",
+      "state": "unknown"
+    },
+    {
+      "entity_id": "sensor.fixture_75",
+      "state": "UK"
+    },
+    {
+      "entity_id": "sensor.fixture_76",
+      "state": "tz0"
+    },
+    {
+      "entity_id": "sensor.fixture_77",
+      "state": "away"
+    },
+    {
+      "entity_id": "sensor.fixture_81",
+      "state": "0"
+    },
+    {
+      "entity_id": "sensor.fixture_87",
+      "state": "3"
+    },
+    {
+      "entity_id": "sensor.fixture_89",
+      "state": "0"
+    },
+    {
+      "entity_id": "sensor.fixture_94",
+      "state": "Lounge Work Days"
+    },
+    {
+      "entity_id": "sensor.fixture_95",
+      "state": "Hall"
+    },
+    {
+      "entity_id": "sensor.fixture_96",
+      "state": "Dining Room Work Days"
+    },
+    {
+      "entity_id": "sensor.fixture_97",
+      "state": "PROFILE_0"
+    },
+    {
+      "entity_id": "sensor.fixture_98",
+      "state": "Front Bedroom Work Days"
+    },
+    {
+      "entity_id": "sensor.fixture_99",
+      "state": "Back Bedroom Work Days"
+    },
+    {
+      "entity_id": "sensor.fixture_100",
+      "state": "Bathroom"
+    },
+    {
+      "entity_id": "sensor.fixture_101",
+      "state": "Loft Bedroom Work Days"
+    },
+    {
+      "entity_id": "sensor.fixture_102",
+      "state": "Hot Water"
+    },
+    {
+      "entity_id": "sensor.fixture_104",
+      "state": "2026-10-24T09:02:00+00:00"
+    },
+    {
+      "entity_id": "sensor.fixture_105",
+      "state": "one"
+    },
+    {
+      "entity_id": "sensor.fixture_106",
+      "state": "unknown"
+    },
+    {
+      "entity_id": "sensor.fixture_107",
+      "state": "6"
+    },
+    {
+      "entity_id": "sensor.fixture_108",
+      "state": "unknown"
+    },
+    {
+      "entity_id": "sensor.fixture_109",
+      "state": "unknown"
+    },
+    {
+      "entity_id": "sensor.fixture_110",
+      "state": "unknown"
+    },
+    {
+      "entity_id": "sensor.fixture_111",
+      "state": "unknown"
+    },
+    {
+      "entity_id": "sensor.fixture_112",
+      "state": "unknown"
+    },
+    {
+      "entity_id": "sensor.fixture_113",
+      "state": "unknown"
+    },
+    {
+      "entity_id": "sensor.fixture_114",
+      "state": "unknown"
+    },
+    {
+      "entity_id": "sensor.fixture_115",
+      "state": "unknown"
+    },
+    {
+      "entity_id": "sensor.fixture_116",
+      "state": "unknown"
+    },
+    {
+      "entity_id": "sensor.fixture_117",
+      "state": "16.3"
+    },
+    {
+      "entity_id": "sensor.fixture_118",
+      "state": "18.1"
+    },
+    {
+      "entity_id": "sensor.fixture_119",
+      "state": "17.5"
+    },
+    {
+      "entity_id": "sensor.fixture_120",
+      "state": "18.9"
+    },
+    {
+      "entity_id": "sensor.fixture_121",
+      "state": "15.4"
+    },
+    {
+      "entity_id": "sensor.fixture_122",
+      "state": "18.7"
+    },
+    {
+      "entity_id": "sensor.fixture_123",
+      "state": "19.5"
+    },
+    {
+      "entity_id": "sensor.fixture_124",
+      "state": "20.3"
+    },
+    {
+      "entity_id": "sensor.fixture_126",
+      "state": "unknown"
+    },
+    {
+      "entity_id": "sensor.fixture_127",
+      "state": "unknown"
+    },
+    {
+      "entity_id": "sensor.fixture_128",
+      "state": "unknown"
+    },
+    {
+      "entity_id": "sensor.fixture_129",
+      "state": "unknown"
+    },
+    {
+      "entity_id": "sensor.fixture_130",
+      "state": "unknown"
+    },
+    {
+      "entity_id": "sensor.fixture_131",
+      "state": "unknown"
+    },
+    {
+      "entity_id": "sensor.fixture_132",
+      "state": "unknown"
+    },
+    {
+      "entity_id": "sensor.fixture_133",
+      "state": "unknown"
+    },
+    {
+      "entity_id": "sensor.fixture_134",
+      "state": "21.0"
+    },
+    {
+      "entity_id": "sensor.fixture_135",
+      "state": "19.0"
+    },
+    {
+      "entity_id": "sensor.fixture_136",
+      "state": "21.0"
+    },
+    {
+      "entity_id": "sensor.fixture_137",
+      "state": "unknown"
+    },
+    {
+      "entity_id": "sensor.fixture_138",
+      "state": "20.5"
+    },
+    {
+      "entity_id": "sensor.fixture_139",
+      "state": "15.0"
+    },
+    {
+      "entity_id": "sensor.fixture_140",
+      "state": "18.0"
+    },
+    {
+      "entity_id": "sensor.fixture_141",
+      "state": "15.0"
+    },
+    {
+      "entity_id": "sensor.fixture_142",
+      "state": "21.5"
+    },
+    {
+      "entity_id": "sensor.fixture_143",
+      "state": "15.0"
+    },
+    {
+      "entity_id": "sensor.fixture_144",
+      "state": "15.0"
+    },
+    {
+      "entity_id": "sensor.fixture_145",
+      "state": "unknown"
+    },
+    {
+      "entity_id": "sensor.fixture_146",
+      "state": "20.5"
+    },
+    {
+      "entity_id": "sensor.fixture_147",
+      "state": "21.0"
+    },
+    {
+      "entity_id": "sensor.fixture_148",
+      "state": "23.0"
+    },
+    {
+      "entity_id": "sensor.fixture_149",
+      "state": "21.0"
+    },
+    {
+      "entity_id": "sensor.fixture_150",
+      "state": "2026-10-19T21:59:00+00:00"
+    },
+    {
+      "entity_id": "sensor.fixture_151",
+      "state": "2026-10-19T19:30:00+00:00"
+    },
+    {
+      "entity_id": "sensor.fixture_152",
+      "state": "2026-10-19T22:00:00+00:00"
+    },
+    {
+      "entity_id": "sensor.fixture_153",
+      "state": "2026-10-19T20:00:00+00:00"
+    },
+    {
+      "entity_id": "sensor.fixture_154",
+      "state": "unknown"
+    },
+    {
+      "entity_id": "sensor.fixture_155",
+      "state": "2026-10-19T17:30:00+00:00"
+    },
+    {
+      "entity_id": "sensor.fixture_156",
+      "state": "2026-10-19T17:30:00+00:00"
+    },
+    {
+      "entity_id": "sensor.fixture_157",
+      "state": "2026-10-19T17:30:00+00:00"
+    },
+    {
+      "entity_id": "sensor.fixture_158",
+      "state": "2026-10-19T19:30:00+00:00"
+    },
+    {
+      "entity_id": "sensor.fixture_159",
+      "state": "on"
+    },
+    {
+      "entity_id": "sensor.fixture_160",
+      "state": "heat"
+    },
+    {
+      "entity_id": "sensor.fixture_161",
+      "state": "heat"
+    },
+    {
+      "entity_id": "sensor.fixture_162",
+      "state": "heat"
+    },
+    {
+      "entity_id": "sensor.fixture_163",
+      "state": "heat"
+    },
+    {
+      "entity_id": "sensor.fixture_164",
+      "state": "heat"
+    },
+    {
+      "entity_id": "sensor.fixture_165",
+      "state": "heat"
+    },
+    {
+      "entity_id": "sensor.fixture_166",
+      "state": "heat"
+    },
+    {
+      "entity_id": "sensor.fixture_167",
+      "state": "heat"
+    },
+    {
+      "entity_id": "sensor.fixture_177",
+      "state": "0"
+    },
+    {
+      "entity_id": "sensor.fixture_178",
+      "state": "0"
+    },
+    {
+      "entity_id": "sensor.fixture_179",
+      "state": "0"
+    },
+    {
+      "entity_id": "sensor.fixture_180",
+      "state": "0"
+    },
+    {
+      "entity_id": "sensor.fixture_181",
+      "state": "0"
+    },
+    {
+      "entity_id": "sensor.fixture_182",
+      "state": "0"
+    },
+    {
+      "entity_id": "sensor.fixture_183",
+      "state": "0"
+    },
+    {
+      "entity_id": "sensor.fixture_184",
+      "state": "0"
+    },
+    {
+      "entity_id": "sensor.fixture_185",
+      "state": "unavailable"
+    },
+    {
+      "entity_id": "sensor.fixture_186",
+      "state": "unavailable"
+    },
+    {
+      "entity_id": "sensor.fixture_187",
+      "state": "100"
+    },
+    {
+      "entity_id": "sensor.fixture_188",
+      "state": "0"
+    },
+    {
+      "entity_id": "sensor.fixture_189",
+      "state": "unavailable"
+    },
+    {
+      "entity_id": "sensor.fixture_190",
+      "state": "Mercedes-Benz GLC (2025-)"
+    },
+    {
+      "entity_id": "sensor.fixture_191",
+      "state": "unplugged"
+    },
+    {
+      "entity_id": "sensor.fixture_192",
+      "state": "0"
+    },
+    {
+      "entity_id": "sensor.fixture_193",
+      "state": "0.0"
+    },
+    {
+      "entity_id": "sensor.fixture_194",
+      "state": "unknown"
+    },
+    {
+      "entity_id": "sensor.fixture_195",
+      "state": "99.0"
+    },
+    {
+      "entity_id": "sensor.fixture_196",
+      "state": "unknown"
+    },
+    {
+      "entity_id": "sensor.fixture_197",
+      "state": "off"
+    },
+    {
+      "entity_id": "sensor.fixture_198",
+      "state": "off"
+    },
+    {
+      "entity_id": "sensor.fixture_199",
+      "state": "on"
+    },
+    {
+      "entity_id": "sensor.fixture_200",
+      "state": "06:30:00"
+    },
+    {
+      "entity_id": "sensor.fixture_201",
+      "state": "10.0.2.169"
+    },
+    {
+      "entity_id": "sensor.fixture_202",
+      "state": "devices"
+    },
+    {
+      "entity_id": "sensor.fixture_203",
+      "state": "4"
+    },
+    {
+      "entity_id": "sensor.fixture_206",
+      "state": "Online"
+    },
+    {
+      "entity_id": "sensor.fixture_207",
+      "state": "Running"
+    },
+    {
+      "entity_id": "sensor.fixture_212",
+      "state": "0"
+    },
+    {
+      "entity_id": "sensor.fixture_213",
+      "state": "0"
+    },
+    {
+      "entity_id": "sensor.fixture_215",
+      "state": "0"
+    },
+    {
+      "entity_id": "sensor.fixture_232",
+      "state": "20"
+    },
+    {
+      "entity_id": "sensor.fixture_233",
+      "state": "3165"
+    },
+    {
+      "entity_id": "sensor.fixture_234",
+      "state": "100"
+    },
+    {
+      "entity_id": "sensor.fixture_235",
+      "state": "2026-10-19T16:08:08+00:00"
+    },
+    {
+      "entity_id": "sensor.fixture_236",
+      "state": "2071-12-01T00:00:00+00:00"
+    },
+    {
+      "entity_id": "sensor.fixture_237",
+      "state": "2026-10-19T16:09:08+00:00"
+    },
+    {
+      "entity_id": "sensor.fixture_238",
+      "state": "62"
+    },
+    {
+      "entity_id": "sensor.fixture_241",
+      "state": "Home Assistant"
+    },
+    {
+      "entity_id": "sensor.fixture_242",
+      "state": "TIMED"
+    },
+    {
+      "entity_id": "sensor.fixture_247",
+      "state": "2232932"
+    },
+    {
+      "entity_id": "sensor.fixture_251",
+      "state": "25"
+    },
+    {
+      "entity_id": "sensor.fixture_253",
+      "state": "100"
+    },
+    {
+      "entity_id": "sensor.fixture_254",
+      "state": "2026-10-19T16:08:23+00:00"
+    },
+    {
+      "entity_id": "sensor.fixture_255",
+      "state": "2071-12-01T00:00:00+00:00"
+    },
+    {
+      "entity_id": "sensor.fixture_256",
+      "state": "2026-10-19T16:09:23+00:00"
+    },
+    {
+      "entity_id": "sensor.fixture_260",
+      "state": "Display a copy"
+    },
+    {
+      "entity_id": "sensor.fixture_285",
+      "state": "unknown"
+    },
+    {
+      "entity_id": "sensor.fixture_287",
+      "state": "unknown"
+    },
+    {
+      "entity_id": "sensor.fixture_288",
+      "state": "2026-10-17T10:03:40.830295"
+    },
+    {
+      "entity_id": "sensor.fixture_289",
+      "state": "unknown"
+    },
+    {
+      "entity_id": "sensor.fixture_290",
+      "state": "auto"
+    },
+    {
+      "entity_id": "sensor.fixture_291",
+      "state": "100%"
+    },
+    {
+      "entity_id": "sensor.fixture_292",
+      "state": "100%"
+    },
+    {
+      "entity_id": "sensor.fixture_293",
+      "state": "10 min"
+    },
+    {
+      "entity_id": "sensor.fixture_294",
+      "state": "no"
+    },
+    {
+      "entity_id": "sensor.fixture_295",
+      "state": "8.5 dBm"
+    },
+    {
+      "entity_id": "sensor.fixture_296",
+      "state": "EN English"
+    },
+    {
+      "entity_id": "sensor.fixture_297",
+      "state": "Multicast"
+    },
+    {
+      "entity_id": "sensor.fixture_298",
+      "state": "disabled"
+    },
+    {
+      "entity_id": "sensor.fixture_299",
+      "state": "00:00"
+    },
+    {
+      "entity_id": "sensor.fixture_300",
+      "state": "00:00"
+    },
+    {
+      "entity_id": "sensor.fixture_301",
+      "state": "on"
+    },
+    {
+      "entity_id": "sensor.fixture_302",
+      "state": "off"
+    },
+    {
+      "entity_id": "sensor.fixture_303",
+      "state": "on"
+    },
+    {
+      "entity_id": "sensor.fixture_304",
+      "state": "off"
+    },
+    {
+      "entity_id": "sensor.fixture_305",
+      "state": ""
+    },
+    {
+      "entity_id": "sensor.fixture_307",
+      "state": "0000CCBC912F3728"
+    },
+    {
+      "entity_id": "sensor.fixture_308",
+      "state": "6C1714A61B0AE85F"
+    },
+    {
+      "entity_id": "sensor.fixture_309",
+      "state": "BB47BE76EBBABB5F"
+    },
+    {
+      "entity_id": "sensor.fixture_310",
+      "state": "unavailable"
+    },
+    {
+      "entity_id": "sensor.fixture_312",
+      "state": "unavailable"
+    },
+    {
+      "entity_id": "sensor.fixture_334",
+      "state": "unavailable"
+    },
+    {
+      "entity_id": "sensor.fixture_335",
+      "state": "unavailable"
+    }
+  ],
+  "updates": [
+    {
+      "package": "hassio/home_assistant_core_version_latest",
+      "installed": "2026.10.1",
+      "available": "2026.10.2",
+      "key": "3161efc1c696d91727b92b064f2908643a1400fd77af25c63c022b21f37687f2",
+      "name": "Home Assistant Core",
+      "release_url": "https://www.home-assistant.io/latest-release-notes/"
+    },
+    {
+      "package": "hassio/core_mosquitto_version_latest",
+      "installed": "7.1.1",
+      "available": "7.1.2",
+      "key": "55e1c2ab48cd17ac8a824039ecf4c3db7d2f4bba6d3b7d1589e140506633dd9a",
+      "name": "Mosquitto broker",
+      "release_url": null
+    },
+    {
+      "package": "hacs/605635573",
+      "installed": "v5.11.0",
+      "available": "v5.11.1",
+      "key": "9683cdc11b4695d13f163e28ff4d9d0592b715c5d83b394b9ae1d3d30d40edca",
+      "name": "Spook 👻 Your homie",
+      "release_url": "https://github.com/frenck/spook/releases/v5.11.1"
+    },
+    {
+      "package": "hacs/311594993",
+      "installed": "v6.1",
+      "available": "v7.0",
+      "key": "e80a8bc6ce19a688fbf792c1a6641b1b1cdb05d2cbc3ec382a40381344105591",
+      "name": "Presence Simulation",
+      "release_url": "https://github.com/slashback100/presence_simulation/releases/v7.0"
+    }
+  ],
+  "assessments": {
+    "pairs": {
+      "3161efc1c696d91727b92b064f2908643a1400fd77af25c63c022b21f37687f2": {
+        "package": "hassio/home_assistant_core_version_latest",
+        "installed": "2026.10.1",
+        "available": "2026.10.2",
+        "assessment": "update at the next convenient restart\nAfter the restart, confirm that Beer Fridge Internal Temperature reports new readings.",
+        "assessed_at": "2026-10-19T12:49:27.394658+00:00",
+        "sent_receipt": {
+          "accepted_at": "2026-10-19T12:49:27.394658+00:00",
+          "message_id": "<hermes-a7a5fe5d3909@cynexia.io>"
+        }
+      },
+      "9683cdc11b4695d13f163e28ff4d9d0592b715c5d83b394b9ae1d3d30d40edca": {
+        "package": "hacs/605635573",
+        "installed": "v5.11.0",
+        "available": "v5.11.1",
+        "assessment": "Spook — recommend a prompt routine update at a convenient restart. This is a corrective release for the installed release, with no documented configuration migration or security advisory. Its strongest benefits are fewer incorrect repair warnings, fewer dashboard-check crashes and fewer expensive repair rescans. Those are relevant to this installation's automation, template and timer use, but I have not established that your current configuration triggers any particular bug.\n",
+        "assessed_at": "2026-10-19T08:07:17.225462+00:00",
+        "sent_receipt": {
+          "accepted_at": "2026-10-19T08:07:17.225462+00:00",
+          "message_id": "<hermes-623109474ddd@cynexia.io>"
+        }
+      },
+      "e80a8bc6ce19a688fbf792c1a6641b1b1cdb05d2cbc3ec382a40381344105591": {
+        "package": "hacs/311594993",
+        "installed": "v6.1",
+        "available": "v7.0",
+        "assessment": "Presence Simulation — prepare first; hold installation until the cutoff and replay mode are checked. The integration is currently loaded and its simulation switch is off. The release removes the configured historic end date/time and its migration deletes saved history_end settings. If your simulation relies on a fixed historical cutoff, record it before upgrading and arrange for Rob's start actions to pass history_end explicitly afterward. The read-only integration lookup returned empty options but did not expose entry data; the switch exposed no cutoff or snapshot attributes. That is insufficient to prove you do not use the removed setting. The bounded configuration search found no matching automation or script, but it did not provide dashboard coverage, so I have not cleared dashboard controls or indirect calls.\n",
+        "assessed_at": "2026-10-19T08:07:17.225462+00:00",
+        "sent_receipt": {
+          "accepted_at": "2026-10-19T08:07:17.225462+00:00",
+          "message_id": "<hermes-623109474ddd@cynexia.io>"
+        }
+      }
+    }
+  }
+}

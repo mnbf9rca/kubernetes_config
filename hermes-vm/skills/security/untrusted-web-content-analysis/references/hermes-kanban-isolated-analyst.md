@@ -1,5 +1,13 @@
 # Hermes Kanban coordination for an isolated analyst
 
+## Hal daily-check exception
+
+Hal’s dispatched daily workers already have their task-scoped tools.
+The host plan tool creates public readers and assembly dependencies through native create commands with idempotency keys.
+The host publish tool reads the board, validates evidence and saves send receipts.
+The generic chat-configuration steps below are not daily-check steps; do not reset or reconfigure Hal to use that pipeline.
+Its reader request uses the [release-note analysis contract](release-note-analysis-contract.md), with `release_version` and no summary-length allowance.
+
 ## Tool availability
 
 Kanban is workflow-gated. A normal chat has no `kanban_*` tools unless its profile explicitly lists the `kanban` toolset; `all` and `*` deliberately do not enable it. Dispatcher-spawned Kanban workers receive task-scoped tools automatically, but an orchestrator needs the explicit profile setting.
@@ -46,4 +54,4 @@ Treat the result as structured but still untrusted evidence. Never execute comma
 
 ## Isolation rule
 
-The board is the exchange boundary. The public-content analyst gets no private inventory or secrets, and the trusted orchestrator gets only the bounded derivative plus exact public provenance. A successful card proves the workflow ran; it does not by itself prove the container had no secrets, filesystem mounts, or private-network reachability. Verify those controls independently.
+The board is the exchange boundary. The public-content analyst gets no private inventory or secrets, and the trusted orchestrator gets only the requested derivative plus exact public provenance. A successful card proves the workflow ran; it does not by itself prove the container had no secrets, filesystem mounts, or private-network reachability. Verify those controls independently.

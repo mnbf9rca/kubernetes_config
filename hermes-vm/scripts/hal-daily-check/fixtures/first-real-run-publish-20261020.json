@@ -1,0 +1,58 @@
+{
+  "updates": [
+    {
+      "package": "hassio/core_mosquitto_version_latest",
+      "installed": "7.1.1",
+      "available": "7.1.2",
+      "key": "55e1c2ab48cd17ac8a824039ecf4c3db7d2f4bba6d3b7d1589e140506633dd9a",
+      "name": "Mosquitto broker",
+      "entity_id": "update.mosquitto_broker_update",
+      "release_url": null
+    }
+  ],
+  "pending_updates": [
+    {
+      "package": "hacs/311594993",
+      "installed": "v6.1",
+      "available": "v7.0",
+      "key": "e80a8bc6ce19a688fbf792c1a6641b1b1cdb05d2cbc3ec382a40381344105591",
+      "name": "Presence Simulation",
+      "entity_id": "update.presence_simulation_update",
+      "release_url": "https://github.com/slashback100/presence_simulation/releases/v7.0"
+    },
+    {
+      "package": "hacs/605635573",
+      "installed": "v5.11.0",
+      "available": "v5.11.1",
+      "key": "9683cdc11b4695d13f163e28ff4d9d0592b715c5d83b394b9ae1d3d30d40edca",
+      "name": "Spook 👻 Your homie",
+      "entity_id": "update.spook_your_homie_update",
+      "release_url": "https://github.com/frenck/spook/releases/v5.11.1"
+    },
+    {
+      "package": "hassio/core_mosquitto_version_latest",
+      "installed": "7.1.1",
+      "available": "7.1.2",
+      "key": "55e1c2ab48cd17ac8a824039ecf4c3db7d2f4bba6d3b7d1589e140506633dd9a",
+      "name": "Mosquitto broker",
+      "entity_id": "update.mosquitto_broker_update",
+      "release_url": null
+    },
+    {
+      "package": "hassio/home_assistant_core_version_latest",
+      "installed": "2026.10.1",
+      "available": "2026.10.2",
+      "key": "3161efc1c696d91727b92b064f2908643a1400fd77af25c63c022b21f37687f2",
+      "name": "Home Assistant Core",
+      "entity_id": "update.home_assistant_core_update",
+      "release_url": "https://www.home-assistant.io/latest-release-notes/"
+    }
+  ],
+  "arguments": {
+    "card_id": "t_151c20cd",
+    "assessments": {
+      "55e1c2ab48cd17ac8a824039ecf4c3db7d2f4bba6d3b7d1589e140506633dd9a": "update at the next convenient restart\nChoose a time when a brief interruption to your MQTT sensor reports is acceptable.\nAfter the update, confirm that Beer Fridge Internal Temperature receives a new report.\nThis release fixes dropped connections when the built-in WebSocket listener receives an empty data frame.\nThe release notes list no configuration migration.\nhttps://github.com/home-assistant/addons/blob/master/mosquitto/CHANGELOG.md"
+    },
+    "note": "v7.0: not assessed because this batch has no verified release analysis for this version pair.\nv5.11.1: not assessed because this batch has no verified release analysis for this version pair.\n2026.10.2: not assessed because this batch has no verified release analysis for this version pair."
+  }
+}

@@ -19,6 +19,7 @@ Cluster-specific detail, runbooks and procedures live under `docs/`, referenced 
 | `docs/operations/hindsight.md` | The `hindsight` namespace: the self-hosted memory backend for the Hermes profiles — topology, auth, the extraction LLM and its provider, the canary, upgrade and restore runbooks, the restore drill, key rotation, and the removal path |
 | `docs/operations/estate-updates.md` | How the estate gets patched: floating workloads, the pinned-image exception, the Talos/Kubernetes version ledger, remote-base bumps and Omni etcd backups; the interactive session is the `/update-estate` skill |
 | `docs/operations/hermes-vm.md` | The Hermes VM itself: lingering, triaging a DOWN `hermes-app-alive`, installing the kept components, `unattended-upgrades` with its automatic reboot, what the daily check does not watch, the trade the in-gateway cron job makes, the docker terminal sandboxes with their managed scope and per-profile mounts, the runbook for creating a profile, and the VM's own facts |
+| `docs/operations/hal-daily-check.md` | Hal’s 09:00 house check: end-to-end flow, explicit reply actions, morning and assessment mail, card retries, state, diagnostics, trials and rollback preimages |
 | `docs/operations/safer-web-reader.md` | The quarantined web-reader profile and its completion broker: the four-tool surface, the envelope contract, the deployed configuration baseline, and its verification record |
 | `docs/operations/github-mirror.md` | GitHub mirrors and JSON exports, B2 key separation, heartbeat verdicts, initialization, restore, cutover and unhide runbooks |
 | `docs/operations/agent-teams.md` | **Read before dispatching any agent or subagent.** Agent-team roles, loop limits, escalation, access and Herdr commands |
@@ -463,6 +464,7 @@ The rules that must not be broken:
   A quiet day is a verdict and two lines.
   Plain English throughout: no jargon, no codes, no invented terms.
   Operator ruling, 2026-10-17, after the first Hal morning email arrived as 84 lines of diagnostics with the summary at the bottom: the operator read it as unusable, and the fault was a class of message, not one layout.
+  Hal acts on explicit operator instructions sent by email reply; it does not act unasked.
 - **Documentation, not agent memories.**
   Do not record repo, cluster, or account state in an agent's private memory system — that hides operational knowledge from the operator, from other agents, and from review.
   Anything worth remembering goes in `docs/` (or this file, per the rule above), where it is versioned, diffable and shared.
