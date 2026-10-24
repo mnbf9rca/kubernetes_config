@@ -1112,7 +1112,7 @@ The scheduler runs them as plain host subprocesses (`subprocess.Popen` in `cron/
 
 Hal’s active daily job is `ha-daily-health-email` (`e6a2fb6484b8`), at 09:00 Europe/London.
 It runs the repository-maintained `hal-daily-check-morning.py` without an agent.
-The old 08:15 producer `9f6d4108c6a6` is paused; the former watchdog name no longer describes this job.
+The old 08:15 producer `9f6d4108c6a6` and its retired pipeline files were deleted on 24 October 2026.
 `ha-observer-weekly-audit` (`ea2df3246202`) remains a separate weekly agent job.
 Its recorded delivery to the old `webui` origin fails with `unknown platform 'webui'`.
 The [Hal persona](../../hermes-vm/profiles/hal/SOUL.md#weekly-audit--ea2df3246202) retains that audit’s checklist and report format.
@@ -1154,22 +1154,24 @@ No repository checkout or cron-store mount is needed.
 
 ### Hal daily house check
 
-The [Hal daily-check runbook](hal-daily-check.md) owns the end-to-end flow, files, state, retries, diagnostics, monitor verdicts, trial command and rollback layout.
+The [Hal daily-check runbook](hal-daily-check.md) owns the end-to-end flow, files, state, retries, diagnostics, monitor verdicts, trial command and code rollback from git.
 The [canonical Hal guide](../../hermes-vm/profiles/hal/HA-WATCH.md) and [persona](../../hermes-vm/profiles/hal/SOUL.md) describe Hal’s own task and prose rules.
 The morning script collects facts and sends without an agent; later native cards provide update assessments and device look-overs.
 
 ### The former Home Assistant event feed on `hal`
 
 The native Home Assistant plugin was disabled and privately archived on October 18, 2026.
+Its private rollback archive was deleted after operator acceptance on 24 October 2026.
 `HASS_TOKEN` and HA credentials were removed from agent/worker mappings.
 Hal uses the operator’s read/write MCP address for explicit authenticated email-reply instructions, under the 22 October 2026 ruling.
 The host morning runner alone resolves the separate runner credential reference.
-The old producer’s host-only credential adaptation is retained for rollback, without restoring agent access.
+The old producer and its host-only credential adaptation were removed in the same cleanup.
 
 Before removal, an empty native watch list limited unsolicited HA event turns.
 A nested `platforms.homeassistant.enabled: false` alone did not hold when `HASS_TOKEN` could re-enable the adapter.
 Those historical settings are not the current restriction; restoring that plugin or token would reopen the gap.
-Current reply-action scope and ordinary rollback are described in [Home Assistant access and mounts](hal-daily-check.md#home-assistant-access-and-mounts).
+Current reply-action scope is described in [Home Assistant access and mounts](hal-daily-check.md#home-assistant-access-and-mounts).
+Code rollback reinstalls [files from git history](hal-daily-check.md#code-rollback).
 
 ### `hermes` CLI spellings
 
