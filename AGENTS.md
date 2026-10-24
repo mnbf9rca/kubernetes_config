@@ -19,7 +19,7 @@ Cluster-specific detail, runbooks and procedures live under `docs/`, referenced 
 | `docs/operations/hindsight.md` | The `hindsight` namespace: the self-hosted memory backend for the Hermes profiles — topology, auth, the extraction LLM and its provider, the canary, upgrade and restore runbooks, the restore drill, key rotation, and the removal path |
 | `docs/operations/estate-updates.md` | How the estate gets patched: floating workloads, the pinned-image exception, the Talos/Kubernetes version ledger, remote-base bumps and Omni etcd backups; the interactive session is the `/update-estate` skill |
 | `docs/operations/hermes-vm.md` | The Hermes VM itself: lingering, triaging a DOWN `hermes-app-alive`, installing the kept components, `unattended-upgrades` with its automatic reboot, what the daily check does not watch, the trade the in-gateway cron job makes, the docker terminal sandboxes with their managed scope and per-profile mounts, the runbook for creating a profile, and the VM's own facts |
-| `docs/operations/hal-daily-check.md` | Hal’s 09:00 house check: end-to-end flow, explicit reply actions, morning and assessment mail, card retries, state, diagnostics, trials and rollback preimages |
+| `docs/operations/hal-daily-check.md` | Hal’s 09:00 house check: end-to-end flow, explicit reply actions, morning and assessment mail, card retries, state, diagnostics, trials and code rollback from git |
 | `docs/operations/safer-web-reader.md` | The quarantined web-reader profile and its completion broker: the four-tool surface, the envelope contract, the deployed configuration baseline, and its verification record |
 | `docs/operations/github-mirror.md` | GitHub mirrors and JSON exports, B2 key separation, heartbeat verdicts, initialization, restore, cutover and unhide runbooks |
 | `docs/operations/agent-teams.md` | **Read before dispatching any agent or subagent.** Agent-team roles, loop limits, escalation, access and Herdr commands |
@@ -69,9 +69,9 @@ kubernetes_config/
 │   └── backup/               # restic init Job + nightly CronJob (hostPath /var/mnt/ssd/local-path-provisioner)
 ├── vps/                      # Hetzner Talos cluster, same sub-layout (bootstrap/secrets/workloads/backup/ops/talos)
 ├── hermes-vm/                # files that live on the hermes VM, not in a cluster
-│   ├── scripts/              # the daily alive check + the weekly sandbox refresh (both hermes cron jobs) + the hand-run profile docker setup helper
+│   ├── scripts/              # alive/refresh jobs, Hal daily/reply scripts, reviewer sweep and profile docker setup
 │   ├── etc/                  # unattended-upgrades config + the two apt timer drop-ins + the managed-scope hermes config (/etc/hermes/config.yaml)
-│   ├── plugins/              # canonical copies of the profile-scoped Hermes plugins (safer-reader-broker + its test)
+│   ├── plugins/              # safer-reader-broker, hal-daily-check, hal-email-verdict and reviewer-tooling-request
 │   ├── profiles/             # canonical copies of the per-profile SOUL.md personas
 │   └── skills/               # canonical copies of promoted Hermes skills (untrusted-web-content-analysis)
 ├── nut-pi/                   # canonical NUT Pi configuration; secrets resolved from its own .env.tpl
@@ -234,6 +234,11 @@ The rules that must not be broken:
   Pass handovers as file paths under `.superpowers/sdd/<plan>/`, never pasted output, with the chief of staff outside that loop.
   Run every step your credentials and tools allow; ask the operator only for private-vault access, browser sign-in or publication approval.
   Roles, loop limits, escalation, access and Herdr commands: `docs/operations/agent-teams.md`.
+  **The three seats scale down for documentation-only work.**
+  A change that touches only Markdown, or a test or script copy that no running job executes, takes the light path: the builder edits the files in a worktree, installs any VM copy, and opens the pull request; the chief of staff reads the diff and the checks; the operator merges.
+  No written brief, no reviewer round, no report, and no scope question over a sentence.
+  The full loop is for anything that reaches a cluster, the VM's running code or configuration, or a credential.
+  Operator ruling, 2026-10-24, after a five-file runbook fix went through a brief, a worktree, a reviewer round, two handover documents and a scope decision for removing three words: the fix was right-sized, the ceremony was not.
   On 2026-09-29 a chief of staff asked to "get subagent or codex to review" an upgrade dispatched two generic Claude subagents and read the cluster inventories itself, never having opened that document.
 - Keep the one-file-per-service pattern; keep all of a service's resources in that file.
 - **Every workload on both clusters floats unless no floating channel exists.**
@@ -333,7 +338,8 @@ The rules that must not be broken:
   Update external hermes-webui on its stable channel; its Update Now button is WebUI-only, and `ignore_agent_updates` hides agent offers.
   Complete the maintenance and runtime verification in `docs/operations/hermes-vm.md` together; do not advance core with a raw git pull.
   Everything else about the VM — lingering, the daily liveness check, the install, `unattended-upgrades` — is in `docs/operations/hermes-vm.md`.
-  **Nothing under `hermes-vm/` is scheduled by systemd any more**: the `systemd/` directory was deleted on 2026-08-27, and scheduled scripts run as hermes `no_agent` cron jobs: daily liveness and weekly sandbox refresh in default, thirty-day closed-report cleanup in security_reviewer.
+  **Nothing under `hermes-vm/` is scheduled by systemd any more**: the `systemd/` directory was deleted on 2026-08-27, and scheduled scripts run as hermes `no_agent` cron jobs: daily liveness and weekly sandbox refresh in default, thirty-day closed-report cleanup in security_reviewer, and the 09:00 house check in hal.
+  Hal's requested timed restarts also use profile-owned no-agent one-shots.
   The liveness check is read-only; sandbox refresh derives each profile image and removes only idle stale containers. The worker-only security_reviewer uses its own signed derived image, staged community skills and scoped tooling-request plugin; operation and owed HAL report bind are documented in `docs/operations/hermes-vm.md#security-reviewer-operation`.
   **Nothing mechanical guards runbook prose**, which is why its disclosure rules are written into the steps they govern rather than referenced.
   The files that remain under `hermes-vm/` are not rendered by kustomize, so `make check-script-lint` cannot see them — `make check-vm-scripts` is their guard, and it is `shellcheck -s sh` over every `*.sh` under `hermes-vm/scripts/` (the daily alive check; since 2026-08-29 the weekly docker-sandbox refresh; and since 2026-08-31 `hermes-profile-docker-setup.sh`, which is run by hand per new profile and is on no schedule) plus `scripts/check-ping-bodies.py hermes-vm`.

@@ -453,8 +453,10 @@ class FirstRealRun(unittest.TestCase):
   b=Board();report=dict(updates=[],inventory=[],situations=[dict(key='s',members=[dict(device_id='d',condition='offline')],line='Device offline')])
   c.Tickets(b).ensure(report,{},{},'2026-10-20',AT);return c.body(b.show(next(iter(b.tasks))))['instruction']
  def test_emitted_device_instruction_and_guide_apply_assessment_prose_rules(self):
-  instruction=self.device_instruction();guide=(Path(__file__).resolve().parents[2]/'profiles/hal/HA-WATCH.md').read_text()
-  for text in (instruction,guide):
+  instruction=self.device_instruction();root=Path(__file__).resolve().parents[2]
+  guide=root/'profiles/hal/HA-WATCH.md'
+  if not guide.exists():guide=root/'workspace/HA-WATCH.md'
+  for text in (instruction,guide.read_text()):
    for rule in ('Simplified Technical English','does not establish','not proof','one finding per device'):self.assertIn(rule,text)
   self.assertIn('last report',instruction);self.assertIn('battery',instruction)
  def test_checked_and_fine_integration_is_not_a_separate_finding(self):

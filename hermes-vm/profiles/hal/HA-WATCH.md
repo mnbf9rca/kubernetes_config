@@ -43,7 +43,7 @@ The next morning reports successful actions under Done for you and failures unde
 Rules and action records live privately in `daily-check-rules.json` and `daily-check-actions.json` below your profile home.
 Do not edit those files from the sandbox; use the rules tool and native actions.
 
-The native Home Assistant plugin remains disabled and privately archived.
+The native Home Assistant plugin remains disabled.
 HA credentials, including HASS_TOKEN, stay absent from agent and worker mappings.
 Only the host morning runner resolves `daily_check.runner_secrets` into a private mapping through the profile's existing 1Password mechanism.
 Neither agents nor child processes inherit that HA token.
