@@ -69,9 +69,9 @@ kubernetes_config/
 │   └── backup/               # restic init Job + nightly CronJob (hostPath /var/mnt/ssd/local-path-provisioner)
 ├── vps/                      # Hetzner Talos cluster, same sub-layout (bootstrap/secrets/workloads/backup/ops/talos)
 ├── hermes-vm/                # files that live on the hermes VM, not in a cluster
-│   ├── scripts/              # the daily alive check + the weekly sandbox refresh (both hermes cron jobs) + the hand-run profile docker setup helper
+│   ├── scripts/              # alive/refresh jobs, Hal daily/reply scripts, reviewer sweep and profile docker setup
 │   ├── etc/                  # unattended-upgrades config + the two apt timer drop-ins + the managed-scope hermes config (/etc/hermes/config.yaml)
-│   ├── plugins/              # canonical copies of the profile-scoped Hermes plugins (safer-reader-broker + its test)
+│   ├── plugins/              # safer-reader-broker, hal-daily-check, hal-email-verdict and reviewer-tooling-request
 │   ├── profiles/             # canonical copies of the per-profile SOUL.md personas
 │   └── skills/               # canonical copies of promoted Hermes skills (untrusted-web-content-analysis)
 ├── nut-pi/                   # canonical NUT Pi configuration; secrets resolved from its own .env.tpl
@@ -333,7 +333,8 @@ The rules that must not be broken:
   Update external hermes-webui on its stable channel; its Update Now button is WebUI-only, and `ignore_agent_updates` hides agent offers.
   Complete the maintenance and runtime verification in `docs/operations/hermes-vm.md` together; do not advance core with a raw git pull.
   Everything else about the VM — lingering, the daily liveness check, the install, `unattended-upgrades` — is in `docs/operations/hermes-vm.md`.
-  **Nothing under `hermes-vm/` is scheduled by systemd any more**: the `systemd/` directory was deleted on 2026-08-27, and scheduled scripts run as hermes `no_agent` cron jobs: daily liveness and weekly sandbox refresh in default, thirty-day closed-report cleanup in security_reviewer.
+  **Nothing under `hermes-vm/` is scheduled by systemd any more**: the `systemd/` directory was deleted on 2026-08-27, and scheduled scripts run as hermes `no_agent` cron jobs: daily liveness and weekly sandbox refresh in default, thirty-day closed-report cleanup in security_reviewer, and the 09:00 house check in hal.
+  Hal's requested timed restarts also use profile-owned no-agent one-shots.
   The liveness check is read-only; sandbox refresh derives each profile image and removes only idle stale containers. The worker-only security_reviewer uses its own signed derived image, staged community skills and scoped tooling-request plugin; operation and owed HAL report bind are documented in `docs/operations/hermes-vm.md#security-reviewer-operation`.
   **Nothing mechanical guards runbook prose**, which is why its disclosure rules are written into the steps they govern rather than referenced.
   The files that remain under `hermes-vm/` are not rendered by kustomize, so `make check-script-lint` cannot see them — `make check-vm-scripts` is their guard, and it is `shellcheck -s sh` over every `*.sh` under `hermes-vm/scripts/` (the daily alive check; since 2026-08-29 the weekly docker-sandbox refresh; and since 2026-08-31 `hermes-profile-docker-setup.sh`, which is run by hand per new profile and is on no schedule) plus `scripts/check-ping-bodies.py hermes-vm`.

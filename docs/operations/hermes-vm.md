@@ -779,10 +779,10 @@ The rule bites on a name that means a *different* secret in each profile, which 
 **The 2026-09-06 incident is what this rule is for.**
 `emh` and the default profile (mailbox `kairos`) both declared `EMAIL_PASSWORD`, pointing at different Purelymail items, and the `mcp-email-server` that `hermes-webui` spawned for `emh` was started with the `kairos` password.
 Every authenticated IMAP and SMTP call from an `emh` WebUI chat then failed as `provider_failure`, while account discovery kept succeeding, because discovery needs no login.
-The per-profile gateways were never affected: each serves one profile, so its scope and its environment agree.
+The per-profile gateways then in use were unaffected: each served one profile, so its scope and environment agreed.
 
 **The `EMAIL_*` names are read verbatim and cannot be prefixed.**
-The email platform adapter and the gateway config reader look these up by fixed name through `os.getenv`, and no configuration key remaps any of them:
+The email adapter and gateway config reader use these fixed names through profile-aware secret getters:
 
 ```
 EMAIL_ADDRESS          EMAIL_IMAP_HOST   EMAIL_SMTP_HOST   EMAIL_ALLOWED_USERS       EMAIL_HOME_ADDRESS
@@ -791,9 +791,15 @@ EMAIL_POLL_INTERVAL    EMAIL_AUTHSERV_ID EMAIL_TRUST_FROM_HEADER                
 ```
 
 Sources: `plugins/platforms/email/adapter.py` and `gateway/config.py` in the installed hermes-agent checkout.
+Some non-secret settings also have YAML equivalents; `EMAIL_PASSWORD` itself has no configurable name or password-key alternative.
 **Only `EMAIL_PASSWORD` is affected by the prefix rule**, because it is the only one of them that comes from the 1Password map; the rest are non-secret settings the profile's `.env` carries, and `.env` is per-profile and never shared.
 So a profile running `platforms.email` keeps a verbatim `EMAIL_PASSWORD` entry **as well as** its prefixed one, both against the same `op://` reference.
-That is safe, because the adapter runs only in the profile's own gateway, where the scope and the environment agree, and never in `hermes-webui`.
+The shared gateway constructs and connects each secondary email adapter inside that profile's `_profile_runtime_scope`.
+The adapter reads `EMAIL_PASSWORD` through `gateway.platforms._shared.get_scoped_secret` and saves it on that adapter instance.
+A missing value in an active secondary profile scope does not fall back to another profile's process environment.
+The unscoped default adapter uses the default profile's environment.
+This profile scoping, rather than a separate gateway process, keeps the fixed credential name local to its mailbox.
+The prefixed name remains for the mail MCP server used by WebUI.
 
 **The pattern a new email profile copies**, with `<PREFIX>` the profile name upper-cased and `<name>` the mailbox:
 
@@ -823,15 +829,16 @@ Mail profiles also need an explicit `EMAIL_AUTHSERV_ID` pin established from the
 
 ### 6. The email platform, if wanted
 
-The email adapter reads **`.env` only**.
+The deployed profiles keep email settings in `.env`; the adapter also accepts several non-secret settings through `platforms.email.extra`.
 Put `EMAIL_ADDRESS`, `EMAIL_IMAP_HOST`, `EMAIL_SMTP_HOST` and `EMAIL_ALLOWED_USERS` in the profile's `.env`, let `EMAIL_PASSWORD` arrive through the 1Password map from step 5, and then:
 
 ```sh
 /home/hermes/.local/bin/hermes -p <name> config set platforms.email.enabled true
 ```
 
-**Skip `platforms.email.extra`.**
-The adapter does not read it, so setting the address and hosts there is harmless and does nothing — while looking exactly like the configuration that matters.
+Keep each setting in one place.
+The native adapter gives scoped environment values precedence over the corresponding YAML address and host settings.
+`EMAIL_PASSWORD` still comes from the profile secret map, not `platforms.email.extra`.
 
 ### 7. The standard docker mounts, for a trusted profile only
 
@@ -978,7 +985,7 @@ A no-agent cron subprocess is bounded instead by the scheduler's `script_timeout
 Every command in the script that reaches the network carries its own `-m 15`, so the residual exposure is a wedged `systemctl` or a wedged Python import rather than an unbounded wait.
 
 **Cost: the schedule is agent state** — a systemd timer is a file this repository owns; a cron job is not.
-The detail, and `hermes cron list` as the check, is in [what the daily check does not watch](#what-the-daily-check-does-not-watch).
+The detail, and `hermes cron list` as the check, is in [Create the daily check's cron job](#5-create-the-daily-checks-cron-job).
 
 ## Facts about this VM
 
@@ -1165,7 +1172,7 @@ Its private rollback archive was deleted after operator acceptance on 24 October
 `HASS_TOKEN` and HA credentials were removed from agent/worker mappings.
 Hal uses the operator’s read/write MCP address for explicit authenticated email-reply instructions, under the 22 October 2026 ruling.
 The host morning runner alone resolves the separate runner credential reference.
-The old producer and its host-only credential adaptation were removed in the same cleanup.
+The old producer and its host-only credential adaptation were removed on 24 October 2026.
 
 Before removal, an empty native watch list limited unsolicited HA event turns.
 A nested `platforms.homeassistant.enabled: false` alone did not hold when `HASS_TOKEN` could re-enable the adapter.

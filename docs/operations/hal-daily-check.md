@@ -67,7 +67,7 @@ Other legacy observer jobs and timers are separate from this runner.
 ### Private state
 
 The private JSON stores live directly under Hal's profile home, outside its terminal sandbox mounts.
-Each update is atomic; the producer and publisher use separate directory locks.
+Each update is atomic; the morning runner and publisher use separate directory locks.
 
 | File | Contents |
 |---|---|
