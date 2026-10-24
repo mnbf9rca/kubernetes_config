@@ -234,6 +234,11 @@ The rules that must not be broken:
   Pass handovers as file paths under `.superpowers/sdd/<plan>/`, never pasted output, with the chief of staff outside that loop.
   Run every step your credentials and tools allow; ask the operator only for private-vault access, browser sign-in or publication approval.
   Roles, loop limits, escalation, access and Herdr commands: `docs/operations/agent-teams.md`.
+  **The three seats scale down for documentation-only work.**
+  A change that touches only Markdown, or a test or script copy that no running job executes, takes the light path: the builder edits the files in a worktree, installs any VM copy, and opens the pull request; the chief of staff reads the diff and the checks; the operator merges.
+  No written brief, no reviewer round, no report, and no scope question over a sentence.
+  The full loop is for anything that reaches a cluster, the VM's running code or configuration, or a credential.
+  Operator ruling, 2026-10-24, after a five-file runbook fix went through a brief, a worktree, a reviewer round, two handover documents and a scope decision for removing three words: the fix was right-sized, the ceremony was not.
   On 2026-09-29 a chief of staff asked to "get subagent or codex to review" an upgrade dispatched two generic Claude subagents and read the cluster inventories itself, never having opened that document.
 - Keep the one-file-per-service pattern; keep all of a service's resources in that file.
 - **Every workload on both clusters floats unless no floating channel exists.**
