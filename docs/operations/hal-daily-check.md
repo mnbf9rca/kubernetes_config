@@ -61,14 +61,13 @@ The shared gateway owns scheduling and dispatch; Hal needs no separate gateway u
 
 The no-agent job is named `ha-daily-health-email`, uses `0 9 * * *` in Europe/London and delivers scheduler output locally.
 It runs at 08:00 UTC during British Summer Time and 09:00 UTC in winter.
-The old producer `9f6d4108c6a6`, `hal-assessment-morning.py`, is paused and retained for rollback.
-The former watchdog description and 08:15 producer are not the active pipeline.
+The old 08:15 producer `9f6d4108c6a6`, its scripts and the daily pipeline's staging and rollback copies were deleted on 24 October 2026.
 Other legacy observer jobs and timers are separate from this runner.
 
 ### Private state
 
 The private JSON stores live directly under Hal's profile home, outside its terminal sandbox mounts.
-Each update is atomic; the producer and publisher use separate directory locks.
+Each update is atomic; the morning runner and publisher use separate directory locks.
 
 | File | Contents |
 |---|---|
@@ -91,7 +90,7 @@ Hal's HA-MCP URL comes from 1Password through the profile secret map and native 
 Hermes does not redact 1Password-resolved values automatically, so Hal uses a LAN-only direct-access URL.
 Hal uses native HA-MCP write tools directly on explicit authenticated email replies; the usual install, reload and restart services are examples, not a whitelist.
 Cards and audits remain read-only by instruction, and no new pre-tool block restricts the MCP surface.
-The native Home Assistant plugin is disabled and privately archived; `HASS_TOKEN` and HA credentials are absent from agent/worker mappings.
+The native Home Assistant plugin is disabled; `HASS_TOKEN` and HA credentials are absent from agent/worker mappings.
 Only the host runner resolves `daily_check.runner_secrets.onepassword.env` into a private credential mapping.
 `HAL_DAILY_RUNNER_HASS_URL` and `HAL_DAILY_RUNNER_HASS_TOKEN` do not enter child-process environments.
 The runner enforces its fixed read-command set; it never installs updates or changes Home Assistant.
@@ -148,7 +147,7 @@ Neither notice reports a Home Assistant action or fault.
 
 A home channel also supplies the destination for a bare email `send_message` target, including messages sent from another platform.
 Cron can use it for bare-platform delivery, broadcast delivery, or `origin` delivery without a saved origin.
-All seven current Hal cron records specify delivery: six use `local`, and weekly audit `ea2df3246202` uses its explicit WebUI origin.
+All Hal cron records specify delivery: script jobs use `local`, and weekly audit `ea2df3246202` uses its explicit WebUI origin.
 None gains email delivery from this home setting; the audit's existing WebUI delivery failure remains recorded in [the VM runbook](hermes-vm.md#hals-own-script-cron-jobs).
 Reply-created timed-restart jobs also specify `deliver=local`.
 
@@ -242,24 +241,29 @@ After today's accepted morning run, it reads automation runs only after that run
 A refused trial returns exit 1 and does not retry.
 No arguments to the cron entrypoint mean production; trial must be explicit.
 
-## Rollback preimages
+## Code rollback
 
-Candidates and manifests are under `<profile>/workspace/hal-daily-check-next/<change>-<UTC timestamp>/`.
-Preimages are under `<profile>/workspace/hal-daily-check-next/rollback-native-ha-20261018T193004Z/<change>-<UTC timestamp>/`.
-Each leaf preserves the replaced relative paths; its candidate manifest records preimage and installed hashes, protected files and test results.
-These working directories are private runtime evidence, not source or instructions for Hal to execute.
+Rollback reinstalls the selected files from git history on `master`.
+The VM's daily-pipeline candidates and rollback preimages were deleted after operator acceptance on 24 October 2026.
+They are no longer a recovery source.
+Commit `bf743d2` is the first `master` revision containing this pipeline; earlier revisions do not contain its files.
 
 For an approved code rollback:
 
-1. Read the selected candidate manifest.
-2. Wait for active Hal publishers to finish.
-3. Restore only the listed code files from that change's preimages.
-4. Compare their hashes with the recorded preimage hashes.
-5. Run the affected local tests before admitting new work.
-6. Preserve current state, receipts, card claims, schedules and profile credentials.
+1. Fetch `origin/master` in an isolated checkout.
+2. Select a revision on `master` that contains the required daily-check files.
+3. Check those files for compatibility with the current private state and card schemas.
+4. Extract only the required files from that revision with `git show` or `git archive`.
+5. Wait for active Hal workers and morning runs to finish.
+6. Reinstall the extracted files at the locations in [Files and ownership](#files-and-ownership).
+7. Compare installed hashes with the selected git files.
+8. Run the installed tests without invoking the production or trial runner.
+9. Preserve current state, receipts, card claims, schedules and profile credentials.
 
-Restoring the native HA plugin, token mappings or paused producer is not an ordinary code rollback.
-The retained old producer already uses the runner-only credential reference; it must not export that token to agents.
+Changed plugin code can require a gateway reload; replacing tests or documentation does not.
+Restoring the native HA plugin, token mappings or deleted producer is not an ordinary code rollback.
+Neither private profile configuration nor old agent-authored pipeline code is recoverable from this repository's history.
+Runner-only credentials must remain outside agent and worker environments.
 
 ## What this check does not watch
 
