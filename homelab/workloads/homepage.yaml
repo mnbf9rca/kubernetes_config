@@ -82,6 +82,10 @@ data:
             icon: mdi-chart-line
             href: http://192.168.17.179/
             description: 192.168.17.179 · energy data
+        - OpenEPaperLink AP:
+            icon: mdi-tag-text-outline
+            href: http://10.0.2.169/
+            description: 10.0.2.169 · e-paper tags
         - Kiosk Satellite:
             icon: mdi-tablet-dashboard
             href: http://10.0.2.140:2324/
