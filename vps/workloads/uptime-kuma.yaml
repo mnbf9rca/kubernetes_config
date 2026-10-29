@@ -55,6 +55,9 @@ spec:
           imagePullPolicy: Always
           env:
             - { name: TZ, value: Europe/London }
+            # Give slow Cloudflare handshakes time to avoid empty-message failures.
+            # Node defaults to 250 ms per address; see docs/operations/uptime-kuma.md.
+            - { name: NODE_OPTIONS, value: "--network-family-autoselection-attempt-timeout=2000" }
             # Closes the "green but monitoring nothing" path. On a recreated
             # or empty PVC, uptime-kuma starts its setup wizard, which binds
             # the SAME port 3001 and answers /api/entry-page with HTTP 200
