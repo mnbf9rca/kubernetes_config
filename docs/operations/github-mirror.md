@@ -104,7 +104,7 @@ Other branches are not counted.
 
 `github-backup` swallows some export failures, including some failed asset downloads.
 Its zero exit code does not prove a complete export; the pod log is the record.
-Monitor configuration is in [uptime-kuma.md](uptime-kuma.md#push-monitors).
+Query the current monitor configuration through [uptime-kuma.md](uptime-kuma.md#monitor-list).
 
 ## Runbook: initialise the repository, once
 

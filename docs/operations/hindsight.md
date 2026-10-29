@@ -404,7 +404,8 @@ Before onboarding a profile, run the two-bank isolation test once — retain int
 Two uptime-kuma **push** monitors, both driven from an EXIT trap — `up` on exit 0, `down` otherwise: `hindsight-pg-dump` (86400s interval, one retry at 7200s) and `hindsight-canary` (3600s interval, one retry at 1800s).
 They replaced two healthchecks.io checks of the same names on August 26, 2026; tokens are in the `hindsight` 1Password item.
 There is no start signal — the push API has none — so `activeDeadlineSeconds` is the whole of the hang bound and the monitor's interval plus retry is the silence bound.
-The roster is in [uptime-kuma.md](uptime-kuma.md#push-monitors) and the reasoning behind the canary is in [monitoring.md](monitoring.md#healthchecksio-checks).
+Query the live roster through [uptime-kuma.md](uptime-kuma.md#monitor-list).
+The reasoning behind the canary is in [monitoring.md](monitoring.md#healthchecksio-checks).
 
 **`/health/live` has no consumer outside the cluster.**
 It used to: the deleted update wrapper on VM 103 read its `version` field to choose a `hindsight-client` to install.
