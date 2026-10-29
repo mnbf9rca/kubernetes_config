@@ -298,7 +298,7 @@ The four single-DB services still take the newest match, because their glob is o
 **The checks in the table below are the whole of this repo's healthchecks.io reporting policy, and routine jobs otherwise push to uptime-kuma.**
 The account is capped at 20 checks and six of them are pinged from outside this repo, so a check on healthchecks.io has to earn its slot.
 The two restic checks keep their multi-line triage bodies; `vps-uptime-kuma-alive` watches kuma from outside it; `estate-update` records operator sessions.
-Every other job in this estate drives a **push monitor** — inventory in [uptime-kuma.md](uptime-kuma.md#push-monitors).
+Every other job in this estate drives a **push monitor** — query the [live monitor table](uptime-kuma.md#monitor-list) for the inventory.
 Migrated August 26, 2026.
 List the live account with the read-only API key rather than trusting a count written anywhere: the command is in [Checks in the account that this repo does not ping](#checks-in-the-account-that-this-repo-does-not-ping).
 
@@ -347,7 +347,7 @@ Both ages are written on every `up` push for exactly this reason; do not trim on
 `jottacloud-backup` is success-only for a different reason: its request comes from `backup.sh` inside `ghcr.io/mnbf9rca/jottacloud-backup`, an image this repo does not build.
 It is the one migrated job whose request shape this repo does not control, so the shape was measured rather than assumed (August 26, 2026): kuma routes the success POST, reading `status` and `msg` from the query string and discarding the body, and routes neither the `/fail` POST nor the every-run `/log` POST.
 That is the contract this repo wants — **a failed backup pushes nothing and the monitor goes DOWN by silence** — at the cost of one cosmetic `WARNING: Failed to send…` line per unrouted request.
-The full measurements, and what to re-check after an image bump, are in [uptime-kuma.md](uptime-kuma.md#the-one-monitor-whose-request-this-repo-does-not-control).
+The request contract and what to re-check after an image bump are in [uptime-kuma.md](uptime-kuma.md#the-one-monitor-whose-request-this-repo-does-not-control).
 
 **`hermes-pull`** backs up the off-cluster hermes VM: it SSHes in with a forced-command key, runs `hermes backup`, and pulls the zip onto the `hermes-dumps` PVC ([homelab.md](homelab.md#hermes-vm-backup-and-restore)).
 Its heartbeat reports a verdict, the pulled zip's size in KiB and a fixed `sha256_match=yes|no` — never the checksum values themselves, which are command output — and the pod log's `detail:` line carries the local-copy and prune counts as well.
@@ -381,7 +381,7 @@ A push monitor that goes DOWN alerts once on the flip and then stays quiet.
 Cloudflare answers urllib's default `Python-urllib/3.x` User-Agent with HTTP 403 and `error code: 1010` before the request reaches kuma, so the Python push jobs set an explicit `User-Agent` and their suites assert it.
 A push failure is swallowed by design, so the only symptom is a monitor that never goes UP.
 Shell runners use curl or wget and are unaffected.
-Measurement and detail: [uptime-kuma.md](uptime-kuma.md#push-monitors).
+The caller requirement is recorded in [uptime-kuma.md](uptime-kuma.md#the-push-path-is-bypassed-at-the-edge).
 
 ### The update watcher
 
@@ -599,7 +599,7 @@ It is worth remembering as a shape.
 ## Layers 3 and 4: uptime-kuma
 
 Layer 3 is a hand-maintained uptime-kuma instance on the VPS; layer 4 is one monitor inside it that pings healthchecks.io, so uptime-kuma's own death is visible.
-Both are UI procedures, so they live in **[uptime-kuma.md](uptime-kuma.md)** — monitor list, per-monitor HTTP settings, the Cloudflare Access trap and the self-monitor.
+Monitor standards, recorded departures and access procedures are in **[uptime-kuma.md](uptime-kuma.md)**; the live database is the monitor inventory.
 One consequence bites from this side: a monitor that follows redirects reports UP off the Cloudflare login page while the origin is dead.
 
 Layer 3 is no longer only outbound HTTP checks.
@@ -613,7 +613,7 @@ Its 24-hour heartbeat and one two-hour retry alarm about 26 hours after the last
 The message is a fixed `verdict=` value: `accepted` or `already-accepted` is up; state, send, credential, timeout or internal failures are down when a push token is available.
 The exact [verdict enum and missing-mail procedure](hal-daily-check.md#diagnostics-and-the-kuma-heartbeat) belong to the Hal runbook.
 Preview, trial and a lock-losing production run push nothing; a credential failure before token resolution also leaves silence.
-The operator created this monitor on October 18, 2026; its [inventory row](uptime-kuma.md#push-monitors) records the token reference and retry settings.
+The operator created this monitor on October 18, 2026; its current retry settings are in the [live monitor table](uptime-kuma.md#monitor-list).
 That widens the `/api/push/*` Access bypass's blast radius past "the clusters".
 **`Withings-ingest`** was added on September 2, 2026 for the `withings-ingest` CronJob in `health`.
 The `vps-github-mirror` push monitor covers the nightly `github-mirror` CronJob in `backup`, with an 86400s interval and one retry at 7200s.
@@ -621,7 +621,7 @@ It pushes `up` on exit 0 and `down` otherwise, including default-branch force-pu
 Its message carries `verdict=`, `repos=`, `forced_default=`, `deleted_default=` and, on failure, `failed_step=`.
 The six verdicts and the current final-step precedence are documented in [github-mirror.md](github-mirror.md#monitoring).
 Because the healthchecks.io account is capped at 20 checks, new scheduled work takes a push monitor instead.
-Both the roster and the Cloudflare Access bypass that lets a job reach the push endpoint are in **[uptime-kuma.md](uptime-kuma.md#push-monitors)**.
+Use the [live monitor query](uptime-kuma.md#monitor-list) for the roster and the [push-path runbook](uptime-kuma.md#the-push-path-is-bypassed-at-the-edge) for Access bypass details.
 
 **The monitors deliberately kept the retired checks' names**, so the estate reads as one inventory across the change: `health-influx-backup` names the same job it always did, in a different place.
 The one exception is the merge — `health-apple-ingest` and `health-garmin-ingest` became the single `health-garmin-and-apple-ingest`, because one CronJob checked both in one process.

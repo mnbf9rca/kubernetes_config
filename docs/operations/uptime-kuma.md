@@ -1,135 +1,109 @@
 # uptime-kuma runbook
 
-uptime-kuma on the VPS cluster is layer 3 of the four detection layers in [monitoring.md](monitoring.md#the-four-layers): the external check that sees a tunnel or edge failure that no in-pod probe can.
-This file is the procedure for maintaining it.
-The policy — why the layer exists, and what it still does not catch — stays in [monitoring.md](monitoring.md).
+This runbook covers monitor standards and access to uptime-kuma on the VPS cluster.
+Detection policy, job-specific reporting contracts and accepted gaps belong in [monitoring.md](monitoring.md).
+The live `kuma.db` is the record for monitor names, settings and group membership.
 
-**Create monitors by hand in the UI and record them here.** uptime-kuma v2 offers no *supported* programmatic path: monitor CRUD is Socket.IO only, the one API-key-protected HTTP route is `/metrics`, and the REST API issue (#118) has been open since 2021 with two bridge PRs closed unmerged.
-The community Python wrapper, `uptime-kuma-api`, documents v1.23.2 as its ceiling, but that is the version it was tested against and not a gate: it asserts no version, branching only on `>= 1.22` and `>= 1.23` for two features, and on September 5, 2026 it logged in to the live 2.5.3 and edited monitors there unaltered.
-Creating a monitor stays a UI job, because the point of the rule is that a new monitor gets recorded in this file.
-Changing one field across many existing monitors is not — see [Editing monitors in bulk](#editing-monitors-in-bulk).
+## Standard monitor settings
 
-To read the monitor inventory, query `kuma.db` read-only:
+Use these settings for HTTP monitors unless a recorded reason requires a departure.
 
-```bash
-kubectl -n vps exec deploy/uptime-kuma -- \
-  sqlite3 -readonly /app/data/kuma.db \
-  'select id, name, type, url, interval, maxretries, retry_interval, accepted_statuscodes_json, parent, active from monitor order by id'
-```
-
-**`/metrics` omits monitors created after the process started, until it restarts.**
-Using `/metrics` as an inventory produces a wrong answer; `kuma.db` is the reliable source.
-
-A monitor is created by hand in the UI, so the roster moves without a commit and no count written down here stays true for long.
-List the current roster from the live database:
-
-```bash
-kubectl --context cynexia-vps -n vps exec deploy/uptime-kuma -- \
-  sqlite3 -readonly /app/data/kuma.db \
-  'select name, type from monitor order by name'
-```
-
-The `uptime-kuma` container ships `sqlite3` at `/usr/bin/sqlite3`, so the command needs no `-c` flag and installs nothing.
-
-The pod's `sqlite-snapshot` sidecar writes `kuma.db.restic` beside the database every 12 hours (`sleep 43200` in `vps/workloads/scripts/sqlite-snapshot.sh`), and the nightly `restic-backup` CronJob captures it, so a rebuild restores the monitors.
-
-## Settings for every HTTP monitor
-
-| Field | Value | Why |
+| Field | Standard | Reason |
 |---|---|---|
-| Monitor type | HTTP(s) | Use the `Keyword` or `JSON Query` variant only where the body carries the verdict — see below |
-| Heartbeat interval | 60s | The `blog.cynexia.com` group and its `blog.cynexia.com homepage` monitor use 15s; every other monitor uses 60s |
-| Retries | 3 | The default of 0 alerts on a single blip |
-| Heartbeat retry interval | 60s | `blog.cynexia.com homepage` uses 5s |
-| Request timeout | 20s | Separates "slow" from "wedged" |
-| Max redirects | **0** | Defeats the Access trap below. Required on every Access-protected monitor; the monitors on hosts with no Access app keep the default |
-| Accepted status codes | per monitor | — |
-| Certificate expiry, ignore TLS | defaults | TLS terminates at the Cloudflare edge |
+| Monitor type | HTTP(s) | Use a body assertion only when a successful status can hide a fault |
+| Method / cache-busting | GET / off | Normal request behavior; exceptions are recorded below |
+| Heartbeat interval | 60s | Routine availability checks |
+| Retries | 3 | Absorb a transient failure before alerting |
+| Heartbeat retry interval | 60s | Allow a transient fault time to recover |
+| Request timeout | 20s | Separate a slow response from a wedged service |
+| Max redirects | 0 behind Access; default elsewhere | Prevent a login page from passing as a healthy origin |
+| Accepted status codes | `200-299`, or the endpoint's recorded healthy response | Do not widen the set to hide a failure |
+| Certificate expiry / ignore TLS | defaults | TLS terminates at the Cloudflare edge |
 
-The retries and timeout rows are the current state as of September 5, 2026, not just the standard: all seventeen HTTP monitors run at 3 retries and a 20s timeout, apart from `blog.cynexia.com homepage`, which deliberately keeps 1 retry at a 5s interval and a 10s timeout.
-The same fourteen were short of both, and were moved in two sweeps through the Socket.IO API, below.
+### Departures and their reasons
 
-Reach for a keyword or JSON-query monitor only when the status code cannot fail on its own.
-uptime-kuma evaluates the keyword after the status check passes, so against an origin that returns 5xx or a Cloudflare `1033` it adds nothing — `saveErrorResponse` already captures the error body into the alert, which makes a `1033` diagnosable.
-It earns its place against an origin that answers 200 while broken, which is what `blog database status` and the two `api.recordwell.app` monitors assert.
+A departure is deliberate only when its reason is recorded.
+
+- `blog.cynexia.com homepage` still uses a 15s interval, 1 retry, a 5s retry interval and a 10s timeout, with no reason on record.
+  It also uses HEAD with cache-busting enabled; neither has a recorded reason.
+- `family-foqos.app` and `recordwell.app website` enable cache-busting, also without a recorded reason.
+- The two `api.recordwell.app` monitors use JSON Query and require `$.status` to equal `ok`, because HTTP 200 alone cannot establish application health.
+- `hae.cynexia.com` accepts 401 because its origin requires authentication; the response proves the edge, tunnel and origin answered.
+- `Data MCP` and `homelab-proxy` check the Access challenge itself for the security reasons in [The Cloudflare Access trap](#the-cloudflare-access-trap).
+
+Reach for a keyword or JSON-query assertion only when the status code cannot fail on its own.
+An error status already fails the check, and `saveErrorResponse` captures the response body for diagnosis.
 
 The `uptime-kuma` container sets `NODE_OPTIONS=--network-family-autoselection-attempt-timeout=2000` to give each address two seconds to connect instead of abandoning slow Cloudflare handshakes after 250 milliseconds.
 
-### Editing monitors in bulk
+### Push monitors
 
-The UI edits one field of one monitor at a time, which is right for a new monitor and painful for a sweep across seventeen.
-For a sweep, drive the same Socket.IO API the UI itself uses, through the `uptime-kuma-api` Python wrapper.
+A push monitor receives a job's heartbeat rather than sending a request.
+Its interval and retry allowance follow the job's schedule and tolerated lateness; read the current values from the [live monitor table](#monitor-list).
+The normal contract is `up` on success and `down` on failure.
+There is no `/start` signal: the job's own deadline bounds a hang, and the monitor's interval plus retry bounds silence.
 
-Reach the server by port-forward rather than through `uptime.cynexia.com`, so Cloudflare Access is not in the path:
+Two jobs have recorded reasons to send nothing on some runs.
+`health-garmin-and-apple-ingest` stays silent unless both buckets are fresh, preserving the tolerance for an operator who has not synced a watch.
+Its last successful message's `apple_age_h=` and `garmin_age_h=` identify the ageing source; the pod log separates stale data from a failed query.
+`homelab-update-watch` stays silent on an unreadable dashboard or API failure because an unknown result is neither a healthy result nor a dependency-lookup failure.
+
+### The one monitor whose request this repo does not control
+
+`jottacloud-backup` is success-only because the upstream image sends a success POST that kuma accepts, but also sends `/fail` and `/log` POSTs that kuma does not route.
+Kuma reads `status` and `msg` from the query string and discards the POST body.
+A failed backup therefore reports by silence; the unrouted requests produce one cosmetic warning on success and two on failure.
+Re-check the image's request contract after an update; a changed success path or method can stop reporting.
+
+### The self-monitor (layer 4)
+
+`vps-uptime-kuma-alive` is an HTTP monitor that sends a GET to its healthchecks.io ping URL, not a Push monitor.
+It lets healthchecks.io notice kuma's death from outside the VPS, which kuma cannot report itself.
+The external check's period and grace are recorded in [monitoring.md](monitoring.md#healthchecksio-checks); kuma's own UP/DOWN label is not that external signal.
+
+## Reaching monitors
+
+### UI
+
+Open [uptime.cynexia.com](https://uptime.cynexia.com/) through Cloudflare Access.
+The kuma admin username, password and one-time password are on `op://VPS/uptime-kuma`.
+Create and edit monitors in the UI.
+The live database records their configuration.
+
+For direct access without the Cloudflare path, forward the Service locally:
 
 ```bash
 kubectl --context cynexia-vps -n vps port-forward svc/uptime-kuma 13001:3001
 ```
 
-Then run this against it from a throwaway venv (`python3 -m venv venv`, then `./venv/bin/pip install uptime-kuma-api`).
-The ids and the field below are the first of the two September 5, 2026 sweeps, which set `maxretries` to 3.
-The second set `timeout` to 20 on the same fourteen and was the same script with those two constants changed, which is the whole of how it generalises.
+Then open `http://127.0.0.1:13001` and use the kuma admin login.
 
-```python
-import subprocess, sys
-from uptime_kuma_api import UptimeKumaApi
+### Monitor list
 
-def opread(ref):
-    return subprocess.run(["op", "read", ref], capture_output=True, text=True,
-                          check=True).stdout.strip()
+Read the live monitor table without selecting authentication headers or push tokens:
 
-IDS = [1, 3, 5, 6, 7, 8, 9, 10, 12, 13, 14, 15, 16, 39]
-
-api = UptimeKumaApi("http://127.0.0.1:13001", wait_events=1.0)
-try:
-    api.login(opread("op://VPS/uptime-kuma/username"),
-              opread("op://VPS/uptime-kuma/password"),
-              opread("op://VPS/uptime-kuma/one-time password?attribute=otp"))
-    apply = "--apply" in sys.argv
-    for i in IDS:
-        m = api.get_monitor(i)
-        if apply and m["maxretries"] != 3:
-            api.edit_monitor(i, maxretries=3)
-            m = api.get_monitor(i)
-        print(i, m["name"], m["maxretries"])
-finally:
-    api.disconnect()
+```bash
+kubectl --context cynexia-vps -n vps exec deploy/uptime-kuma -c uptime-kuma -- \
+  sqlite3 -readonly -header -column /app/data/kuma.db \
+  'SELECT id, name, type, url, interval, maxretries, retry_interval, timeout, maxredirects, accepted_statuscodes_json, method, cache_bust, parent, active FROM monitor ORDER BY id;'
 ```
 
-Four things in that script are load-bearing.
+The container already ships `sqlite3`; no installation is needed.
+The `parent` column records group membership.
+`/metrics` can omit monitors created after process startup until the next restart, so it is not the inventory.
 
-The admin login is the `username` and `password` on `op://VPS/uptime-kuma`, and the account has 2FA enabled, so `login` needs a third argument: the item's `one-time password` field read with `?attribute=otp`, which `op` computes fresh on every read.
-Both plain fields sat empty until the operator populated them on September 5, 2026 — an empty one returns a bare newline and fails as `authIncorrectCreds`, which reads like a wrong password rather than a missing one.
+Raw heartbeats last about a day.
+Status changes and the `stat_hourly` table provide the 30-day view; use them for older incidents.
+Hourly failure counts include PENDING checks absorbed by retries, so they are not a count of outages.
+The database stores UTC even though the container uses `Europe/London`.
 
-Every credential is read by `op read` inside the Python process and handed straight to `login`, so no value lands on argv, in a shell variable, or in the terminal.
+### The Cloudflare Access trap
 
-The script is read-only unless it is given `--apply`, so the run that does the writing can be rehearsed first against the real server.
+An unauthenticated request can receive a 302 to the Cloudflare login page.
+A monitor that follows it gets HTTP 200 from the login page and reports UP even when the origin is down.
+Set **Max redirects to 0** on every Access-protected monitor.
 
-`edit_monitor` fetches the whole monitor, merges the keyword arguments over it and saves the result, so fields the call does not name survive.
-That was checked rather than assumed after both September 5 sweeps: `maxredirects: 0`, the accepted status codes and the five service-token `Headers` boxes all came through unchanged.
-
-Verify from `kuma.db` rather than from the script's own read-back, which only proves the server echoed what it was sent.
-Take the inventory query at the top of this file before and after, and `diff` the two — the sweep should touch one column and no other row.
-
-## The Cloudflare Access trap
-
-An Access-protected hostname answers an unauthenticated request with a 302 to the Cloudflare login page.
-At the default `maxredirects: 10`, the monitor follows it, gets 200 from Cloudflare's login app, and reports UP while the tunnel, pod and node are all dead.
-
-Two mitigations are in place: every Access-protected monitor sets `maxredirects: 0`, and the monitors whose Access app demands a credential also send service-token headers, so the request reaches the origin (`proxy.cynexia.com` is the deliberate exception — see below).
-
-The `Uptime` service token authenticates against the `service-auth-monitoring` Access policy, which is attached to exactly four apps: `Umami analytics`, `changedetection`, `hermes` and `n8n`.
-A fifth, `grafana`, was retired on September 6, 2026 with the self-hosted Grafana.
-The token was created on August 25, 2026 and expires on **August 24, 2031**.
-On expiry all four monitors fail at once with a 302.
-Four simultaneous reds therefore mean expired or wrong headers, not an outage — check the headers first.
-
-A **second** service token exists and is deliberately separate: `vps-proxy-access`, created September 2, 2026, expiring **September 1, 2031**.
-It is attached to the app-scoped `service-auth-homelab-proxy` policy on the `homelab-proxy` application, which gates `proxy.cynexia.com`, and to nothing else.
-Reusing `Uptime` here would have widened four monitors' credential to cover an open proxy.
-When it expires, the residential egress proxy breaks and every proxied changedetection watch errors — no monitor turns red, because the `proxy.cynexia.com` monitor asserts the Access challenge, which a dead token does not change, and that monitor sends no headers at all, so the paste instruction below does not apply to it.
-
-Paste the headers as JSON in the monitor's **Headers** box:
+To check an origin protected by Service Auth, supply the service-token headers in the monitor's **Headers** box:
 
 ```json
 {
@@ -138,321 +112,59 @@ Paste the headers as JSON in the monitor's **Headers** box:
 }
 ```
 
-Read the values with `op read` as you paste them; never write them into this repo.
-A wrong or missing header produces a 302, which fails the monitor — the correct, loud outcome.
+Read the values from 1Password without writing them into this repository.
+The `Uptime` token serves the `Umami analytics`, `changedetection`, `hermes` and `n8n` Access apps through `service-auth-monitoring`.
+It expires on August 24, 2031; wrong, missing or expired headers can fail all four monitors together.
+Changedetection has no origin login, so that token grants access to the full application.
+The `rss.cynexia.com` and `Karakeep` monitors need no headers because their path-scoped Access apps admit anonymous requests.
 
-**The `rss.cynexia.com` and `Karakeep` monitors need no headers.**
-Path-scoped Access apps (`freshrss api`, `karakeep api`) serve those two URLs, and both apps carry the anonymous `bypass` policy, so each returns 200 with no credential.
-Verified August 25, 2026 by requesting both without headers.
-An earlier version of this file claimed one token covered `analytics`, `rss`, `keep`, `watch` and `n8n`.
-That was wrong: an IP bypass policy supplied the access, and that policy was deleted on August 25, 2026.
+Two monitors intentionally check Access rather than the origin:
 
-On an app that does demand a credential, a bypass path is no substitute for the token: the glob `/foo/*` does not match bare `/foo`, so a bypassed health path needs both destinations.
+- `Data MCP` accepts exactly `["401"]` and sends `{"Accept": "application/json"}` so Access challenges it as a client.
+  The pinned status detects a missing Access gate, which would expose the origin.
+  Give this monitor no service token.
+  Keep its Access app free of bypass policies; MCP clients need the 401 to start OAuth.
+  The tunnel route and HTTP handler are outside this monitor's coverage.
+- `homelab-proxy`, for `proxy.cynexia.com`, accepts exactly `["403"]` and sends no service-token headers.
+  Its Access app has no identity provider, so it refuses the request instead of redirecting to a login page.
+  The origin proxy has no authentication; a missing Access gate would publish an open proxy, so a successful origin response must fail this monitor.
 
 ### The push path is bypassed at the edge
 
-Every push monitor in this estate is driven by something that holds no Access credential — a CronJob inside a cluster, or a native cron job on the off-cluster Hermes VM — so without a bypass the edge answers 302 and no push monitor could ever report UP.
-An Access application named **`uptime-kuma push`** carries that bypass, created **August 26, 2026**.
-It covers two destinations: `uptime.cynexia.com/api/push/*` and the bare `uptime.cynexia.com/api/push`.
-The wildcard is the load-bearing one — a push URL always carries its token as a path segment, so every real request matches it — and the bare form is present only because `/foo/*` does not match bare `/foo`, so the pair is written together and neither is "tidied" away later.
+The `uptime-kuma push` Access app bypasses authentication for both `uptime.cynexia.com/api/push/*` and bare `uptime.cynexia.com/api/push`.
+The wildcard does not match the bare path, so both destinations are required.
+The dashboard and the rest of the hostname remain protected.
+The [VPS bypass inventory](vps.md#cloudflare-access-bypasses) records the account-side applications and policies.
 
-It is attached to the **existing reusable bypass policy** (`b8dbe397-8b45-44ca-a57a-4131e82cb3a1`) rather than a new one, matching the four apps already there, with a 24h session, App Launcher hidden and no IdPs.
-Application id `ff3b2581-1975-48d1-866c-e02e8d2e0593`.
-Nothing else on this host is bypassed: `/api/push/<token>` accepts a heartbeat and exposes no dashboard, no monitor list and no settings.
-The authoritative bypass inventory is the Access-bypass table in [vps.md](vps.md#cloudflare-access-bypasses); this section is the operational note.
+Jobs in both clusters send pushes without Access credentials; `hermes-app-alive` and `hal-daily-check` on the off-cluster Hermes VM do the same.
+Removing or narrowing this bypass stops their heartbeats even when the jobs are healthy.
+It is how the private homelab reports to kuma: the VPS cannot reach the homelab's `*.cynexia.net` addresses, but the jobs can call outward.
+Each push URL carries its monitor token, which lets a caller forge a heartbeat; keep it in 1Password and out of public files.
 
-Verified at creation from outside both clusters, and worth repeating after any Access change from a network with no Access session:
+Python callers need an explicit User-Agent: Cloudflare rejected urllib's default agent with HTTP 403 / error 1010 during the August 26, 2026 check.
+Curl and wget were unaffected.
+Kuma rejects an unknown or inactive token with HTTP 404; a successful push response confirms the heartbeat landed.
+
+After an Access change, check the bypass from a client with no Access session:
 
 ```bash
-# A bogus token: the bypass must let the request REACH kuma, which then rejects it.
 curl -s -o /dev/null -w '%{http_code}\n' 'https://uptime.cynexia.com/api/push/notarealtoken'
 curl -s -o /dev/null -w '%{http_code}\n' 'https://uptime.cynexia.com/api/push'
 curl -s -o /dev/null -w '%{http_code}\n' 'https://uptime.cynexia.com/dashboard'
 ```
 
-Observed on August 26, 2026: the bogus token returned **404** — the request reached kuma and kuma rejected the token, which is the proof the bypass works — and the bare path returned **200**.
-`/dashboard`, `/` and `/api/status-page/heartbeat/x` all returned **302**, proving the rest of the host is still gated.
-A `302` on the push path means the bypass is missing, scoped to the wrong destination, or written as the bare path only.
-
-`mcp.cynexia.com` (homelab) is also Access-protected but deliberately carries no service token and no bypass policy — its monitor expects the edge's 401 itself (see the monitor list), and `maxredirects: 0` still applies.
-
-## Monitor list
-
-Each path mirrors the service's in-pod probe target, so a monitor failing while the probe passes isolates the fault to the tunnel or the edge.
-`uptime.cynexia.com` is absent on purpose: uptime-kuma checking its own hostname reports nothing it can deliver.
-
-Monitor names below match `kuma.db` as of September 3, 2026.
-The Access column names the application that answers the URL and the policies attached to it, so you can tell a credential fault from an outage without opening the dashboard.
-
-### Groups
-
-A group is a container, not a check: it sends no request, and the `https://` stored against it is a placeholder rather than a broken URL.
-Eight groups hold the tree.
-
-| Group | What it holds |
-|---|---|
-| `VPS apps` | The five Access-protected VPS monitors |
-| `homelab apps` | The homelab tunnel's HTTP monitors, plus the `Hermes` group |
-| `Hermes` | `hermes API`, `hermes-app-alive` and `hindsight-canary` — the Hermes stack and the memory backend it reads |
-| `health data` | `Data MCP`, `hae.cynexia.com` and the `health` namespace's push monitors |
-| `Backups` | `health-influx-backup`, `homelab-hermes-pull`, `hindsight-pg-dump`, `netdisco-pg-dump`, `jottacloud-backup` and `vps-github-mirror` |
-| `Updates` | `homelab-keel-fresh`, `vps-keel-fresh` and `homelab-update-watch` |
-| `blog.cynexia.com` | `blog.cynexia.com homepage` and `blog database status` |
-| `recordwell` | `recordwell.app website`, `auth API live` and `Auth API health` |
-
-`family-foqos.app` and `vps-uptime-kuma-alive` sit outside every group.
-
-VPS cluster, Access-protected:
-
-| Monitor | URL | Access app and policies | Accepted status codes |
-|---|---|---|---|
-| `analytics.cynexia.com` | `https://analytics.cynexia.com/api/heartbeat` | `Umami analytics`: `service-auth-monitoring`, `allow_cynexia_com` | `["200-299"]` |
-| `watch.cynexia.com` | `https://watch.cynexia.com/` | `changedetection`: `service-auth-monitoring`, `allow_cynexia_com` | `["200-299"]`; add `302` if you enable changedetection's password |
-| `n8n.cynexia.com` | `https://n8n.cynexia.com/healthz` | `n8n`: `service-auth-monitoring`, `allow_cynexia_com` | `["200-299"]` |
-| `rss.cynexia.com` | `https://rss.cynexia.com/api/` | `freshrss api`: `bypass` — send no headers | `["200-299"]` |
-| `Karakeep` | `https://keep.cynexia.com/api/health` | `karakeep api`: `bypass` — send no headers | `["200-299"]` |
-
-The first three carry the service-token headers.
-The last two must not: their apps admit anonymous requests, and adding headers there would imply a credential that nothing checks.
-
-Homelab cloudflared tunnel (connector in `cloudflared`; UUID `1a4245a3-5264-420c-9893-b45ff25a0214`):
-
-| Monitor | URL | Access app and policies | Accepted status codes |
-|---|---|---|---|
-| `Data MCP` | `https://mcp.cynexia.com/mcp` | `health-data-mcp`: `allow_cynexia_com` | exactly `["401"]` — see below |
-| `hae.cynexia.com` | `https://hae.cynexia.com/` | none | `["401"]` |
-| `hermes API` | `https://hermes.cynexia.com/api/health` | `hermes`: `service-auth-monitoring`, `allow_cynexia_com` | `["200-299"]` — see below |
-| `proxy.cynexia.com` | `https://proxy.cynexia.com/` | `homelab-proxy`: `service-auth-homelab-proxy` — send no headers | exactly `["403"]` — see below |
-
-`hermes API` carries the service-token headers; `Data MCP`, `hae.cynexia.com` and `proxy.cynexia.com` must not.
-
-A `grafana.cynexia.com` row sat here from September 2, 2026 until September 6, 2026, when the self-hosted Grafana was removed.
-Delete that monitor by hand: nothing in this repository creates or deletes a kuma monitor, so a removed hostname leaves a monitor that turns red on the next check.
-
-Not Access-protected, and unrelated to either cluster's tunnels:
-
-| Monitor | URL | Type and note |
-|---|---|---|
-| `blog.cynexia.com homepage` | `https://blog.cynexia.com` | HTTP(s). 15s interval with one retry after 5s, the only monitor that departs from 60s |
-| `blog database status` | `https://blog.cynexia.com/_emdash/api/setup/status` | Keyword, matching `"needsSetup":false`, accepting exactly `["200"]` — the endpoint answers 200 either way, so the keyword is the whole check |
-| `family-foqos.app` | `https://family-foqos.app` | HTTP(s) |
-| `recordwell.app website` | `https://recordwell.app/` | HTTP(s) |
-| `Auth API health` | `https://api.recordwell.app/health/ready` | JSON query, asserting `$.status` equals `ok` |
-| `auth API live` | `https://api.recordwell.app/health/live` | JSON query, asserting `$.status` equals `ok` |
-
-The `hermes API` monitor probes the Hermes dashboard on the hermes VM — the tunnel's one off-cluster origin.
-A 200 proves edge, tunnel, cloudflared and the dashboard process end to end.
-`/api/health` is on the dashboard's unauthenticated allowlist, so the origin asks for nothing; the credential this monitor needs is the one Access asks for.
-
-The homelab cloudflared tunnel also publishes `hermes-app.cynexia.com` (hermes-webui, for the Hermex iOS app).
-**That hostname still has no monitor, by decision.**
-What changed on August 26, 2026 is that the service behind it is now checked from *inside* the VM instead, once a day, by the `hermes-app-alive` push monitor below.
-Hermes core/dashboard use the upstream updater and external WebUI follows stable ([runbook](hermes-vm.md#application-updates)); the existing daily alive check remains independent of updates.
-
-**Do not "improve" that push monitor into a GET against this hostname.**
-An HTTP monitor is the wrong instrument here for two independent reasons.
-`GET /health` returns `status: ok` straight through the broken-venv failure worth catching — the unit stays `active` and the endpoint stays green while every chat turn answers `AIAgent not available` — so the check would be green over the outage it exists for.
-And the chat path needs a login session, which a monitor cannot perform.
-The daily check sidesteps both by running on the VM: it deep-imports WebUI APIs and `run_agent` from the selected PM runtime, the assertion the HTTP surface cannot make.
-
-If a monitor is ever added here anyway, it is not a copy of the `hermes API` monitor: this Access app authenticates every request with Service Auth, so the monitor must send the service-token headers and set `maxredirects: 0`.
-Residuals are in [monitoring.md](monitoring.md#what-this-does-not-catch); the check's own triage is in [hermes-vm.md](hermes-vm.md#reading-a-down-hermes-app-alive).
-
-**The triage here inverted on August 25, 2026.**
-The monitor used to reach the origin because it probes from the VPS's Hetzner IP, which an Access bypass policy admitted, and a 302 or 401 therefore meant that policy had lost the VPS IP.
-That bypass is deleted.
-The monitor now presents the `Uptime` service-token headers and matches the `service-auth-monitoring` policy, so a 302 or 401 means the headers are wrong, missing or expired.
-Check the headers first; the token expires on August 24, 2031, and its expiry fails this monitor together with `analytics.cynexia.com`, `watch.cynexia.com` and `n8n.cynexia.com`.
-Do not widen the accepted set to swallow the 302.
-
-`hae.cynexia.com`'s fast 401 is a true end-to-end signal: the hostname has no Access app, so the 401 comes from the origin pod, proving the tunnel, cloudflared and the pod all serve — exactly what was false during the 2026-08-18 Pomerium wedge.
-
-**`proxy.cynexia.com` exists to be refused, and its accepted set must stay pinned.**
-The monitor sends no service-token headers and sets `maxredirects: 0`, so the edge answers it with the Access challenge and it never reaches the origin.
-Admitting it would defeat it: the origin is tinyproxy, which authenticates nobody, so a deleted or disabled Access application does not close the hostname — it publishes an open HTTP proxy egressing from the operator's home address.
-This monitor is the only thing in the estate that detects that state, and it detects it by going DOWN when the challenge stops arriving.
-Never widen the set to include `200` or `400`: those are what a naked tinyproxy answers.
-The pinned code is `403`, observed at rollout on September 2, 2026.
-The `homelab-proxy` Access application has no identity provider attached, so Access has no login flow to redirect an unauthenticated request to and refuses it outright instead of issuing the usual 302.
-If the edge's behaviour ever changes, re-confirm with one unauthenticated `curl` and re-pin, rather than widening.
-
-**`Data MCP` is edge-only, by decision.**
-`mcp.cynexia.com` sits behind Cloudflare Access (Managed OAuth), which answers the unauthenticated probe at the edge, before the tunnel — so this monitor no longer proves the tunnel or the pod.
-The accepted set is pinned to exactly `["401"]` on purpose and must never be widened: an outage (timeout, 5xx, `1033`) falls outside it, and so does a 2xx/404 from a naked origin — which is what a deleted or disabled Access app looks like, because that gate fails OPEN ([homelab-health.md](homelab-health.md#mcp-behind-cloudflare-access)).
-
-**The mcp.cynexia.com Access app carries no bypass policy — keep it that way.**
-Unlike the other monitored hostnames, the app holds only the `allow_cynexia_com` policy.
-The edge's 401 does two jobs: it is the status this monitor pins, and it is what starts every MCP client's OAuth flow — the MCP SDK begins OAuth only after a 401, so a bypassed client gets 200 from the origin and no flow ever starts.
-An IP bypass breaks both: it broke Hermes profile OAuth until the bypass was removed on 2026-08-23, and it would let this monitor's probe (which egresses from the Hetzner IP) reach the origin, so the monitor could never return its pinned 401.
-Do not re-attach any bypass policy to this app.
-
-**The monitor must send `{"Accept": "application/json"}` in its Headers field.**
-Access decides browser-vs-client on the `Accept` header: uptime-kuma's default is browser-like (`text/html,…`), so Access classifies the probe as a browser and answers `302` to the login page instead of the non-browser `401` — verified 2026-08-22 with two curls differing only in that header.
-Without the custom header the monitor stays DOWN forever against a perfectly healthy edge.
-Do not "fix" that by accepting `302` — keep the pinned `["401"]` and fix the header, so the accepted set keeps meaning "Access challenged a non-browser client".
-
-Accepted residual: the mcp tunnel route and the `influxdb-mcp` HTTP handler have no external monitor, so a wedged handler surfaces only when a client fails.
-A service token plus a Service Auth policy would close that gap.
-
-That option stays declined, but one of its three original reasons no longer holds.
-Two still do: `hae.cynexia.com` proves tunnel and cloudflared end to end, and the pod has in-cluster TCP probes.
-The third — that a service token means a standing secret in uptime-kuma's config — was overtaken on August 25, 2026, when the `Uptime` token was introduced for four VPS apps.
-The estate now holds such a secret deliberately: the arrangement it replaced granted nine apps to every VPS pod and logged nothing, whereas the token opens four apps and logs every use, and `uptime.cynexia.com` now sits behind `allow_cynexia_com` so the UI that renders the secret is no longer public.
-Adding the same arrangement to `mcp.cynexia.com` is a live option, not a closed one.
-
-**The `Data MCP` monitor still must not get a token**, whatever is decided about the tunnel-route gap.
-Its pinned `["401"]` depends on the edge challenging the probe, and a credential that reached the origin would make the pinned status unreachable.
-
-Before you add a status code to any set, observe it once:
-
-```bash
-curl -s -o /dev/null -w '%{http_code}\n' https://hae.cynexia.com/
-```
-
-Widening a set to swallow whatever appears stops the monitor being a monitor.
-
-## Push monitors
-
-A push monitor receives a heartbeat instead of sending a request, which is what lets a job inside a cluster drive it without exposing anything.
-Each token lives in 1Password, typed `[text]` because it lets a stranger report a heartbeat and mask a failure, but grants no access.
-Cluster jobs receive it through `op run` and envsubst; the two VM runners use profile-scoped 1Password references.
-So it stays out of the public repository, needs no rotation, and earns no honesty-box row if it turns up in a transcript or a pod log.
-
-There is **no `/start` equivalent** on this API and there must not be a synthetic one: a push is a heartbeat carrying a status.
-Cluster jobs use `activeDeadlineSeconds` as their hang bound; VM scripts use their own guards and the native scheduler timeout.
-The silence bound is the interval plus retries below.
-
-**Almost every push in this estate is made from inside a cluster, outbound, through the Cloudflare Access bypass described above.**
-That outbound direction is what lets the private homelab cluster — which uptime-kuma cannot reach, because it probes from a Hetzner IP and every `*.cynexia.net` name resolves to a LAN address — report to a monitor at all.
-It is also why the bypass is load-bearing rather than a convenience: without it every push monitor here would be permanently DOWN.
-The two VM exceptions, `hermes-app-alive` and `hal-daily-check`, need the same bypass.
-
-**Some monitors deliberately receive nothing on some runs, so silence is not always a fault.**
-`health-garmin-and-apple-ingest` pushes only when both its buckets are fresh, and `homelab-update-watch` pushes nothing on API errors or an unreadable dashboard body.
-Both stand in for healthchecks.io's `/log` ping, which recorded an event and changed no state; kuma has two states and no third kind, so "record nothing" becomes "send nothing".
-So a monitor that has not moved in a while may be working exactly as designed, and its **silence bound is the interval plus retry** in the table below — not any per-run signal.
-Read the last message it did receive, and the pod log, before treating a gap as an incident.
-
-**One trap is Python-only and it is silent.**
-Cloudflare answers urllib's default `Python-urllib/3.x` User-Agent with HTTP 403 and `error code: 1010` before the request reaches kuma — measured in-cluster on August 26, 2026, where the default agent got 403/1010 and a named one got kuma's own 404 for a bogus token, from the same URL in the same process.
-Python push runners set an explicit `User-Agent`; curl and wget are unaffected.
-It matters because a failed push is swallowed by design, so the only symptom would be a monitor that never goes UP.
-
-**A successful push attempt is proof the heartbeat landed.** kuma answers an unknown or inactive token with `404 {"ok":false,"msg":"Monitor not found or not active."}`, which `curl -f` and busybox `wget` both treat as a failure, and every runner prints a fixed line when its push fails.
-For a runner that actually attempted its push, success proves the token, bypass and monitor.
-Silence alone proves nothing for a preview, trial, lock-losing run or an intentional no-push branch.
-Confirming UP in the UI is the second half, not the first.
-
-Create one by hand in the kuma UI — see the note on monitor creation above.
-Set the type to **Push**, take the token from the generated push URL — the last path segment, and nothing else — and store it in 1Password.
-For cluster jobs, the manifest assembles the URL: the `env:` block sets `PUSH_URL: "https://uptime.cynexia.com/api/push/${TOKEN_VAR}"`, and only `PUSH_URL` reaches the runner.
-A generated script rides the same envsubst stream as its manifest and envsubst rewrites the bare `$NAME` form too, so a script naming the allowlisted variable would publish the token inside a ConfigMap; `make check-script-substitution` enforces the rename.
-
-The last column records when each job pushes and what it reports.
-Read it per row rather than assuming up-on-success everywhere.
-
-| Monitor | Token | Interval / retries | Pushed by, and on what |
-|---|---|---|---|
-| `homelab-keel-fresh` | `op://Homelab/keel-fresh/kuma-push-token` | 86400s, 1 retry at 21600s | `keel-fresh` CronJob in `ops`, from an EXIT trap: `up` on exit 0, `down` on any failure. Never silent on a failure it can observe |
-| `vps-keel-fresh` | `op://VPS/keel-fresh/kuma-push-token` | 86400s, 1 retry at 21600s | `keel-fresh` CronJob in the VPS `ops` namespace, from an EXIT trap: `up` on exit 0, `down` on any failure. The same contract as the row above, from the cluster this uptime-kuma runs on |
-| `vps-github-mirror` | `op://VPS/GitHub/kuma-github-mirror-token` | 86400s, 1 retry at 7200s | `github-mirror` CronJob in `backup`, from an EXIT trap: `up` on exit 0, `down` otherwise, including on any default-branch force-push or deletion. `msg` carries `verdict=`, `repos=`, `forced_default=`, `deleted_default=` and `failed_step=` on failure. [Verdict meanings](github-mirror.md#monitoring) |
-| `health-influx-backup` | `op://Homelab/health-healthchecks/backup-kuma-push-token` | 86400s, 1 retry at 21600s | `influx-backup` CronJob in `health`, from an EXIT trap: `up` on exit 0, `down` otherwise. `msg` carries `verdict=` and `buckets=n/m`, plus `failed_step=` and `error=` on a failure |
-| `homelab-cloudflare-analytics` | `op://Homelab/health-healthchecks/cloudflare-kuma-push-token` | 3600s, 1 retry at 7200s | `cloudflare-analytics` CronJob in `health`, Python: `up` on rc 0, `down` otherwise, the unrecoverable-gap path included. `msg` carries `verdict=` from `ok\|incomplete\|gap\|failed`, then `zones=`, `chunks=`, `rows=`, `series=`, `catching_up=` and `beacon=` from `ok\|behind\|failed` |
-| `Withings-ingest` | `op://Homelab/health-healthchecks/withings-kuma-push-token` | 1800s, 1 retry at 900s | `withings-ingest` CronJob in `health`, Python: `up` on rc 0, `down` otherwise. `msg` carries `verdict=` from `ok\|failed`, `groups=` and `points=`, plus `failure=` from a six-member enum including `verify`, plus `exception=` after it on an unhandled error |
-| `health-garmin-and-apple-ingest` | `op://Homelab/health-healthchecks/ingest-kuma-push-token` | 86400s, 1 retry at 43200s | `ingest-freshness` CronJob in `health`, **success only**: `up` when BOTH buckets are under 24h, and **nothing at all** when either is stale or the query failed. One monitor for two buckets because one process checks both. `msg` carries `apple_age_h=` and `garmin_age_h=` on every push — the last message before the silence is what names which path was ageing |
-| `homelab-hermes-pull` | `op://Homelab/hermes-backup/kuma-push-token` | 86400s, 1 retry at 7200s | `hermes-pull` CronJob in `backup`, from an EXIT trap: `up` on exit 0, `down` otherwise. `msg` carries `verdict=`, `zip_kib=` and `sha256_match=yes\|no` |
-| `hindsight-pg-dump` | `op://Homelab/hindsight/kuma-push-token` | 86400s, 1 retry at 7200s | `hindsight-pg-dump` CronJob in `hindsight`, from an EXIT trap: `up` on exit 0, `down` otherwise. `msg` carries `verdict=`, `dump_kib=`, `tables=` and `kept=` |
-| `netdisco-pg-dump` | `op://Homelab/netdisco/kuma-push-token` | 86400s, 1 retry at 7200s | `netdisco-pg-dump` CronJob in `netdisco`, from an EXIT trap: `up` on exit 0, `down` otherwise. `msg` carries fixed `verdict=` and a count-only `dump_kib=` |
-| `hindsight-canary` | `op://Homelab/hindsight/canary-kuma-push-token` | 3600s, 1 retry at 1800s | `hindsight-canary` CronJob in `hindsight`, from an EXIT trap: `up` when retain and recall both pass, `down` when either fails. `msg` carries `verdict=` from that script's enum plus both HTTP statuses |
-| `homelab-update-watch` | `op://Homelab/update-watch/kuma-push-token` | 86400s, 1 retry at 21600s | `update-watch` CronJob in `ops`: `down` for lookup failures or a missing dashboard, `up` for a readable dashboard without lookup-failure markers, and **nothing** for indeterminate reads; the one-line `msg` starts with `verdict=`, then `run_epoch=`, fixed `next=` advice and any lookup-failure count |
-| `jottacloud-backup` | `op://Homelab/jottacloud-backup/kuma-push-token` | 21600s, 1 retry at 7200s | The `jottacloud-backup-scheduled` CronJob's own image, on success only. This repo does not build that image and does not control the request — see the note below |
-| `hermes-app-alive` | `op://hermes/hermes-app-alive/kuma-push-token` | 86400s, 1 retry at 21600s | A `no_agent` cron job inside `hermes-gateway` on the hermes VM at 05:45 UTC, `up` on exit 0 and `down` on failure, from an EXIT trap |
-| `hal-daily-check` | `op://hermes/hal-daily-check/kuma-push-token` | 86400s, 1 retry at 7200s | Hal’s 09:00 Europe/London native no-agent runner `e6a2fb6484b8`: up after accepted/already-accepted morning mail, down on state/mail or other owned failure when a token is available; no push from preview, trial or a lock-losing production run. Later card mail does not gate it. [Verdict enum](hal-daily-check.md#diagnostics-and-the-kuma-heartbeat) |
-
-The keel image floors are exactly **25 for homelab** and **12 for VPS**, counting distinct floating images across all containers in keel-annotated workloads.
-The former homelab count of 20 matched the live Keel gauge after the printer services were applied on 2026-10-08; Homepage, NetAlertX and Netdisco were added later.
-PR counts, PR ages and dashboard age do not affect `homelab-update-watch`; its API-error silence behavior is unchanged.
-
-Each migrated row's interval and retry mirror the period and grace of the healthchecks.io check it replaced, so nothing got quieter or noisier in the move (August 26, 2026).
-`Withings-ingest` replaced nothing: it was created on September 2, 2026 for new scheduled work.
-Its interval tracks its CronJob's period, so both moved when the schedule went from six-hourly to every 15 minutes on September 3, 2026: 1800s with 1 retry at 900s, which tolerates one missed run before it alerts.
-Nothing in this repo sets those two numbers — change them by hand in the uptime-kuma UI on the monitor's edit page, because a CronJob schedule change does not reach the monitor.
-
-`hermes-app-alive` and `hal-daily-check` run outside both clusters on the Hermes VM; neither replaced a healthchecks.io check.
-Hal’s monitor was created on October 18, 2026.
-Its last accepted heartbeat expires after 24 hours plus one two-hour retry, normally around 11:00 London time the next day.
-Hal’s host runner resolves `HAL_DAILY_CHECK_PUSH_TOKEN` and assembles its URL in memory; it does not use a Kubernetes manifest.
-The [Hal runbook](hal-daily-check.md) owns the email, receipt, retry and local-output details.
-
-The following details describe `hermes-app-alive`.
-Three things about it are unlike every other row here.
-
-- **Both VM push monitors are native cron jobs on an off-cluster Debian VM.**
-  The other push monitors are CronJobs in namespaces.
-  It relies on the same `/api/push/*` Access bypass, which is what widens that bypass's blast radius past "the clusters": remove or narrow it and this monitor goes permanently DOWN over a perfectly healthy VM, along with every other push monitor here.
-- **Its token lives in the `hermes` vault, not `Homelab`**, because the VM's 1Password service account can see only that vault — which is what lets the VM resolve it for itself.
-  Anyone looking for it in `Homelab` will not find it.
-  No manifest in this estate assembles its `PUSH_URL`: the monitor and the 1Password field are created by hand during the install in [hermes-vm.md](hermes-vm.md#installing-or-reinstalling), and the token reaches the script as an injected environment variable that the script turns into a URL.
-- It replaced no healthchecks.io check, so its interval and retry mirror nothing.
-  They are chosen: a 24-hour heartbeat with one 6-hour retry, matching a check that runs once a day, which means a missing beat alarms about 30 hours after the last good one.
-  The runbook is [hermes-vm.md](hermes-vm.md#reading-a-down-hermes-app-alive).
-
-### The one monitor whose request this repo does not control
-
-`jottacloud-backup` is driven by `ghcr.io/mnbf9rca/jottacloud-backup`, whose `scripts/healthcheck-notify.sh` joins two container environment keys — `HEALTHCHECK_URL` and `HEALTHCHECK_UUID` — with a single `/`.
-Those key names are fixed by the image; only their values changed.
-So the ConfigMap sets `HEALTHCHECK_URL: "https://uptime.cynexia.com/api/push"` and `HEALTHCHECK_UUID` to the push token.
-
-Its request shape was **measured, not assumed**, on August 26, 2026, because the whole migration of this job rested on somebody else's script:
-
-- On success it makes a **POST**, with the tail of the backup log as the body. kuma's push route accepts a POST — checked against the live endpoint with a bogus token, which answered kuma's own `{"ok":false,"msg":"Monitor not found or not active."}` rather than Express's "Cannot POST" page, so the request reached the handler. kuma reads `status` and `msg` from the **query string**, so the body is discarded and the heartbeat lands as `up` with kuma's default message.
-  Observed live: `{"ok":true}`.
-- On failure it appends `/fail`, and on every run it makes a second POST to `/log`. kuma routes neither, so both answer `404 Cannot POST`.
-  **That is the contract this repo wants**: a failed backup pushes nothing and the monitor goes DOWN by silence at its interval plus retry.
-- The cost is one `WARNING: Failed to send…` line per unrouted request, from the image's `--fail-with-body` curl treating a 404 as an error: **one** on a successful run, from the `/log` POST alone, and **two** on a failed one, where the `/fail` POST 404s as well.
-  Cosmetic, and not a fault.
-  A successful run on August 26, 2026 logged exactly one.
-
-If a future image version changes any of that — a suffix on the success path, or a switch to a method kuma does not route — this job stops reporting silently, and the monitor goes DOWN.
-Re-check the three bullets above after any bump.
-
-## Reviewing who used the token
-
-`service-auth-monitoring` is a `non_identity` policy, so unlike a bypass it writes an entry for every request it admits.
-That log is the only inventory of the four apps' machine callers, and the only channel that would show a second party presenting the `Uptime` token.
-
-Read it through the Cloudflare API, filtered to the four apps by their `aud` values:
-
-```
-GET /accounts/{account_id}/access/logs/access_requests?limit=1000&since=<ISO8601>
-```
-
-Review it about a week after any change to the token or the policy, and again when investigating an unexplained 302.
-Expect only the four monitors.
-Anything else is either a caller nobody documented or a leaked credential; treat an unfamiliar source as the latter until you can name it.
-
-To enable changedetection's password, see the note in the monitor list above.
-After August 25, 2026 the `Uptime` token is the only wall in front of `watch.cynexia.com` — changedetection has no origin login of its own, so anyone holding the token reaches the application in full.
-Umami, n8n and hermes each keep their own origin login behind Access.
-
-## The self-monitor (layer 4)
-
-uptime-kuma shares the VPS tunnel, node and scheduler with most of what it watches, so it cannot report its own death.
-Add one monitor that GETs a healthchecks.io ping URL.
-
-| Field | Value |
-|---|---|
-| Monitor type | **HTTP(s)** |
-| Name | `vps-uptime-kuma-alive` |
-| URL | `https://hc-ping.com/<op://VPS/uptime-kuma/healthcheck-uuid>` |
-| Interval | 60s |
-| Accepted status codes | `["200-299"]` |
-| Max redirects | default — `hc-ping.com` has no Access app in front of it |
-
-**Do not use a Push monitor.**
-A Push monitor waits to *receive* a ping, which is the opposite of what this needs.
-This monitor must *send* one.
-
-The check `vps-uptime-kuma-alive` runs a 5m period with a 15m grace.
-If the pod, node or scheduler dies, the pings stop and healthchecks.io alerts from outside both clusters.
-The monitor's own UP/DOWN state is irrelevant — the signal lives at healthchecks.io.
+The expected results are 404 for the bogus token, 200 for the bare push path and 302 for the dashboard.
+A 302 on the push path means the bypass did not admit the caller.
+
+### Cloudflare request logs
+
+For `blog.cynexia.com` and the other Cloudflare-fronted hosts, query `httpRequestsAdaptiveGroups` through Cloudflare's GraphQL API.
+Filter by hostname, UTC time window, client address and user agent; other pods share the VPS egress address.
+Read `/cdn-cgi/trace` from inside the kuma pod to find its current client address.
+Filter the user agent with `Uptime-Kuma%`.
+Compare per-request timestamps, edge status and `sampleInterval`; requests near a minute boundary can land in the next minute's bucket.
+A connection that fails before HTTP leaves no request row at Cloudflare.
+
+The hourly copy is the `http_requests` measurement in the InfluxDB `cloudflare` bucket in the homelab's `health` namespace.
+Use the health-data MCP to query by zone, host, UTC range and `client=uptime-kuma`.
+Those counts are Cloudflare's sampled estimates, so small differences from kuma's check counts are expected.
