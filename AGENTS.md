@@ -229,10 +229,7 @@ The rules that must not be broken:
   A question from the operator, a sketch, or a correction is not agreement; "agreed", "go" or an equivalent is.
   Operator ruling, 2026-10-18, after a chief of staff dispatched three briefs in one afternoon before any of them had been agreed: "didn't I explicitly tell you to stop dispatching things until we've agreed them".
   Operator ruling, 2026-10-17: the seat exists to spare the operator long explanations in a text conversation, and an agent that captures what was said and relays it is not doing the job.
-  The chief of staff reads `docs/operations/agent-teams.md` before dispatching anything.
-  The seats are agent tabs in this repository's Herdr workspace: the Codex tab is the builder and the Claude reviewer tab is the reviewer, whatever name each carries.
-  Address a seat by its pane ID from `herdr agent list` or by its current name.
-  No fixed agent name is required, and a generic subagent does not replace either tab (operator ruling, 2026-10-29).
+  The chief of staff reads `docs/operations/agent-teams.md` before dispatching anything and follows its seat identity and addressing rules.
   The chief of staff does not read inventories, diffs or cluster state itself; those belong to the builder and the reviewer, and reading them is what fills the context the seat exists to keep clean.
   Pass handovers as file paths under `.superpowers/sdd/<plan>/`, never pasted output, with the chief of staff outside that loop.
   Run every step your credentials and tools allow; ask the operator only for private-vault access, browser sign-in or publication approval.
@@ -242,8 +239,7 @@ The rules that must not be broken:
   No written brief, no reviewer round, no report, and no scope question over a sentence.
   The full loop is for anything that reaches a cluster, the VM's running code or configuration, or a credential.
   Operator ruling, 2026-10-24, after a five-file runbook fix went through a brief, a worktree, a reviewer round, two handover documents and a scope decision for removing three words: the fix was right-sized, the ceremony was not.
-  On 2026-09-29, a chief of staff was asked to "get subagent or codex to review" an upgrade.
-  It dispatched two generic Claude subagents and read the cluster inventories itself without opening that document.
+  On 2026-09-29, a chief of staff was asked to "get subagent or codex to review" an upgrade; it dispatched two generic Claude subagents and read the cluster inventories itself without opening that document.
 - Keep the one-file-per-service pattern; keep all of a service's resources in that file.
 - **Every workload on both clusters floats unless no floating channel exists.**
   Use the full keel annotation set on floating Deployments, DaemonSets and StatefulSets, including keel itself on `latest`.

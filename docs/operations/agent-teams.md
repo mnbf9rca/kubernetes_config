@@ -5,17 +5,17 @@ Operator rulings of 2026-09-20 define this repository's multi-agent working arra
 ## Three seats, one workspace
 
 Herdr is a terminal multiplexer that recognises coding agents in its panes and exposes them through the `herdr` command line.
-The seats are agent tabs in this repository's Herdr workspace.
-The Codex tab is the builder and the Claude reviewer tab is the reviewer, whatever name each carries.
-Address a seat by its pane ID from `herdr agent list` or by its current name.
-No seat requires a fixed agent name.
+Seats are identified by harness type in this repository's Herdr workspace, not by tab label or agent name.
+The Codex agent is the builder; the Claude agent that is not the chief of staff is the reviewer; generic subagents do not replace them.
+If `herdr agent list` shows no candidate or multiple candidates of the required harness type in this workspace, the chief of staff asks the operator which tab to use and waits for confirmation; it does not guess.
+Address the selected agent by its pane ID from `herdr agent list` or by its current name.
 The builder uses an isolated Git worktree branch within the shared repository.
 
-| Seat | Agent | Responsibility |
-|---|---|---|
-| Chief of staff | Claude tab handling the operator conversation | Operator conversation, interpretation of the operator's intent, work classification and delegation. |
-| Builder | Codex tab | Specifications, implementation plans, code, documentation and commits. |
-| Reviewer | Claude reviewer tab on the most capable model at high effort | Independent review and read-only verification. |
+| Seat | Responsibility |
+|---|---|
+| Chief of staff | Operator conversation, interpretation of the operator's intent, work classification and delegation. |
+| Builder | Specifications, implementation plans, code, documentation and commits. |
+| Reviewer | Independent review and read-only verification, using the most capable model at high effort. |
 
 The chief of staff keeps its context clean.
 It is the operator's interpreter, not their stenographer.
@@ -24,8 +24,7 @@ It confirms the reading with the operator when the matter is complex, and acts a
 It never passes the operator's words on verbatim, and it never narrows a general remark to the single instance in front of it.
 It carries the operator's intent, so interpreted, into the brief the builder works from before the builder writes the specification.
 Operator ruling, 2026-10-17: the seat exists to spare the operator long explanations in a text conversation, and relaying words back and forth is the failure the seat exists to prevent.
-For the full review loop, it does not read inventories or diffs, or write specifications or plans.
-Documentation-only work follows the light path in [AGENTS.md](../../AGENTS.md#when-editing), without a reviewer round.
+It does not read inventories or diffs, or write specifications or plans.
 It rules on disagreements, defective plans and the escalations defined below.
 The builder writes the specification and implementation plan.
 Operator ruling, 2026-10-08: the operator approves the specification, and the chief of staff approves the implementation plan.
@@ -59,11 +58,9 @@ A short routing message can also carry the commit range and verdict.
 
 1. Write the artifact and report in the locations required by the plan.
 2. Commit the implementation or documentation on the worktree branch.
-3. Address the Claude reviewer tab by pane ID or current name.
-   Send the report path, brief path, changed file paths and commit range.
+3. Send the reviewer the report path, brief path, changed file paths and commit range.
 4. Write the review verdict to an SDD file.
-5. Address the Codex builder tab by pane ID or current name.
-   Send the verdict path and verdict directly to that tab.
+5. Reply directly to the builder with the verdict path and verdict.
 6. Fix the Critical and Important findings in one commit.
 7. Send the next report path and commit range.
 8. Repeat within the limits below until clean or escalated.
@@ -138,14 +135,10 @@ Record that ruling in the ledger.
 Run these commands from a Herdr-managed pane, where `HERDR_ENV=1`.
 Use `herdr --help`, `herdr agent` and `herdr pane` for the installed command syntax.
 Replace the example absolute paths with the current plan directory.
-Find the seats in this repository's workspace with `herdr agent list`.
-Replace `<reviewer-pane-id-or-name>` and `<builder-pane-id-or-name>` with each tab's pane ID or current name.
-Replace `<pane-id-or-name>` with the target seat's pane ID or current name.
-For `herdr pane run`, replace `<pane-id>` with that seat's pane ID.
 
 | Command | Use |
 |---|---|
-| `herdr agent list` | Find live agent names, pane IDs and states. |
+| `herdr agent list` | Find harness types, current agent names, pane IDs and states. |
 | `herdr agent prompt <reviewer-pane-id-or-name> "Review /absolute/checkout/.superpowers/sdd/<plan>/report.md; range BASE..HEAD; brief /absolute/checkout/.superpowers/sdd/<plan>/brief.md"` | Builder sends the review handover directly. |
 | `herdr agent prompt <builder-pane-id-or-name> "Review: /absolute/checkout/.superpowers/sdd/<plan>/review.md; verdict: CLEAN"` | Reviewer returns its verdict directly. |
 | `herdr agent wait <reviewer-pane-id-or-name> --timeout 60000` | Wait for a settled agent state. |
@@ -158,9 +151,7 @@ The pane command sends raw terminal input; it does not validate the question or 
 A selection dialog may need `herdr agent send-keys <pane-id-or-name> <key>` instead of text.
 Use `agent prompt` for normal handovers.
 
-Agent names are unique server-wide, not workspace-wide.
 On 2026-09-20, `reviewer` was already taken server-wide, so this team's reviewer used `k8s-reviewer`.
-Confirm the target tab belongs to this repository's workspace before sending work.
 
 A standalone `herdr agent wait` can return the pre-prompt idle state when called within seconds of the prompt.
 That response does not prove the new review finished.
