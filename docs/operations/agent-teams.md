@@ -1,18 +1,21 @@
 # Agent teams
 
-Operator rulings of 2026-09-20 define this repository's multi-agent working arrangement.
+Operator rulings of 2026-09-20 define this repository's multi-agent working arrangement; the 2026-10-29 ruling clarifies seat identity.
 
 ## Three seats, one workspace
 
 Herdr is a terminal multiplexer that recognises coding agents in its panes and exposes them through the `herdr` command line.
-A workspace groups the panes; each seat is an agent in that workspace.
+Seats are identified by harness type in this repository's Herdr workspace, not by tab label or agent name.
+The Codex agent is the builder; the Claude agent that is not the chief of staff is the reviewer; generic subagents do not replace them.
+If `herdr agent list` shows no candidate or multiple candidates of the required harness type in this workspace, the chief of staff asks the operator which tab to use and waits for confirmation; it does not guess.
+Address the selected agent by its pane ID from `herdr agent list` or by its current name.
 The builder uses an isolated Git worktree branch within the shared repository.
 
-| Seat | Agent | Responsibility |
-|---|---|---|
-| Chief of staff | Claude, `chief-of-staff` | Operator conversation, interpretation of the operator's intent, work classification and delegation. |
-| Builder | Codex, `implementer` | Specifications, implementation plans, code, documentation and commits. |
-| Reviewer | Claude on the most capable model at high effort, `k8s-reviewer` since 2026-09-20 | Independent review and read-only verification. |
+| Seat | Responsibility |
+|---|---|
+| Chief of staff | Operator conversation, interpretation of the operator's intent, work classification and delegation. |
+| Builder | Specifications, implementation plans, code, documentation and commits. |
+| Reviewer | Independent review and read-only verification, using the most capable model at high effort. |
 
 The chief of staff keeps its context clean.
 It is the operator's interpreter, not their stenographer.
@@ -24,7 +27,7 @@ Operator ruling, 2026-10-17: the seat exists to spare the operator long explanat
 It does not read inventories or diffs, or write specifications or plans.
 It rules on disagreements, defective plans and the escalations defined below.
 The builder writes the specification and implementation plan.
-Operator ruling, 2026-10-08: the operator approves the specification, and the chief of staff approves the implementation plan.
+Operator ruling, 2026-10-29: the chief of staff approves both the specification and the implementation plan once each has cleared review; the 2026-10-08 ruling that the operator approved specifications is superseded.
 After those approvals, the builder writes the code and documentation and commits on its isolated worktree branch.
 The reviewer reviews each artifact in turn.
 Design review includes the deletion seat required by [AGENTS.md](../../AGENTS.md#when-editing): identify unnecessary machinery and what deleting it would lose.
@@ -98,7 +101,7 @@ Re-prompt once after fifteen minutes without a reply, then escalate continued si
 Operator ruling, 2026-09-20: never run long tasks synchronously.
 Never block your turn on another seat or cluster Job for more than about one minute.
 Start a background monitor or background wait, then continue other work or end your turn.
-For Herdr agents, poll `herdr agent get <name>` in the background and report `done` or `blocked`.
+For Herdr agents, poll `herdr agent get <pane-id-or-name>` in the background and report `done` or `blocked`.
 For cluster Jobs, poll the Job's conditions in the background and report completion or failure.
 Use foreground `herdr agent wait` only for waits known to take less than one minute.
 Hand external waits longer than fifteen minutes to a background monitor in the chief of staff's session.
@@ -132,27 +135,23 @@ Record that ruling in the ledger.
 Run these commands from a Herdr-managed pane, where `HERDR_ENV=1`.
 Use `herdr --help`, `herdr agent` and `herdr pane` for the installed command syntax.
 Replace the example absolute paths with the current plan directory.
-Replace `<pane-id>` with the pane ID from `herdr agent list`.
 
 | Command | Use |
 |---|---|
-| `herdr agent list` | Find live agent names, pane IDs and states. |
-| `herdr agent prompt k8s-reviewer "Review /absolute/checkout/.superpowers/sdd/<plan>/report.md; range BASE..HEAD; brief /absolute/checkout/.superpowers/sdd/<plan>/brief.md"` | Builder sends the review handover directly. |
-| `herdr agent prompt implementer "Review: /absolute/checkout/.superpowers/sdd/<plan>/review.md; verdict: CLEAN"` | Reviewer returns its verdict directly. |
-| `herdr agent wait k8s-reviewer --timeout 60000` | Wait for a settled agent state. |
-| `herdr agent read k8s-reviewer --source recent-unwrapped --lines 40` | Inspect progress or a question dialog. |
+| `herdr agent list` | Find harness types, current agent names, pane IDs and states. |
+| `herdr agent prompt <reviewer-pane-id-or-name> "Review /absolute/checkout/.superpowers/sdd/<plan>/report.md; range BASE..HEAD; brief /absolute/checkout/.superpowers/sdd/<plan>/brief.md"` | Builder sends the review handover directly. |
+| `herdr agent prompt <builder-pane-id-or-name> "Review: /absolute/checkout/.superpowers/sdd/<plan>/review.md; verdict: CLEAN"` | Reviewer returns its verdict directly. |
+| `herdr agent wait <reviewer-pane-id-or-name> --timeout 60000` | Wait for a settled agent state. |
+| `herdr agent read <reviewer-pane-id-or-name> --source recent-unwrapped --lines 40` | Inspect progress or a question dialog. |
 | `herdr pane run <pane-id> "<answer>"` | Send answer text and Enter to an inspected question dialog. |
 
 Use `pane run` for a question dialog only when the operator has supplied or authorized the answer.
 The pane command sends raw terminal input; it does not validate the question or the answer.
 `herdr agent prompt` refuses an agent waiting at a question or approval dialog with `agent_blocked`.
-A selection dialog may need `herdr agent send-keys <name> <key>` instead of text.
+A selection dialog may need `herdr agent send-keys <pane-id-or-name> <key>` instead of text.
 Use `agent prompt` for normal handovers.
 
-Agent names are unique server-wide, not workspace-wide.
-On 2026-09-20, `reviewer` was already taken, so this team's reviewer became `k8s-reviewer`.
-Discover the name before sending work.
-Do not assume a neighboring workspace's `reviewer` belongs to this team.
+On 2026-09-20, `reviewer` was already taken server-wide, so this team's reviewer used `k8s-reviewer`.
 
 A standalone `herdr agent wait` can return the pre-prompt idle state when called within seconds of the prompt.
 That response does not prove the new review finished.

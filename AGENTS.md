@@ -229,7 +229,7 @@ The rules that must not be broken:
   A question from the operator, a sketch, or a correction is not agreement; "agreed", "go" or an equivalent is.
   Operator ruling, 2026-10-18, after a chief of staff dispatched three briefs in one afternoon before any of them had been agreed: "didn't I explicitly tell you to stop dispatching things until we've agreed them".
   Operator ruling, 2026-10-17: the seat exists to spare the operator long explanations in a text conversation, and an agent that captures what was said and relays it is not doing the job.
-  The chief of staff reads `docs/operations/agent-teams.md` before dispatching anything, and never dispatches a generic Claude subagent for builder or reviewer work: the builder is Codex (`implementer`) and the reviewer is `k8s-reviewer`.
+  The chief of staff reads `docs/operations/agent-teams.md` before dispatching anything and follows its seat identity and addressing rules.
   The chief of staff does not read inventories, diffs or cluster state itself; those belong to the builder and the reviewer, and reading them is what fills the context the seat exists to keep clean.
   Pass handovers as file paths under `.superpowers/sdd/<plan>/`, never pasted output, with the chief of staff outside that loop.
   Run every step your credentials and tools allow; ask the operator only for private-vault access, browser sign-in or publication approval.
@@ -239,7 +239,7 @@ The rules that must not be broken:
   No written brief, no reviewer round, no report, and no scope question over a sentence.
   The full loop is for anything that reaches a cluster, the VM's running code or configuration, or a credential.
   Operator ruling, 2026-10-24, after a five-file runbook fix went through a brief, a worktree, a reviewer round, two handover documents and a scope decision for removing three words: the fix was right-sized, the ceremony was not.
-  On 2026-09-29 a chief of staff asked to "get subagent or codex to review" an upgrade dispatched two generic Claude subagents and read the cluster inventories itself, never having opened that document.
+  On 2026-09-29, a chief of staff was asked to "get subagent or codex to review" an upgrade; it dispatched two generic Claude subagents and read the cluster inventories itself without opening that document.
 - Keep the one-file-per-service pattern; keep all of a service's resources in that file.
 - **Every workload on both clusters floats unless no floating channel exists.**
   Use the full keel annotation set on floating Deployments, DaemonSets and StatefulSets, including keel itself on `latest`.
@@ -277,7 +277,7 @@ The rules that must not be broken:
      Then do not add a step that re-confirms it.
      A gate on next-morning restic confirmation detected nothing the gate's own alert would not, and the overnight wait held a deployed-but-unmerged branch open — the last-apply-wins window above.
      **The deploy-then-merge gate is workload health, not a backup cycle.**
-  2. **Has the helper exactly one consumer and the app's own lifecycle?**
+  2. **Does the helper have exactly one consumer and the app's own lifecycle?**
      Then it is a second container in the app's pod, not a Deployment plus Service plus DNS name: folding a single-consumer Valkey cache back in deleted two resources and a probe and lost nothing.
   3. **Can this acceptance criterion fail at runtime?**
      One that can only fail if you mis-edit the files you just reviewed is reading your own diff — delete it.
@@ -365,7 +365,7 @@ The rules that must not be broken:
   `make check-workflows` — actionlint with shellcheck over `.github/workflows/` — is deliberately **not** in that preflight, because a workflow renders nothing and reaches no cluster; it runs in the workflow's own `lint` job on every push and pull request, and by hand.
 - **A deliberate copy of a file across the two clusters must be enforced, not just commented.**
   `homelab/ops/` and `vps/ops/` hold the same `keel-fresh` runner and CronJob twice, because kustomize will not read a generator source outside its own root and because the alternative puts a VPS kubeconfig inside a homelab pod.
-  The invariant that rests on is **edit them together**, and the two comments saying so — both in the VPS copies; neither homelab file carries the instruction — have never stopped anybody: a fix applied to one cluster and not the other is a dead-man's-switch that has quietly stopped switching on the cluster nobody looked at.
+  The invariant is **edit them together**, and the two comments saying so — both in the VPS copies; neither homelab file carries the instruction — have never stopped anybody: a fix applied to one cluster and not the other is a dead-man's-switch that has quietly stopped switching on the cluster nobody looked at.
   `make check-keel-fresh-parity` enforces it by masking a short, stated list of sanctioned differences — the copy notes, `IMAGE_FLOOR`, the schedule, the monitor name, the two paths, the `nodeSelector`, the 1Password vault path, the token variable — and requiring the rest to be identical.
   Editing either copy means editing both; genuinely per-cluster behaviour means a new rule in that guard, in the same commit, with its reason written down.
   Every rule's span is **bounded to comment lines plus the line it names**: an earlier `IMAGE_FLOOR` rule used `.*?` across newlines and silently swallowed executable shell inserted above the assignment, which `check-script-lint` cannot catch either because the insertion is valid `sh`.
@@ -421,7 +421,7 @@ The rules that must not be broken:
   1. **Secrets grant access.**
      Tokens, passwords, private keys, API keys, session cookies, the 1Password service-account token.
      Disclosure means honesty box **and** rotation.
-  2. **Spam-target identifiers grant no access but let a stranger cause a nuisance.** healthchecks.io ping UUIDs and uptime-kuma push tokens are the cases that matter here: anyone holding one can report a heartbeat and mask a genuine failure, and grants nothing else.
+  2. **Spam-target identifiers grant no access but let a stranger cause a nuisance.** healthchecks.io ping UUIDs and uptime-kuma push tokens are the cases that matter here: anyone holding one can report a heartbeat and mask a genuine failure, but gains no other access.
      Keep them out of this public repo (`op://` reference only) and type them `[text]` in the vault — but a transcript or a pod log is **not** a disclosure, they need **no rotation**, and they get **no honesty-box row**.
      This has been ruled three times.
      `jottacloud-backup`'s own image prints its push URL to the pod log on every run: same tier, no action.
