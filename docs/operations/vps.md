@@ -157,7 +157,14 @@ Only the push path is opened: `/api/push/<token>` accepts a heartbeat and expose
 It reuses the shared bypass policy rather than carrying its own.
 The verification performed at creation, and the proof commands to repeat after any Access change: [uptime-kuma.md](uptime-kuma.md#the-push-path-is-bypassed-at-the-edge).
 
-These apps are also why the `rss.cynexia.com` and `Karakeep` uptime-kuma monitors need no service-token headers: their URLs resolve to the path-scoped app, not the root one ([uptime-kuma.md](uptime-kuma.md#monitor-list)).
+These apps are also why the `rss.cynexia.com` and `Karakeep` uptime-kuma monitors need no service-token headers: their URLs resolve to the path-scoped app, not the root one ([uptime-kuma.md](uptime-kuma.md#the-cloudflare-access-trap)).
+
+### Reviewing Uptime token use
+
+The four apps using the [`Uptime` token](uptime-kuma.md#the-cloudflare-access-trap) log admitted requests through `service-auth-monitoring`.
+Query `GET /accounts/{account_id}/access/logs/access_requests?limit=1000&since=<ISO8601>` through the Cloudflare API, filtered by those apps' `aud` values.
+Expect only the four monitors; investigate an unfamiliar caller as possible token misuse.
+Review after token or policy changes and when investigating an unexplained 302.
 
 ### cloudflared runs two replicas
 
@@ -276,7 +283,7 @@ Recovery is `kubectl rollout restart` on the pod the error points at: `deploy/ho
 Every proxied watch failing at once, with unproxied ones fine, is the Access service token instead — read the `homelab-proxy` pod log, which records the refusal on every dial.
 
 The Access application is the whole gate, and it fails open: tinyproxy authenticates nobody, so a deleted or disabled application publishes an open HTTP proxy egressing from the home address rather than closing the path.
-The `proxy.cynexia.com` uptime-kuma monitor exists to detect exactly that — see [uptime-kuma.md](uptime-kuma.md#monitor-list).
+The `homelab-proxy` uptime-kuma monitor exists to detect exactly that — see [uptime-kuma.md](uptime-kuma.md#the-cloudflare-access-trap).
 
 Stale proxy references hide in `/datastore`, inside both the watch entries and `changedetection.json`, and a URL-grep misses them because the compose-era proxy URL was a sibling container name rather than a hostname.
 

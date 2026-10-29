@@ -29,10 +29,12 @@ A departure is deliberate only when its reason is recorded.
 - `family-foqos.app` and `recordwell.app website` enable cache-busting, also without a recorded reason.
 - The two `api.recordwell.app` monitors use JSON Query and require `$.status` to equal `ok`, because HTTP 200 alone cannot establish application health.
 - `hae.cynexia.com` accepts 401 because its origin requires authentication; the response proves the edge, tunnel and origin answered.
+  It also sets `maxredirects` to 0 without an Access app; no reason for that departure is recorded.
 - `Data MCP` and `homelab-proxy` check the Access challenge itself for the security reasons in [The Cloudflare Access trap](#the-cloudflare-access-trap).
 
 Reach for a keyword or JSON-query assertion only when the status code cannot fail on its own.
 An error status already fails the check, and `saveErrorResponse` captures the response body for diagnosis.
+Observe a status code with `curl` before adding it to an accepted set.
 
 The `uptime-kuma` container sets `NODE_OPTIONS=--network-family-autoselection-attempt-timeout=2000` to give each address two seconds to connect instead of abandoning slow Cloudflare handshakes after 250 milliseconds.
 
@@ -78,6 +80,18 @@ kubectl --context cynexia-vps -n vps port-forward svc/uptime-kuma 13001:3001
 
 Then open `http://127.0.0.1:13001` and use the kuma admin login.
 
+### Editing monitors in bulk
+
+Use the Socket.IO client `uptime-kuma-api` in a throwaway virtual environment against the port-forward above.
+Read `op://VPS/uptime-kuma` credentials inside the Python process.
+Pass username, password and the fresh `one-time password?attribute=otp` to `login`.
+Never put credentials on argv or in terminal output.
+An empty username or password produces `authIncorrectCreds`, which can resemble incorrect credentials.
+Make the sweep read-only unless `--apply` is supplied.
+Rehearse it before enabling writes.
+`edit_monitor` merges supplied fields over the existing monitor; preserve the other fields.
+Verify the change with a before-and-after diff of the read-only monitor query.
+
 ### Monitor list
 
 Read the live monitor table without selecting authentication headers or push tokens:
@@ -85,9 +99,10 @@ Read the live monitor table without selecting authentication headers or push tok
 ```bash
 kubectl --context cynexia-vps -n vps exec deploy/uptime-kuma -c uptime-kuma -- \
   sqlite3 -readonly -header -column /app/data/kuma.db \
-  'SELECT id, name, type, url, interval, maxretries, retry_interval, timeout, maxredirects, accepted_statuscodes_json, method, cache_bust, parent, active FROM monitor ORDER BY id;'
+  'SELECT id, name, type, url, interval, maxretries, retry_interval, timeout, maxredirects, accepted_statuscodes_json, keyword, json_path, expected_value, method, cache_bust, parent, active FROM monitor ORDER BY id;'
 ```
 
+The self-monitor's URL contains its healthchecks.io ping identifier; keep query output out of committed files.
 The container already ships `sqlite3`; no installation is needed.
 The `parent` column records group membership.
 `/metrics` can omit monitors created after process startup until the next restart, so it is not the inventory.
@@ -116,6 +131,8 @@ Read the values from 1Password without writing them into this repository.
 The `Uptime` token serves the `Umami analytics`, `changedetection`, `hermes` and `n8n` Access apps through `service-auth-monitoring`.
 It expires on August 24, 2031; wrong, missing or expired headers can fail all four monitors together.
 Changedetection has no origin login, so that token grants access to the full application.
+Enabling changedetection's password requires adding `302` to the `watch.cynexia.com` monitor's accepted set.
+The `hermes API` monitor needs only Access credentials because `/api/health` is on the VM dashboard's unauthenticated allowlist.
 The `rss.cynexia.com` and `Karakeep` monitors need no headers because their path-scoped Access apps admit anonymous requests.
 
 Two monitors intentionally check Access rather than the origin:
@@ -128,6 +145,9 @@ Two monitors intentionally check Access rather than the origin:
 - `homelab-proxy`, for `proxy.cynexia.com`, accepts exactly `["403"]` and sends no service-token headers.
   Its Access app has no identity provider, so it refuses the request instead of redirecting to a login page.
   The origin proxy has no authentication; a missing Access gate would publish an open proxy, so a successful origin response must fail this monitor.
+  The separate `vps-proxy-access` token is scoped only to the `homelab-proxy` Access app through `service-auth-homelab-proxy`.
+  It expires on September 1, 2031.
+  On expiry, the residential proxy and every proxied changedetection watch fail without a monitor alert, because this monitor still receives the Access challenge.
 
 ### The push path is bypassed at the edge
 

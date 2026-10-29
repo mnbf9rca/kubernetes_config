@@ -1137,7 +1137,7 @@ Four uptime-kuma **push** monitors; tokens in 1Password item `health-healthcheck
 Three of them replaced four healthchecks.io checks on August 26, 2026 — the two ingest checks merged, because one CronJob checks both buckets in one process and two monitors would have been one signal counted twice.
 The names were kept so the estate reads as one inventory across the change.
 `withings-ingest` replaced nothing; it was created on September 2, 2026 for new scheduled work.
-Roster and per-monitor settings: [uptime-kuma.md](uptime-kuma.md#push-monitors).
+Live monitor table and current settings: [uptime-kuma.md](uptime-kuma.md#monitor-list).
 
 | Monitor | Interval / retry | Signals failure by |
 |---|---|---|
@@ -1169,7 +1169,7 @@ All four are bounded by `timeZone: "UTC"` and `activeDeadlineSeconds` (3600 for 
 `influx-backup` sets `startingDeadlineSeconds: 3600`, `cloudflare-analytics` 1800 and `withings-ingest` 600; `ingest-freshness` deliberately does not, since it runs again in six hours.
 
 This namespace's monitors watch **data freshness**, not the edge — which is why the 2026-08-18 Pomerium wedge went unnoticed (that proxy has since been removed).
-External availability of `mcp.cynexia.com` and the other tunnel hostnames is layer 3, in [uptime-kuma.md](uptime-kuma.md#monitor-list).
+External availability of `mcp.cynexia.com` and the other tunnel hostnames is layer 3, in [uptime-kuma.md](uptime-kuma.md#the-cloudflare-access-trap).
 
 ## Secret rotation
 

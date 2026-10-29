@@ -200,7 +200,7 @@ The `hal-daily-check` push monitor uses a 24-hour interval and one two-hour retr
 A missing daily beat therefore alarms about 26 hours after the last accepted beat, near 11:00 London time on an ordinary day.
 It monitors morning-mail acceptance, including an email that says the check could not finish; it does not monitor later Hal mail.
 The token reference is `op://hermes/hal-daily-check/kuma-push-token`; the profile mapping names `HAL_DAILY_CHECK_PUSH_TOKEN`.
-The [monitor inventory](uptime-kuma.md#push-monitors) and [failure triage](monitoring.md#layers-3-and-4-uptime-kuma) describe its place in estate monitoring.
+The [live monitor table](uptime-kuma.md#monitor-list) and [failure triage](monitoring.md#layers-3-and-4-uptime-kuma) describe its place in estate monitoring.
 
 | Heartbeat `verdict=` | Status | Meaning |
 |---|---|---|
