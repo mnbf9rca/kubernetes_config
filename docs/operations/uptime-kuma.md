@@ -24,8 +24,6 @@ Use these settings for HTTP monitors unless a recorded reason requires a departu
 
 A departure is deliberate only when its reason is recorded.
 
-- `blog.cynexia.com homepage` still uses a 15s interval, 1 retry, a 5s retry interval and a 10s timeout, with no reason on record.
-  It also uses HEAD with cache-busting enabled; neither has a recorded reason.
 - `family-foqos.app` and `recordwell.app website` enable cache-busting, also without a recorded reason.
 - The two `api.recordwell.app` monitors use JSON Query and require `$.status` to equal `ok`, because HTTP 200 alone cannot establish application health.
 - `hae.cynexia.com` accepts 401 because its origin requires authentication; the response proves the edge, tunnel and origin answered.
