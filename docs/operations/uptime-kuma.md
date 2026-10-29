@@ -53,6 +53,8 @@ Reach for a keyword or JSON-query monitor only when the status code cannot fail 
 uptime-kuma evaluates the keyword after the status check passes, so against an origin that returns 5xx or a Cloudflare `1033` it adds nothing — `saveErrorResponse` already captures the error body into the alert, which makes a `1033` diagnosable.
 It earns its place against an origin that answers 200 while broken, which is what `blog database status` and the two `api.recordwell.app` monitors assert.
 
+The `uptime-kuma` container sets `NODE_OPTIONS=--network-family-autoselection-attempt-timeout=2000` to give each address two seconds to connect instead of abandoning slow Cloudflare handshakes after 250 milliseconds.
+
 ### Editing monitors in bulk
 
 The UI edits one field of one monitor at a time, which is right for a new monitor and painful for a sweep across seventeen.
