@@ -27,7 +27,7 @@ Operator ruling, 2026-10-17: the seat exists to spare the operator long explanat
 It does not read inventories or diffs, or write specifications or plans.
 It rules on disagreements, defective plans and the escalations defined below.
 The builder writes the specification and implementation plan.
-Operator ruling, 2026-10-08: the operator approves the specification, and the chief of staff approves the implementation plan.
+Operator ruling, 2026-10-29: the chief of staff approves both the specification and the implementation plan once each has cleared review; the 2026-10-08 ruling that the operator approved specifications is superseded.
 After those approvals, the builder writes the code and documentation and commits on its isolated worktree branch.
 The reviewer reviews each artifact in turn.
 Design review includes the deletion seat required by [AGENTS.md](../../AGENTS.md#when-editing): identify unnecessary machinery and what deleting it would lose.
