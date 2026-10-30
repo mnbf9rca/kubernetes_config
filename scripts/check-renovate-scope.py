@@ -145,8 +145,8 @@ MODE_FROZEN = "frozen"                      # pinned tag WITH keel - always a fa
 MODE_INCOMPLETE_KEEL = "incomplete-keel"    # a partial keel set - always a failure
 MODE_FLOATING_UNMANAGED = "floating-unmanaged"  # floating tag, no keel - nothing updates it
 
-# Kinds whose every run starts a fresh pod, so a floating tag is RE-PULLED on
-# each schedule tick without keel or anything else arranging it. That is why
+# Kinds whose every run starts a fresh pod; with effective imagePullPolicy
+# Always, a floating tag is re-pulled without keel arranging it. That is why
 # `jottacloud-backup` is legal on `:latest` with no keel annotations: the
 # schedule already delivers what keel would. A long-running Deployment gets no
 # such thing - it sits on the image it was admitted with until something rolls
@@ -369,8 +369,8 @@ def render(cluster):
 # The estate has no PyYAML and adding a dependency for a preflight guard would
 # make the guard the reason an apply cannot run on a fresh machine. The render
 # is kustomize's own normalised output: two-space indent, no tabs, no anchors,
-# no flow mappings at the levels read here. Five things are extracted - kind,
-# namespace, the workload's annotations, and each container's name and image.
+# no flow mappings at the levels read here. Read kind, namespace, workload
+# annotations, and each container's name, image and pull policy.
 #
 # WHAT "REPORTED, NEVER SKIPPED" MEANS HERE, PRECISELY, AND WHERE IT STOPS. Two
 # reader failures are printed as advisories rather than dropped: a non-empty
@@ -462,8 +462,8 @@ def _value(raw):
     return token or None
 
 
-def _sibling_name(lines, index, col):
-    """The `name:` belonging to the same list item as the `image:` at `index`.
+def _sibling_scalar(lines, index, col, key):
+    """A scalar belonging to the same list item as the `image:` at `index`.
 
     kustomize sorts mapping keys, so `image` precedes `name` in its output and
     the forward scan is the one that fires. The backward scan is for
@@ -472,6 +472,8 @@ def _sibling_name(lines, index, col):
     the next container's - which opens a new item - are both out of reach.
     """
     for step in (1, -1):
+        if step == -1 and KEY_LINE.match(lines[index]).group(1).strip().startswith("-"):
+            continue
         j = index + step
         while 0 <= j < len(lines):
             line = lines[j]
@@ -491,16 +493,18 @@ def _sibling_name(lines, index, col):
                 break
             if here == col:
                 opens_item = match.group(1).strip().startswith("-")
-                if match.group(2) == "name":
-                    return _value(match.group(3)) or "<unnamed>"
+                if opens_item and step == 1:
+                    break
+                if match.group(2) == key:
+                    return _value(match.group(3))
                 if opens_item:
                     break                  # a different container
             j += step
-    return "<unnamed>"
+    return None
 
 
 def containers_of(doc):
-    """Every (container name, image) pair in the document, in order."""
+    """Every (container name, image, pull policy) tuple, in document order."""
     lines = doc.splitlines()
     found = []
     for index, line in enumerate(lines):
@@ -509,7 +513,9 @@ def containers_of(doc):
             continue
         image = _value(match.group(3))
         if image:
-            found.append((_sibling_name(lines, index, len(match.group(1))), image))
+            col = len(match.group(1))
+            found.append((_sibling_scalar(lines, index, col, "name") or "<unnamed>",
+                          image, _sibling_scalar(lines, index, col, "imagePullPolicy")))
     return found
 
 
@@ -531,7 +537,7 @@ def source_index(roots=CLUSTERS):
         with open(path, encoding="utf-8", errors="replace") as handle:
             text = handle.read()
         index.append((rel, rel.split("/", 1)[0],
-                      frozenset(image for _name, image in containers_of(text))))
+                      frozenset(image for _name, image, _policy in containers_of(text))))
     return index
 
 
@@ -579,8 +585,8 @@ def analyse_render(cluster, text, patterns, ignore_paths, source_files):
         # Workload-level, computed once: does keel have ANYTHING here it could
         # track? If it does, a pinned container in this workload is a sidecar
         # beside a keel-tracked image, not a frozen pin.
-        floats = any(not is_pinned(reference) for _name, reference in containers)
-        for container, reference in containers:
+        floats = any(not is_pinned(reference) for _name, reference, _policy in containers)
+        for container, reference, pull_policy in containers:
             where = "%s %s/%s (%s) [%s]" % (kind, namespace, name, container,
                                             reference)
             mode, why = classify_container(reference, annotations, floats)
@@ -613,8 +619,14 @@ def analyse_render(cluster, text, patterns, ignore_paths, source_files):
                     advisories.append(
                         "%s: a floating tag from a remote base. Advisory."
                         % where)
-                elif mode == MODE_FLOATING_UNMANAGED and kind not in RE_PULLS:
-                    failures.append("%s: %s" % (where, why))
+                else:
+                    tag = reference.rsplit("/", 1)[-1].partition(":")[2] or "latest"
+                    effective_policy = pull_policy or ("Always" if tag == "latest" else "IfNotPresent")
+                    if effective_policy != "Always":
+                        failures.append("%s: floating image needs imagePullPolicy: Always "
+                                        "(effective policy: %s)" % (where, effective_policy))
+                    if mode == MODE_FLOATING_UNMANAGED and kind not in RE_PULLS:
+                        failures.append("%s: %s" % (where, why))
                 continue
 
             # MODE_PINNED: it must be visible to Renovate.
@@ -767,7 +779,8 @@ def main(argv):
         for line in sorted(failures):
             print("  %s" % line)
         print("\nThe rule: FLOATING TAG MEANS KEEL, PINNED TAG MEANS RENOVATE, "
-              "NEVER BOTH.\nJobs and CronJobs may float without keel. "
+              "NEVER BOTH.\nJobs and CronJobs may float without keel "
+              "with imagePullPolicy: Always. "
               "See AGENTS.md and\ndocs/operations/apply-workflow.md.")
         return 1
 
