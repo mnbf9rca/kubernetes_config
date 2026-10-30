@@ -125,6 +125,12 @@
       "description": "Reviewer routine inputs wait seven days; daily lock maintenance relies on uv's seven-day exclude-newer floor instead of a release timestamp. Advisory PRs bypass Renovate's wait, but uv still enforces its floor. Enable automerge only after sandbox-changes and sandbox-build are required and the operator accepts the test assessment; keep it off until both conditions hold."
     },
     {
+      "matchDatasources": ["docker"],
+      "matchPackageNames": ["nousresearch/hermes-sandbox"],
+      "groupName": null,
+      "description": "The sandbox base supplies Python; propose it separately so an interpreter change cannot block routine tool updates. Automerge inherits the reviewer-image gate."
+    },
+    {
       "matchFileNames": ["homelab/health/mcp/**", "hermes-vm/sandbox-image/**"],
       "matchUpdateTypes": ["lockFileMaintenance"],
       "minimumReleaseAgeBehaviour": "timestamp-optional",
