@@ -4,7 +4,7 @@
   "private": true,
   "description": "Build inputs for ghcr.io/mnbf9rca/influxdb-mcp-server: the upstream server plus health tools, added by a --import hook rather than a fork.",
   "dependencies": {
-    "influxdb-mcp-server": "0.2.0",
+    "influxdb-mcp-server": "0.3.0",
     "zod": "4.6.7"
   }
 }
