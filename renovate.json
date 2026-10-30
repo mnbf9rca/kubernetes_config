@@ -138,10 +138,11 @@
     },
     {
       "matchDatasources": ["python-version"],
+      "matchUpdateTypes": ["minor", "major"],
       "enabled": false,
       "groupName": null,
       "automerge": false,
-      "description": "Python interpreter minor changes are breaking major upgrades. Disable interpreter updates across managers: requires-python uses PEP 440 ranges, and Renovate cannot reclassify their minor component as major without losing range support. Ordinary PyPI packages remain enabled."
+      "description": "Python interpreter minor and major steps are breaking upgrades. Disable and ungroup only those update types across managers: requires-python uses PEP 440 ranges that Renovate cannot safely reclassify. Patch releases within one Python minor follow the ordinary update rules; PyPI package updates are unaffected."
     }
   ],
   "customManagers": [
