@@ -245,7 +245,7 @@ The rules that must not be broken:
 - **Every workload on both clusters floats unless no floating channel exists.**
   Use the full keel annotation set on floating Deployments, DaemonSets and StatefulSets, including keel itself on `latest`.
   Numeric streams such as `2`, `v3`, `pg17`, `16-alpine`, `17-alpine` and `3-alpine` are floating channels.
-  Set `imagePullPolicy: Always` on floating Jobs and CronJobs; omit keel annotations from them.
+  Set `imagePullPolicy: Always` on every floating container; omit keel annotations from Jobs and CronJobs.
   The only repo-owned runtime image pin is `alpine/k8s`, which has no floating channel and receives Renovate proposals.
   Talos, Kubernetes and homelab remote-base bundles remain interactive updates a few times a year through `/update-estate`.
 - **Every pinned image in both clusters is inside Renovate's scope, and keeping it that way is a standing obligation.**

@@ -27,7 +27,7 @@ spec:
     spec:
       containers:
         - name: influxdb
-          image: influxdb:2
+          image: library/influxdb:2
           imagePullPolicy: Always
           env:
             - { name: DOCKER_INFLUXDB_INIT_MODE, value: setup }

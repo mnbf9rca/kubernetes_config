@@ -9,7 +9,7 @@ The strategy lives in the gitignored design note `docs/superpowers/specs/2026-08
 
 | Mode | Surface | Cadence | Watched by |
 |---|---|---|---|
-| Floating runtime images | Keel on both clusters; Jobs and CronJobs use `imagePullPolicy: Always` | Six-hour Keel polling or each new Job Pod | `homelab-keel-fresh`, `vps-keel-fresh`, and existing job monitors |
+| Floating runtime images | Keel on both clusters; every floating container uses `imagePullPolicy: Always`, explicitly on non-`latest` tags | Six-hour Keel polling or each new Job Pod | `homelab-keel-fresh`, `vps-keel-fresh`, and existing job monitors |
 | Pinned dependencies | `alpine/k8s`, MCP build inputs, and the VPS local-path `?ref=` base | Renovate without a monthly window | `homelab-update-watch` reports lookup failures and a missing dashboard |
 | Interactive infrastructure | Talos, Kubernetes and remote-base bundles through `/update-estate` | A few times a year, or sooner for an advisory | Existing `estate-update` check; its configured 45-day period is unchanged |
 | Hermes application | Core/dashboard use upstream `hermes update`; external WebUI follows stable | Operator choice | Existing daily `hermes-app-alive` monitor |
@@ -17,7 +17,7 @@ The strategy lives in the gitignored design note `docs/superpowers/specs/2026-08
 
 Everything on both clusters floats unless its image has no floating channel.
 Floating Deployments, DaemonSets and StatefulSets carry the full Keel annotation set.
-Jobs and CronJobs use floating tags with `imagePullPolicy: Always`, without Keel annotations.
+Every floating container uses `imagePullPolicy: Always`, explicitly for non-`latest` tags; Jobs and CronJobs omit Keel annotations.
 PostgreSQL stays within `pg17`, `17-alpine`, or `16-alpine`; major upgrades remain explicit dump-and-restore operations.
 Restic binaries float, while repository-format migrations remain explicit operations.
 Nightly dumps are the accepted recovery path for application schema changes.
