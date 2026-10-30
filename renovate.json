@@ -114,7 +114,7 @@
       "minimumReleaseAge": "7 days",
       "minimumReleaseAgeBehaviour": "timestamp-required",
       "groupName": "security-reviewer image inputs",
-      "automerge": false,
+      "automerge": true,
       "automergeType": "pr",
       "automergeStrategy": "squash",
       "platformAutomerge": false,
