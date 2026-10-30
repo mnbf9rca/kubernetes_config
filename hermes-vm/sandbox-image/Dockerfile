@@ -1,5 +1,5 @@
 FROM ghcr.io/astral-sh/uv:0.12.24@sha256:3af4716e991d6956a41e573eab705d0ee08500cd829ed30293eb8472f372c65a AS uv
-FROM nousresearch/hermes-sandbox:v0.21.6-desktop@sha256:669abbd2df186067be9c645eee5fddb8764c9fe8b9edd28625ec3a61e6685443
+FROM nousresearch/hermes-sandbox:v0.21.7-desktop@sha256:c7d8607d076f26a64e0bd6828f74e1764af43fe3281368188459bb693bfa7567
 
 # Renovate pairs each release with the checksum of its Linux amd64 attachment.
 ARG SHELLCHECK_VERSION=v0.11.0
