@@ -335,9 +335,10 @@ The rules that must not be broken:
   Every runner prints the full detail to the pod log, where triage starts.
   Either one travels with the alert to every notification transport its destination has configured, a list nobody has enumerated on either side.
   Policy, the accepted residuals and that open item: `docs/operations/monitoring.md`.
-- **Update Hermes as one application: core agent, bundled dashboard and external hermes-webui.**
+- **Update Hermes as one application: core agent, bundled dashboard, external hermes-webui and plugins.**
   Use upstream `hermes update` for core updates on stable; official installs ahead of a release keep the implicit forward-only default.
   Update external hermes-webui on its stable channel; its Update Now button is WebUI-only, and `ignore_agent_updates` hides agent offers.
+  Bundled plugins move with core; update every non-bundled plugin through `hermes plugins update`, accepting only a safe scan verdict and verifying every affected profile.
   Complete the maintenance and runtime verification in `docs/operations/hermes-vm.md` together; do not advance core with a raw git pull.
   Everything else about the VM — lingering, the daily liveness check, the install, `unattended-upgrades` — is in `docs/operations/hermes-vm.md`.
   **Nothing under `hermes-vm/` is scheduled by systemd any more**: the `systemd/` directory was deleted on 2026-08-27, and scheduled scripts run as hermes `no_agent` cron jobs: daily liveness and weekly sandbox refresh in default, thirty-day closed-report cleanup in security_reviewer, and the 09:00 house check in hal.

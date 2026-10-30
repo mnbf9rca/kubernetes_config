@@ -5,7 +5,7 @@ It is not a Kubernetes cluster, so none of this repository's cluster machinery r
 What it has instead lives in `hermes-vm/`: a daily liveness check, a weekly docker-sandbox refresh, a hand-run helper that finishes a new profile's docker setup, the Hal morning runner and publication plugins, the reviewer persona/plugin and closed-report sweep, the managed-scope Hermes config and the `unattended-upgrades` configuration.
 
 This page covers that machinery — how to read it, how to install it — and the VM facts that keep being rediscovered.
-Update core, its bundled dashboard and external hermes-webui together using [Application updates](#application-updates).
+Update core, its bundled dashboard, external hermes-webui and plugins together using [Application updates](#application-updates).
 There is no update timer or update-estate step.
 
 The canonical copy of every file named here is in `hermes-vm/`.
@@ -21,15 +21,22 @@ The `hal` profile also carries four agent-authored systemd timers that this repo
 
 ## Application updates
 
-“Update Hermes” includes **core, the bundled dashboard and external hermes-webui**.
+“Update Hermes” includes **core, the bundled dashboard, external hermes-webui and plugins**.
 Use the upstream `hermes update` route for core; keep its official-install **implicit stable** default.
-This install is ahead of stable v0.22.0, so path B waits for a later stable release instead of rolling back to v0.22.0.
+An official install ahead of stable waits for a later release instead of rolling back.
 Do not set an explicit stable channel or advance core with `git pull`.
 Update external WebUI on **stable**; its **Update Now** is WebUI-only and `ignore_agent_updates: true` hides agent offers.
 There is no scheduled application updater.
 
+Read every intervening stable release note for core and WebUI before opening the window.
+Compare changed defaults, migrations, dependencies and deprecated options with this VM's saved and effective configuration.
+Escalate configuration, credential, mount or profile-behaviour changes before applying them.
+[Core v0.22.3](https://github.com/NousResearch/hermes-agent/releases/tag/v0.22.3) changed `sessions.auto_prune` from true to false by default, so a missing key changes effective behaviour.
+The October 30 maintenance explicitly retained `sessions.auto_prune: true` with 90-day retention on every existing profile.
+The October 15 record below describes the earlier enabled default.
+
 1. Prepare the window.
-   1. Record both source commits and the actual install stamp.
+   1. Record both source commits, the actual install stamp and each non-bundled plugin's version/source pin in every profile where it is installed.
    2. Record PM state, pending state and unit enablement.
    3. Set `HERMES_DISABLE_LAZY_INSTALLS=1` for preparatory Hermes commands.
    An ordinary worker command can complete a pending update without the operator.
@@ -56,7 +63,7 @@ There is no scheduled application updater.
    2. Establish its ownership and recoverable home.
    3. Move `hermes_cli/.web_dist-build-vZVavf/` to private recovery storage.
    Preserve both paths until this work is complete; never `git clean` them.
-6. Update both products.
+6. Update the application.
    1. Review core's proposed source target.
    2. Update external WebUI on stable.
    3. Update core through its upstream updater.
@@ -64,6 +71,15 @@ There is no scheduled application updater.
    For a stopped WebUI source update, require a clean tracked tree and verified tag before fast-forwarding.
    Keep it stopped until the runtime gates pass.
    Do not reinstall the Hindsight backend.
+   5. After core and WebUI, run `hermes plugins list --plain` for default and each profile (`hermes -p <profile> plugins list --plain`).
+   Bundled plugins move with core; inspect every non-bundled plugin's installed and offered version/source pin.
+   Read its upstream changes against the affected profiles' configuration before proceeding; escalate configuration, credentials, mounts or profile-behaviour changes first.
+   6. Update every non-bundled plugin through `hermes plugins update <name>` in each home where it is separately installed, using `-p <profile>` for named profiles.
+   Accept only the native scanner's **safe** verdict; stop and escalate **caution** or **dangerous**, without `--force`, confirmation or a scan bypass.
+   Catalogue updates can silently accept caution on reviewed pins: first stage the exact offered pin with the updater's user-file carry rules and run `tools.plugin_guard.scan_plugin` in the selected PM runtime, requiring safe before invoking the updater.
+   Record the scan verdict and resulting version/pin for every copy; do not treat the updater's exit status alone as scan evidence.
+   7. Follow upstream's plugin activation/restart guidance, then verify every affected profile and the feature each plugin serves after the coherent runtime starts.
+   For Hindsight this means the actual dashboard panels/hubs, existing expected-bank reads and scheduled backend canary in step 11.
 7. Gate completion.
    1. Require a matching built install stamp without `adoptedAt`.
    2. Require the upstream `completion_pending_path` to be absent.
@@ -114,8 +130,12 @@ There is no scheduled application updater.
     2. Confirm four messaging profiles connected once using profile connection logs.
     3. Require safer_web_reader and security_reviewer to remain worker-only.
     4. Check WebUI health.
-    5. Exercise one normal authenticated diagnostic chat.
-    6. Restore observer timers to their previous active/enabled states.
+    5. Exercise one normal authenticated emh WebUI diagnostic chat using the read-only health-data help tool.
+    6. Run authenticated dashboard MCP tests for Health-data and HA-MCP.
+    7. Require the health-data help tool and `ha_get_system_health` in their returned lists.
+    8. Restore observer timers to their previous active/enabled states.
+    Successful live tool execution and dashboard discovery are the completion evidence; registration lines can support them.
+    Do not change configuration or core to manufacture a registration line.
     The shared runtime record omits secondary mailbox connections.
     Existing observer failures remain outside this procedure.
 13. Verify sandbox and jobs.
@@ -1005,8 +1025,16 @@ After a core update, verify the shared gateway and explicitly restart/check dash
 **A Hermes process discovers an MCP server's tools once, when it connects, so a tool added to a server is invisible to every already-running Hermes process until that process restarts.**
 Nothing re-lists tools on a live connection, and neither the server's own restart nor a reconnect re-runs discovery, so the stale process keeps serving the tool list it captured — which is how the `how-to-use-health-data` tool added to the health MCP server on September 4, 2026 stayed missing on September 5.
 **A WebUI chat does not run in the profile gateway**, it runs in `hermes-webui`, so restarting the shared `hermes-gateway` fixes the profile's cron and messaging turns and changes nothing about the conversation in the browser.
-Restart the shared `hermes-gateway`, `hermes-webui` and `hermes-dashboard` — and prove each one by its `tools.mcp_tool` registration line, `MCP server '<name>' (HTTP): registered N tool(s): …`, which names every tool and so carries the new count: a profile gateway writes it to `~/.hermes/profiles/<profile>/logs/agent.log`, while `hermes-webui` and `hermes-dashboard` run under the base `HERMES_HOME` and write it to `~/.hermes/logs/agent.log`.
-Those two connect **lazily**, on the first turn that uses the server rather than at start — the WebUI process that served the stale list had been up since 17:56 on September 3 and registered the server at 22:46 that evening — so the line appears only after a chat in that profile touches the server, and its absence straight after a restart is not a fault.
+Restart the shared `hermes-gateway`, `hermes-webui` and `hermes-dashboard`.
+Verify the WebUI through an authenticated tool call.
+Verify the dashboard through its authenticated MCP test action, as above.
+A fresh `tools.mcp_tool` line, `MCP server '<name>' (HTTP): registered N tool(s): …`, names the discovered tools and supports that evidence.
+Connections can be lazy, so an absent line immediately after restart does not establish a failure.
+
+Log destinations follow the active profile and logging handlers, so the base `HERMES_HOME` does not identify every destination.
+On October 30 with core v0.22.5, the WebUI process held the emh profile's `logs/agent.log`; the dashboard held root, emh and hal logs.
+Shared profile logs omit PID attribution, so a line in one file alone does not prove which service wrote it.
+Use successful live actions instead of changing logging configuration or investigating an absent line after those actions pass.
 
 **Update snapshots live in `~/.hermes/backups/`**, not `~/.hermes/pre_update_backups/` — an earlier draft of this design named the second path and it does not exist.
 Retention is five snapshots, pruned after each write and floored at one, at roughly 200 MiB each.
