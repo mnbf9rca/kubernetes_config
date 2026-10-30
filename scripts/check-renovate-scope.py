@@ -659,7 +659,8 @@ def docker_from_lines(contents):
 def analyse_dockerfiles(config, sources):
     """Check literal base pins and the reviewer's whole-input age policy.
 
-    shortcut: supports file-wide rules only, extend before adding dependency-specific Dockerfile rules.
+    shortcut: supports file-wide age rules and timestamp-only lock maintenance
+    exceptions, extend before adding dependency-specific Dockerfile age rules.
     """
     failures = []
     try:
@@ -699,6 +700,12 @@ def analyse_dockerfiles(config, sources):
             probe = target.replace("**", "Dockerfile")
             for rule in config.get("packageRules", []):
                 if not any(fnmatch.fnmatch(probe, pat) for pat in rule.get("matchFileNames", [])):
+                    continue
+                # Maintenance has no release timestamp; it must not weaken routine updates.
+                if (rule.get("matchUpdateTypes") == ["lockFileMaintenance"]
+                        and rule.get("minimumReleaseAgeBehaviour") == "timestamp-optional"
+                        and set(rule) <= {"matchFileNames", "matchUpdateTypes",
+                                          "minimumReleaseAgeBehaviour", "description"}):
                     continue
                 if any(k.startswith("match") and k != "matchFileNames" for k in rule):
                     failures.append("reviewer age policy needs file-wide rules")

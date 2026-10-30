@@ -37,6 +37,30 @@ FULL_KEEL = {
 
 
 class TestDockerfileScope(unittest.TestCase):
+    def test_lock_maintenance_timestamp_exception_keeps_routine_age_policy(self):
+        import copy
+        path = "hermes-vm/sandbox-image/Dockerfile"
+        source = [(path, "FROM nousresearch/hermes-sandbox:v0.21.6-desktop@sha256:" + "a" * 64)]
+        config = {"enabledManagers": ["dockerfile"],
+                  "dockerfile": {"managerFilePatterns": ["/^hermes-vm/sandbox-image/Dockerfile$/"]},
+                  "minimumReleaseAge": "3 days",
+                  "packageRules": [{"matchFileNames": ["hermes-vm/sandbox-image/**", ".github/workflows/hermes-security-reviewer-image.yml"],
+                                    "minimumReleaseAge": "7 days", "minimumReleaseAgeBehaviour": "timestamp-required"},
+                                   {"matchFileNames": ["homelab/health/mcp/**", "hermes-vm/sandbox-image/**"],
+                                    "matchUpdateTypes": ["lockFileMaintenance"],
+                                    "minimumReleaseAgeBehaviour": "timestamp-optional"}]}
+        self.assertEqual(crs.analyse_dockerfiles(config, source), [])
+        for mutation in ({"matchUpdateTypes": ["minor"]},
+                         {"matchUpdateTypes": ["lockFileMaintenance", "minor"]},
+                         {"minimumReleaseAge": "1 day"}, {"enabled": False},
+                         {"matchDatasources": ["docker"]}):
+            broken = copy.deepcopy(config)
+            broken["packageRules"][1].update(mutation)
+            with self.subTest(mutation=mutation):
+                self.assertTrue(crs.analyse_dockerfiles(broken, source))
+        config["packageRules"].pop(0)
+        self.assertTrue(crs.analyse_dockerfiles(config, source))
+
     def test_sandbox_dockerfile_scope_and_age(self):
         path = "hermes-vm/sandbox-image/Dockerfile"
         source = [(path, "FROM nousresearch/hermes-sandbox:v0.21.6-desktop@sha256:" + "a" * 64)]
