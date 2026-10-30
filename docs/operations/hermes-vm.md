@@ -23,10 +23,17 @@ The `hal` profile also carries four agent-authored systemd timers that this repo
 
 “Update Hermes” includes **core, the bundled dashboard and external hermes-webui**.
 Use the upstream `hermes update` route for core; keep its official-install **implicit stable** default.
-This install is ahead of stable v0.22.0, so path B waits for a later stable release instead of rolling back to v0.22.0.
+An official install ahead of stable waits for a later release instead of rolling back.
 Do not set an explicit stable channel or advance core with `git pull`.
 Update external WebUI on **stable**; its **Update Now** is WebUI-only and `ignore_agent_updates: true` hides agent offers.
 There is no scheduled application updater.
+
+Read every intervening stable release note for core and WebUI before opening the window.
+Compare changed defaults, migrations, dependencies and deprecated options with this VM's saved and effective configuration.
+Escalate configuration, credential, mount or profile-behaviour changes before applying them.
+[Core v0.22.3](https://github.com/NousResearch/hermes-agent/releases/tag/v0.22.3) changed `sessions.auto_prune` from true to false by default, so a missing key changes effective behaviour.
+The October 30 maintenance explicitly retained `sessions.auto_prune: true` with 90-day retention on every existing profile.
+The October 15 record below describes the earlier enabled default.
 
 1. Prepare the window.
    1. Record both source commits and the actual install stamp.
@@ -114,8 +121,12 @@ There is no scheduled application updater.
     2. Confirm four messaging profiles connected once using profile connection logs.
     3. Require safer_web_reader and security_reviewer to remain worker-only.
     4. Check WebUI health.
-    5. Exercise one normal authenticated diagnostic chat.
-    6. Restore observer timers to their previous active/enabled states.
+    5. Exercise one normal authenticated emh WebUI diagnostic chat using the read-only health-data help tool.
+    6. Run authenticated dashboard MCP tests for Health-data and HA-MCP.
+    7. Require the health-data help tool and `ha_get_system_health` in their returned lists.
+    8. Restore observer timers to their previous active/enabled states.
+    Successful live tool execution and dashboard discovery are the completion evidence; registration lines can support them.
+    Do not change configuration or core to manufacture a registration line.
     The shared runtime record omits secondary mailbox connections.
     Existing observer failures remain outside this procedure.
 13. Verify sandbox and jobs.
@@ -1005,8 +1016,16 @@ After a core update, verify the shared gateway and explicitly restart/check dash
 **A Hermes process discovers an MCP server's tools once, when it connects, so a tool added to a server is invisible to every already-running Hermes process until that process restarts.**
 Nothing re-lists tools on a live connection, and neither the server's own restart nor a reconnect re-runs discovery, so the stale process keeps serving the tool list it captured — which is how the `how-to-use-health-data` tool added to the health MCP server on September 4, 2026 stayed missing on September 5.
 **A WebUI chat does not run in the profile gateway**, it runs in `hermes-webui`, so restarting the shared `hermes-gateway` fixes the profile's cron and messaging turns and changes nothing about the conversation in the browser.
-Restart the shared `hermes-gateway`, `hermes-webui` and `hermes-dashboard` — and prove each one by its `tools.mcp_tool` registration line, `MCP server '<name>' (HTTP): registered N tool(s): …`, which names every tool and so carries the new count: a profile gateway writes it to `~/.hermes/profiles/<profile>/logs/agent.log`, while `hermes-webui` and `hermes-dashboard` run under the base `HERMES_HOME` and write it to `~/.hermes/logs/agent.log`.
-Those two connect **lazily**, on the first turn that uses the server rather than at start — the WebUI process that served the stale list had been up since 17:56 on September 3 and registered the server at 22:46 that evening — so the line appears only after a chat in that profile touches the server, and its absence straight after a restart is not a fault.
+Restart the shared `hermes-gateway`, `hermes-webui` and `hermes-dashboard`.
+Verify the WebUI through an authenticated tool call.
+Verify the dashboard through its authenticated MCP test action, as above.
+A fresh `tools.mcp_tool` line, `MCP server '<name>' (HTTP): registered N tool(s): …`, names the discovered tools and supports that evidence.
+Connections can be lazy, so an absent line immediately after restart does not establish a failure.
+
+Log destinations follow the active profile and logging handlers, so the base `HERMES_HOME` does not identify every destination.
+On October 30 with core v0.22.5, the WebUI process held the emh profile's `logs/agent.log`; the dashboard held root, emh and hal logs.
+Shared profile logs omit PID attribution, so a line in one file alone does not prove which service wrote it.
+Use successful live actions instead of changing logging configuration or investigating an absent line after those actions pass.
 
 **Update snapshots live in `~/.hermes/backups/`**, not `~/.hermes/pre_update_backups/` — an earlier draft of this design named the second path and it does not exist.
 Retention is five snapshots, pruned after each write and floored at one, at roughly 200 MiB each.
