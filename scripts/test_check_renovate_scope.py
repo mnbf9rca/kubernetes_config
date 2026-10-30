@@ -195,11 +195,11 @@ class TestFloatingUpdateModes(unittest.TestCase):
         annotations = "".join("    %s: %r\n" % (k, v)
                               for k, v in sorted(FULL_KEEL.items()))
         for namespace, name, reference in (
-                ("health", "influxdb", "influxdb:2"),
+                ("health", "influxdb", "library/influxdb:2"),
                 ("health", "garmin-grafana", "someone/garmin:latest"),
                 ("hindsight", "hindsight", "someone/hindsight:latest"),
                 ("hindsight", "hindsight-postgres", "pgvector/pgvector:pg17"),
-                ("vps", "umami-postgres", "postgres:16-alpine"),
+                ("vps", "umami-postgres", "library/postgres:16-alpine"),
                 ("vps", "meilisearch", "getmeili/meilisearch:v1"),
                 ("kube-system", "keel", "ghcr.io/keel-hq/keel:latest")):
             with self.subTest(name=name):
@@ -461,16 +461,17 @@ class TestFloatingPullPolicy(unittest.TestCase):
     def test_named_channel_requires_always(self):
         for policy in (None, "IfNotPresent", "Never"):
             with self.subTest(policy=policy):
-                failures, _ = self.verdict("example:stable", policy)
+                failures, _ = self.verdict("library/example:stable", policy)
                 self.assertEqual(len(failures), 1)
                 self.assertIn("imagePullPolicy", failures[0])
-        self.assertEqual(self.verdict("example:stable", "Always"), ([], []))
+        self.assertEqual(self.verdict("library/example:stable", "Always"), ([], []))
 
     def test_latest_defaults_to_always_but_explicit_cache_policy_fails(self):
-        for image in ("example:latest", "example", "registry.local:5000/example"):
+        for image, kind in (("library/example:latest", "Deployment"),
+                            ("example", "Job"), ("registry.local:5000/example", "Job")):
             with self.subTest(image=image):
-                self.assertEqual(self.verdict(image), ([], []))
-        failures, _ = self.verdict("example:latest", "IfNotPresent")
+                self.assertEqual(self.verdict(image, kind=kind), ([], []))
+        failures, _ = self.verdict("library/example:latest", "IfNotPresent")
         self.assertEqual(len(failures), 1)
 
     def test_scheduled_floating_image_requires_always_without_keel(self):
@@ -481,20 +482,88 @@ class TestFloatingPullPolicy(unittest.TestCase):
                 self.assertEqual(self.verdict("python:3-alpine", "Always", kind), ([], []))
 
     def test_remote_base_policy_failure_is_only_advisory(self):
-        failures, advisories = self.verdict("example:stable", owned=False)
+        failures, advisories = self.verdict("library/example:stable", owned=False)
         self.assertEqual(failures, [])
         self.assertTrue(advisories)
 
     def test_init_container_policy_is_checked_beside_a_pinned_app(self):
-        image = "example:stable"
+        image = "library/example:stable"
         annotations = "".join("    %s: %r\n" % pair for pair in sorted(FULL_KEEL.items()))
-        doc = _pod("alpine:3.20", annotations=annotations) + (
-            "      initContainers:\n      - image: example:stable\n        name: init\n")
+        doc = _pod("library/alpine:3.20", annotations=annotations) + (
+            "      initContainers:\n      - image: library/example:stable\n        name: init\n")
         source = [("homelab/workloads/x.yaml", "homelab",
-                   frozenset({image, "alpine:3.20"}))]
+                   frozenset({image, "library/alpine:3.20"}))]
         failures, _ = crs.analyse_render("homelab", doc, _PATTERNS_HOMELAB, [], source)
         self.assertEqual(len(failures), 1)
         self.assertIn("(init)", failures[0])
+
+
+class TestKeelImageSpelling(unittest.TestCase):
+    def test_references_match_keel_writeback_under_any_policy(self):
+        annotations = "".join("    %s: %s\n" % item
+                              for item in dict(FULL_KEEL, **{"keel.sh/policy": "minor"}).items())
+        for reference, rewritten in (
+            ("postgres:16", "library/postgres:16"),
+            ("postgres", "library/postgres:latest"),
+            ("library/postgres", "library/postgres:latest"),
+            ("docker.io/library/postgres:16", "library/postgres:16"),
+            ("index.docker.io/postgres:16", "library/postgres:16"),
+            ("docker.io/louislam/uptime-kuma:2", "louislam/uptime-kuma:2"),
+            ("example/app", "example/app:latest"),
+            ("registry.local:5000/app", "registry.local:5000/app:latest"),
+            ("library/postgres:16", None),
+            ("louislam/uptime-kuma:2", None),
+            ("ghcr.io/example/app:latest", None),
+            ("lscr.io/linuxserver/app:latest", None),
+            ("registry.local:5000/app:latest", None),
+            ("localhost/app:latest", None),
+        ):
+            with self.subTest(reference=reference):
+                doc = _pod(reference, annotations=annotations, pull_policy="Always")
+                sources = [("homelab/workloads/x.yaml", "homelab", {reference})]
+                failures, advisories = crs.analyse_render(
+                    "homelab", doc, _PATTERNS_HOMELAB, [], sources)
+                if rewritten:
+                    self.assertTrue(failures, reference)
+                    self.assertIn(rewritten, " ".join(failures))
+                else:
+                    self.assertEqual(failures, [])
+                self.assertEqual(advisories, [])
+
+    def test_pinned_and_init_sidecars_cannot_skip_spelling_check(self):
+        for init in (False, True):
+            with self.subTest(init=init):
+                doc = _FIXTURE_DEPLOYMENT
+                if init:
+                    doc = doc.replace("      - args:", "      initContainers:\n      - args:")
+                sources = [("vps/workloads/x.yaml", "vps",
+                            {"lscr.io/linuxserver/freshrss:latest", "alpine:3.20"})]
+                failures, _ = crs.analyse_render("vps", doc, _PATTERNS_VPS, [], sources)
+                self.assertTrue(failures)
+                self.assertIn("library/alpine:3.20", " ".join(failures))
+                canonical = doc.replace("alpine:3.20", "library/alpine:3.20")
+                sources[0][2].remove("alpine:3.20")
+                sources[0][2].add("library/alpine:3.20")
+                self.assertEqual(crs.analyse_render(
+                    "vps", canonical, _PATTERNS_VPS, [], sources)[0], [])
+
+    def test_remote_and_keel_free_and_digest_behavior_is_preserved(self):
+        annotations = "".join("    %s: %s\n" % item for item in FULL_KEEL.items())
+        failures, advisories = crs.analyse_render(
+            "homelab", _pod("postgres:16", annotations=annotations),
+            _PATTERNS_HOMELAB, [], [])
+        self.assertEqual(failures, [])
+        self.assertIn("library/postgres:16", " ".join(advisories))
+        for kind in ("Deployment", "Job", "CronJob"):
+            sources = [("homelab/workloads/x.yaml", "homelab", {"alpine:3.20"})]
+            self.assertEqual(crs.analyse_render(
+                "homelab", _pod("alpine:3.20", kind=kind),
+                _PATTERNS_HOMELAB, [], sources)[0], [])
+        digest = "alpine:3.20@sha256:" + "a" * 64
+        doc = _FIXTURE_DEPLOYMENT.replace("alpine:3.20", digest)
+        sources = [("vps/workloads/x.yaml", "vps",
+                    {"lscr.io/linuxserver/freshrss:latest", digest})]
+        self.assertEqual(crs.analyse_render("vps", doc, _PATTERNS_VPS, [], sources)[0], [])
 
 
 class TestScopeEvaluation(unittest.TestCase):
@@ -573,10 +642,11 @@ class TestScopeEvaluation(unittest.TestCase):
     def test_two_containers_sharing_an_image_are_told_apart(self):
         # `vps/workloads/umami.yaml` really does declare postgres:16-alpine on
         # two containers, and the first draft printed two byte-identical lines.
-        failures, _adv = crs.analyse_render("vps", FIXTURE_RENDER,
+        failures, _adv = crs.analyse_render("vps", FIXTURE_RENDER.replace(
+                                                "alpine:3.20", "library/alpine:3.20"),
                                             _PATTERNS_HOMELAB, [],
                                             [("vps/workloads/f.yaml", "vps",
-                                              frozenset({"alpine:3.20"}))])
+                                              frozenset({"library/alpine:3.20"}))])
         self.assertEqual(len(failures), 1)
         self.assertIn("(quiesce)", failures[0])
 

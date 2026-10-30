@@ -37,7 +37,7 @@ spec:
     spec:
       initContainers:
         - name: postgres
-          image: postgres:18-alpine
+          image: library/postgres:18-alpine
           imagePullPolicy: Always
           restartPolicy: Always
           env:

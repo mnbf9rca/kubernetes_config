@@ -58,7 +58,7 @@ spec:
     spec:
       containers:
         - name: postgres
-          image: postgres:16-alpine
+          image: library/postgres:16-alpine
           imagePullPolicy: Always
           env:
             - { name: POSTGRES_DB, value: umami }
@@ -112,7 +112,7 @@ spec:
             timeoutSeconds: 10
             failureThreshold: 6
         - name: pg-dump-sidecar
-          image: postgres:16-alpine
+          image: library/postgres:16-alpine
           imagePullPolicy: Always
           # The script is vps/workloads/scripts/pg-dump-snapshot.sh, mounted at
           # /scripts by the configMapGenerator in this directory's
