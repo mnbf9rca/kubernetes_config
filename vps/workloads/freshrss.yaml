@@ -84,7 +84,7 @@ spec:
             - { name: data, mountPath: /var/www/FreshRSS/data }
             - { name: extensions, mountPath: /var/www/FreshRSS/extensions }
         - name: sqlite-snapshot
-          image: alpine:latest
+          image: library/alpine:latest
           imagePullPolicy: Always
           # The script is vps/workloads/scripts/sqlite-snapshot-freshrss.sh,
           # mounted at /scripts by the configMapGenerator in this directory's

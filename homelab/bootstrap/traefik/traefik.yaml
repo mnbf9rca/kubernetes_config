@@ -88,7 +88,7 @@ spec:
       terminationGracePeriodSeconds: 30
       containers:
         - name: traefik
-          image: traefik:v3
+          image: library/traefik:v3
           imagePullPolicy: Always
           args:
             - --global.checkNewVersion=false

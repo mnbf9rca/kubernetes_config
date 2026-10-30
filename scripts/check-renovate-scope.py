@@ -186,6 +186,27 @@ def image_repo(reference):
     return (prefix + "/" + last) if prefix else last
 
 
+def keel_image_reference(reference):
+    """Keel writeback at bc640168: util/image/reference.go splitHostname and
+    provider/kubernetes/updates.go use Docker Hub's remote name plus a tag.
+    A digest-pinned sidecar in a Keel workload is not compared: neither
+    render contains one, but Keel would strip its digest on the next update.
+    """
+    if "@" in reference:
+        return reference
+    last = reference.rsplit("/", 1)[-1]
+    repository, tag = (reference.rsplit(":", 1) if ":" in last
+                       else (reference, "latest"))
+    first, slash, remote = repository.partition("/")
+    if slash and ("." in first or ":" in first or first == "localhost"):
+        host = "index.docker.io" if first == "docker.io" else first
+    else:
+        host, remote = "index.docker.io", repository
+    if host == "index.docker.io":
+        repository = remote if "/" in remote else "library/" + remote
+    return repository + ":" + tag
+
+
 def classify_container(reference, annotations, workload_floats=None):
     """Return (mode, why) for ONE container. `why` is '' when the mode is legal.
 
@@ -602,6 +623,17 @@ def analyse_render(cluster, text, patterns, ignore_paths, source_files):
             # unwatched VPS container.
             owners = [rel for rel, owner_cluster, images in source_files
                       if owner_cluster == cluster and reference in images]
+
+            if "keel.sh/policy" in annotations:
+                rewritten = keel_image_reference(reference)
+                if rewritten != reference:
+                    message = ("%s: Keel rewrites this spelling to %s; use that "
+                               "reference to avoid an extra rollout on apply."
+                               % (where, rewritten))
+                    if owners:
+                        failures.append(message)
+                    else:
+                        advisories.append(message + " Remote base; advisory.")
 
             if mode in (MODE_FROZEN, MODE_INCOMPLETE_KEEL):
                 if owners:

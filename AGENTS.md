@@ -203,6 +203,7 @@ The rules that must not be broken:
 ## File Conventions
 
 - Every floating container, init containers included, uses effective `imagePullPolicy: Always`; non-`latest` tags need it explicitly, including Jobs and CronJobs without keel.
+- On a keel-annotated workload, spell every image exactly as keel writes it back: `library/<name>:<tag>` for a Docker Hub official image, no `docker.io/` prefix, and always a tag. Mechanism: [homelab operational gotchas](docs/operations/homelab.md#operational-gotchas).
 - Each service is **one YAML file** under `homelab/workloads/` (or `vps/workloads/`) containing its Deployment, Service, Ingress and PVCs separated by `---`.
 - Every new browser-facing service on either cluster gets a Homepage card in the same change, with a group, name, URL and icon; removing a service removes its card. Use its public `*.cynexia.net` or `*.cynexia.com` name when one exists, otherwise its reserved IP. Never use a `lan.cynexia.net` name in a card because Tailscale clients do not resolve it.
 - **Every resource declares its own `namespace:` explicitly.**

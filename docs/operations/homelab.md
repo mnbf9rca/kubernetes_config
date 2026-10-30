@@ -34,8 +34,8 @@ Update these three bundles during the Kubernetes step of `/update-estate`.
 
 ### keel
 
-The manifests select `ghcr.io/keel-hq/keel:latest` for self-updates and `traefik:v3` for Traefik.
-Keel can rewrite `traefik:v3` as `library/traefik:v3`; a later apply restores the equivalent name and rolls Traefik, so this diff alone does not prove missing deployed branch content.
+The manifests select `ghcr.io/keel-hq/keel:latest` for self-updates and `library/traefik:v3` for Traefik.
+Use Keel’s writeback spelling to prevent an apply from rolling an unchanged image; see [Operational gotchas](#operational-gotchas).
 Both controllers carry the full keel annotation set: `force`, `match-tag: "true"`, `poll`, and `@every 6h`.
 Every container moved to a floating image has `imagePullPolicy: Always`.
 Jobs and CronJobs pull their floating tags at each run without keel annotations.
@@ -700,6 +700,9 @@ The old microk8s cluster was **decommissioned 2026-07-26** — no overlap concer
 ## Operational gotchas
 
 Symptom-first; the rules these imply for *writing* manifests are in `AGENTS.md`.
+
+**Keel and apply alternate equivalent image spellings and restart a workload.**
+Keel 0.22.4 ([source bc640168](https://github.com/keel-hq/keel/blob/bc640168f020ab1dc89842938d1883886242a40b/provider/kubernetes/updates.go)) writes Docker Hub images without a registry host, adds `library/` for official images, and supplies `:latest` when a tag is absent; every accepted update policy shares this path, including init-container updates. A later apply of a different spelling changes the pod template again, although both names resolve to the same repository. InfluxDB’s retained history shows Keel writing `library/influxdb:2` on October 21 and 28, 2026, and apply restoring `influxdb:2` on October 21; Traefik, netdisco and VPS database/snapshot containers showed the same pattern. Match the writeback form in git, including pinned sidecars: `library/<name>:<tag>` for official images, no `docker.io/` prefix, and an explicit tag. `check-renovate-scope` compares every non-digest image in a keel-annotated workload before its update-mode branches; repo-owned mismatches fail, while remote-base mismatches advise.
 
 **An NFS PV stays `Released` and the replacement PVC stays `Pending`.**
 NFS PVs use reclaim policy `Retain` and keep their `claimRef` after the PVC is deleted, so they won't auto-bind:
