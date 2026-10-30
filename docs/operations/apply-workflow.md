@@ -304,8 +304,10 @@ Exit 1 means a finding; exit 2 means the check could not run.
 **Floating controllers need all four keel annotation names.**
 An incomplete set fails on any tag; an entirely pinned workload with keel annotations fails as frozen.
 A floating tag without keel fails on Deployments, DaemonSets, StatefulSets, ReplicaSets and bare Pods.
-Jobs and CronJobs may float without keel, regardless of their namespace or workload name.
-The guard checks annotation names, not their values, and does not check `imagePullPolicy`.
+Jobs and CronJobs may float without keel, regardless of their namespace or workload name, with effective `imagePullPolicy: Always`.
+The guard checks this policy for every repo-owned floating container, init containers included: an omitted policy defaults to `Always` for `latest` or an untagged image, and `IfNotPresent` otherwise.
+An explicit `IfNotPresent` on `latest` fails too; immutable pins and remote-base advisories retain their existing treatment.
+The guard checks annotation names, not their values.
 
 Renovate disables updates for the selected floating channels with a Kubernetes-only `matchCurrentValue` rule, preserving PostgreSQL major streams.
 Digest pinning is off for `homelab/**/*.yaml` and `vps/**/*.yaml`, with an override for `alpine/k8s`.

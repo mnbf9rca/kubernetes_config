@@ -202,6 +202,7 @@ The rules that must not be broken:
 
 ## File Conventions
 
+- Every floating container, init containers included, uses effective `imagePullPolicy: Always`; non-`latest` tags need it explicitly, including Jobs and CronJobs without keel.
 - Each service is **one YAML file** under `homelab/workloads/` (or `vps/workloads/`) containing its Deployment, Service, Ingress and PVCs separated by `---`.
 - Every new browser-facing service on either cluster gets a Homepage card in the same change, with a group, name, URL and icon; removing a service removes its card. Use its public `*.cynexia.net` or `*.cynexia.com` name when one exists, otherwise its reserved IP. Never use a `lan.cynexia.net` name in a card because Tailscale clients do not resolve it.
 - **Every resource declares its own `namespace:` explicitly.**
@@ -398,9 +399,10 @@ The rules that must not be broken:
   A pinned image must be named by a repo file **in the same cluster's tree** inside `kubernetes.managerFilePatterns` and outside `ignorePaths`.
   A `packageRule` alone does **not** widen scope.
   A pinned sidecar beside a floating image is checked for Renovate scope, because keel annotations belong to the workload.
-  A floating tag with no keel is unmanaged and fails — **except** on a `CronJob` or `Job`, where every run starts a fresh pod that re-pulls the tag, which is why `jottacloud-backup` is legal on `:latest` with no annotations and needs no written exemption.
+  A floating tag with no keel is unmanaged and fails — **except** on a `CronJob` or `Job`, where every run starts a fresh pod that re-pulls the tag with effective `imagePullPolicy: Always`, which is why `jottacloud-backup` is legal on `:latest` with no annotations and needs no written exemption.
   Images from remote bases are advisory.
-  The guard checks annotation names, not their values, and does not check `imagePullPolicy` or package-rule enablement.
+  The guard checks annotation names, not their values, and requires effective `imagePullPolicy: Always` for every repo-owned floating container, including Jobs, CronJobs and init containers.
+  It does not evaluate package-rule enablement.
 - For new `hostPath`/`hostNetwork` workloads: elevate their namespace to PSA `privileged` in the cluster's `bootstrap/namespaces.yaml`.
   The cluster-wide enforce level is `baseline`.
 - A new secret placeholder takes the four edits listed under **Apply Workflow** above; use the `VPS_*` lists in the `Makefile` for VPS vars.

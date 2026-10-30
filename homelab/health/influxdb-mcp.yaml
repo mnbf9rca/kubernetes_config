@@ -45,16 +45,15 @@
 #      (docs/operations/uptime-kuma.md).
 #
 # IN-CLUSTER EXPOSURE — unchanged in kind from the 2026-08 sidecar era. flannel
-# does NOT enforce NetworkPolicy, and upstream calls Express `app.listen(port)`
-# with no bind host (no --bind/--host flag exists; checked src/index.js), so the
-# server listens on 0.0.0.0 and was already reachable on pod-IP:3000 from any
-# pod even while it was a sidecar. The Service below therefore restores
-# cluster-DNS discoverability of something that was reachable anyway. Any
+# does NOT enforce NetworkPolicy. Version 0.4.0 defaults to loopback; the
+# explicit MCP_HTTP_HOST below restores 0.2.0's all-interface listener, already
+# reachable on pod-IP:3000 from any pod even while it was a sidecar. The Host
+# allowlist rejects other hostnames but is not authentication: any pod can
+# send the allowed Host header. The Service restores cluster-DNS discovery. Any
 # in-cluster pod can query InfluxDB READ-ONLY through it (the token has no
 # write scope; a write probe 403s, server-log-verified 2026-07-26). If flannel
 # is ever swapped for a NetworkPolicy-enforcing CNI (for example Cilium),
-# reinstate a NetworkPolicy scoped to this pod; the queued upstream bind-flag
-# patch remains the real fix.
+# reinstate a NetworkPolicy scoped to this pod.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -77,9 +76,10 @@ metadata:
   # A PINNED TAG IS NOT A ROLLBACK TARGET HERE. check-renovate-scope reads a
   # pinned reference under a complete keel annotation set as the frozen state
   # and hard-fails apply-homelab, so pointing this at sha-<n> means stripping
-  # these four annotations in the same emergency edit. The rollback is: revert
-  # the build input in a pull request, let the merge promote the image, keel
-  # delivers it.
+  # these four annotations in the same emergency edit. Capture the serving
+  # digest before deployment; an Always pull refreshes the cached stable tag,
+  # so reverting the pull policy alone cannot restore the old artifact.
+  # Routine image rollback reverts the build input in a PR for promotion.
   annotations:
     keel.sh/policy: force
     keel.sh/match-tag: "true"   # REQUIRED — without this keel silently downgrades to :latest
@@ -95,8 +95,13 @@ spec:
       containers:
         - name: mcp
           image: ghcr.io/mnbf9rca/influxdb-mcp-server:stable   # built from homelab/health/mcp/ by .github/workflows/influxdb-mcp-image.yml, promoted to this tag on merge; keel follows it
+          imagePullPolicy: Always
           args: [--http, "3000"]
           env:
+            - { name: MCP_HTTP_HOST, value: "0.0.0.0" }
+            # Cloudflare Access authenticates internet clients at the tunnel edge.
+            - { name: MCP_HTTP_ALLOW_UNAUTHENTICATED, value: "true" }
+            - { name: MCP_ALLOWED_HOSTS, value: "mcp.cynexia.com" }
             - { name: INFLUXDB_URL, value: "http://influxdb.health.svc.cluster.local:8086" }
             - name: INFLUXDB_TOKEN            # READ-ONLY token (no write scope). The server's write-data/
               valueFrom:                      # create-bucket/create-org TOOLS exist, but InfluxDB rejects

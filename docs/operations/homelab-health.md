@@ -144,10 +144,13 @@ The old gate was committed here and failed closed (no Pomerium → 502).
 The new gate is Access dashboard/API state tracked nowhere in this repo: delete or disable the app and cloudflared serves the authless origin raw to the internet, silently — and a rebuild from this repo (`make apply-homelab` + `make route-homelab-dns`) republishes the hostname with no guarantee the app still exists.
 After any rollback, rebuild or account-side change, `curl -s -o /dev/null -D - https://mcp.cynexia.com/mcp` must return 401 before the hostname is trusted; the `Data MCP` uptime-kuma monitor is pinned to exactly `["401"]` so a naked origin alarms ([uptime-kuma.md](uptime-kuma.md)).
 
-In-cluster exposure is unchanged in kind from the 2026-08 sidecar era: flannel does not enforce NetworkPolicy, and `ghcr.io/mnbf9rca/influxdb-mcp-server` (built here from source for **`linux/amd64` only** — there is no official image, and the workflow's single `platforms: linux/amd64` publishes a single-platform manifest, so an arm64 node would fail to pull it) binds `0.0.0.0` with no `--bind` flag, so pod-IP:3000 was reachable from any pod even as a sidecar; the restored Service only re-adds DNS discoverability.
+In-cluster exposure is unchanged in kind from the 2026-08 sidecar era: flannel does not enforce NetworkPolicy, and pod-IP:3000 was already reachable from any pod with the 0.2.0 listener.
+The image is built for **`linux/amd64` only**; an arm64 node would fail to pull it.
+Version 0.4.0 defaults to loopback, so the Deployment explicitly sets `MCP_HTTP_HOST=0.0.0.0` and `MCP_HTTP_ALLOW_UNAUTHENTICATED=true` for the existing Cloudflare Access boundary.
+`MCP_ALLOWED_HOSTS=mcp.cynexia.com` enables Host-header validation before body parsing; an in-cluster pod can spoof that header, so it is not authentication.
 Any in-cluster pod can query InfluxDB read-only through it.
 Documented in `influxdb-mcp.yaml`.
-Queued: a bind-flag patch, and reinstating a NetworkPolicy if the CNI is ever swapped to Cilium.
+Reinstate a NetworkPolicy if the CNI is ever swapped to Cilium.
 
 **The `how-to-use-health-data` tool is what reveals the InfluxDB org.**
 `query-data` requires an `org` parameter, and no upstream *tool* names it: bucket and org discovery are exposed only as MCP **resources**, which agent frameworks — Hermes included — generally never surface to the model.
@@ -159,14 +162,15 @@ Server-side improvements (an org default, a list-buckets tool, MCP instructions)
 
 ### Where the image comes from, and the guidance tool
 
-The Deployment runs `ghcr.io/mnbf9rca/influxdb-mcp-server:stable`, built from `homelab/health/mcp/` by `.github/workflows/influxdb-mcp-image.yml` — the only workflow in this repository.
+The Deployment runs `ghcr.io/mnbf9rca/influxdb-mcp-server:stable`, built from `homelab/health/mcp/` by `.github/workflows/influxdb-mcp-image.yml`.
 
 There is **no fork**.
-Upstream `idoru/influxdb-mcp-server` 0.2.0 runs its source directly and exports nothing, so there is no module to import, subclass or wrap.
-A Node `--import` hook (`hook.mjs`) runs before the package does and patches `McpServer.prototype.connect` to register one extra zero-argument tool, `how-to-use-health-data`, then calls through.
-The upstream package is unmodified and installed by `npm ci` from a committed lockfile: the exact `0.2.0` pin fixes one package, and the lockfile is what fixes `@modelcontextprotocol/sdk`, which upstream declares by a caret range and which the hook patches.
+Upstream `idoru/influxdb-mcp-server` 0.4.0 runs its source directly; the package's executable starts the server.
+A Node `--import` hook (`hook.mjs`) runs before the package does and patches `McpServer.prototype.connect` to register `how-to-use-health-data` and `flag-suspect-withings-group`, then calls through.
+The upstream package is unmodified and installed by `npm ci` from a committed lockfile: the exact `0.4.0` pin fixes one package, and the lockfile fixes its dependencies, including the SDK the hook patches.
 
-Nothing in this repository can run a JavaScript test, so the build is the hook's only check: the pull-request job builds the image, runs it over stdio and asserts the tool is in its `tools/list` before it pushes and signs it as `sha-<head sha>`.
+The pull-request job builds the image, runs it over stdio, asserts both tools are in `tools/list` and checks invalid group-ID rejection before it pushes and signs `sha-<head sha>`.
+This does not test the production HTTP bind, Host settings or authenticated Cloudflare path; deployment verification checks that path separately.
 
 **The guide is not in the image.**
 `homelab/health/scripts/health-data-guide.md` reaches the pod through its own `configMapGenerator` entry, mounted read-only at `/guide`, with `GUIDE_PATH=/guide/health-data-guide.md` in the container's environment.
@@ -179,8 +183,16 @@ A tool is the only surface every client sees.
 That is the same argument that explains why re-minting the read token made `influxdb://orgs` correct without closing the discovery issue behind it: `influxdb://orgs` is a resource, and most agent frameworks never surface one.
 
 **Delivery is keel's.**
-Merging a Renovate pull request against `homelab/health/mcp/` deploys nothing by itself: it renders no manifest, the pull request's own build made and signed the image, the merge promotes that digest to `stable`, and keel rolls it within six hours.
+Merging a Renovate pull request against `homelab/health/mcp/` renders no manifest: the PR builds and signs the image, the merge promotes its digest to `stable`, and keel rolls it within six hours.
+The Deployment uses `imagePullPolicy: Always`, so each replacement resolves `stable` rather than reusing the node's cached tag.
+Without that policy, successful promotions and keel rollouts can keep serving an old image; this left the MCP pod on 0.2.0 while `stable` named 0.4.0.
 There is no apply step for that change, and looking for one is the mistake this paragraph exists to prevent.
+
+Before a manifest deployment, record the serving image digest as the rollback artifact.
+An `Always` pull refreshes the cached `stable` reference, so reverting the manifest alone cannot guarantee the previous image.
+For an emergency rollback, use the captured digest with its four conflicting keel annotations removed.
+Run the normal diff/apply targets.
+Verify readiness, the public connector and Access's unauthenticated 401 before trusting the rollback.
 
 **Nothing builds outside a pull request.**
 The merge run resolves `sha-<head sha>` to a digest, verifies the signature on that digest and points `stable` at it with `crane tag` — it builds nothing and signs nothing, so what `stable` delivers is bit-for-bit what was reviewed.

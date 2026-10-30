@@ -183,7 +183,7 @@ class TestFloatingUpdateModes(unittest.TestCase):
                            frozenset({reference}))]
                 self.assertEqual(crs.analyse_render(
                     "homelab", _pod(reference, namespace=namespace, name=name,
-                                    annotations=annotations),
+                                    annotations=annotations, pull_policy="Always"),
                     _PATTERNS_HOMELAB, [], source), ([], []))
 
     def test_backup_jobs_may_float_without_keel_on_both_clusters(self):
@@ -200,7 +200,7 @@ class TestFloatingUpdateModes(unittest.TestCase):
                                frozenset({reference}))]
                     self.assertEqual(crs.analyse_render(
                         cluster, _pod(reference, namespace=namespace,
-                                      name=name, kind=kind), patterns, [], source),
+                                      name=name, kind=kind, pull_policy="Always"), patterns, [], source),
                         ([], []))
 
 
@@ -217,7 +217,7 @@ class TestTheUnmanagedFloatingArm(unittest.TestCase):
                     source = [("homelab/workloads/x.yaml", "homelab",
                                frozenset({reference}))]
                     failures, _adv = crs.analyse_render(
-                        "homelab", _pod(reference, kind=kind),
+                        "homelab", _pod(reference, kind=kind, pull_policy="Always"),
                         _PATTERNS_HOMELAB, [], source)
                     self.assertEqual(len(failures), 1)
                     self.assertIn("nothing updates it", failures[0])
@@ -283,13 +283,14 @@ _OWNED_HOMELAB = [("homelab/workloads/x.yaml", "homelab",
 
 
 def _pod(image, namespace="downloads", annotations="", name="thing",
-         kind="Deployment"):
+         kind="Deployment", pull_policy=None):
     """One minimal pod-parent document naming one image."""
     meta = "  annotations:\n" + annotations if annotations else ""
     return ("apiVersion: apps/v1\nkind: %s\nmetadata:\n%s  name: %s\n"
             "  namespace: %s\nspec:\n  template:\n    spec:\n"
-            "      containers:\n      - image: %s\n        name: app\n"
-            % (kind, meta, name, namespace, image))
+            "      containers:\n      - image: %s\n%s        name: app\n"
+            % (kind, meta, name, namespace, image,
+               "        imagePullPolicy: %s\n" % pull_policy if pull_policy else ""))
 
 
 # A two-container Deployment (floating app + pinned sidecar, the shape the
@@ -371,13 +372,13 @@ class TestTheYamlReader(unittest.TestCase):
     def test_both_containers_are_found_with_their_names(self):
         self.assertEqual(
             crs.containers_of(_FIXTURE_DEPLOYMENT),
-            [("freshrss", "lscr.io/linuxserver/freshrss:latest"),
-             ("quiesce", "alpine:3.20")])
+            [("freshrss", "lscr.io/linuxserver/freshrss:latest", "Always"),
+             ("quiesce", "alpine:3.20", None)])
 
     def test_an_env_var_name_is_not_mistaken_for_the_container_name(self):
         # `- name: TZ` sits deeper than the container's keys. Reading it would
         # label the app container `TZ`.
-        names = [name for name, _image in crs.containers_of(_FIXTURE_DEPLOYMENT)]
+        names = [name for name, _image, _policy in crs.containers_of(_FIXTURE_DEPLOYMENT)]
         self.assertNotIn("TZ", names)
 
     def test_the_workload_annotations_are_read_and_the_templates_are_not(self):
@@ -388,7 +389,7 @@ class TestTheYamlReader(unittest.TestCase):
                          FULL_KEEL)
 
     def test_a_nested_pod_is_not_attributed_to_the_deployment(self):
-        images = [image for _n, image in crs.containers_of(_FIXTURE_DEPLOYMENT)]
+        images = [image for _n, image, _policy in crs.containers_of(_FIXTURE_DEPLOYMENT)]
         self.assertNotIn("busybox", images)
 
     def test_the_nested_pod_lives_in_a_configmap_and_is_never_judged(self):
@@ -404,6 +405,72 @@ class TestTheYamlReader(unittest.TestCase):
     def test_has_content_ignores_blanks_and_comments(self):
         self.assertFalse(crs.has_content("\n  # just a comment\n\n"))
         self.assertTrue(crs.has_content("\nkind: Pod\n"))
+
+    def test_policy_stays_with_its_container_in_both_key_orders(self):
+        text = """containers:
+- name: first
+  env:
+  - name: imagePullPolicy
+    value: Always
+  image: example:stable
+- imagePullPolicy: Always
+  image: example:release
+  name: second
+- image: example:main
+  name: third
+"""
+        self.assertEqual(crs.containers_of(text), [
+            ("first", "example:stable", None),
+            ("second", "example:release", "Always"),
+            ("third", "example:main", None)])
+
+
+class TestFloatingPullPolicy(unittest.TestCase):
+    def verdict(self, image, policy=None, kind="Deployment", owned=True):
+        annotations = "" if kind in crs.RE_PULLS else "".join(
+            "    %s: %r\n" % (key, value) for key, value in sorted(FULL_KEEL.items()))
+        source = [("homelab/workloads/x.yaml", "homelab", frozenset({image}))] if owned else []
+        return crs.analyse_render(
+            "homelab", _pod(image, annotations=annotations, kind=kind,
+                            pull_policy=policy), _PATTERNS_HOMELAB, [], source)
+
+    def test_named_channel_requires_always(self):
+        for policy in (None, "IfNotPresent", "Never"):
+            with self.subTest(policy=policy):
+                failures, _ = self.verdict("example:stable", policy)
+                self.assertEqual(len(failures), 1)
+                self.assertIn("imagePullPolicy", failures[0])
+        self.assertEqual(self.verdict("example:stable", "Always"), ([], []))
+
+    def test_latest_defaults_to_always_but_explicit_cache_policy_fails(self):
+        for image in ("example:latest", "example", "registry.local:5000/example"):
+            with self.subTest(image=image):
+                self.assertEqual(self.verdict(image), ([], []))
+        failures, _ = self.verdict("example:latest", "IfNotPresent")
+        self.assertEqual(len(failures), 1)
+
+    def test_scheduled_floating_image_requires_always_without_keel(self):
+        for kind in ("Job", "CronJob"):
+            with self.subTest(kind=kind):
+                failures, _ = self.verdict("python:3-alpine", kind=kind)
+                self.assertEqual(len(failures), 1)
+                self.assertEqual(self.verdict("python:3-alpine", "Always", kind), ([], []))
+
+    def test_remote_base_policy_failure_is_only_advisory(self):
+        failures, advisories = self.verdict("example:stable", owned=False)
+        self.assertEqual(failures, [])
+        self.assertTrue(advisories)
+
+    def test_init_container_policy_is_checked_beside_a_pinned_app(self):
+        image = "example:stable"
+        annotations = "".join("    %s: %r\n" % pair for pair in sorted(FULL_KEEL.items()))
+        doc = _pod("alpine:3.20", annotations=annotations) + (
+            "      initContainers:\n      - image: example:stable\n        name: init\n")
+        source = [("homelab/workloads/x.yaml", "homelab",
+                   frozenset({image, "alpine:3.20"}))]
+        failures, _ = crs.analyse_render("homelab", doc, _PATTERNS_HOMELAB, [], source)
+        self.assertEqual(len(failures), 1)
+        self.assertIn("(init)", failures[0])
 
 
 class TestScopeEvaluation(unittest.TestCase):
