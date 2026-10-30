@@ -15,6 +15,10 @@
   "recreateWhen": "always",
   "pinDigests": true,
   "minimumReleaseAge": "3 days",
+  "vulnerabilityAlerts": {
+    "enabled": true,
+    "minimumReleaseAge": null
+  },
   "rebaseWhen": "behind-base-branch",
   "kubernetes": {
     "managerFilePatterns": [
@@ -36,7 +40,10 @@
   "npm": {
     "managerFilePatterns": [
       "/^homelab/health/mcp/package\\.json$/"
-    ]
+    ],
+    "lockFileMaintenance": {
+      "enabled": true
+    }
   },
   "github-actions": {
     "managerFilePatterns": [
@@ -93,7 +100,11 @@
       "automerge": true,
       "automergeType": "pr",
       "automergeStrategy": "squash",
-      "description": "MCP build inputs automerge after the image build, signature checks and three-day stability wait; the merge promotes the reviewed digest to stable, which Keel deploys."
+      "lockFileMaintenance": {
+        "enabled": true,
+        "schedule": ["at any time"]
+      },
+      "description": "MCP build inputs automerge after image checks and the three-day routine stability wait; advisory PRs have no wait. Daily lock maintenance refreshes transitive packages; its missing timestamp must not leave the check pending."
     },
     {
       "matchFileNames": [
@@ -107,7 +118,24 @@
       "automergeType": "pr",
       "automergeStrategy": "squash",
       "platformAutomerge": false,
-      "description": "Reviewer image inputs wait seven days; uv resolves transitive constraints and enforces the same cooldown when refreshing the hashed lock. Automerge remains off until required checks are installed."
+      "lockFileMaintenance": {
+        "enabled": true,
+        "schedule": ["at any time"]
+      },
+      "description": "Reviewer routine inputs wait seven days; daily lock maintenance relies on uv's seven-day exclude-newer floor instead of a release timestamp. Advisory PRs bypass Renovate's wait, but uv still enforces its floor. Enable automerge only after sandbox-changes and sandbox-build are required and the operator accepts the test assessment; keep it off until both conditions hold."
+    },
+    {
+      "matchFileNames": ["homelab/health/mcp/**", "hermes-vm/sandbox-image/**"],
+      "matchUpdateTypes": ["lockFileMaintenance"],
+      "minimumReleaseAgeBehaviour": "timestamp-optional",
+      "description": "Lock maintenance has no release timestamp. Keep the routine cooldown passed to npm or enforced by uv, but do not leave Renovate's stability check pending forever."
+    },
+    {
+      "matchDatasources": ["python-version"],
+      "enabled": false,
+      "groupName": null,
+      "automerge": false,
+      "description": "Python interpreter minor changes are breaking major upgrades. Disable interpreter updates across managers: requires-python uses PEP 440 ranges, and Renovate cannot reclassify their minor component as major without losing range support. Ordinary PyPI packages remain enabled."
     }
   ],
   "customManagers": [
