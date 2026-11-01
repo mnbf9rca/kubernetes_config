@@ -196,8 +196,9 @@ The execution database records start, completion and result; a scheduler `delive
 Successful no-agent runs discard stderr, so stderr alone is not a durable diagnostic surface.
 A recovered log with unreadable timing is currently omitted from email and reported only in stdout.
 
-The `hal-daily-check` push monitor uses a 24-hour interval and one two-hour retry.
-A missing daily beat therefore alarms about 26 hours after the last accepted beat, near 11:00 London time on an ordinary day.
+The `hal-daily-check` push monitor uses a 26-hour interval and zero retries.
+A `send-failed` push makes it DOWN at once.
+With no push, Kuma waits for its next scheduled check, one interval after the last beat or the last Kuma restart, whichever is later.
 It monitors morning-mail acceptance, including an email that says the check could not finish; it does not monitor later Hal mail.
 The token reference is `op://hermes/hal-daily-check/kuma-push-token`; the profile mapping names `HAL_DAILY_CHECK_PUSH_TOKEN`.
 The [live monitor table](uptime-kuma.md#monitor-list) and [failure triage](monitoring.md#layers-3-and-4-uptime-kuma) describe its place in estate monitoring.
@@ -229,10 +230,23 @@ python3 hermes-vm/scripts/hal-daily-check/hal_daily_check.py --fixture <snapshot
 For an authorized trial email, run this command on the VM as `hermes`:
 
 ```sh
-HERMES_HOME=/home/hermes/.hermes/profiles/hal /home/hermes/.hermes/hermes-agent/venv/bin/python /home/hermes/.hermes/profiles/hal/scripts/hal-daily-check-morning.py --trial
+HERMES_HOME=/home/hermes/.hermes/profiles/hal /usr/bin/python3 - <<'PYTHON'
+import os
+from pathlib import Path
+import subprocess
+import sys
+
+root = Path('/home/hermes/.hermes/hermes-agent')
+sys.path.insert(0, str(root))
+from hermes_cli._launchers import runtime_command
+code = "runpy.run_path('/home/hermes/.hermes/profiles/hal/scripts/hal-daily-check-morning.py', run_name='__main__')"
+command = runtime_command(root, args=['--trial'], code=code, home=os.environ['HERMES_HOME'])
+raise SystemExit(subprocess.run(command, env=dict(os.environ, HERMES_DISABLE_LAZY_INSTALLS='1')).returncode)
+PYTHON
 ```
 
-The interpreter path is Hermes's existing runtime entry, not a new virtual environment or pinned store generation.
+The upstream launcher selects and leases the installed PM runtime without pinning a store generation.
+The legacy `/home/hermes/.hermes/hermes-agent/venv/bin/python` can still point to the bootstrap interpreter and lack current dependencies.
 Trial collects real HA reads and sends once with exactly one `[trial] ` subject prefix.
 It uses the runner-only credential references and reads saved cutoffs and advice, but writes no state, creates no cards and pushes no heartbeat.
 It takes no production lock, so it does not contend with the scheduled morning runner.

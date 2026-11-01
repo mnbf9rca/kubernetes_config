@@ -134,6 +134,8 @@ The October 15 record below describes the earlier enabled default.
     6. Run authenticated dashboard MCP tests for Health-data and HA-MCP.
     7. Require the health-data help tool and `ha_get_system_health` in their returned lists.
     8. Restore observer timers to their previous active/enabled states.
+    9. After startup finishes, check `/home/hermes/.hermes/logs/errors.log` and each `/home/hermes/.hermes/profiles/<profile>/logs/errors.log` for new `Failed to load plugin` entries since the restart.
+    Resolve any plugin-load failure before accepting the update.
     Successful live tool execution and dashboard discovery are the completion evidence; registration lines can support them.
     Do not change configuration or core to manufacture a registration line.
     The shared runtime record omits secondary mailbox connections.
@@ -285,6 +287,11 @@ The shared gateway runs the default profile’s daily alive check and the weekly
 
 The **dashboard** is an administration panel for the default profile: configuration, credentials, sessions, logs and cron.
 It is reached at `https://hermes.cynexia.com`, and it starts a mail MCP server of its own.
+
+For secondary email profiles such as `hal` and `emh`, the dashboard can keep `fatal` after the receiver reconnects.
+The email adapter records the failure but does not publish `connected` after recovery, so this flag shows the last error rather than the current receiver state.
+A later `IMAP reconnect test passed` line in `/home/hermes/.hermes/profiles/<profile>/logs/gateway.log` confirms mailbox reconnection; the subsequent `email reconnected` line confirms the platform has reconnected.
+The known recurring IMAP `UNEXPECTED_MESSAGE` error usually recovers in about a second and needs no action.
 
 The **WebUI is a second runtime, not a front end for a gateway.**
 This is the piece that surprises people.

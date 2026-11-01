@@ -8,7 +8,7 @@ from pathlib import Path
 from gateway.config import Platform, load_gateway_config
 from hermes_constants import get_hermes_home
 from plugins.platforms.email import adapter as native
-from tools.send_message_targets import _PLATFORM_PARSERS
+from gateway.platforms.send_targets import regex_stripped_parser
 
 NAME = 'hal_email_verdict'
 HAL_HOME = Path('/home/hermes/.hermes/profiles/hal')
@@ -124,8 +124,7 @@ async def standalone_send(config, chat_id, message, *, thread_id=None, media_fil
 
 def register(ctx):
     require_native()
-    parser = _PLATFORM_PARSERS.get('email')
-    if not callable(parser): raise RuntimeError('hal_verdict_native_target_parser_incompatible')
+    parser = regex_stripped_parser(native._SEND_TARGET_RE)
     ctx.register_platform(name=NAME, label='Hal verdict email', adapter_factory=VerdictAdapter,
         check_fn=lambda: True, standalone_sender_fn=standalone_send, parse_target_ref_fn=parser,
         max_message_length=0, pii_safe=True, allow_update_command=False)
