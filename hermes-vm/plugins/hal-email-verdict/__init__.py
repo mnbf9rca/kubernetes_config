@@ -125,7 +125,6 @@ async def standalone_send(config, chat_id, message, *, thread_id=None, media_fil
 def register(ctx):
     require_native()
     parser = regex_stripped_parser(native._SEND_TARGET_RE)
-    if not callable(parser): raise RuntimeError('hal_verdict_native_target_parser_incompatible')
     ctx.register_platform(name=NAME, label='Hal verdict email', adapter_factory=VerdictAdapter,
         check_fn=lambda: True, standalone_sender_fn=standalone_send, parse_target_ref_fn=parser,
         max_message_length=0, pii_safe=True, allow_update_command=False)

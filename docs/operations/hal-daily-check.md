@@ -196,7 +196,7 @@ The execution database records start, completion and result; a scheduler `delive
 Successful no-agent runs discard stderr, so stderr alone is not a durable diagnostic surface.
 A recovered log with unreadable timing is currently omitted from email and reported only in stdout.
 
-The `hal-daily-check` push monitor uses a 24-hour interval and zero retries.
+The `hal-daily-check` push monitor uses a 26-hour interval and zero retries.
 A `send-failed` push makes it DOWN at once.
 With no push, Kuma waits for its next scheduled check, one interval after the last beat or the last Kuma restart, whichever is later.
 It monitors morning-mail acceptance, including an email that says the check could not finish; it does not monitor later Hal mail.
