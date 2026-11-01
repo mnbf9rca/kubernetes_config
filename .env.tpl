@@ -163,6 +163,11 @@ HINDSIGHT_CANARY_HC_UUID=op://Homelab/hindsight/canary-healthcheck-uuid
 # VPS_RESTIC_HC_UUID still drive live checks, because a restic ping body is the
 # triage runbook and a one-line kuma message cannot carry it.
 
+# Omni service URL for the Homepage Infrastructure card. Not a secret, but it
+# names the account, so it stays out of this public repo like the Omni facts in
+# docs/operations/omni-access.md.
+OMNI_URL=op://Homelab/omni/service_url
+
 # NetAlertX OPNsense REST import (homelab only)
 NETALERTX_OPNSENSE_KEY=op://Homelab/netalertx/opnsense-key
 NETALERTX_OPNSENSE_SECRET=op://Homelab/netalertx/opnsense-secret
