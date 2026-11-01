@@ -17,10 +17,10 @@ data:
       Reading and automation: { style: row, columns: 4, icon: freshrss.svg }
       Home: { style: row, columns: 4, icon: home-assistant.svg }
       Workshop and printing: { style: row, columns: 4, icon: prusa-research.svg }
-      ADS-B: { style: row, columns: 4, icon: mdi-airplane }
+      Agents: { style: row, columns: 4, icon: hermes-agent-alt.svg }
       Network: { style: row, columns: 4, icon: mikrotik.svg }
       Infrastructure: { style: row, columns: 4, icon: proxmox.svg }
-      Agents: { style: row, columns: 4, icon: hermes-agent-alt.svg }
+      ADS-B: { style: row, columns: 4, icon: mdi-airplane }
   custom.css: |
     body {
       background: radial-gradient(circle at 12% 0%, #134e4a66, transparent 32rem),
@@ -115,23 +115,23 @@ data:
             icon: mdi-shield-check
             href: https://printguard.cynexia.net
             description: Print monitoring
-    - ADS-B:
-        - tar1090 map:
-            icon: mdi-airplane
-            href: http://192.168.17.136/tar1090/
-            description: 192.168.17.136 · live aircraft from readsb
-        - ADS-B Exchange map:
-            icon: mdi-radar
-            href: http://192.168.17.136:8504/
-            description: What this station sends to ADS-B Exchange
-        - Flightradar24 feeder:
-            icon: mdi-airplane-marker
-            href: http://192.168.17.136:8754/
-            description: fr24feed status · radar T-EGTR38
-        - Plane Finder client:
-            icon: mdi-airplane-search
-            href: http://192.168.17.136:30053/
-            description: pfclient status and setup
+        - Prusa Connect materials:
+            icon: prusa-research.svg
+            href: https://connect.prusa3d.com/materials
+            description: Filament profiles
+    - Agents:
+        - Hindsight UI:
+            icon: mdi-brain
+            href: https://hindsight-ui.cynexia.net
+            description: Agent memory
+        - Hermes:
+            icon: hermes-agent-alt.svg
+            href: https://hermes.cynexia.com
+            description: Agent dashboard
+        - Hermes WebUI:
+            icon: hermes.svg
+            href: https://hermes-app.cynexia.com
+            description: Agent chat
     - Network:
         - OPNsense:
             icon: opnsense.svg
@@ -202,6 +202,10 @@ data:
             icon: hetzner.svg
             href: https://console.hetzner.com/
             description: Cloud servers
+        - Omni:
+            icon: talos.svg
+            href: ${OMNI_URL}
+            description: Talos cluster management
         - Cloudflare Dashboard:
             icon: cloudflare.svg
             href: https://dash.cloudflare.com/
@@ -210,6 +214,10 @@ data:
             icon: aws.svg
             href: https://console.aws.amazon.com/console/home/?nc2=h_si&src=header-signin
             description: AWS services
+        - Backblaze B2:
+            icon: backblaze.svg
+            href: https://secure.backblaze.com/b2_buckets.htm
+            description: Backup buckets
         - Uptime Kuma:
             icon: uptime-kuma.svg
             href: https://uptime.cynexia.com
@@ -218,19 +226,23 @@ data:
             icon: umami.svg
             href: https://analytics.cynexia.com
             description: Analytics
-    - Agents:
-        - Hindsight UI:
-            icon: mdi-brain
-            href: https://hindsight-ui.cynexia.net
-            description: Agent memory
-        - Hermes:
-            icon: hermes-agent-alt.svg
-            href: https://hermes.cynexia.com
-            description: Agent dashboard
-        - Hermes WebUI:
-            icon: hermes.svg
-            href: https://hermes-app.cynexia.com
-            description: Agent chat
+    - ADS-B:
+        - tar1090 map:
+            icon: mdi-airplane
+            href: http://192.168.17.136/tar1090/
+            description: 192.168.17.136 · live aircraft from readsb
+        - ADS-B Exchange map:
+            icon: mdi-radar
+            href: http://192.168.17.136:8504/
+            description: What this station sends to ADS-B Exchange
+        - Flightradar24 feeder:
+            icon: mdi-airplane-marker
+            href: http://192.168.17.136:8754/
+            description: fr24feed status · radar T-EGTR38
+        - Plane Finder client:
+            icon: mdi-airplane-search
+            href: http://192.168.17.136:30053/
+            description: pfclient status and setup
 ---
 apiVersion: apps/v1
 kind: Deployment
