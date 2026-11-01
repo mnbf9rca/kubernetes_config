@@ -609,7 +609,7 @@ Ten were created on August 26, 2026: `homelab-keel-fresh` and `vps-keel-fresh`, 
 **`hal-daily-check`** runs on that VM at 09:00 Europe/London through profile-owned no-agent job `e6a2fb6484b8`.
 It follows morning-mail acceptance and saved receipts, including an email that says the check could not finish.
 Later assessment mail does not gate it; look-over notes are folded into the next morning email.
-Its 24-hour heartbeat and one two-hour retry alarm about 26 hours after the last beat, normally around 11:00 London time.
+Its zero-retry failure and silence timing follow the [Hal heartbeat contract](hal-daily-check.md#diagnostics-and-the-kuma-heartbeat).
 The message is a fixed `verdict=` value: `accepted` or `already-accepted` is up; state, send, credential, timeout or internal failures are down when a push token is available.
 The exact [verdict enum and missing-mail procedure](hal-daily-check.md#diagnostics-and-the-kuma-heartbeat) belong to the Hal runbook.
 Preview, trial and a lock-losing production run push nothing; a credential failure before token resolution also leaves silence.
