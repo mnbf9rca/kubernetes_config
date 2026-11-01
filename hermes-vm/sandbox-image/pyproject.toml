@@ -4,8 +4,8 @@ version = "0.0.0"
 requires-python = "==3.13.*"
 dependencies = [
     "bandit==1.9.4",
-    "semgrep==1.180.0",
-    "ruff==0.16.10",
+    "semgrep==1.182.1",
+    "ruff==0.17.2",
     "yamllint==1.38.0",
 ]
 
