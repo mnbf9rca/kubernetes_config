@@ -63,6 +63,7 @@ ACME_EMAIL=op://Homelab/acme/email
 # HEALTHCHECK_UUID because the image reads that name, but the value it now
 # carries is a kuma push token — see homelab/workloads/jottacloud-backup.yaml.
 JOTTACLOUD_KUMA_TOKEN=op://Homelab/jottacloud-backup/kuma-push-token
+JOTTACLOUD_ARCHIVE_KUMA_TOKEN=op://Homelab/jottacloud-archive/kuma-push-token
 HEALTHCHECK_UUID=op://Homelab/jottacloud-backup/HEALTHCHECK_UUID
 
 # health namespace — uptime-kuma push tokens
