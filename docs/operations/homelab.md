@@ -330,6 +330,7 @@ pve3 specifics that follow from that design:
 
 The jottacloud staging copy on the HDD pool is separately encrypted with rclone crypt (`DEST_REMOTE` in the workload ConfigMap).
 Its passphrase (`JOTTA_CRYPT_PASSWORD` in 1Password) is frozen by design: rclone crypt cannot rekey in place, so rotation is the re-encrypt procedure documented in the `mnbf9rca/jottacloud-backup` image README.
+The planned Archive `RCLONE_CONFIG` uses `STRING` because this repository has proven its multiline `op read` path with that type; the vault protects it.
 
 ### Recovery: VMs don't autostart after a pve3 boot
 
