@@ -48,12 +48,14 @@ Two jobs have recorded reasons to send nothing on some runs.
 Its last successful message's `apple_age_h=` and `garmin_age_h=` identify the ageing source; the pod log separates stale data from a failed query.
 `homelab-update-watch` stays silent on an unreadable dashboard or API failure because an unknown result is neither a healthy result nor a dependency-lookup failure.
 
-### The one monitor whose request this repo does not control
+### The Jottacloud request contract
 
-`jottacloud-backup` is success-only because the upstream image sends a success POST that kuma accepts, but also sends `/fail` and `/log` POSTs that kuma does not route.
+`jottacloud-backup` and `jottacloud-archive` are success-only because their shared image sends a success POST that kuma accepts, but also sends `/fail` and `/log` POSTs that kuma does not route.
 Kuma reads `status` and `msg` from the query string and discards the POST body.
 A failed backup therefore reports by silence; the unrouted requests produce one cosmetic warning on success and two on failure.
 Re-check the image's request contract after an update; a changed success path or method can stop reporting.
+Archive uses its own push token, the Synced notification bindings and backup group, a 21600-second interval, and one 7200-second retry.
+Keep the Archive monitor paused until its first bootstrap Job starts; the two monitors must not share a token.
 
 ### The self-monitor (layer 4)
 

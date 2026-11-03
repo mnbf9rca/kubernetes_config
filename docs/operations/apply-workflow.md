@@ -179,6 +179,7 @@ Use it only for secrets that genuinely can't be single-line; everything else flo
 | `diff-homelab` | Same pipeline into `kubectl diff`, inside the `op run` child (real values, printed diff masked) |
 | `apply-homelab` | Same pipeline into `kubectl apply` with real values, after the guards above |
 | `create-jotta-secret` | Imperative Secret creation for jottacloud-backup (multi-line rclone config) |
+| `create-jotta-archive-secret` | Fail-closed Secret creation for Archive; resolves and validates every field before applying the multi-line rclone config |
 | `apply-talos` | envsubst + `omnictl apply` over `homelab/talos/machineconfig-patches/*.yaml`, under `op run` with `_assert-vars` first. No patch contains a `${VAR}` today, so the envsubst pass is a no-op, but the wrapper is already in place for one that does |
 | `bootstrap-tailscale` | One-shot Tailscale extension bootstrap for a node (see below) |
 | `clear-tailscale-bootstrap` | Removes the one-shot bootstrap ConfigPatch |
@@ -196,7 +197,7 @@ Use it only for secrets that genuinely can't be single-line; everything else flo
 | `route-vps-dns` | `cloudflared tunnel route dns cynexia-vps <host>` for every hostname in `vps/bootstrap/cloudflared/cloudflared.yaml` |
 | `create-cloudflared-secret` | Imperative Secret creation for the VPS tunnel creds from `op://VPS/cloudflared/credentials-json` |
 
-Targets that read a single field imperatively — `create-jotta-secret`, `create-hermes-ssh-secret` and both `create-*-cloudflared-secret` targets — call `op read` / `op document get` directly rather than going through `op run`; they authenticate with the same service-account token from `.envrc`.
+Targets that read fields imperatively — `create-jotta-secret`, `create-jotta-archive-secret`, `create-hermes-ssh-secret` and both `create-*-cloudflared-secret` targets — call `op read` / `op document get` directly rather than going through `op run`; they authenticate with the same service-account token from `.envrc`.
 **No influx target touches 1Password at all**, and that is worth stating because one used to: `health-influx-bucket-bootstrap` runs entirely through the in-pod `influx` CLI and `jq`, so the admin token stays inside the cluster instead of landing in this shell's argv where `ps` can read it. The Garmin v1 password the deleted `health-influx-bootstrap` read with `op read` now lives in the already-done paragraph in [homelab-health.md](homelab-health.md).
 
 The VPS block is a deliberate copy-paste of the homelab block rather than a parameterised macro — reading `apply-vps` top to bottom is clearer than chasing a generated target, and two clusters is not enough to justify the abstraction.

@@ -13,6 +13,7 @@ Read [What this does not catch](#what-this-does-not-catch) before you trust a gr
 | `health-garmin-and-apple-ingest` is DOWN | Check whether the operator synced a watch before suspecting the pipeline. The last heartbeat's `apple_age_h=`/`garmin_age_h=` names which path was ageing — [the push monitors](uptime-kuma.md#push-monitors) |
 | `Withings-ingest` is DOWN | `failure=` names the stage it reached. `failure=token_persist` is the one with a clock on it: the refresh succeeded, the rotated token was lost, and the old one is running down an eight-hour grace, so fix the volume and force a run inside that window or the repair is a browser re-authorization. Every other stage is safe until the next run — [homelab-health.md](homelab-health.md#the-token-rule) |
 | `homelab-update-watch` is DOWN | In a fresh heartbeat, `verdict=` names the cause and `next=` names the command to run; a stale `run_epoch=` means the watcher itself went quiet — [The update watcher](#the-update-watcher) |
+| `jottacloud-backup` or `jottacloud-archive` is DOWN | Read the corresponding Job and pod log; the image reports failure by silence. Archive has an independent login, staging tree and B2 repository — [Jottacloud recovery](homelab.md#jottacloud-backup-and-restore) |
 | `vps-github-mirror` is DOWN | Read the verdict, default-branch counters and original mirror status — [GitHub mirror monitoring](github-mirror.md#monitoring) |
 | A sidecar shows `RESTARTS: 0` but its snapshot is missing | Expected; they log rather than exit. Read the sidecar's stderr — [Why the sidecars have no probes](#why-the-sidecars-have-no-probes) |
 | The Grafana Cloud NoData alert on the health datasources fires | The PDC agent, its tunnel or InfluxDB failed, and the alert does not say which. Start at `kubectl -n health logs deploy/pdc-agent`, then the InfluxDB pod — [homelab-health.md](homelab-health.md#grafana-cloud-over-private-datasource-connect) |
@@ -110,6 +111,7 @@ Defaults, unless a service's entry below says otherwise:
 | traefik | exec `traefik healthcheck --ping` | `hostNetwork` makes the pod IP the storage NIC, where the ping endpoint is not bound. The CLI queries loopback |
 | keel (both clusters) | `/healthz` | Liveness 15s × 6 is laxer than readiness 10s × 3 |
 | jottacloud-backup | none | Its old liveness probe could not fail. `activeDeadlineSeconds: 21600` bounds the run |
+| jottacloud-archive | none | Separate success-only push monitor; `activeDeadlineSeconds: 21600` is twice the first full-run duration rounded up to a whole hour |
 | garmin-grafana | none | It serves nothing. The `health-garmin-and-apple-ingest` push monitor is the correct instrument |
 | cloudflare-analytics | none | Scheduled work. `homelab-cloudflare-analytics` plus `activeDeadlineSeconds: 1200` is the instrument |
 | withings-ingest | none | Scheduled work. `withings-ingest` plus `activeDeadlineSeconds: 600` is the instrument |
@@ -159,8 +161,8 @@ Generated scripts also pass through envsubst, so run `make check-script-substitu
 | Field | Value | Why |
 |---|---|---|
 | `timeZone: "UTC"` | every job | Otherwise the schedule follows kube-controller-manager's local zone |
-| `startingDeadlineSeconds` | 3600 (update-watch and both clusters' keel-fresh included), except 1800 for cloudflare-analytics, 600 for withings-ingest and hindsight-canary, 300 for jottacloud, and unset for `ingest-freshness` | A missed window retries for that long, then drops. `update-watch` takes the 3600 default deliberately: a silently skipped run is the failure it exists to prevent |
-| `activeDeadlineSeconds` | restic 14400, influx-backup 3600, hindsight-pg-dump 3600, netdisco-pg-dump 3600, hermes-pull 1800, cloudflare-analytics 1200, withings-ingest 600, ingest-freshness 300, update-watch 300, keel-fresh 300 on both clusters, hindsight-canary 300, jottacloud 21600, github-mirror 21600 | With `concurrencyPolicy: Forbid`, one hung run silently blocks every later run |
+| `startingDeadlineSeconds` | 3600 (update-watch and both clusters' keel-fresh included), except 1800 for cloudflare-analytics, 600 for withings-ingest and hindsight-canary, 300 for both Jottacloud jobs, and unset for `ingest-freshness` | A missed window retries for that long, then drops. `update-watch` takes the 3600 default deliberately: a silently skipped run is the failure it exists to prevent |
+| `activeDeadlineSeconds` | restic 14400, influx-backup 3600, hindsight-pg-dump 3600, netdisco-pg-dump 3600, hermes-pull 1800, cloudflare-analytics 1200, withings-ingest 600, ingest-freshness 300, update-watch 300, keel-fresh 300 on both clusters, hindsight-canary 300, jottacloud-backup 21600, jottacloud-archive 21600, github-mirror 21600 | With `concurrencyPolicy: Forbid`, one hung run silently blocks every later run |
 | `ttlSecondsAfterFinished` | 259200 on both restic jobs, github-mirror, hermes-pull, cloudflare-analytics, withings-ingest, update-watch and both clusters' keel-fresh; 172800 on influx-backup, hindsight-pg-dump and netdisco-pg-dump; 3600 on hindsight-canary, which runs hourly; 86400 on the rest | A Friday failure on the restic jobs survives until Monday |
 | `terminationGracePeriodSeconds` | not set on any job | busybox `ash` runs as PID 1 and never forwards SIGTERM to restic, so a grace period only slows teardown. `restic unlock` at the head of the next run recovers the lock |
 
@@ -344,10 +346,19 @@ Two checks told you *which* ingest path went stale; one monitor tells you that o
 The recovery is the `msg` on the **last** heartbeat before the silence, which carries both ages — a monitor that goes DOWN with a last message of `apple_age_h=3 garmin_age_h=22` names garmin without ambiguity — plus the pod log, which carries the full per-bucket verdict and keeps "stale" apart from "query failed".
 Both ages are written on every `up` push for exactly this reason; do not trim one.
 
-`jottacloud-backup` is success-only for a different reason: its request comes from `backup.sh` inside `ghcr.io/mnbf9rca/jottacloud-backup`, an image this repo does not build.
-It is the one migrated job whose request shape this repo does not control, so the shape was measured rather than assumed (August 26, 2026): kuma routes the success POST, reading `status` and `msg` from the query string and discarding the body, and routes neither the `/fail` POST nor the every-run `/log` POST.
+`jottacloud-backup` and `jottacloud-archive` are success-only for a different reason: their requests come from `backup.sh` inside `ghcr.io/mnbf9rca/jottacloud-backup`, an image this repo does not build.
+They use the same image, whose request shape this repo does not control, so the shape was measured rather than assumed (August 26, 2026): kuma routes the success POST, reading `status` and `msg` from the query string and discarding the body, and routes neither the `/fail` POST nor the every-run `/log` POST.
 That is the contract this repo wants — **a failed backup pushes nothing and the monitor goes DOWN by silence** — at the cost of one cosmetic `WARNING: Failed to send…` line per unrouted request.
-The request contract and what to re-check after an image bump are in [uptime-kuma.md](uptime-kuma.md#the-one-monitor-whose-request-this-repo-does-not-control).
+The request contract and what to re-check after an image bump are in [uptime-kuma.md](uptime-kuma.md#the-jottacloud-request-contract).
+
+| Monitor | Source | Reason for a separate signal |
+|---|---|---|
+| `jottacloud-backup` | Synced, every six hours | Existing source and repository; an Archive success must not hide a Synced failure |
+| `jottacloud-archive` | Archive, every six hours with a three-hour offset | Independent login and repository; success-only, DOWN by silence after the 21600-second interval and one 7200-second retry |
+
+Archive's monitor was activated immediately before its manual bootstrap Job on 2026-11-03.
+The real success reached Kuma at 19:32:55Z; the first full run and B2 restore drill passed before schedule activation.
+For a future full bootstrap, keep the CronJob suspended until those checks pass; a run exceeding eight hours can cause an initial silence alert.
 
 **`hermes-pull`** backs up the off-cluster hermes VM: it SSHes in with a forced-command key, runs `hermes backup`, and pulls the zip onto the `hermes-dumps` PVC ([homelab.md](homelab.md#hermes-vm-backup-and-restore)).
 Its heartbeat reports a verdict, the pulled zip's size in KiB and a fixed `sha256_match=yes|no` — never the checksum values themselves, which are command output — and the pod log's `detail:` line carries the local-copy and prune counts as well.

@@ -16,7 +16,8 @@ Kubectl context: `cynexia-homelab`.
 | NFS CSI driver | Static PV/PVCs against the Proxmox host's ZFS pool |
 | keel | Floating image updates, including keel itself; see [keel](#keel) below |
 | restic | Nightly CronJob (03:00 UTC) → Backblaze B2 `b2:homelab-restic-d5e15f22`, 7 daily / 4 weekly / 6 monthly. Pings healthchecks.io on start and exit code — see [monitoring.md](monitoring.md#the-restic-ping-wrapper) |
-| jottacloud-backup | Own namespace; rclone Jottacloud → NFS, then kopia → B2 `cloud-files-backup`; reports to the `jottacloud-backup` uptime-kuma push monitor |
+| jottacloud-backup | Synced area → encrypted NFS → Kopia/B2 `cloud-files-backup`; `jottacloud-backup` push monitor |
+| jottacloud-archive | Archive area → separate encrypted NFS → Kopia/B2 `cloud-files-archive-backup`; verified backup and restore, with its own push monitor |
 
 Workloads run on the single node because Omni's own system patch `400-homelab-control-planes-untaint` sets `cluster.allowSchedulingOnControlPlanes: true` — the mirror of the VPS twin described in [vps.md](vps.md), labelled `omni.sidero.dev/system-patch:`, so Omni owns it and it must never be copied into a file under `homelab/talos/`.
 
@@ -56,7 +57,7 @@ Verify keel's permissions with a SelfSubjectAccessReview issued with keel's own 
 | Namespace | Purpose | Services |
 |---|---|---|
 | `downloads` | Media management | sonarr, radarr, sabnzbd, hydra2, emby |
-| `jottacloud-backup` | Cloud backup | jottacloud-backup CronJob (own namespace) |
+| `jottacloud-backup` | Cloud backup | Independent Synced and Archive CronJobs |
 | `cert-manager` | TLS | cert-manager controller |
 | `traefik` | Ingress | Traefik DaemonSet (PSA privileged — hostNetwork) |
 | `keel` | Auto-updates | keel controller |
@@ -240,13 +241,12 @@ Spoolman stores `spoolman.db` on `spoolman-data`, FilaBridge stores `filabridge.
 
 ## Storage and NFS
 
-`10.10.10.1` and `fs.cynexia.net` are the **same physical host** — one `tank` zpool, folders exported over NFS and consumed by the cluster as static PV/PVCs.
-Two hostnames for one box (storage-NIC IP vs. general LAN name), not two servers.
+`10.10.10.1` is pve3's `vmbr100` address; pve3 owns the `tank` zpool and exports its folders over NFS as static PV/PVCs.
+`fs.cynexia.net` resolves to the separate Proxmox host `fs` at `10.100.0.8`, which has no `tank` zpool.
 
 | Address | Typical paths |
 |---|---|
-| `10.10.10.1` | `/tank/video/` (emby + *arr media), `/tank/largeappdata/jottacloud` (rclone sync target) |
-| `fs.cynexia.net` | `/tank/appdata/*`, `/tank/largeappdata/*` |
+| `10.10.10.1` (pve3) | `/tank/video/` (emby + *arr media), `/tank/appdata/*`, `/tank/largeappdata/*`; Jottacloud uses the sibling `jottacloud` and `jottacloud-archive` directories |
 
 All the data that matters lives on that zpool.
 The Talos node's own SSD partitions (vmdata LVM, user volume) are for VM/system lifecycle — etcd and local-path PVCs — not for NFS-backed data.
@@ -261,6 +261,84 @@ The sqlite-quiesce sidecar pattern from earlier drafts of the plan is **not** us
 
 Until 2026-08 neither restic CronJob reported anywhere and neither had a runtime ceiling, so a hung run would have blocked every following night silently and been discovered at restore time.
 Both now ping healthchecks.io — after the 2026-08-26 migration they are the only jobs in either cluster that still do — and carry `activeDeadlineSeconds` — [monitoring.md](monitoring.md#scheduled-work).
+
+## Jottacloud backup and restore
+
+Archive completed its first full backup and B2 restore drill on 2026-11-03; its CronJob is active.
+The existing Synced job continues unchanged.
+Both jobs use `ghcr.io/mnbf9rca/jottacloud-backup:latest`, with independent data and config PVCs in `jottacloud-backup`.
+
+| Area | CronJob | Remote and local source | NFS directory on pve3 | B2 repository |
+|---|---|---|---|---|
+| Synced | `jottacloud-backup-scheduled` | `jotta:` (`Sync`), `/data/jotta` | `/tank/largeappdata/jottacloud` | `cloud-files-backup` |
+| Archive | `jottacloud-archive-scheduled` | `jotta-archive:` (`Jotta/Archive`), `/data/archive` | `/tank/largeappdata/jottacloud-archive` | `cloud-files-archive-backup` |
+
+The Archive directory is owned by 1999:1999 with mode 0750 and uses the existing `/tank/largeappdata` export.
+Its 2Ti PV capacity is a declaration, not a reservation or quota; check pool headroom before a large download.
+Synced runs at 00:45, 06:45, 12:45 and 18:45 UTC; Archive runs at 03:45, 09:45, 15:45 and 21:45 UTC.
+Normal runs start three hours after Synced; unusually long runs can overlap.
+The initial Archive source measured 156.4 GiB; a 64 MiB download sample took 12.7 seconds.
+Four times the scaled download duration plus six hours for upload and housekeeping gives a 42-hour bootstrap deadline (`activeDeadlineSeconds: 151200`).
+The manual bootstrap ran from 16:53:57Z to 19:32:58Z on 2026-11-03 (9541 seconds).
+Twice that duration rounded up to a whole hour gives the scheduled six-hour deadline (`activeDeadlineSeconds: 21600`).
+The manual bootstrap ran outside an Archive schedule tick while its CronJob was suspended; its larger bound remained in place.
+Both manual and scheduled Jobs have a one-day TTL.
+
+Archive has its own bucket-scoped B2 key, Kopia password and maintenance identity, `backup@jotta-archive-backup-client`.
+The image runs full Kopia maintenance after each snapshot, and its exclusion lock is local to the config PVC.
+Separate repositories keep concurrent maintenance from touching the other area's history.
+
+### Credentials and recovery
+
+Archive credentials live at `op://Homelab/jottacloud-archive`: `S3_ACCESS_KEY`, `S3_SECRET_KEY`, `KOPIA_PASSWORD`, `JOTTA_CRYPT_PASSWORD`, `RCLONE_CONFIG` and `kuma-push-token`.
+The two passwords are concealed; the config uses the approved STRING exception described under [encryption at rest](#encryption-at-rest).
+All Homelab vault writes use the operator's 1Password session; the service account reads and verifies values afterward.
+
+1. Generate a fresh personal login token in Jottacloud's security settings when a new Archive login is needed.
+2. Exchange it with standard authentication for a separate `jotta-archive` remote using device `Jotta` and mountpoint `Archive`.
+3. Keep the token out of argv and history.
+   Send it through hidden stdin.
+   Suppress the final config display.
+4. Measure Archive with that same temporary config before importing its current contents into the vault.
+5. Save the measurement before the import.
+   Verify the stored config through service-account reads without printing its contents.
+6. Run `make create-jotta-archive-secret` from the branch checkout after a deliberate credential change.
+
+The target reads every field before writing the Secret and refuses failed or empty reads.
+The image copies a changed seed to the config PVC; otherwise it keeps the refreshed live token on that PVC.
+A second client using a copied refresh token can invalidate the whole token family.
+Never use the vault seed as another live client after deployment, and never seed Archive with Synced's config.
+Do not restore an old OAuth config blindly after losing the PVC; establish a new independent login instead.
+On an import mismatch, stop and investigate before another exchange.
+A fresh exchange requires clearing the failed field in the operator session; delete the superseded temporary copy after success.
+
+### Restore one Archive file
+
+The drill restores ciphertext from B2, compares it with the NFS file and then decrypts it; it makes no Jottacloud call.
+
+1. Suspend the Archive CronJob for the drill.
+2. Start a bounded helper Job with the same image and only Archive B2, Kopia and crypt credentials.
+3. Mount Archive NFS read-only.
+   Keep config, cache and restored files in its temporary volume on the encrypted Talos SSD.
+4. Connect Kopia read-only under a separate helper identity.
+   Select the completed Archive snapshot.
+5. Restore one nonempty ciphertext file smaller than 2 GiB, preserving its relative path and `.bin` filename.
+6. Compare the restored ciphertext against the same NFS file with `cmp`.
+7. Decrypt through a temporary crypt remote wrapping the restored directory, with filename encryption off and the Archive password.
+8. Require successful decryption and a positive plaintext byte count.
+   Do not print file contents.
+9. Disconnect Kopia.
+   Remove temporary files.
+   Delete the helper Job.
+   Resume the CronJob after verification.
+
+Do not mount the live rclone config or heartbeat settings in the helper.
+Do not run the image's backup entrypoint.
+The 5Gi temporary volume must hold both ciphertext and plaintext.
+On 2026-11-03, the first Archive drill restored `tellmegen/ULXEDCB23163.sha256.bin` (401 ciphertext bytes) from snapshot `789e48666766b9796b8ba0966fa4ab7d`, root `k286288079283d8d9fdc770dc1ee1503b`.
+`cmp` matched the NFS ciphertext; authenticated decryption succeeded and produced 353 plaintext bytes.
+The helper used a read-only Kopia client, made no Jottacloud call, and was disconnected and deleted with its temporary data afterward.
+No prior Synced restore drill is claimed.
 
 ## Node network
 
@@ -328,8 +406,10 @@ pve3 specifics that follow from that design:
   Everything else on the VM (OS, systemd user units, tunnel config, `~/.local/bin` wrappers, the hermes-agent and hermes-webui checkouts, `~/workspace`) stays rebuild territory: rebuild the VM, reinstall hermes, then restore state with `hermes import`.
   The restore runbook, the wrapper script, and the key-rotation procedure are in [Hermes VM backup and restore](#hermes-vm-backup-and-restore); monitoring semantics are in [monitoring.md](monitoring.md#healthchecksio-checks).
 
-The jottacloud staging copy on the HDD pool is separately encrypted with rclone crypt (`DEST_REMOTE` in the workload ConfigMap).
-Its passphrase (`JOTTA_CRYPT_PASSWORD` in 1Password) is frozen by design: rclone crypt cannot rekey in place, so rotation is the re-encrypt procedure documented in the `mnbf9rca/jottacloud-backup` image README.
+Both Jottacloud staging trees on the HDD pool use rclone crypt (`DEST_REMOTE` in each workload ConfigMap).
+Synced uses `jottacrypt`; Archive uses `archivecrypt` with an independent passphrase and filename encryption off.
+Each passphrase (`JOTTA_CRYPT_PASSWORD` in its own 1Password item) is frozen by design: rclone crypt cannot rekey in place, so rotation is the re-encrypt procedure documented in the `mnbf9rca/jottacloud-backup` image README.
+The Archive `RCLONE_CONFIG` uses `STRING` because this repository has proven its multiline `op read` path with that type; the vault protects it.
 
 ### Recovery: VMs don't autostart after a pve3 boot
 

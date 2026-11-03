@@ -43,7 +43,7 @@ HOMELAB_CONTEXT ?= cynexia-homelab
 REQUIRED_VARS := B2_ACCOUNT_ID B2_ACCOUNT_KEY RESTIC_PASSWORD RESTIC_REPOSITORY \
                  RESTIC_HC_UUID HERMES_HC_UUID OPS_HC_UPDATE_UUID \
                  OPS_KUMA_KEEL_TOKEN OPS_KUMA_UPDATE_TOKEN HERMES_KUMA_TOKEN \
-                 JOTTACLOUD_KUMA_TOKEN \
+                 JOTTACLOUD_KUMA_TOKEN JOTTACLOUD_ARCHIVE_KUMA_TOKEN \
                  HEALTH_KUMA_BACKUP_TOKEN HEALTH_KUMA_CLOUDFLARE_TOKEN \
                  HEALTH_KUMA_INGEST_TOKEN HEALTH_KUMA_WITHINGS_TOKEN \
                  HEALTH_WITHINGS_CLIENT_ID HEALTH_WITHINGS_CLIENT_SECRET \
@@ -83,7 +83,7 @@ REQUIRED_VARS := B2_ACCOUNT_ID B2_ACCOUNT_KEY RESTIC_PASSWORD RESTIC_REPOSITORY 
 ENVSUBST_VAR_NAMES := B2_ACCOUNT_ID B2_ACCOUNT_KEY RESTIC_PASSWORD RESTIC_REPOSITORY \
                      RESTIC_HC_UUID HERMES_HC_UUID OPS_HC_UPDATE_UUID \
                      OPS_KUMA_KEEL_TOKEN OPS_KUMA_UPDATE_TOKEN HERMES_KUMA_TOKEN \
-                     JOTTACLOUD_KUMA_TOKEN \
+                     JOTTACLOUD_KUMA_TOKEN JOTTACLOUD_ARCHIVE_KUMA_TOKEN \
                      HEALTH_KUMA_BACKUP_TOKEN HEALTH_KUMA_CLOUDFLARE_TOKEN \
                      HEALTH_KUMA_INGEST_TOKEN HEALTH_KUMA_WITHINGS_TOKEN \
                      HEALTH_WITHINGS_CLIENT_ID HEALTH_WITHINGS_CLIENT_SECRET \
@@ -807,6 +807,31 @@ create-jotta-secret: check-context
 	  --from-literal="RCLONE_CONFIG=$$(op read 'op://Homelab/jottacloud-backup/RCLONE_CONFIG')" \
 	  --from-literal="DEST_REMOTE_PASSWORD=$$(op read 'op://Homelab/jottacloud-backup/JOTTA_CRYPT_PASSWORD')" \
 	  --dry-run=client -o yaml | kubectl apply -f -
+
+# Resolve every Archive field before writing, so a failed read preserves the
+# existing Secret and its mutable OAuth token on the config PVC.
+.PHONY: create-jotta-archive-secret
+create-jotta-archive-secret: check-context
+	@set -euo pipefail; \
+	archive_kopia_password=$$(op read 'op://Homelab/jottacloud-archive/KOPIA_PASSWORD'); \
+	archive_s3_access_key=$$(op read 'op://Homelab/jottacloud-archive/S3_ACCESS_KEY'); \
+	archive_s3_secret_key=$$(op read 'op://Homelab/jottacloud-archive/S3_SECRET_KEY'); \
+	archive_rclone_config=$$(op read 'op://Homelab/jottacloud-archive/RCLONE_CONFIG'); \
+	archive_crypt_password=$$(op read 'op://Homelab/jottacloud-archive/JOTTA_CRYPT_PASSWORD'); \
+	: "$${archive_kopia_password:?KOPIA_PASSWORD is empty}" \
+	  "$${archive_s3_access_key:?S3_ACCESS_KEY is empty}" \
+	  "$${archive_s3_secret_key:?S3_SECRET_KEY is empty}" \
+	  "$${archive_rclone_config:?RCLONE_CONFIG is empty}" \
+	  "$${archive_crypt_password:?JOTTA_CRYPT_PASSWORD is empty}"; \
+	archive_secret=$$(kubectl create secret generic jottacloud-archive-secrets \
+	  --namespace jottacloud-backup \
+	  --from-literal="KOPIA_PASSWORD=$$archive_kopia_password" \
+	  --from-literal="S3_ACCESS_KEY=$$archive_s3_access_key" \
+	  --from-literal="S3_SECRET_KEY=$$archive_s3_secret_key" \
+	  --from-literal="RCLONE_CONFIG=$$archive_rclone_config" \
+	  --from-literal="DEST_REMOTE_PASSWORD=$$archive_crypt_password" \
+	  --dry-run=client -o yaml); \
+	printf '%s\n' "$$archive_secret" | kubectl apply -f -
 
 # SSH private key for the hermes-pull CronJob (backup namespace). Multi-line,
 # so it cannot ride the envsubst pipeline. This target deliberately does NOT
