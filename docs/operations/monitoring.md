@@ -111,7 +111,7 @@ Defaults, unless a service's entry below says otherwise:
 | traefik | exec `traefik healthcheck --ping` | `hostNetwork` makes the pod IP the storage NIC, where the ping endpoint is not bound. The CLI queries loopback |
 | keel (both clusters) | `/healthz` | Liveness 15s × 6 is laxer than readiness 10s × 3 |
 | jottacloud-backup | none | Its old liveness probe could not fail. `activeDeadlineSeconds: 21600` bounds the run |
-| jottacloud-archive | none | Separate success-only push monitor; bootstrap deadline is measured before deployment, with the CronJob suspended until verified |
+| jottacloud-archive | none | Separate success-only push monitor; `activeDeadlineSeconds: 21600` is twice the first full-run duration rounded up to a whole hour |
 | garmin-grafana | none | It serves nothing. The `health-garmin-and-apple-ingest` push monitor is the correct instrument |
 | cloudflare-analytics | none | Scheduled work. `homelab-cloudflare-analytics` plus `activeDeadlineSeconds: 1200` is the instrument |
 | withings-ingest | none | Scheduled work. `withings-ingest` plus `activeDeadlineSeconds: 600` is the instrument |
@@ -162,7 +162,7 @@ Generated scripts also pass through envsubst, so run `make check-script-substitu
 |---|---|---|
 | `timeZone: "UTC"` | every job | Otherwise the schedule follows kube-controller-manager's local zone |
 | `startingDeadlineSeconds` | 3600 (update-watch and both clusters' keel-fresh included), except 1800 for cloudflare-analytics, 600 for withings-ingest and hindsight-canary, 300 for both Jottacloud jobs, and unset for `ingest-freshness` | A missed window retries for that long, then drops. `update-watch` takes the 3600 default deliberately: a silently skipped run is the failure it exists to prevent |
-| `activeDeadlineSeconds` | restic 14400, influx-backup 3600, hindsight-pg-dump 3600, netdisco-pg-dump 3600, hermes-pull 1800, cloudflare-analytics 1200, withings-ingest 600, ingest-freshness 300, update-watch 300, keel-fresh 300 on both clusters, hindsight-canary 300, jottacloud-backup 21600, jottacloud-archive 151200 during bootstrap, github-mirror 21600 | With `concurrencyPolicy: Forbid`, one hung run silently blocks every later run |
+| `activeDeadlineSeconds` | restic 14400, influx-backup 3600, hindsight-pg-dump 3600, netdisco-pg-dump 3600, hermes-pull 1800, cloudflare-analytics 1200, withings-ingest 600, ingest-freshness 300, update-watch 300, keel-fresh 300 on both clusters, hindsight-canary 300, jottacloud-backup 21600, jottacloud-archive 21600, github-mirror 21600 | With `concurrencyPolicy: Forbid`, one hung run silently blocks every later run |
 | `ttlSecondsAfterFinished` | 259200 on both restic jobs, github-mirror, hermes-pull, cloudflare-analytics, withings-ingest, update-watch and both clusters' keel-fresh; 172800 on influx-backup, hindsight-pg-dump and netdisco-pg-dump; 3600 on hindsight-canary, which runs hourly; 86400 on the rest | A Friday failure on the restic jobs survives until Monday |
 | `terminationGracePeriodSeconds` | not set on any job | busybox `ash` runs as PID 1 and never forwards SIGTERM to restic, so a grace period only slows teardown. `restic unlock` at the head of the next run recovers the lock |
 
@@ -356,9 +356,9 @@ The request contract and what to re-check after an image bump are in [uptime-kum
 | `jottacloud-backup` | Synced, every six hours | Existing source and repository; an Archive success must not hide a Synced failure |
 | `jottacloud-archive` | Archive, every six hours with a three-hour offset | Independent login and repository; success-only, DOWN by silence after the 21600-second interval and one 7200-second retry |
 
-Archive's monitor is created paused and activated immediately before its manual bootstrap Job.
-If the first full run exceeds eight hours, an initial silence alert can occur before the first success.
-The CronJob remains suspended until the first run and B2 restore drill pass.
+Archive's monitor was activated immediately before its manual bootstrap Job on 2026-11-03.
+The real success reached Kuma at 19:32:55Z; the first full run and B2 restore drill passed before schedule activation.
+For a future full bootstrap, keep the CronJob suspended until those checks pass; a run exceeding eight hours can cause an initial silence alert.
 
 **`hermes-pull`** backs up the off-cluster hermes VM: it SSHes in with a forced-command key, runs `hermes backup`, and pulls the zip onto the `hermes-dumps` PVC ([homelab.md](homelab.md#hermes-vm-backup-and-restore)).
 Its heartbeat reports a verdict, the pulled zip's size in KiB and a fixed `sha256_match=yes|no` — never the checksum values themselves, which are command output — and the pod log's `detail:` line carries the local-copy and prune counts as well.

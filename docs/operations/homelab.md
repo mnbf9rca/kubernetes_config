@@ -17,7 +17,7 @@ Kubectl context: `cynexia-homelab`.
 | keel | Floating image updates, including keel itself; see [keel](#keel) below |
 | restic | Nightly CronJob (03:00 UTC) → Backblaze B2 `b2:homelab-restic-d5e15f22`, 7 daily / 4 weekly / 6 monthly. Pings healthchecks.io on start and exit code — see [monitoring.md](monitoring.md#the-restic-ping-wrapper) |
 | jottacloud-backup | Synced area → encrypted NFS → Kopia/B2 `cloud-files-backup`; `jottacloud-backup` push monitor |
-| jottacloud-archive | Archive area → separate encrypted NFS → Kopia/B2 `cloud-files-archive-backup`; bootstrap pending, with its own push monitor |
+| jottacloud-archive | Archive area → separate encrypted NFS → Kopia/B2 `cloud-files-archive-backup`; verified backup and restore, with its own push monitor |
 
 Workloads run on the single node because Omni's own system patch `400-homelab-control-planes-untaint` sets `cluster.allowSchedulingOnControlPlanes: true` — the mirror of the VPS twin described in [vps.md](vps.md), labelled `omni.sidero.dev/system-patch:`, so Omni owns it and it must never be copied into a file under `homelab/talos/`.
 
@@ -264,7 +264,7 @@ Both now ping healthchecks.io — after the 2026-08-26 migration they are the on
 
 ## Jottacloud backup and restore
 
-The Archive rollout is pending its first full download and restore drill; its CronJob stays suspended during bootstrap.
+Archive completed its first full backup and B2 restore drill on 2026-11-03; its CronJob is active.
 The existing Synced job continues unchanged.
 Both jobs use `ghcr.io/mnbf9rca/jottacloud-backup:latest`, with independent data and config PVCs in `jottacloud-backup`.
 
@@ -279,13 +279,14 @@ Synced runs at 00:45, 06:45, 12:45 and 18:45 UTC; Archive runs at 03:45, 09:45, 
 Normal runs start three hours after Synced; unusually long runs can overlap.
 The initial Archive source measured 156.4 GiB; a 64 MiB download sample took 12.7 seconds.
 Four times the scaled download duration plus six hours for upload and housekeeping gives a 42-hour bootstrap deadline (`activeDeadlineSeconds: 151200`).
-The scheduled deadline is set from the actual first full-run duration after bootstrap.
-A manual bootstrap Job runs while the Archive CronJob is suspended; both have explicit deadlines and a one-day Job TTL.
+The manual bootstrap ran from 16:53:57Z to 19:32:58Z on 2026-11-03 (9541 seconds).
+Twice that duration rounded up to a whole hour gives the scheduled six-hour deadline (`activeDeadlineSeconds: 21600`).
+The manual bootstrap ran outside an Archive schedule tick while its CronJob was suspended; its larger bound remained in place.
+Both manual and scheduled Jobs have a one-day TTL.
 
 Archive has its own bucket-scoped B2 key, Kopia password and maintenance identity, `backup@jotta-archive-backup-client`.
 The image runs full Kopia maintenance after each snapshot, and its exclusion lock is local to the config PVC.
 Separate repositories keep concurrent maintenance from touching the other area's history.
-The builder disconnects its initialization client and deletes its local config and cache before the jobs take over.
 
 ### Credentials and recovery
 
@@ -308,7 +309,7 @@ The image copies a changed seed to the config PVC; otherwise it keeps the refres
 A second client using a copied refresh token can invalidate the whole token family.
 Never use the vault seed as another live client after deployment, and never seed Archive with Synced's config.
 Do not restore an old OAuth config blindly after losing the PVC; establish a new independent login instead.
-On an import mismatch, stop and tell the chief of staff before another exchange.
+On an import mismatch, stop and investigate before another exchange.
 A fresh exchange requires clearing the failed field in the operator session; delete the superseded temporary copy after success.
 
 ### Restore one Archive file
@@ -334,8 +335,10 @@ The drill restores ciphertext from B2, compares it with the NFS file and then de
 Do not mount the live rclone config or heartbeat settings in the helper.
 Do not run the image's backup entrypoint.
 The 5Gi temporary volume must hold both ciphertext and plaintext.
-Record the date, snapshot ID, relative ciphertext path, plaintext bytes and successful comparison/decryption here after the first drill.
-The first Archive restore drill is pending; no restore result is claimed yet.
+On 2026-11-03, the first Archive drill restored `tellmegen/ULXEDCB23163.sha256.bin` (401 ciphertext bytes) from snapshot `789e48666766b9796b8ba0966fa4ab7d`, root `k286288079283d8d9fdc770dc1ee1503b`.
+`cmp` matched the NFS ciphertext; authenticated decryption succeeded and produced 353 plaintext bytes.
+The helper used a read-only Kopia client, made no Jottacloud call, and was disconnected and deleted with its temporary data afterward.
+No prior Synced restore drill is claimed.
 
 ## Node network
 
@@ -406,7 +409,7 @@ pve3 specifics that follow from that design:
 Both Jottacloud staging trees on the HDD pool use rclone crypt (`DEST_REMOTE` in each workload ConfigMap).
 Synced uses `jottacrypt`; Archive uses `archivecrypt` with an independent passphrase and filename encryption off.
 Each passphrase (`JOTTA_CRYPT_PASSWORD` in its own 1Password item) is frozen by design: rclone crypt cannot rekey in place, so rotation is the re-encrypt procedure documented in the `mnbf9rca/jottacloud-backup` image README.
-The planned Archive `RCLONE_CONFIG` uses `STRING` because this repository has proven its multiline `op read` path with that type; the vault protects it.
+The Archive `RCLONE_CONFIG` uses `STRING` because this repository has proven its multiline `op read` path with that type; the vault protects it.
 
 ### Recovery: VMs don't autostart after a pve3 boot
 

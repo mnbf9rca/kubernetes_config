@@ -277,7 +277,7 @@ metadata:
     app: jottacloud-archive
 spec:
   schedule: "45 3,9,15,21 * * *"
-  suspend: true
+  suspend: false
   # Normal runs start three hours after Synced; unusually long runs can overlap.
   timeZone: "UTC"
   concurrencyPolicy: Forbid
@@ -286,8 +286,8 @@ spec:
   startingDeadlineSeconds: 300
   jobTemplate:
     spec:
-      # Bootstrap bound from Archive size and throughput; resize after the first run.
-      activeDeadlineSeconds: 151200
+      # Twice the 9541-second bootstrap run, rounded up to a whole hour.
+      activeDeadlineSeconds: 21600
       backoffLimit: 2
       ttlSecondsAfterFinished: 86400
       template:
