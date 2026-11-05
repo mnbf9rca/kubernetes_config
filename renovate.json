@@ -104,7 +104,7 @@
         "enabled": true,
         "schedule": ["at any time"]
       },
-      "description": "MCP build inputs automerge after image checks and the three-day routine stability wait; advisory PRs have no wait. Daily lock maintenance refreshes transitive packages; its missing timestamp must not leave the check pending."
+      "description": "MCP build inputs automerge after image checks and the three-day routine stability wait; advisory PRs have no wait. Daily lock maintenance refreshes transitive packages. Lock maintenance and GitHub Actions digest updates may lack timestamps; their exceptions prevent the stability check from staying pending forever."
     },
     {
       "matchFileNames": [
@@ -122,7 +122,7 @@
         "enabled": true,
         "schedule": ["at any time"]
       },
-      "description": "Reviewer routine inputs wait seven days; daily lock maintenance relies on uv's seven-day exclude-newer floor instead of a release timestamp. Advisory PRs bypass Renovate's wait, but uv still enforces its floor. Enable automerge only after sandbox-changes and sandbox-build are required and the operator accepts the test assessment; keep it off until both conditions hold."
+      "description": "Reviewer routine inputs wait seven days when timestamps are available; missing timestamps block updates except lock maintenance and GitHub Actions digest updates. Daily lock maintenance relies on uv's seven-day exclude-newer floor. Advisory PRs bypass Renovate's wait, but uv still enforces its floor. Automerge is enabled after the operator accepted the test assessment; sandbox-changes and sandbox-build must be required alongside the existing checks."
     },
     {
       "matchDatasources": ["docker"],
@@ -135,6 +135,12 @@
       "matchUpdateTypes": ["lockFileMaintenance"],
       "minimumReleaseAgeBehaviour": "timestamp-optional",
       "description": "Lock maintenance has no release timestamp. Keep the routine cooldown passed to npm or enforced by uv, but do not leave Renovate's stability check pending forever."
+    },
+    {
+      "matchManagers": ["github-actions"],
+      "matchUpdateTypes": ["digest"],
+      "minimumReleaseAgeBehaviour": "timestamp-optional",
+      "description": "GitHub Actions digest updates have no release timestamp. Do not leave grouped image inputs pending forever; updates with timestamps keep their three-day or seven-day stability wait."
     },
     {
       "matchDatasources": ["python-version"],
