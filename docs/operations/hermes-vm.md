@@ -1247,7 +1247,17 @@ CodeQL uses the checksum-pinned Linux x64 bundle from `github/codeql-action`, re
 
 Commands are linked into `/usr/local/bin`, because Hermes's login-shell environment resets PATH. `/etc/hermes-reviewer-tools.txt` records installed versions. Semgrep metrics and version checks are off; its two locally authored rules live under `/opt/hermes-reviewer/rules/`. Use that explicit rules file, `--metrics off --disable-version-check`, and the explicit baked Ruff/yamllint configs. Never use target-controlled configs, Semgrep registry/auto rules, autofix or target builds. Static tools provide limited checks; missing coverage belongs in the report's `Tooling gaps:` line, not an ad hoc package install.
 
-Renovate groups base/uv versions and digests, native versions/checksums, the four direct Python tools and workflow actions as `security-reviewer image inputs`; its pep621 manager regenerates `uv.lock`, and scoped lockfile maintenance refreshes transitives through the resolver. Version and digest updates require seven-day-old source timestamps; uv also enforces the cooldown during lock refreshes. A mutable `desktop` tag cannot evidence an older release; default Docker versioning follows the versioned `-desktop` suffix instead. Missing timestamps or a checksum/closure failure stop the update. The cooldown deliberately delays fixes by seven days. Image-input automerge is **off**. After the image workflow is merged, the operator-visible settings step adds `sandbox-changes` and `sandbox-build` to the existing master ruleset without removing other checks; only a subsequent verified change enables automerge. Do not add required contexts while the workflow is absent from master: with no bypass actor, that blocks other PRs.
+Renovate groups base/uv versions and digests, native versions/checksums, the four direct Python tools and workflow actions as `security-reviewer image inputs`.
+Its pep621 manager regenerates `uv.lock`, and scoped lockfile maintenance refreshes transitive dependencies through the resolver.
+Routine updates require seven-day-old source timestamps, with two exceptions: lockfile maintenance and GitHub Actions digest updates can proceed without a timestamp.
+When a timestamp is available, the seven-day wait still applies; uv also enforces its cooldown during lock refreshes.
+A mutable `desktop` tag cannot prove a release is old enough; default Docker versioning follows the versioned `-desktop` suffix instead.
+Missing timestamps on other updates, checksum failures and an inconsistent dependency lock stop the update.
+The cooldown deliberately delays fixes by seven days.
+Image-input automerge is enabled; Renovate merges after the stability check and all image checks pass.
+The operator-visible settings step adds `sandbox-changes` and `sandbox-build` to the existing master ruleset without removing other checks.
+Required checks must have a workflow on master before they are added.
+Without a bypass actor, adding them earlier blocks other PRs.
 
 The manual bootstrap and exceptional delivery procedure is below. Routine Renovate image updates use the same checksum, cooldown, non-root fixture and signed-digest promotion gates in CI; they do not require repeating the manual VM candidate gate. The profile now tracks `stable`; the existing weekly refresh pulls that configured tag and replaces only idle stale-image containers. Promotion changes the tag, not an already-running container.
 
