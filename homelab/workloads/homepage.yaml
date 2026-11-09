@@ -132,6 +132,10 @@ data:
             icon: hermes.svg
             href: https://hermes-app.cynexia.com
             description: Agent chat
+        - Hermes Webapp:
+            icon: hermes-agent-alt.svg
+            href: https://hermes-web.cynexia.com
+            description: Browser Desktop
     - Network:
         - OPNsense:
             icon: opnsense.svg
