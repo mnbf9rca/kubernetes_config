@@ -3,9 +3,11 @@ import ast
 import contextlib
 import io
 import json
+import os
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from agent.secret_scope import load_env_file
 from hermes_cli.config import _strip_managed_keys_for_save
@@ -15,6 +17,51 @@ from utils import atomic_roundtrip_yaml_save, load_yaml_file_readonly
 
 
 class ProfilePolicyTests(unittest.TestCase):
+    def test_image_selection_without_managed_image_pin(self):
+        helper = Path(__file__).with_name('hermes-profile-docker-setup.sh')
+        outer = ast.parse(helper.read_text().split("<<'PYTHON'\n", 1)[1].split('\nPYTHON', 1)[0])
+        code = next(n.value for n in ast.walk(outer) if isinstance(n, ast.Constant)
+                    and isinstance(n.value, str) and 'managed = load_yaml_file_readonly' in n.value)
+        previous = get_hermes_home_override()
+        try:
+            for yaml_image, env_image, expected in (
+                    (None, None, 'nousresearch/hermes-sandbox:desktop'),
+                    (None, 'env-image', 'env-image'),
+                    ('ghcr.io/example/reviewer:stable', 'stale-image', 'ghcr.io/example/reviewer:stable')):
+                with self.subTest(image=expected), tempfile.TemporaryDirectory() as scratch:
+                    home = Path(scratch) / 'profile'; home.mkdir()
+                    managed = Path(scratch) / 'managed'; managed.mkdir()
+                    (managed / 'config.yaml').write_text('terminal:\n  backend: docker\n  docker_run_as_host_user: true\n  cwd: /workspace\n')
+                    config = home / 'config.yaml'; env = home / '.env'
+                    terminal = {'docker_volumes': ['/approved:/approved:ro']}
+                    if yaml_image:
+                        terminal['docker_image'] = yaml_image
+                    atomic_roundtrip_yaml_save(config, {'unrelated': 'keep', 'terminal': terminal})
+                    env.write_text('UNRELATED=op://example/item/field\n' +
+                                   (f'TERMINAL_DOCKER_IMAGE={env_image}\n' if env_image else ''))
+                    env.chmod(0o640)
+                    set_hermes_home_override(home)
+                    # The helper's fixed managed path reads this fixture; scope resolution uses the same directory.
+                    def read(path):
+                        return load_yaml_file_readonly(managed / 'config.yaml' if str(path) == '/etc/hermes/config.yaml' else path)
+                    with patch.dict(os.environ, {'HERMES_MANAGED_DIR': str(managed)}), patch('utils.load_yaml_file_readonly', read):
+                        try:
+                            exec(code, {'home': str(home), 'policy_only': True})
+                        except KeyError as exc:
+                            self.fail(f'helper requires an optional managed image: {exc}')
+                        scope = build_profile_terminal_scope(home)
+                        self.assertEqual(scope['TERMINAL_DOCKER_IMAGE'], expected)
+                        self.assertEqual(scope['TERMINAL_ENV'], 'docker')
+                        self.assertEqual(scope['TERMINAL_CWD'], '/workspace')
+                        self.assertEqual(scope['TERMINAL_DOCKER_RUN_AS_HOST_USER'].lower(), 'true')
+                    saved = load_yaml_file_readonly(config)
+                    self.assertEqual(saved['unrelated'], 'keep')
+                    self.assertEqual(saved['terminal']['docker_volumes'], ['/approved:/approved:ro'])
+                    self.assertIn('UNRELATED=op://example/item/field', env.read_text())
+                    self.assertEqual(env.stat().st_mode & 0o777, 0o640)
+        finally:
+            set_hermes_home_override(previous)
+
     def test_bulk_save_keeps_terminal_in_desktop_sandbox(self):
         helper = Path(__file__).with_name('hermes-profile-docker-setup.sh')
         outer = ast.parse(helper.read_text().split("<<'PYTHON'\n", 1)[1].split('\nPYTHON', 1)[0])

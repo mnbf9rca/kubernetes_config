@@ -167,6 +167,57 @@ Use a WebUI-owned target directory only when PM polices installed contents.
 Use no hand-rolled extraction or core lock edits.
 Recheck the existing import-failed gate after every generation change.
 
+### Completion record: November 9, 2026
+
+Native `hermes update --yes --no-gateway-restart` advanced core from v0.22.5 to stable v0.23.0 at `2bd378ed1b8d6bf2192cb26e0a55ff3091e6bd19`.
+External WebUI remains stable v0.52.544 at `687d80333870c3797d6858738621fca13d1bf27a`, by operator choice.
+All six profiles use config version 52 and store schema 32.
+The selected PM runtime uses Python 3.14.9 and SQLite 3.53.1; all stores pass `quick_check`.
+The built stamp matches core, completion is clear, and both native owed-restart predicates are false.
+No local core patch, PyYAML supplement or backend migration was needed.
+
+The managed file now pins only Docker backend, host UID and `/workspace`.
+Core honours that layer; external WebUI still needs the helper's profile mirrors.
+The five ordinary profiles keep desktop, and `security_reviewer` keeps its explicit stable scanner image.
+Both runtime readers agree on every image and existing mount.
+HAL already had its read-only reviewer-report bind before this window.
+Model/delegation pins, cron contracts, secret references, pruning at 90 days and promoted skills remain intact.
+HAL's `_left_core_installed` marker still contains `homeassistant`; its plugin directory remains absent.
+
+All three Hindsight copies are 1.2.4 at `f14cc1eb5624b0374cb4d82768eb2e0b9c21ae24` after individual safe scans and accepted native dependency prompts.
+The client and embed packages remain 0.10.3 under the widened upstream bounds.
+Actual dashboard Memory panels are ready, available and configured; each profile's plugin hub is enabled.
+Existing-bank reads passed for `hermes`, `hermes-emh` and `hermes-hal`; the first is empty, which is acceptable.
+No verification memory was retained to populate it.
+The existing scheduled backend canary passed; no new backend Job was created.
+
+Webapp is enabled only at its default `127.0.0.1:9120`, with empty `public_url`.
+Its browser bundle required the native `hermes webapp --build-only` build on first enablement.
+Anonymous HTML contains no browser credential; a protected read returns 401 without it and 200 with it.
+The credential directory/file modes are 0700/0600.
+No LAN/public listener, tunnel or DNS change was made.
+Plugin auto-apply remains absent/off, Telegram topic transfer remains off, vault storage remains file, and advanced delegation was not installed.
+
+Authenticated dashboard MCP probes passed for Health-data, HA-MCP, emh mail and Foodnoms.
+Normal authenticated emh WebUI session `3dcee718a3a5` executed `how-to-use-health-data` and `list_available_accounts` successfully.
+One non-destructive approval refusal passed; no mail or HA write was requested.
+
+Reader diagnostic `t_79075aea` retained the four-capability boundary, read all nine release-note pieces and completed a valid envelope.
+Static reviewer diagnostic `t_c82a1689` used its fresh stable image, read-only inputs and writable own workspace.
+Its seven baked tools were present, with no findings or applicable tooling gaps in the narrow assessed scope.
+The final reviewer image ID was `sha256:b82ebbd0c6de0c96b81145115f6ebbf18ac45906fb3e70e809a341ab7f6f0016`.
+The existing refresh pulled both configured tags and removed no containers; default's native Docker workspace round trip passed.
+All four messaging profiles connected, and no new plugin-load error was found in any profile.
+HAL's existing fixture and native temporary-board checks passed without invoking its mail-sending trial runner.
+Kuma received the gateway-owned `verdict=ok units=3/3 webui_http=200` heartbeat at 12:51:03Z.
+
+The private stopped-state recovery archive remains under `/Users/rob/Downloads/hermes-recovery-20261109.NVJxrm/`, mode 0600 in a 0700 directory.
+Its SHA256 is `c151a16c711641a9657d987e5c2051b529498fe9d67dbaa1f3dc413cd640ff47`.
+Gzip/tar integrity and all 54 copied SQLite databases passed; disposable plaintext verification copies were removed.
+The known stable-WebUI memory-binding race remains accepted by the operator; these point-in-time reads do not prove it absent.
+The four observer timers were restored active/enabled, and no reboot was owed.
+Effective reboot policy is true, WithUsers true, at 04:45.
+
 ### Completion record: October 15, 2026
 
 Core HEAD is `5575a0859d6278bfcef79c28189a24594952efd3`; external WebUI stable **v0.52.458** is `fd0141fa196fe832171c9c0551bbb8205b6412d4`.
@@ -207,8 +258,8 @@ After an update or restore, verify the dispatched surface before relying on this
 
 ### Dashboard Migrate config
 
-At this commit, [the System action](https://github.com/NousResearch/hermes-agent/blob/5575a0859d6278bfcef79c28189a24594952efd3/hermes_cli/web_routers/status.py#L793) spawns `hermes config migrate` for the selected profile.
-Startup/update maintenance already ran the schema migration; all five profiles are at the current version 51.
+The [System action](https://github.com/NousResearch/hermes-agent/blob/v0.23.0/hermes_cli/web_routers/status.py#L862) spawns `hermes config migrate` for the selected profile.
+Startup/update maintenance already migrated all six profiles to config version 52.
 Pressing it adds no schema upgrade, but the implementation still checks `.env` formatting and suspicious MCP entries. It is not a button needed to finish this maintenance.
 
 ### Repair record: September 11, 2026
@@ -251,12 +302,14 @@ Four profiles receive messages: default, emh, hal and web_watcher. safer_web_rea
 
 | Unit | Role | Port |
 |---|---|---|
-| `hermes-gateway` | Multiplexed messaging, cron, dispatcher and profile owners |8642 API, where configured|
+| `hermes-gateway` | Multiplexed messaging, cron, dispatcher and profile owners |8642 API; Webapp on 127.0.0.1:9120|
 | `hermes-dashboard` | Profile administration and Memory/Plugins panels |9119|
 | `hermes-webui` | External browser/Hermex chat runtime, serving all profiles |8787|
 
 The homelab cloudflared tunnel publishes dashboard `hermes.cynexia.com` and WebUI `hermes-app.cynexia.com`, behind Cloudflare Access.
-All three ports also answer on the trusted LAN; the VM has no host firewall. The published Access gate is separate from each application's authentication.
+Ports 8642, 9119 and 8787 also answer on the trusted LAN; the VM has no host firewall.
+Webapp port 9120 binds only to loopback and has no published route.
+The published Access gate is separate from each application's authentication.
 The three enabled user units run under lingering and use upstream PM Python 3.14. Their former three secondary gateway unit files were removed by upstream migration.
 The four `hal-ha-observer-{analyze,health,inventory,logbook}.timer` units are agent-authored, outside repository management, and were restored active/enabled. Their pre-existing failures were not repaired; their legacy interpreter needs separate investigation before any change that could write profile stores.
 
@@ -293,12 +346,17 @@ The email adapter records the failure but does not publish `connected` after rec
 A later `IMAP reconnect test passed` line in `/home/hermes/.hermes/profiles/<profile>/logs/gateway.log` confirms mailbox reconnection; the subsequent `email reconnected` line confirms the platform has reconnected.
 The known recurring IMAP `UNEXPECTED_MESSAGE` error usually recovers in about a second and needs no action.
 
-The **WebUI is a second runtime, not a front end for a gateway.**
-This is the piece that surprises people.
-`hermes-webui` is a separate program from a separate repository, but upstream activates the agent’s selected PM environment, imports hermes-agent, and calls `run_agent` inside its own process.
-So a chat in the browser makes its own model calls and starts its own MCP servers, and the gateway for that profile is not involved at all.
-It serves every profile from that one process, switching `HERMES_HOME` per request, which is why there is one unit and one port rather than five.
-Restarting `hermes-gateway` therefore changes nothing about a browser conversation — the fact recorded under [Facts about this VM](#facts-about-this-vm) about MCP tool discovery is a consequence of exactly this.
+The **WebUI is a separate runtime that also supports gateway-backed chats.**
+`hermes-webui` is a separate repository and process, using the agent's selected PM environment.
+Its local chat path imports `run_agent` and starts its own model calls and MCP servers.
+Its gateway chat path uses the shared gateway's sessions instead.
+One WebUI unit serves all six profiles with request-scoped profile selection.
+Restart both runtimes after core or dependency changes; a gateway restart alone leaves WebUI's imported modules unchanged.
+
+Stable v0.52.544 has a known [cross-profile memory-binding race](https://github.com/nesquena/hermes-webui/issues/8517).
+The [merged fix](https://github.com/nesquena/hermes-webui/pull/8585) is outside that stable tag.
+The operator retained stable for this maintenance; no wrong-bank event on this VM is claimed.
+Passing a bank read at one point does not prove the race absent.
 
 ### emh fitness and nutrition skill
 
@@ -598,14 +656,19 @@ The reviewed v0.21.x/v0.22.0 release notes contain no managed-scope deprecation 
 However, [build_profile_terminal_scope](https://github.com/NousResearch/hermes-agent/blob/5575a0859d6278bfcef79c28189a24594952efd3/tools/terminal_scope.py#L114) reads defaults, profile env and raw profile YAML without the managed layer.
 We observed a fresh emh container using the old image while `hermes config get` correctly reported desktop.
 
-`/etc/hermes/config.yaml` remains the source of record. Until upstream's actual terminal scope honors it, mirror its backend, run-as-host-user and cwd into each profile’s YAML and `.env` through upstream writers. Preserve an explicit profile image (the reviewer's derived image); use the managed image only when no YAML or env image is selected.
-The existing setup helper now does that and asserts actual scope parity, preserving unrelated config/comments and mounts.
+Core v0.23.0 fixes this gap: `build_profile_terminal_scope` now applies managed scope.
+External WebUI v0.52.544 still reads profile YAML and env without that layer, so the setup helper mirrors the three managed keys there.
+`/etc/hermes/config.yaml` pins only backend, run-as-host-user and cwd.
+Its image leaf is deliberately absent: a managed desktop pin would override the reviewer's explicit image in the corrected core scope.
+The helper selects profile YAML image, then profile env, then the upstream desktop default, and asserts actual scope parity.
+It preserves unrelated config/comments and mounts.
 After a managed policy change, run it with `--policy-only` for **default and every directory under profiles/**; isolated workers must use that mode to avoid shared attachment mounts.
 A new trusted profile can use the ordinary helper to copy policy and add its standard mounts together.
 Bulk config saves strip managed leaves from profile YAML. The corresponding `TERMINAL_ENV`, `TERMINAL_DOCKER_IMAGE`, `TERMINAL_DOCKER_RUN_AS_HOST_USER` and `TERMINAL_CWD` values in each `.env` survive, keeping the selected Docker image and backend.
 The helper preserves unrelated env entries and asserts actual scope parity.
 The PM regression fixture applies upstream’s real managed-key stripping and proves the selected image survives, including a YAML image winning a stale env image.
-These copies are a temporary duplicate; remove copying only after an updated upstream `build_profile_terminal_scope` demonstrably reads managed scope for each profile. Before removing image fallbacks, unpin `terminal.docker_image` in managed scope and prove the reviewer's explicit image still wins; otherwise managed precedence would replace it with desktop.
+These copies remain necessary until external WebUI's actual runtime reader also applies managed scope for every profile.
+Core's fix alone does not meet that removal condition.
 Do not file or draft an upstream bug report for this gap (operator ruling).
 
 **The repository copy is the only durable record.**
@@ -1078,12 +1141,13 @@ All six profiles resolve the terminal backend to docker after the managed-key mi
 | Setting | Value | Source |
 |---|---|---|
 |`terminal.backend`|`docker`|Managed config plus temporary profile copy|
-|`terminal.docker_image`|`nousresearch/hermes-sandbox:desktop`; reviewer uses its signed derived digest below|Profile image, then env fallback, then managed default|
+|`terminal.docker_image`|`nousresearch/hermes-sandbox:desktop`; reviewer uses its signed derived stable image below|Profile image, then env fallback, then upstream default; no managed image pin|
 |`terminal.docker_run_as_host_user`|`true`, uid1000|Same|
 |`terminal.cwd`|`/workspace`|Same|
 |`terminal.docker_volumes`|Profile-specific workspaces/identity/attachments mounts|Profile only|
 
-The managed file is root-owned 0644 in a 0755 directory. Its CLI precedence still works, but multiplex terminal scope bypasses it: [workaround and removal condition](#managed-scope-gap-at-5575a08).
+The managed file is root-owned 0644 in a 0755 directory.
+Core v0.23.0 honours its three pins; external WebUI still needs profile mirrors: [workaround and removal condition](#managed-scope-gap-at-5575a08).
 Desktop digest observed October 15: `sha256:c7d8607d076f26a64e0bd6828f74e1764af43fe3281368188459bb693bfa7567`, image 3,050,982,704 bytes.
 The existing refresh removed only idle old containers. A fresh hal terminal used desktop with the previous home/workspace mounts and a successful host→container→host diagnostic file round-trip; the diagnostic file was removed.
 
@@ -1237,7 +1301,11 @@ The deployed `security_reviewer` uses its own `terminal.docker_image` and matchi
 ghcr.io/mnbf9rca/hermes-security-reviewer:stable
 ```
 
-The signed candidate was deployed before merge by operator ruling. After promotion, the profile switched to `stable` on October 16; it resolved to the same verified digest `sha256:5a34087dbcdd4dd91315f0546db8d9125691dcc04c4210dfc306a4fdf304ac03`, image config `sha256:e2b75dd66b889c671dab4e616ebb49102793084c99e07bdea5a99577776a73d3`. Both YAML and env select stable; all mounts are preserved. Managed scope and the five other profiles keep `nousresearch/hermes-sandbox:desktop`. The reviewer base deliberately trails their floating image by at least seven days.
+The signed candidate was deployed before merge by operator ruling.
+After promotion, the profile switched to `stable` on October 16; it resolved to the same verified digest `sha256:5a34087dbcdd4dd91315f0546db8d9125691dcc04c4210dfc306a4fdf304ac03`, image config `sha256:e2b75dd66b889c671dab4e616ebb49102793084c99e07bdea5a99577776a73d3`.
+Both YAML and env select stable; all mounts are preserved.
+The five other profiles keep `nousresearch/hermes-sandbox:desktop`; managed scope no longer pins an image.
+The reviewer base deliberately trails their floating image by at least seven days.
 
 `hermes-vm/sandbox-image/` builds `ghcr.io/mnbf9rca/hermes-security-reviewer` for linux/amd64 from a versioned `vX.Y.Z-desktop@sha256:...` base. It preserves the desktop runtime and adds ShellCheck, Bandit, Gitleaks, Semgrep, ruff, yamllint and CodeQL. Native release archives, including the CodeQL bundle, have committed SHA-256 checksums; `pyproject.toml` declares the four direct Python tools and `uv.lock` records their resolved closure and artifact hashes. A tag-and-digest-pinned uv image supplies `uv sync --locked --no-dev --no-build` into the tools venv; installation consumes the lock without resolving and must pass `uv pip check`. There are no runtime tool installs. Trivy and pip-audit are not included.
 
@@ -1278,7 +1346,11 @@ The manual bootstrap and exceptional delivery procedure is below. Routine Renova
 
 The installed weekly refresh derives each profile's backend/image from `build_profile_terminal_scope` through the current PM runtime with lazy installs disabled. It pulls desktop and the reviewer's configured stable tag once each; it never promotes or rewrites a profile ref. Both idle checks still protect stale-container removal. Worker-only status with an unknown gateway state is conservatively kept.
 
-For an urgent reviewer image rollback, use upstream `atomic_roundtrip_yaml_update` under the selected PM runtime to set only `/home/hermes/.hermes/profiles/security_reviewer/config.yaml`'s `terminal.docker_image` to `nousresearch/hermes-sandbox:desktop`, then run the setup helper `security_reviewer --policy-only` to mirror the new image into `.env`. The helper preserves an existing image; it cannot select a replacement by itself, and `config set` refuses the managed-pinned leaf. Pull the selected image, recreate only proven idle reviewer containers, and record missing scanner coverage. Do not change registry stable or managed scope to roll back one profile.
+For an urgent reviewer image rollback, run `/home/hermes/.local/bin/hermes -p security_reviewer config set terminal.docker_image nousresearch/hermes-sandbox:desktop`.
+Then run the setup helper `security_reviewer --policy-only` to mirror the image into `.env`.
+The image leaf is no longer managed, so the native writer can select it; the helper preserves the selected image.
+Pull that image, recreate only proven idle reviewer containers, and record missing scanner coverage.
+Do not change registry stable or managed scope to roll back one profile.
 
 
 ### Security reviewer operation
@@ -1289,13 +1361,15 @@ File tickets on explicit board `security_reviewer`, assigned to `security_review
 
 The reviewer mounts existing other profiles' workspace/scripts/skills directories at identical absolute paths read-only; missing directories are omitted. Its own workspace is writable at `/workspace` and its host path. There is no custom writable scripts, shared attachments, whole-profile-home, board database or Docker socket bind. Upstream still provides its normal writable sandbox home and read-only own-profile media/cache/skills mounts. Read-only inputs prevent ordinary edits, not network disclosure: the reviewer retains web and terminal network access.
 
-Default, emh and web_watcher have this read-only report bind in saved YAML and matching single-quoted JSON `.env`:
+Default, emh, hal and web_watcher have this read-only report bind in saved YAML and matching single-quoted JSON `.env`:
 
 ```text
 /home/hermes/.hermes/profiles/security_reviewer/workspace:/home/hermes/.hermes/profiles/security_reviewer/workspace:ro
 ```
 
-**HAL's bind is owed at its next idle window.** Operator ruling forbade editing HAL YAML/env or recreating its container during admission. Append the exact line above to HAL's YAML `terminal.docker_volumes`, preserving its scripts bind; run `hermes-profile-docker-setup.sh hal --sync-mounts`; compare both runtime readers; recreate only a proven idle stale HAL container. Do not restart shared services for this owed step without a separate need/authorization. `safer_web_reader` is excluded from requester/report mounts and its config/env remain unchanged.
+HAL's bind was already installed before the November 9 update baseline; no owed-bind change remains.
+Its scripts and spillover binds remain alongside the report bind.
+`safer_web_reader` is excluded from requester/report mounts.
 
 Admission at 5575a08 used native clean creation outside live discovery, complete offline configuration, atomic rename into `profiles/security_reviewer`, then native reconcile notification. No shared gateway, WebUI or dashboard restart occurred. Default's actual Docker terminal read the completed review by hash and refused a neighboring write; the reviewer's input write was refused and its own workspace write reached the host. HAL remained untouched.
 
@@ -1316,7 +1390,7 @@ The host-installed [sweep](../../hermes-vm/scripts/security-reviewer-sweep.py) l
 
 Pause that job to roll back cleanup. The private deployment-time backup is for diagnosis only; do not restore requester `config.yaml` or `.env` over current files, because that would undo later unrelated changes, including the shared root configuration.
 
-To remove report access, for each requester that currently carries the bind (`default`, `emh`, `web_watcher`, and HAL only if its owed bind was later installed):
+To remove report access, apply these steps to `default`, `emh`, `hal` and `web_watcher`:
 
 1. Delete only the exact reviewer-report entry above from saved YAML `terminal.docker_volumes`, preserving every other mount and setting.
 2. Run `/home/hermes/.hermes/scripts/hermes-profile-docker-setup.sh <profile> --sync-mounts` for that requester, including `default`.

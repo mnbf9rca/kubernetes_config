@@ -359,6 +359,19 @@ The current runtime fully defers the two broker schemas; the guard therefore tak
 The registry overrides provide the kanban boundary on this path; the guard's soft-failure limitation remains unchanged.
 The August injection and SSRF battery below was not repeated during this repair.
 
+### November 9, 2026: core v0.23.0 verification
+
+Public diagnostic `t_79075aea`, run 23, completed `done` through the unchanged broker 1.2.0.
+Its accepted five-key envelope is `OK` and passes the installed validator.
+The actual worker used `gpt-6.1-sol-900k` through `openai-codex`.
+Stored visible schemas are `web_extract`, `web_search`, `tool_search`, `tool_describe` and `tool_call`.
+The deferred catalog contains exactly `safer_reader_task` and `safer_reader_complete`; both executed in the same run.
+Neither `delegate_task` nor `session_search` was exposed, and guessed `kanban_show` discovery was refused.
+The stored extraction results prove all nine pieces, 0 through 8, of the public v0.23.0 release page were read.
+No private context, new tool, mount or grant was added.
+The 54 broker fixture tests passed under the updated PM runtime.
+The earlier injection/SSRF battery was not repeated.
+
 ### October 19, 2026: complete extraction paging
 
 Broker 1.2.0 adds URL-plus-piece reads to the existing web_extract name.

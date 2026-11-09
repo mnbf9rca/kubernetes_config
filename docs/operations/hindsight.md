@@ -158,13 +158,16 @@ Select the known-good image version and remove that workload's keel annotations 
 ## The client on the hermes VM
 
 **The estate follows upstream's catalog-client dependency policy; it does not independently pin the SDK to match the backend.**
-As of October 30, 2026, on core v0.22.5, Hindsight is a catalog plugin, version 1.2.3 at `d952b6e655fccab4581ee0722b51c5f103873d12`, installed and selected for default/emh/hal.
+As of November 9, 2026, on core v0.23.0, Hindsight is catalog plugin 1.2.4 at `f14cc1eb5624b0374cb4d82768eb2e0b9c21ae24`, installed and selected for default/emh/hal.
 Its own authored project dependencies are admitted into PM; an installed plugin directory alone does not prove admission or a live provider.
-Plugin 1.2.3 changes the implicit `observation_scopes` default from `combined` to `shared`, allowing consolidation across sessions within each bank while preserving lineage tags on facts; the estate accepts this fix without pinning the old default.
+The 1.2.4 project widens `hindsight-client` and `hindsight-embed` to `>=0.10.1,<2`; both resolved packages remain 0.10.3.
+Each exact candidate passed the native safe scan before its individual native update and accepted dependency prompt.
+Since plugin 1.2.3, the implicit `observation_scopes` default is `shared` rather than `combined`, allowing consolidation across sessions within each bank while preserving lineage tags on facts; the estate accepts this fix without pinning the old default.
 Client and server still move independently. The backend remains floating under keel and its existing backup/canary policy is unchanged.
 
 Update core, bundled dashboard, external stable WebUI and plugins together using [the Hermes runbook](hermes-vm.md#application-updates).
 After restart, authenticate to the **actual** dashboard Memory and Plugins hub panels: require ready/available/configured and enabled for each of the three profiles, then read existing expected-bank memory without printing content.
+Record an empty bank as empty; do not retain a probe to populate it.
 A successful helper in a fresh interpreter does not establish that the running dashboard loaded the client.
 The October 15 maintenance cleared the demonstrated installed/inactive condition by replacing the old serving processes with PM 3.14; no backend reinstall or migration was performed.
 URL, bank selectors/templates, additional banks and `op://` references matched the stopped-state archive; existing-memory reads passed and the earlier write/read round-trip was retained as evidence.
