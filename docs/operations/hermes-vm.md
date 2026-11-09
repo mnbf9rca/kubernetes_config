@@ -200,9 +200,7 @@ Plugin auto-apply remains absent/off, Telegram topic transfer remains off, vault
 
 Authenticated dashboard MCP probes passed for Health-data, HA-MCP, emh mail and Foodnoms.
 Normal authenticated emh WebUI session `3dcee718a3a5` executed `how-to-use-health-data` and `list_available_accounts` successfully.
-The browser flow used its native CSRF token and signed profile cookie.
 One non-destructive approval refusal passed; no mail or HA write was requested.
-The service's own WebUI password was supplied only in VM memory; credentials and cookies were not printed or saved by the verifier.
 
 Reader diagnostic `t_79075aea` retained the four-capability boundary, read all nine release-note pieces and completed a valid envelope.
 Static reviewer diagnostic `t_c82a1689` used its fresh stable image, read-only inputs and writable own workspace.
@@ -218,8 +216,6 @@ Its SHA256 is `c151a16c711641a9657d987e5c2051b529498fe9d67dbaa1f3dc413cd640ff47`
 Gzip/tar integrity and all 54 copied SQLite databases passed; disposable plaintext verification copies were removed.
 The known stable-WebUI memory-binding race remains accepted by the operator; these point-in-time reads do not prove it absent.
 The four observer timers were restored active/enabled, and no reboot was owed.
-The retained verifier credential process exited; its temporary files were removed.
-Removing the temporary reboot hold was the last VM mutation.
 Effective reboot policy is true, WithUsers true, at 04:45.
 
 ### Completion record: October 15, 2026
@@ -1350,7 +1346,8 @@ The manual bootstrap and exceptional delivery procedure is below. Routine Renova
 
 The installed weekly refresh derives each profile's backend/image from `build_profile_terminal_scope` through the current PM runtime with lazy installs disabled. It pulls desktop and the reviewer's configured stable tag once each; it never promotes or rewrites a profile ref. Both idle checks still protect stale-container removal. Worker-only status with an unknown gateway state is conservatively kept.
 
-For an urgent reviewer image rollback, run `hermes -p security_reviewer config set terminal.docker_image nousresearch/hermes-sandbox:desktop`, then run the setup helper `security_reviewer --policy-only` to mirror the new image into `.env`.
+For an urgent reviewer image rollback, run `/home/hermes/.local/bin/hermes -p security_reviewer config set terminal.docker_image nousresearch/hermes-sandbox:desktop`.
+Then run the setup helper `security_reviewer --policy-only` to mirror the image into `.env`.
 The image leaf is no longer managed, so the native writer can select it; the helper preserves the selected image.
 Pull that image, recreate only proven idle reviewer containers, and record missing scanner coverage.
 Do not change registry stable or managed scope to roll back one profile.
