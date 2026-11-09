@@ -1,10 +1,10 @@
 #!/bin/sh
 # Finish the docker terminal setup for ONE named Hermes profile.
 #
-# Copy terminal policy from /etc/hermes/config.yaml into config and .env, then add
-# the three durable mounts used by the trusted default, emh and hal profiles.
-# shortcut: multiplex terminal scopes ignore managed config at 5575a08; remove
-# the profile copies when upstream build_profile_terminal_scope honors it.
+# Copy managed terminal policy and the profile image into config and .env, then
+# add the three durable mounts used by trusted profiles.
+# shortcut: external WebUI bypasses managed scope; remove these policy mirrors
+# when its runtime reader applies that layer.
 #
 #   <workspace>:/workspace                 the sandbox's working directory
 #   <attachments>:<attachments>:ro         the shared WebUI upload inbox, read
@@ -84,6 +84,7 @@ from tools.terminal_scope import build_profile_terminal_scope
 from hermes_constants import set_hermes_home_override
 from hermes_cli.config import (save_env_value, env_write_refusal, _env_write_lock,
                                _write_env_lines, _env_line_defines_key)
+from hermes_cli.config_defaults import DEFAULT_CONFIG
 from agent.secret_scope import load_env_file
 managed = load_yaml_file_readonly('/etc/hermes/config.yaml')['terminal']
 keys = {'backend': 'TERMINAL_ENV', 'docker_image': 'TERMINAL_DOCKER_IMAGE',
@@ -95,7 +96,7 @@ env_path = Path(home) / '.env'
 before_env = load_env_file(env_path)
 if not sync_mounts:
     selected = dict(managed)
-    selected['docker_image'] = before.get('terminal', {}).get('docker_image') or before_env.get('TERMINAL_DOCKER_IMAGE') or managed['docker_image']
+    selected['docker_image'] = before.get('terminal', {}).get('docker_image') or before_env.get('TERMINAL_DOCKER_IMAGE') or managed.get('docker_image') or DEFAULT_CONFIG['terminal']['docker_image']
     expected = copy.deepcopy(before)
     expected.setdefault('terminal', {}).update({key: selected[key] for key in keys})
     for key in keys:
@@ -163,9 +164,9 @@ cat <<EOF
 
 Done: $profile now mounts its workspace and the shared WebUI attachments inbox.
 
-  The four terminal policy keys were copied from /etc/hermes/config.yaml.
-  That root-owned file remains the source of record; the profile copies
-  work around multiplex terminal scopes bypassing the managed layer.
+  The three managed terminal keys and your profile image were copied.
+  /etc/hermes/config.yaml remains the policy source; the profile copies
+  also supply the external WebUI, which bypasses the managed layer.
 
   Restart the shared hermes-gateway (and the WebUI when it serves this
   profile) before the volumes take effect.

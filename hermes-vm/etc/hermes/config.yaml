@@ -1,14 +1,12 @@
 # Managed scope: pinned for EVERY Hermes profile on this VM, current and future.
 # Copy of record: hermes-vm/etc/hermes/config.yaml in the kubernetes_config repo.
-# Source of record; CLI reads enforce these keys, but 5575a08 multiplex terminal
-# scopes bypass managed config. Mirror these four keys with the profile helper
-# --policy-only until upstream build_profile_terminal_scope honors this layer.
-# terminal.docker_volumes is deliberately NOT pinned: it stays per-profile so only
-# default/emh/hal carry the shared WebUI attachments mount (see hermes-vm docs; remove
-# that mount when hermes-webui PR #7022 is deployed). Profiles without docker_volumes
-# get the platform auto-mounted per-profile sandbox workspace.
+# Core honors these three pins; the profile helper mirrors them for external
+# WebUI, whose runtime reader bypasses managed scope.
+# Image and volumes stay per-profile so security_reviewer keeps its scanner
+# image and isolated workers do not gain shared attachments or other mounts.
+# Trusted profiles retain the shared WebUI attachments stopgap until its removal
+# condition in docs/operations/hermes-vm.md is independently verified.
 terminal:
   backend: docker
-  docker_image: nousresearch/hermes-sandbox:desktop
   docker_run_as_host_user: true
   cwd: /workspace
