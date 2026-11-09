@@ -94,6 +94,7 @@ Public `*.cynexia.com` hostnames on this tunnel:
 | `mcp.cynexia.com` | Claude/Hermes MCP connector, via Cloudflare Access (Managed OAuth) |
 | `hermes.cynexia.com` | Hermes agent dashboard on the hermes VM (`hermes.cynexia.net:9119`, off-cluster), via Cloudflare Access (karakeep-style email policy) |
 | `hermes-app.cynexia.com` | `hermes-webui` on the same VM (`hermes.cynexia.net:8787`, off-cluster) — the server the Hermex iOS app talks to, via Cloudflare Access (Service Auth + the same email policy) |
+| `hermes-web.cynexia.com` | Hermes gateway Webapp on the same VM (`hermes.cynexia.net:9120`, off-cluster), through its own Access app `hermes-web` (email policy only) |
 | `proxy.cynexia.com` | Residential egress proxy for changedetection on the VPS — see [vps.md](vps.md#residential-egress-through-the-homelab) |
 | `home.cynexia.com` | Static service directory in the `homepage` namespace; Access app uses only `allow_cynexia_com` |
 

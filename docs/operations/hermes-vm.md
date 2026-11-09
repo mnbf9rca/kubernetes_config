@@ -1,6 +1,8 @@
 # The Hermes VM
 
-VM 103 (`hermes.cynexia.net`) runs the Hermes agent, one multiplexed gateway serving four messaging profiles, the dashboard and the WebUI the Hermex iOS app talks to.
+VM 103 (`hermes.cynexia.net`) runs the Hermes agent.
+Its multiplexed gateway serves four messaging profiles and the Webapp.
+Separate processes serve the dashboard and the WebUI used by the Hermex iOS app.
 It is not a Kubernetes cluster, so none of this repository's cluster machinery reaches it.
 What it has instead lives in `hermes-vm/`: a daily liveness check, a weekly docker-sandbox refresh, a hand-run helper that finishes a new profile's docker setup, the Hal morning runner and publication plugins, the reviewer persona/plugin and closed-report sweep, the managed-scope Hermes config and the `unattended-upgrades` configuration.
 
@@ -191,11 +193,11 @@ Existing-bank reads passed for `hermes`, `hermes-emh` and `hermes-hal`; the firs
 No verification memory was retained to populate it.
 The existing scheduled backend canary passed; no new backend Job was created.
 
-Webapp is enabled only at its default `127.0.0.1:9120`, with empty `public_url`.
+At the end of the update, Webapp was enabled at its default `127.0.0.1:9120`, with empty `public_url`.
 Its browser bundle required the native `hermes webapp --build-only` build on first enablement.
 Anonymous HTML contains no browser credential; a protected read returns 401 without it and 200 with it.
 The credential directory/file modes are 0700/0600.
-No LAN/public listener, tunnel or DNS change was made.
+The update made no LAN/public listener, tunnel or DNS change; the later [Webapp publication](#the-processes) is recorded below.
 Plugin auto-apply remains absent/off, Telegram topic transfer remains off, vault storage remains file, and advanced delegation was not installed.
 
 Authenticated dashboard MCP probes passed for Health-data, HA-MCP, emh mail and Foodnoms.
@@ -302,13 +304,18 @@ Four profiles receive messages: default, emh, hal and web_watcher. safer_web_rea
 
 | Unit | Role | Port |
 |---|---|---|
-| `hermes-gateway` | Multiplexed messaging, cron, dispatcher and profile owners |8642 API; Webapp on 127.0.0.1:9120|
+| `hermes-gateway` | Multiplexed messaging, cron, dispatcher and profile owners |8642 API|
+| `hermes-gateway` Webapp listener | Browser-hosted Desktop |9120|
 | `hermes-dashboard` | Profile administration and Memory/Plugins panels |9119|
 | `hermes-webui` | External browser/Hermex chat runtime, serving all profiles |8787|
 
-The homelab cloudflared tunnel publishes dashboard `hermes.cynexia.com` and WebUI `hermes-app.cynexia.com`, behind Cloudflare Access.
-Ports 8642, 9119 and 8787 also answer on the trusted LAN; the VM has no host firewall.
-Webapp port 9120 binds only to loopback and has no published route.
+The homelab cloudflared tunnel publishes dashboard `hermes.cynexia.com`, WebUI `hermes-app.cynexia.com` and Webapp `hermes-web.cynexia.com`, behind Cloudflare Access.
+Ports 8642, 9119, 8787 and 9120 also answer on the trusted LAN; the VM has no host firewall.
+Webapp uses `webapp.host: 0.0.0.0` and `webapp.public_url: https://hermes-web.cynexia.com`, with `enabled: true` and default port 9120.
+Its public URL declares the trusted browser host/origin and sign-in callback; the non-loopback listener requires its own sign-in.
+The separate self-hosted Access application `hermes-web` permits only `allow_cynexia_com`, with a 24-hour session.
+The existing dashboard and Hermex/WebUI Access applications retain their own policies.
+The proxied CNAME targets the existing homelab tunnel; Homepage lists the Webapp beside the two other Hermes surfaces.
 The published Access gate is separate from each application's authentication.
 The three enabled user units run under lingering and use upstream PM Python 3.14. Their former three secondary gateway unit files were removed by upstream migration.
 The four `hal-ha-observer-{analyze,health,inventory,logbook}.timer` units are agent-authored, outside repository management, and were restored active/enabled. Their pre-existing failures were not repaired; their legacy interpreter needs separate investigation before any change that could write profile stores.

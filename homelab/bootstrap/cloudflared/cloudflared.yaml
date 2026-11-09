@@ -38,6 +38,9 @@ data:
       # or port.
       - hostname: hermes-app.cynexia.com
         service: http://hermes.cynexia.net:8787
+      # Gateway Webapp: its own sign-in behind the hermes-web Access app.
+      - hostname: hermes-web.cynexia.com
+        service: http://hermes.cynexia.net:9120
       # Egress proxy for changedetection on the VPS: a TCP origin, not HTTP,
       # and the only one in this block. THE ORIGIN IS AUTHLESS - tinyproxy
       # serves any client the tunnel hands it - so the Cloudflare Access

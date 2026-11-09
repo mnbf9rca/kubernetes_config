@@ -59,10 +59,11 @@ The connector and its credentials live in the `cloudflared` namespace.
 `proxy.cynexia.com` is the only **TCP** origin in the ingress block — `tcp://tinyproxy.proxy.svc.cluster.local:8888`, not an HTTP service — and, like `mcp.cynexia.com`, it has an origin that authenticates nobody.
 The whole gate is its Access application, `homelab-proxy`, which carries one app-scoped Service Auth policy and nothing else: deleting or disabling that application publishes an open forward proxy on the operator's home connection rather than closing the path.
 
-`hermes.cynexia.com` and `hermes-app.cynexia.com` are the two off-cluster origins on this tunnel: cloudflared proxies both to the hermes VM on the LAN, not to a cluster Service.
+`hermes.cynexia.com`, `hermes-app.cynexia.com` and `hermes-web.cynexia.com` are the three off-cluster origins on this tunnel: cloudflared proxies all three to the hermes VM on the LAN, not to a cluster Service.
 The Access app (`hermes`) attaches two reusable policies: `service-auth-monitoring`, the `non_identity` policy holding the `Uptime` service token that lets the uptime-kuma monitor through, and `allow_cynexia_com`, which requires `email_domain: cynexia.com`.
 It carried IP bypass policies until August 25, 2026; see [MCP behind Cloudflare Access](#mcp-behind-cloudflare-access).
 The `hermes-app` Access app is separate: a Service Auth policy holding the Hermex token, plus the same `allow_cynexia_com` policy for browsers.
+The `hermes-web` Access app holds only `allow_cynexia_com`, with no Service Auth policy, so no service token passes it.
 The dashboard runs its own mandatory login behind that (basic auth, forced by its non-loopback bind), so Access is defense in depth, not the only gate — but the Access gate still **fails open** like mcp's does, and the same post-rebuild rule applies.
 Hermes Desktop's remote-attach cannot pass Access's browser login (no custom-header support upstream); it uses the tailnet path (`http://hermes.cynexia.net:9119` via the OPNsense subnet route) instead.
 
@@ -84,7 +85,8 @@ That gate is load-bearing in a way the dashboard's is not: hermes-webui serves `
 The VM-side unit and security posture are in [homelab.md](homelab.md#hermes-webui-on-the-vm).
 Updates cover core, bundled dashboard and external stable WebUI through [the Hermes runbook](hermes-vm.md#application-updates); recovery is in [Rollback](hermes-vm.md#rollback).
 
-Both hostnames' Access apps **fail open** if the app is deleted; after any Cloudflare rebuild, verify the edge challenges an unauthenticated client before trusting either.
+Each Access application **fails open** if deleted.
+After a Cloudflare rebuild, verify that each hostname challenges an unauthenticated client.
 
 Two pieces of VM-side state make the dashboard work behind the tunnel (on `hermes.cynexia.net`, login `ssh hermes@…`; `~/.local/bin` is not on the non-login PATH, so run `hermes` through an interactive shell or by full path):
 
