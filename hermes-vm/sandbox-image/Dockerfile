@@ -29,8 +29,8 @@ RUN UV_PROJECT_ENVIRONMENT=/opt/hermes-reviewer/venv UV_PYTHON_DOWNLOADS=never u
 COPY semgrep-rules.yml /opt/hermes-reviewer/rules/semgrep-rules.yml
 COPY ruff.toml yamllint.yml test-tools.sh /opt/hermes-reviewer/
 
-ARG CODEQL_VERSION=codeql-bundle-v2.27.3
-ARG CODEQL_SHA256=64518dc413c8e7b5733fee2489e830a899bb1e3f28c8873b5869d5cc90164c5c
+ARG CODEQL_VERSION=codeql-bundle-v2.27.4
+ARG CODEQL_SHA256=89ed56c8ec6bfccef6a0d2e7fe86da0469ca24b4db08b88016ec134b942c17a4
 RUN set -eu; \
     curl -fsSL "https://github.com/github/codeql-action/releases/download/${CODEQL_VERSION}/codeql-bundle-linux64.tar.gz" -o /tmp/codeql.tar.gz; \
     printf '%s  %s\n' "$CODEQL_SHA256" /tmp/codeql.tar.gz | sha256sum -c -; \
