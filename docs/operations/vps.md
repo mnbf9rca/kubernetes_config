@@ -49,7 +49,7 @@ Verify keel's permissions with a SelfSubjectAccessReview issued with keel's own 
 
 ## SSH on the separate Ubuntu VM
 
-`ubuntu-8gb-hel1-1` (`62.238.55.235`, Ubuntu 26.04) is separate from the three Talos nodes above.
+`ubuntu-8gb-hel1-1` (public `62.238.55.235`, tailnet `100.69.33.55`, Ubuntu 26.04) is separate from the three Talos nodes above.
 Those Talos nodes have no sshd and need no SSH migration.
 This VM uses ordinary OpenSSH over Tailscale with its existing accounts and SSH keys; Tailscale SSH is not enabled.
 **Public TCP 22 remains open** until the video-upload client joins the tailnet and the operator authorizes closure.
