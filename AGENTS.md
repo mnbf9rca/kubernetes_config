@@ -72,7 +72,7 @@ kubernetes_config/
 │   ├── scripts/              # alive/refresh jobs, Hal daily/reply scripts, reviewer sweep and profile docker setup
 │   ├── etc/                  # unattended-upgrades config + the two apt timer drop-ins + the managed-scope hermes config (/etc/hermes/config.yaml)
 │   ├── plugins/              # safer-reader-broker, hal-daily-check, hal-email-verdict and reviewer-tooling-request
-│   ├── profiles/             # canonical copies of the per-profile SOUL.md personas
+│   ├── profiles/             # Hal persona snapshot; canonical SOUL.md for other profiles
 │   └── skills/               # canonical copies of promoted Hermes skills (untrusted-web-content-analysis)
 ├── nut-pi/                   # canonical NUT Pi configuration; secrets resolved from its own .env.tpl
 │   ├── etc/                  # NUT configuration, update/report/reboot policy and the two apt timer drop-ins
@@ -474,7 +474,9 @@ The rules that must not be broken:
   A quiet day is a verdict and two lines.
   Plain English throughout: no jargon, no codes, no invented terms.
   Operator ruling, 2026-10-17, after the first Hal morning email arrived as 84 lines of diagnostics with the summary at the bottom: the operator read it as unusable, and the fault was a class of message, not one layout.
-  Hal acts on explicit operator instructions sent by email reply; it does not act unasked.
+  Hal acts on explicit operator email replies and its standing automatic-update allowlist under each entry's conditions.
+  Operator ruling, 2026-11-11: Hal is authoritative over its live profile and learns there; repository copies are snapshots.
+  Operator ruling, 2026-11-11: Agents have agency; Hal installs updates on its operator-maintained allowlist under each entry's conditions.
 - **Documentation, not agent memories.**
   Do not record repo, cluster, or account state in an agent's private memory system — that hides operational knowledge from the operator, from other agents, and from review.
   Anything worth remembering goes in `docs/` (or this file, per the rule above), where it is versioned, diffable and shared.

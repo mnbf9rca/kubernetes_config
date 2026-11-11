@@ -137,8 +137,6 @@ def add_action_lines(report,home,cutoff,snapshot,at):
         name=', '.join(names) or 'Home Assistant'
         clock=when.astimezone(d.LONDON).strftime('%H:%M')
         error=result.get('error') or ((result.get('message') or 'Home Assistant refused the requested action') if result.get('success') is False else None)
-        if not row.get('message_id'):
-            error='a Home Assistant write ran without a recorded operator reply; check the actions log'
         if error:
             report.setdefault('items',[]).append(f'{name}: the requested action failed at {clock}: {d.label(error)}.')
             continue

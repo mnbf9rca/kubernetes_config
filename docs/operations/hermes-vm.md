@@ -1170,7 +1170,7 @@ HAL also has the writable scripts and read-only tool-result spillover identity m
 | `<workspace>:/workspace` | The sandbox's working directory, matching `terminal.cwd` |
 | `/home/hermes/.hermes/webui/attachments:/home/hermes/.hermes/webui/attachments:ro` | Chat uploads, read-only, at the host path the WebUI pastes into the prompt |
 | `<workspace>:<workspace>` | The workspace again, at the host path the WebUI advertises in its `[Workspace::v1: …]` label |
-| HAL only: `<scripts>:<scripts>:rw` | Shared script directory at `/home/hermes/.hermes/profiles/hal/scripts/`; the daily runner is repository-maintained |
+| HAL only: `<scripts>:<scripts>:rw` | Shared script directory at `/home/hermes/.hermes/profiles/hal/scripts/`; the live daily runner is Hal-owned; the repository holds a snapshot |
 | HAL only: `<spillover>:<spillover>:ro` | Oversized tool results at `/home/hermes/.hermes/profiles/hal/cache/spillover/`, readable at the host path returned to the worker |
 
 The identity mounts exist because the WebUI hands the agent **host** paths as text, and a path that does not resolve inside the container is a file the agent cannot read.
@@ -1224,7 +1224,7 @@ The scheduler runs them as plain host subprocesses (`subprocess.Popen` in `cron/
 ### HAL's own script cron jobs
 
 Hal’s active daily job is `ha-daily-health-email` (`e6a2fb6484b8`), at 09:00 Europe/London.
-It runs the repository-maintained `hal-daily-check-morning.py` without an agent.
+It runs Hal's live `hal-daily-check-morning.py` without an agent; the repository holds a snapshot.
 The old 08:15 producer `9f6d4108c6a6` and its retired pipeline files were deleted on 24 October 2026.
 `ha-observer-weekly-audit` (`ea2df3246202`) remains a separate weekly agent job.
 Its recorded delivery to the old `webui` origin fails with `unknown platform 'webui'`.
@@ -1259,16 +1259,19 @@ After changing HAL's mounts, restart `hermes-webui` to clear its cached sandbox 
 Recreate only idle HAL containers; preserve their host-backed home and workspace.
 An existing container retains its old bind layout until recreation.
 Verify the scripts path through an authenticated HAL WebUI chat as well as the gateway path.
-The [canonical HAL persona](../../hermes-vm/profiles/hal/SOUL.md) records this convention.
-On rebuild, copy it to `/home/hermes/.hermes/profiles/hal/SOUL.md`.
-The current Hal guide lives at `/home/hermes/.hermes/profiles/hal/workspace/HA-WATCH.md`.
+The [Hal persona snapshot](../../hermes-vm/profiles/hal/SOUL.md) records this convention.
+Hal's live persona at `/home/hermes/.hermes/profiles/hal/SOUL.md` and guide at `/home/hermes/.hermes/profiles/hal/workspace/HA-WATCH.md` are authoritative.
+Restore Hal's backed-up live profile on rebuild; repository snapshots are references for missing material, not files to copy over its learning.
 `deliver=local` keeps stdout in the host cron run record; that output directory is not part of the scripts bind.
 No repository checkout or cron-store mount is needed.
 
 ### Hal daily house check
 
-The [Hal daily-check runbook](hal-daily-check.md) owns the end-to-end flow, files, state, retries, diagnostics, monitor verdicts, trial command and code rollback from git.
-The [canonical Hal guide](../../hermes-vm/profiles/hal/HA-WATCH.md) and [persona](../../hermes-vm/profiles/hal/SOUL.md) describe Hal’s own task and prose rules.
+The [Hal daily-check runbook](hal-daily-check.md) describes the flow, files, state, retries, diagnostics, monitor verdicts, trial command and targeted rollback.
+The [Hal guide snapshot](../../hermes-vm/profiles/hal/HA-WATCH.md) and [persona snapshot](../../hermes-vm/profiles/hal/SOUL.md) describe its task and prose rules.
+Hal owns its live profile and learns there; make targeted live edits or give Hal instructions instead of installing repository snapshots.
+The 11 November 2026 ruling lets Hal maintain an automatic-update allowlist in its live guide and install entries under their conditions.
+The initial Kiosk Satellite entry requires verified release notes and holds for explicit manual steps or unverifiable notes.
 The morning script collects facts and sends without an agent; later native cards provide update assessments and device look-overs.
 
 ### The former Home Assistant event feed on `hal`
@@ -1276,7 +1279,7 @@ The morning script collects facts and sends without an agent; later native cards
 The native Home Assistant plugin was disabled and privately archived on October 18, 2026.
 Its private rollback archive was deleted after operator acceptance on 24 October 2026.
 `HASS_TOKEN` and HA credentials were removed from agent/worker mappings.
-Hal uses the operator’s read/write MCP address for explicit authenticated email-reply instructions, under the 22 October 2026 ruling.
+Hal uses the operator’s read/write MCP address for explicit authenticated email replies and its standing automatic-update allowlist.
 The host morning runner alone resolves the separate runner credential reference.
 The old producer and its host-only credential adaptation were removed on 24 October 2026.
 
