@@ -43,9 +43,11 @@
 ## Files and ownership
 
 Hal's profile home is `/home/hermes/.hermes/profiles/hal`.
+Hal owns its live persona, guide, rules and scripts and learns there; repository copies are snapshots.
+Apply targeted edits to current live text or give Hal instructions; never synchronize snapshots over its learning.
 The shared gateway owns scheduling and dispatch; Hal needs no separate gateway unit.
 
-| Purpose | Installed location | Repository source |
+| Purpose | Live location | Repository snapshot |
 |---|---|---|
 | Morning entrypoint | `<profile>/scripts/hal-daily-check-morning.py` | `hermes-vm/scripts/hal-daily-check-morning.py` |
 | Collection, findings and morning rendering | `<profile>/scripts/hal-daily-check/hal_daily_check.py` | Same path below `hermes-vm/` |
@@ -88,8 +90,9 @@ The native concurrent-create race is accepted: it can cost one duplicate card.
 The operator switched Hal's MCP address to read/write on 22 October 2026.
 Hal's HA-MCP URL comes from 1Password through the profile secret map and native substitution.
 Hermes does not redact 1Password-resolved values automatically, so Hal uses a LAN-only direct-access URL.
-Hal uses native HA-MCP write tools directly on explicit authenticated email replies; the usual install, reload and restart services are examples, not a whitelist.
-Cards and audits remain read-only by instruction, and no new pre-tool block restricts the MCP surface.
+Hal uses native HA-MCP writes on explicit authenticated email replies and for updates on its standing allowlist under each entry's conditions.
+The usual install, reload and restart services are examples, not a whitelist.
+The persona's standing allowlist permission applies inside every daily update-assessment card despite its read-only text; no host policy classifies installs as authorized.
 The native Home Assistant plugin is disabled; `HASS_TOKEN` and HA credentials are absent from agent/worker mappings.
 Only the host runner resolves `daily_check.runner_secrets.onepassword.env` into a private credential mapping.
 `HAL_DAILY_RUNNER_HASS_URL` and `HAL_DAILY_RUNNER_HASS_TOKEN` do not enter child-process environments.
@@ -183,7 +186,12 @@ A crash or uncertain call does not replay that intent.
 An interrupted scheduling attempt remains visible in the private action records rather than creating duplicate jobs.
 
 The operator's 22 October ruling releases explicit reply actions (Tier A).
-Autonomous fixes (Tier B) and automatic update installation (Tier C) remain deferred.
+The 11 November 2026 ruling permits automatic update installation (Tier C) under each entry's conditions in Hal's live HA-WATCH.md allowlist.
+Hal maintains that guide section when the authenticated operator adds, changes or removes permission; the initial entry is Kiosk Satellite (`update.lenovo_tb328fu_update`).
+Its condition requires verified release notes, holds for explicit manual steps or unverifiable notes, and otherwise permits installation and state verification.
+A qualifying pending release needs no second install request when Hal is told to allow it.
+The existing morning script reports logged installations under Done for you; a hold reason appears in the assessment email or Hal's reply, not again in morning reminders.
+Autonomous fixes (Tier B) and all other automatic installations remain deferred.
 Hal never edits configuration files or deletes devices, entities, integrations or files.
 The native HA plugin remains disabled; the deterministic morning runner retains its read-only command set and runner-only credential reference.
 
@@ -257,26 +265,24 @@ No arguments to the cron entrypoint mean production; trial must be explicit.
 
 ## Code rollback
 
-Rollback reinstalls the selected files from git history on `master`.
-The VM's daily-pipeline candidates and rollback preimages were deleted after operator acceptance on 24 October 2026.
-They are no longer a recovery source.
-Commit `bf743d2` is the first `master` revision containing this pipeline; earlier revisions do not contain its files.
+Hal's live files are authoritative; git history holds snapshots, not whole-file rollback instructions.
+The old VM candidates and rollback preimages were deleted on 24 October 2026.
+Use the approved change's diff to identify the hunks to reverse while retaining Hal's intervening learning.
 
-For an approved code rollback:
+For an approved rollback:
 
-1. Fetch `origin/master` in an isolated checkout.
-2. Select a revision on `master` that contains the required daily-check files.
-3. Check those files for compatibility with the current private state and card schemas.
-4. Extract only the required files from that revision with `git show` or `git archive`.
-5. Wait for active Hal workers and morning runs to finish.
-6. Reinstall the extracted files at the locations in [Files and ownership](#files-and-ownership).
-7. Compare installed hashes with the selected git files.
-8. Run the installed tests without invoking the production or trial runner.
-9. Preserve current state, receipts, card claims, schedules and profile credentials.
+1. Read the current live files and the change's diff in an isolated checkout.
+2. Prepare targeted inverse hunks compatible with current private state and card schemas.
+3. Apply only those hunks outside the 09:00 morning run; never replace live files with repository snapshots.
+4. Run existing relevant tests without invoking the production or trial runner.
+5. Preserve Hal's later edits, allowlist entries, state, receipts, card claims, schedules and credentials.
+
+A describe-only fresh Hal session verifies changed startup instructions without installing updates or modifying Home Assistant.
+The morning runner imports hal_reply_actions.py afresh, so its two-line diagnostic change needs no gateway restart.
 
 Changed plugin code can require a gateway reload; replacing tests or documentation does not.
 Restoring the native HA plugin, token mappings or deleted producer is not an ordinary code rollback.
-Neither private profile configuration nor old agent-authored pipeline code is recoverable from this repository's history.
+Private profile configuration and Hal's learned changes absent from snapshots are not recoverable from repository history.
 Runner-only credentials must remain outside agent and worker environments.
 
 ## What this check does not watch
