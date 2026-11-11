@@ -76,14 +76,12 @@ The policy is edited in the Tailscale admin console, with this copy kept here:
 The iPhone, iPad and active M5 MacBook Pro carry `tag:trusted`.
 Every other node carries `tag:server`, including `ai`, the Pi named `tailscale` and the inactive M4 MacBook Air.
 Trusted devices may initiate tailnet connections to any destination and port; other devices cannot initiate them.
-Replies to permitted connections work.
 An untagged device cannot initiate a connection under this policy.
 Mullvad settings and the default Tailscale SSH rule are deliberately removed.
 
-For an existing tailnet, add both tag owners and tag every device before replacing its access rules.
-Keep existing access rules during tagging.
-Replace `tag:homelab-node` on `talos-homelab` with `tag:server` in the console; no Talos bootstrap is needed.
-Saving the restrictive policy before tagging the clients cuts off their access.
+Signing in with a user account [removes a device's tags](https://tailscale.com/docs/features/tags#tag-vs-user-authentication), so a connected personal device can still reach nothing.
+After a personal device joins or signs in again, apply `tag:trusted` to it in the admin console.
+[Taildrop](https://tailscale.com/docs/features/taildrop#send-files-with-taildrop) cannot send files to or from tagged devices, including these personal devices.
 
 VM enrollment:
 
@@ -102,8 +100,6 @@ VM enrollment:
 
 Tailscale updates through the VM's existing `unattended-upgrades` schedule.
 `/etc/apt/apt.conf.d/50unattended-upgrades` already allows `origin=*`, which includes `pkgs.tailscale.com`.
-Daily package-list refresh and unattended upgrades are enabled, with both apt timers enabled.
-No extra updater or apt-origin configuration is needed.
 
 **Next action, only after operator approval:** close public SSH after the uploader joins and its policy is agreed.
 Delete this VM's public inbound TCP 22 allowance for IPv4 and IPv6 in the Hetzner Cloud Console.
