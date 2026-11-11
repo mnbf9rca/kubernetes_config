@@ -18,7 +18,7 @@
 # To bootstrap a brand-new install OR add a new node to the tailnet, use the
 # dedicated Makefile targets:
 #
-#   # 1. Mint a one-shot reusable=no auth key in the Tailscale admin console
+#   # 1. Mint a one-shot reusable=no auth key with tag:server in the admin console
 #   export TAILSCALE_AUTH_KEY=tskey-auth-...
 #   # 2. Apply a temporary machine-scoped patch that injects TS_AUTHKEY
 #   make bootstrap-tailscale                 # or: TALOS_MACHINE_ID=<id> make bootstrap-tailscale

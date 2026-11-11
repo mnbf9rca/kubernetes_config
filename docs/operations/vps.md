@@ -47,6 +47,68 @@ Review that bundle during the Kubernetes step of `/update-estate`.
 Its RBAC was trimmed on August 26, 2026 (PR #68): no `secrets` rule, no `pods/portforward`.
 Verify keel's permissions with a SelfSubjectAccessReview issued with keel's own ServiceAccount token from inside the cluster — `kubectl auth can-i --as=` is meaningless through the Omni proxy, which ignores impersonation and answers as the caller.
 
+## SSH on the separate Ubuntu VM
+
+`ubuntu-8gb-hel1-1` (public `62.238.55.235`, tailnet `100.69.33.55`, Ubuntu 26.04) is separate from the three Talos nodes above.
+Those Talos nodes have no sshd and need no SSH migration.
+This VM uses ordinary OpenSSH over Tailscale with its existing accounts and SSH keys; Tailscale SSH is not enabled.
+**Public TCP 22 remains open** until the video-upload client joins the tailnet and the operator authorizes closure.
+The uploader's future policy is a separate decision.
+
+The policy is edited in the Tailscale admin console, with this copy kept here:
+
+```json
+{
+  "tagOwners": {
+    "tag:trusted": ["autogroup:admin"],
+    "tag:server": ["autogroup:admin"]
+  },
+  "acls": [
+    {
+      "action": "accept",
+      "src": ["tag:trusted"],
+      "dst": ["*:*"]
+    }
+  ]
+}
+```
+
+The iPhone, iPad and active M5 MacBook Pro carry `tag:trusted`.
+Every other node carries `tag:server`, including `ai`, the Pi named `tailscale` and the inactive M4 MacBook Air.
+Trusted devices may initiate tailnet connections to any destination and port; other devices cannot initiate them.
+An untagged device cannot initiate a connection under this policy.
+Mullvad settings and the default Tailscale SSH rule are deliberately removed.
+
+Signing in with a user account [removes a device's tags](https://tailscale.com/docs/features/tags#tag-vs-user-authentication), so a connected personal device can still reach nothing.
+After a personal device joins or signs in again, apply `tag:trusted` to it in the admin console.
+[Taildrop](https://tailscale.com/docs/features/taildrop#send-files-with-taildrop) cannot send files to or from tagged devices, including these personal devices.
+
+VM enrollment:
+
+1. Install Tailscale from its [official stable Ubuntu repository](https://pkgs.tailscale.com/stable/#ubuntu-resolute).
+2. Run `tailscale up --advertise-tags=tag:server` as root on the VM.
+3. Complete browser sign-in and approve the VM with `tag:server`.
+4. Run `tailscale ip -4` on the VM.
+5. Connect from the Mac with the existing SSH account and key:
+
+   ```sh
+   ssh -o StrictHostKeyChecking=yes -o HostKeyAlias=62.238.55.235 root@<tailnet-ip>
+   ```
+
+6. Change the Termius host address on the Mac, iPhone and iPad to that tailnet address.
+7. Keep the existing SSH account and keys.
+
+Tailscale updates through the VM's existing `unattended-upgrades` schedule.
+`/etc/apt/apt.conf.d/50unattended-upgrades` already allows `origin=*`, which includes `pkgs.tailscale.com`.
+
+**Next action, only after operator approval:** close public SSH after the uploader joins and its policy is agreed.
+Delete this VM's public inbound TCP 22 allowance for IPv4 and IPv6 in the Hetzner Cloud Console.
+Keep other VMs' allowances if they share that firewall.
+From the Mac, verify that `nc -4 -z -G 5 <public-ipv4> 22` cannot connect.
+Repeat with `nc -6 -z -G 5 <public-ipv6> 22` for each assigned public IPv6 address.
+A missing local IPv6 route does not prove the server's port is closed; use a client with working IPv6.
+Recovery is re-adding public inbound TCP 22 in the Hetzner Cloud Console.
+
 ## Storage is single-node on purpose
 
 Only the CX43 has a Hetzner Cloud Volume, so `/var/mnt/data` exists on one node and every byte the nightly restic job backs up lives there.
