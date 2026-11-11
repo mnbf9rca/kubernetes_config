@@ -354,11 +354,11 @@ So each patch is substituted into a `mktemp` file that is `shred`ed on every exi
 
 ### Tailscale bootstrap
 
-Node registration on the tailnet needs a one-shot auth key, which must never live in steady-state config.
+Node registration on the tailnet needs a one-shot auth key with `tag:server`, which must never live in steady-state config.
 The flow:
 
 ```bash
-export TAILSCALE_AUTH_KEY=tskey-auth-...        # mint fresh in the Tailscale admin
+export TAILSCALE_AUTH_KEY=tskey-auth-...        # mint fresh with tag:server in the Tailscale admin
 make bootstrap-tailscale                        # applies a machine-scoped ConfigPatch
 tailscale status                                # confirm the node joined (~30s)
 make clear-tailscale-bootstrap TALOS_MACHINE_ID=<id>
