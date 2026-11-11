@@ -53,29 +53,43 @@ Verify keel's permissions with a SelfSubjectAccessReview issued with keel's own 
 Those Talos nodes have no sshd and need no SSH migration.
 This VM uses ordinary OpenSSH over Tailscale with its existing accounts and SSH keys; Tailscale SSH is not enabled.
 **Public TCP 22 remains open** until the video-upload client joins the tailnet and the operator authorizes closure.
-The uploader's future policy is a separate decision.
 
 The policy is edited in the Tailscale admin console, with this copy kept here:
 
-```json
+```jsonc
 {
-  "tagOwners": {
-    "tag:trusted": ["autogroup:admin"],
-    "tag:server": ["autogroup:admin"]
-  },
-  "acls": [
-    {
-      "action": "accept",
-      "src": ["tag:trusted"],
-      "dst": ["*:*"]
-    }
-  ]
+    // video processing hosts (hetzner)
+    "hosts": {"video-vm": "100.69.33.55"},
+
+    "tagOwners": {
+        "tag:trusted": ["autogroup:admin"],
+        "tag:server":  ["autogroup:admin"],
+
+        // allows to upload over ssh to specific hetzner host
+        "tag:uploader": ["autogroup:admin"],
+    },
+
+    "grants": [
+        // allow `trusted` devices to connect anywhere
+        {
+            "src": ["tag:trusted"],
+            "dst": ["*"],
+            "ip":  ["*"],
+        },
+        // allow SSH connections to video processing host
+        {
+            "src": ["tag:uploader"],
+            "dst": ["video-vm"],
+            "ip":  ["tcp:22"],
+        },
+    ],
 }
 ```
 
 The iPhone, iPad and active M5 MacBook Pro carry `tag:trusted`.
-Every other node carries `tag:server`, including `ai`, the Pi named `tailscale` and the inactive M4 MacBook Air.
-Trusted devices may initiate tailnet connections to any destination and port; other devices cannot initiate them.
+The uploader client joins with `tag:uploader` and may reach only `video-vm` on `tcp:22`.
+Other nodes carry `tag:server`, including `ai`, the Pi named `tailscale` and the inactive M4 MacBook Air.
+Trusted devices may initiate tailnet connections to any destination and port; server-tagged devices cannot initiate them.
 An untagged device cannot initiate a connection under this policy.
 Mullvad settings and the default Tailscale SSH rule are deliberately removed.
 
