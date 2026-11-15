@@ -144,7 +144,15 @@ The rules that must not be broken:
   Use a dedicated `make <service>-secret` target with `op read` + `kubectl create secret --dry-run=client -o yaml | kubectl apply -f -`; `make create-jotta-secret` is the canonical pattern. 1Password *document* items need `op document get`, not `op read`.
 - **Apply targets assert the kubectl context first** (`check-context` / `check-vps-context`).
   Never bypass them.
-- **Agent work happens in an isolated git worktree, never in the main checkout** (`.claude/worktrees/` or equivalent; operator ruling, 2026-08-27).
+- **Agent work happens in an isolated git worktree, never in the main checkout** (operator ruling, 2026-08-27).
+  **Create the worktree with your harness's own worktree tool, and never with a hand-run `git worktree add`** (operator ruling, 2026-11-15).
+  Claude Code's `EnterWorktree` tool puts it at `.claude/worktrees/<name>` under the main checkout, which `.gitignore` already covers.
+  Codex's own worktree feature puts it under `~/.codex/worktrees/`.
+  Those are the only two places a worktree of this repository may live: never `/tmp`, a scratch directory, a sibling of the checkout or any other path.
+  A worktree anywhere else is invisible to the harness that should clean it up, may sit outside what the sandbox can read or authorize, and leaves an entry in `git worktree list` that outlives its directory.
+  **Whoever opened a worktree removes it when its pull request merges or the work is abandoned**: run `git worktree remove <path>`, then delete the branch.
+  `scripts/reauth.sh` checks every registered worktree, so one left behind fails every later run until somebody removes it.
+  On 2026-11-15 that list held one worktree in `/private/tmp` whose directory had already gone and one under `.claude/worktrees/` whose pull request had merged, and the second failed the operator's re-authentication.
   Several agents and sessions share that checkout at once, so its current branch is not yours to assume: run `git branch --show-current`, confirm it, and only then commit.
   A guidance edit that day landed on another agent's branch because the shared checkout had been switched mid-flight.
 - **Deploy, then merge.**

@@ -10,6 +10,7 @@ The Codex agent is the builder; the Claude agent that is not the chief of staff 
 If `herdr agent list` shows no candidate or multiple candidates of the required harness type in this workspace, the chief of staff asks the operator which tab to use and waits for confirmation; it does not guess.
 Address the selected agent by its pane ID from `herdr agent list` or by its current name.
 The builder uses an isolated Git worktree branch within the shared repository.
+Every seat that edits files creates its worktree with its harness's own worktree tool and removes it when the pull request merges; the two permitted locations and the reasons are the worktree rule in [AGENTS.md](../../AGENTS.md#apply-workflow-conventions).
 
 | Seat | Responsibility |
 |---|---|
