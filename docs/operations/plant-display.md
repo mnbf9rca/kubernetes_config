@@ -135,7 +135,7 @@ For the Kindle:
 - **The tag's image entity in Home Assistant can lag the tag.** After a draw it held the previous picture for more than six minutes. Trust the tag, not the entity.
 - **All three screens go blank together if the frontend stops rendering the card's image.** The picture reaches the card as a `data:image/svg+xml` image, which the Markdown card's filter admits. If a frontend update changes that, the fallback is the button-card custom card with the same SVG inline. If only the render arrives late, raise `wait` to `3000`.
 - **Without card-mod the picture shrinks.** The TRMNL and the Kindle show a small picture in the top-left corner; the tag is unaffected.
-- **Looking up the TRMNL HA app's details through the Home Assistant MCP server prints its access token.** The app's options hold a Home Assistant long-lived access token, and `ha_get_app` returns them in clear. Do not run that lookup for this app in an agent session.
+- **The TRMNL HA app's token must stay a `!secret` reference.** The app signs in to Home Assistant with a long-lived access token. Its `access_token` option holds `!secret trmnl_ha_token`, and the token belongs to a dedicated non-administrator user. A lookup of the app's details through the Home Assistant MCP server (`ha_get_app`) returns the stored option, so a token pasted there in clear is printed into the agent's transcript; that happened in November 2026.
 
 ## Remove it
 
