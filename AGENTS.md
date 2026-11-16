@@ -22,6 +22,7 @@ Cluster-specific detail, runbooks and procedures live under `docs/`, referenced 
 | `docs/operations/hal-daily-check.md` | Hal’s 09:00 house check: end-to-end flow, explicit reply actions, morning and assessment mail, card retries, state, diagnostics, trials and code rollback from git |
 | `docs/operations/safer-web-reader.md` | The quarantined web-reader profile and its completion broker: the four-tool surface, the envelope contract, the deployed configuration baseline, and its verification record |
 | `docs/operations/github-mirror.md` | GitHub mirrors and JSON exports, B2 key separation, heartbeat verdicts, initialization, restore, cutover and unhide runbooks |
+| `docs/operations/ha-databricks-export.md` | One-off sensor-history export to a Databricks raw volume: privacy exclusions, date-range reruns, verification and deletion |
 | `docs/operations/agent-teams.md` | **Read before dispatching any agent or subagent.** Agent-team roles, loop limits, escalation, access and Herdr commands |
 | `docs/operations/adsb-pi.md` | The ADS-B feeder Pi, outside both clusters: what runs on it, the feeder identity files, backup, the rebuild runbook and the heartbeat wiring |
 | `docs/operations/nut-pi.md` | The NUT UPS Pi: SNMP polling, CGI status page, canonical configuration and 1Password references, rebuild, upgrade heartbeat, monitor authentication and automatic reboot |
