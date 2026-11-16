@@ -78,6 +78,7 @@ class ExportChecks(unittest.TestCase):
         with self.assertRaises(ValueError):
             list(export.chunks(a, a, 86400))
 
+    @unittest.skipUnless(importlib.util.find_spec('pyarrow'), 'requires the export venv: pyarrow')
     def test_parquet_has_fixed_nullable_schema_and_no_partial_final_file(self):
         import pyarrow.parquet as pq
         with tempfile.TemporaryDirectory() as tmp:
@@ -120,6 +121,7 @@ class ExportChecks(unittest.TestCase):
             self.assertEqual(export.upload_file(api, p, '/Volumes/example'), 'uploaded')
             self.assertEqual(api.uploaded, b'parquet-example')
 
+    @unittest.skipUnless(importlib.util.find_spec('websocket'), 'requires the export venv: websocket-client')
     def test_registry_reads_close_plain_websocket_without_context_protocol(self):
         import json
         from unittest.mock import patch
