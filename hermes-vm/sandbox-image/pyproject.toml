@@ -5,7 +5,7 @@ requires-python = "==3.13.*"
 dependencies = [
     "bandit==1.9.4",
     "semgrep==1.185.0",
-    "ruff==0.17.4",
+    "ruff==0.17.5",
     "yamllint==1.38.0",
 ]
 
