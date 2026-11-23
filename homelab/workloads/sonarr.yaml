@@ -68,21 +68,29 @@ spec:
               value: "1999"
             - name: TZ
               value: Europe/London
+            # Count Tailscale 100.64.0.0/10 clients as local, so they skip the login too.
+            - name: SONARR__AUTH__TRUSTCGNATIPADDRESSES
+              value: "true"
           ports:
             - containerPort: 8989
               name: http
+          # Probes send Host: localhost because Allowed Hosts is set in config.xml and
+          # the app answers 400 to any other unlisted name, the pod IP included.
+          # config.xml on the PVC holds the other half: AllowedHosts=sonarr.cynexia.net and
+          # TrustedNetworks=10.244.0.1 (cni0, where Traefik's requests arrive from), which
+          # is what lets a local client skip the login through the Ingress.
           startupProbe:
-            httpGet: { path: /, port: http }
+            httpGet: { path: /, port: http, httpHeaders: [{ name: Host, value: localhost }] }
             failureThreshold: 15
             periodSeconds: 10
             timeoutSeconds: 5
           livenessProbe:
-            httpGet: { path: /, port: http }
+            httpGet: { path: /, port: http, httpHeaders: [{ name: Host, value: localhost }] }
             failureThreshold: 5
             periodSeconds: 10
             timeoutSeconds: 5
           readinessProbe:
-            httpGet: { path: /, port: http }
+            httpGet: { path: /, port: http, httpHeaders: [{ name: Host, value: localhost }] }
             periodSeconds: 10
             timeoutSeconds: 5
             failureThreshold: 3
