@@ -235,7 +235,7 @@ dependencies = [
 requires-dist = [
     { name = "bandit", specifier = "==1.9.4" },
     { name = "ruff", specifier = "==0.17.5" },
-    { name = "semgrep", specifier = "==1.185.0" },
+    { name = "semgrep", specifier = "==1.186.0" },
     { name = "yamllint", specifier = "==1.38.0" },
 ]
 
@@ -736,7 +736,7 @@ wheels = [
 
 [[package]]
 name = "semgrep"
-version = "1.185.0"
+version = "1.186.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "attrs" },
@@ -768,10 +768,10 @@ dependencies = [
     { name = "urllib3" },
     { name = "wcmatch" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/78/82/530228c094e10e658ba323852b169ce807f8ce826384095f89c5e5a34482/semgrep-1.185.0.tar.gz", hash = "sha256:e6fa06ae6262b13b6ef14dd634e2b7d97ccc51ff41b94da59b63862d0c8578af", size = 544995, upload-time = "2026-11-10T09:33:37.579Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/b6/5a/a69c0b96d98c6fdcfcfada401457156097e418a46648de3656900f96fb03/semgrep-1.186.0.tar.gz", hash = "sha256:378b67e7a6627749ad385f5d2e194ba456ece29f37462cd52d3b8897d58a4ea3", size = 546692, upload-time = "2026-11-18T00:23:16.759Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/f2/13/0d4dc8d124794105f300082c46e3d8ad45eac7af63113b57a5966629b5a3/semgrep-1.185.0-cp310.cp311.cp312.cp313.cp314.py310.py311.py312.py313.py314-none-manylinux_2_34_x86_64.whl", hash = "sha256:0eb6aaadad5b957af96d1300487e10af1dc8016e8ef53072effb48cd4906c02b", size = 72302138, upload-time = "2026-11-10T09:33:20.37Z" },
-    { url = "https://files.pythonhosted.org/packages/fb/60/e0557977f9b0ae3a5158e2a311c35f8ed59359cac2788bb3c6dc461de3dc/semgrep-1.185.0-cp310.cp311.cp312.cp313.cp314.py310.py311.py312.py313.py314-none-musllinux_1_2_x86_64.whl", hash = "sha256:f030c391af948b493ae2220a1b64372df5f18adf8e2dd909ab62035364c51890", size = 79028279, upload-time = "2026-11-10T09:33:30.073Z" },
+    { url = "https://files.pythonhosted.org/packages/fd/8c/25b9b38199d0bb5ec2fb12dbea2a7172b6cd0672a1161e2e33dbf3029cd1/semgrep-1.186.0-cp310.cp311.cp312.cp313.cp314.py310.py311.py312.py313.py314-none-manylinux_2_34_x86_64.whl", hash = "sha256:54ebaf79adf4e5855c54d5e4457d8d03f27cc6bf73d79642281790b833d92e4f", size = 74720010, upload-time = "2026-11-18T00:22:56.411Z" },
+    { url = "https://files.pythonhosted.org/packages/30/94/9f2ea086ec99eae0857ffb6fe88c8084efad85975e609f08fc245d772e87/semgrep-1.186.0-cp310.cp311.cp312.cp313.cp314.py310.py311.py312.py313.py314-none-musllinux_1_2_x86_64.whl", hash = "sha256:bd0cfe78d0fab4da9a27e591c7dfde118757fba71e483b74bc2007ef695a1108", size = 81487846, upload-time = "2026-11-18T00:23:07.205Z" },
 ]
 
 [[package]]
